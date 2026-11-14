@@ -129,7 +129,17 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p18a-website-build
 
-- pending
+- worker: Deleted test_the_download_page_offers_every_installer_platform in tests/unit/test_docs_platform_pages.py (outside touches; orchestrator-approved; it read the deleted download.js; the file is deleted whole by the docs phase p19).
+- worker: The /download/ stub title is "Download PrivacyFence" (h1 "Download") because test_every_page_has_title_and_description needs a title of at least 10 characters.
+- worker: Removed --offline from scripts/build_site.py and from the two website-build.yml build commands, since nothing is left to fetch.
+- worker: tests/unit/test_website_pages.py: /faq/ now needs 2 content links instead of 3, because the download and releases pages were two of its linkers.
+- worker: Outside touches: tests/integration/test_website_layout.py and test_website_csp.py lost their Worker stubs and the API_ORIGIN and STABLE_MANIFEST imports, both removed from tests/website_site.py.
+- worker: Removed the whole stats block of website/index.html, GitHub-stars counter included, since stats.js is gone.
+- worker: The changelog entry sits under a new "### Removed" heading in [Unreleased].
+- scope: scope: tests/integration/test_website_csp.py
+- scope: scope: tests/integration/test_website_layout.py
+- scope: scope: tests/unit/test_docs_platform_pages.py
+- retry: Sent back twice: once for the failing docs test above, once because the tip commit lacked the Plan-Phase trailer. No tld CLI in the worker container; the orchestrator ran the checks, including the website build with the docs extra installed (owner choice orch_roles).
 
 ## p18b-website-copy
 
