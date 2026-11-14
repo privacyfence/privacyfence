@@ -343,7 +343,7 @@ UPSTREAM_DATA = {
     **DATA,
     "tools": DATA["tools"] + [{"connector": "kh", "tools": ["kh_search"]}],
     "auto_tools": DATA["auto_tools"] + ["kh_search"],
-    "upstreams": [{"id": "kh", "label": "Knowledge hub", "tools": ["kh_search"], "domains": ["general", "hr"]}],
+    "upstreams": [{"id": "kh", "label": "Knowledge hub", "tools": ["kh_search"], "audiences": ["general", "hr"]}],
 }
 
 
