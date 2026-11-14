@@ -6,8 +6,7 @@ or read. It names the person (or the workflow token), the audiences they hold an
 ``{"tool", "arguments"}``. A request that is not a tool call carries no audiences and no tools.
 
 ``docs/identity-claim.md`` is the contract; ``contrib/verifier/req_test_vectors.json`` holds the
-vectors for ``req``. This module is not wired into the connector yet and leaves the shipped
-``upstream_claims`` module alone.
+vectors for ``req``.
 """
 
 from __future__ import annotations
