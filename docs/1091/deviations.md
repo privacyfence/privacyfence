@@ -42,6 +42,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - worker: the connector caller argument is a zero-argument callable returning a CallerClaim (the plan left the signature open); p9 passes functools.partial(caller_for, upstream)
 - retry: worker stopped as blocked: tests/unit/test_website_connector_pages.py::test_every_connector_module_is_mapped requires a page, setup guide and README row for every connectors/ module; owner chose a documented exemption (ask a-3c3707bb21af5434) and the worker added NO_PAGE_MODULES for upstream_mcp
 - scope: tests/unit/test_website_connector_pages.py is outside touches; changed by the owner-approved exemption for upstream_mcp; accepted
+- review: a code-quality bot flagged lambda: MagicMock() in tests/unit/test_systemic_gate_invariants.py (optional style nit); verified real and replaced by MagicMock, no behaviour change
 
 ## p9-org-wiring
 
@@ -53,6 +54,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - worker: org create-route tests were added to tests/unit/web/test_routes_org_settings.py because test_routes_settings.py covers only local mode; an upstream tool gated review or popup has no scope-catalogue entry yet, so only auto-gated upstream tools can be ticked in the New token form (the plan defers rules for them)
 - scope: tests/unit/web/test_routes_org_settings.py is outside touches; it holds the org create-route tests; accepted
 - review: main added a delivery path for AI-proposed tokens (runtime_credentials.deliver); fix-1 made it pass upstream_domains, held_domains and principal_email_verified like the Settings create route, with a test
+- review: fix-3 added a unit test that extending a scoped token (main extend feature) keeps its upstream_domains and principal_email_verified; the extend operation already used dataclasses.replace, so no source change was needed
 
 ## p11-docs-and-adrs
 
@@ -62,6 +64,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - review: main took ADRs 0278-0282, so this plan ADRs 0278-0280 were renumbered to 0283-0285 everywhere outside docs/1091 on the owner decision (ask a-0213d8fce9cc9789); the plan text still names 0278-0280, so its final check for those ADRs is met by 0283-0285
 - review: tests/unit/test_docs_references_exist.py now exempts docs/adr/ citations in docs/<n>/plan.md as it already did for old-layout plans, because the frozen plan still names the old ADR filenames; owner decision (ask a-adfde717d85da958); the plan file is unchanged
 - review: fix-2 (final review): ADRs 0036, 0164 and 0236 and their index rows now point forward to ADRs 0284 and 0285; configuration-reference.md now says grant edits apply live; the docker exec snippets write the file atomically; docs only
+- conflict: main moved again after the pull request opened (the extend-n8n-credentials feature, PR 1099): conflicts in docs/adr/README.md and docs/configuration-reference.md; fix-3 merged main and kept both features
+- review: main took ADRs 0283 and 0284 as well, so the upstream MCP ADRs were renumbered a second time under the same owner decision: now 0285 (declared connectors), 0286 (signed caller claim), 0287 (data domains); the plan text and the earlier entries above still use 0278-0280 and 0283-0285
 
 ## Final review
 
