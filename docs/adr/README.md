@@ -387,3 +387,12 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0293](0293-the-n8n-node-never-follows-redirects-or-builds-errors-from-caught-values.md) | The n8n node never follows a redirect and never builds an error or an item from a caught error, a request or a credential value | Accepted; relates to 0291 |
 | [0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md) | n8n delivery can be switched on from the server environment | Accepted; amends 0253, 0279, 0282; relates to 0165, 0257 |
 | [0295](0295-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 |
+| [0296](0296-desktop-mode-and-its-installers-are-removed-in-8.md) | Desktop mode and its installers are removed in 8.x | Accepted; supersedes 0002, 0003, 0261 |
+| [0297](0297-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262 |
+| [0298](0298-the-mode-setting-accepts-only-org.md) | The mode setting accepts only org | Accepted; relates to 0260 |
+| [0299](0299-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md) | Files move by upload slot, inline bytes or one-time link only | Accepted; supersedes 0007, 0012; amends 0028, 0160 |
+| [0300](0300-the-download-page-and-worker-are-retired.md) | The download page and the Worker are retired | Accepted; supersedes 0024; amends 0277 |
+| [0301](0301-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md) | Releases build the org image, privacyfence-sync and the SBOM only | Accepted; supersedes 0057; amends 0087 |
+| [0302](0302-linux-is-the-only-ci-platform.md) | Linux is the only CI platform | Accepted; relates to 0057 |
+| [0303](0303-the-mcp-registry-listing-of-the-extension-is-no-longer-published.md) | The MCP registry listing of the extension is no longer published | Accepted; supersedes 0112 |
+| [0304](0304-the-organization-image-is-the-only-distribution.md) | The organization image is the only distribution | Accepted; amends 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255; relates to 0295 |
