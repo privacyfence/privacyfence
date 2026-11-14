@@ -54,6 +54,8 @@ on:
       - "requirements/release.in"
       - "mcpb/shim/package.json"
       - "mcpb/shim/package-lock.json"
+      - "n8n/package.json"
+      - "n8n/package-lock.json"
       - "cloudflare/downloads/package.json"
       - "cloudflare/downloads/package-lock.json"
       - "cloudflare/oauth-relay/package.json"
@@ -66,6 +68,8 @@ on:
       - "requirements/release.in"
       - "mcpb/shim/package.json"
       - "mcpb/shim/package-lock.json"
+      - "n8n/package.json"
+      - "n8n/package-lock.json"
       - "cloudflare/downloads/package.json"
       - "cloudflare/downloads/package-lock.json"
       - "cloudflare/oauth-relay/package.json"
@@ -206,7 +210,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: mcpb/shim/package-lock.json
+          cache-dependency-path: |
+            mcpb/shim/package-lock.json
+            n8n/package-lock.json
 
       - name: Install shim dependencies
         run: npm ci
@@ -220,6 +226,19 @@ jobs:
         if: always()
         run: npm audit --omit=dev || true
         working-directory: mcpb/shim
+
+      - name: Install n8n node dependencies
+        run: npm ci
+        working-directory: n8n
+
+      - name: Audit n8n node runtime dependencies (blocking - high/critical)
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: n8n
+
+      - name: Audit n8n node runtime dependencies (informational - full report)
+        if: always()
+        run: npm audit --omit=dev || true
+        working-directory: n8n
 
   npm-audit-worker:
     # Separate job (not folded into npm-audit above) because the policy is

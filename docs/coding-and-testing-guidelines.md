@@ -402,6 +402,9 @@ checklist for the PR description.
       `bandit -r sync/src` pass (CI's `sync` job, a required check, runs the same three). If
       `sync/README.md` changed, copy it to
       `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
+- [ ] `n8n/**`: in `n8n/`, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test`
+      pass (CI's `n8n-node` job, a required check, runs the same), then
+      `pytest tests/integration/test_n8n_node_contract.py -v` passes.
 - [ ] `cloudflare/downloads/`: `npm test`, `npm run typecheck` and `npm run dry-run` there pass
       ([§1.9](#19-formatting-and-static-analysis)).
 

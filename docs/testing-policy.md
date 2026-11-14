@@ -59,7 +59,8 @@ and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout
 |---|---|
 | `test` (Ubuntu, Python 3.13) | `npm test` and `npm run typecheck` in `mcpb/shim/`; `npm ci --prefix tests/integration/ai_clients` (the pinned AI-client CLIs); the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
 | `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest`; the Windows job then runs `check_coverage_floor.py --platform windows`, which holds the Windows-only modules at `WINDOWS_MODULE_FLOORS` |
-| `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py`); one check per version |
+| `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py` and `test_n8n_node_contract.py`); one check per version |
+| `n8n-node` | The n8n community node in `n8n/`: `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`, then `npm pack`, uploading the tarball as `n8n-nodes-privacyfence-tgz` |
 | `sync` (Python 3.11, 3.13) | `privacyfence-sync` alone: `pip install -e "./sync[test]"`, `pytest sync/tests` at 100 % branch coverage, `mypy sync/src`, `bandit -r sync/src`; one `Sync client (Python 3.x)` check per version |
 | `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
 | `org-docker-image` | Builds the organization-mode Docker image (amd64) from the checkout's wheel and runs `test_org_docker_image.py` against it; the per-PR leg of `build.yml`'s `build-org-image`, deliberately not a required check |
@@ -102,6 +103,8 @@ Key modules in the suite:
   by the official `mcp` client over TCP.
 - `tests/integration/test_shim_mcp_contract.py` — the built `mcpb/shim/dist/shim.js` against that
   server, over MCP-over-stdio. Skips without Node.
+- `tests/integration/test_n8n_node_contract.py` — the n8n node's sources against the same server, over
+  the node's own MCP client. Skips without Node and npm; the `test` job installs `n8n/` first so the install stays out of the timed test step.
 - `tests/integration/test_claude_code_contract.py` — the pinned Claude Code CLI against that
   server; see "AI-client contract tests (T3)" below.
 - `tests/system/test_local_mode_system.py` — `python -m privacyfence.daemon_main` as a separate
