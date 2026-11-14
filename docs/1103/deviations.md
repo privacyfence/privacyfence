@@ -44,7 +44,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p10-claim-switch
 
-- pending
+- worker: tests/integration/test_upstream_mcp_org.py still builds the old signer and errors against the v1 client (2 errors) until phase 12, which owns that file; unit suite is green. The acceptance grep for upstream_claims in src also matches a docstring mention in identity_claim.py (not an import).
+- worker: Signing-failure detection wraps the signer in a small recorder (_FailureRecorder) in upstream_mcp_client.py because the transport may swallow exceptions from auth_flow.
 
 ## p11-forward-audit
 
