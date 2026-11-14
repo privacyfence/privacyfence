@@ -44,6 +44,7 @@ PUBLISHED_DOCS = (
     "docs/security-and-compliance.md",
     "docs/configuration-reference.md",
     "docs/org-mode-setup-guide.md",
+    "docs/n8n-node.md",
     "docs/connecting-a-service.md",
     "docs/google-cloud-setup.md",
     "docs/slack-setup.md",
