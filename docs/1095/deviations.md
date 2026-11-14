@@ -17,7 +17,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-node-logic
 
-- pending
+- review: plain Error for the unreachable sender failure replaced by UnexpectedError (lint rule node-execute-block-wrong-error-thrown, as the brief allowed); credential test sender uses the legacy request helper with a documented eslint-disable because ICredentialTestFunctions declares only request
+- worker: n8n/LICENSE carries MIT text per the owner decision, not the repository Apache-2.0 file; worker had no toolkit so ran no dod or roles, none are required for these paths; orchestrator re-ran n8n lint, typecheck, build, test and ruff after the merge
 
 ## p4-delivery-core
 
