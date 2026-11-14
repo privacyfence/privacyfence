@@ -233,7 +233,9 @@ def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
         admin_config, "admin_config_path", lambda: request.getfixturevalue("tmp_path") / "admin_config.json"
     )
     monkeypatch.setattr(app_credentials, "builtin_app", lambda key: None)
-    monkeypatch.setattr(data_format, "marker_path", lambda: request.getfixturevalue("tmp_path") / "data_format.json")
+    monkeypatch.setattr(
+        data_format, "marker_path", lambda root=None: request.getfixturevalue("tmp_path") / "data_format.json"
+    )
     monkeypatch.setattr(relay_client, "relay_token_path", lambda: request.getfixturevalue("tmp_path") / "relay_token.txt")
     monkeypatch.setattr(
         relay_client, "relay_status_path", lambda: request.getfixturevalue("tmp_path") / "relay_status.json"
