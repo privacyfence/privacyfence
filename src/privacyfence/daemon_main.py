@@ -103,6 +103,7 @@ from . import (
     data_format,
     grist_provisioning,
     group_membership,
+    identity_claim,
     oauth_apps,
     oidc_provider,
     org_bundle_signing,
@@ -114,7 +115,6 @@ from . import (
     runtime_credential_sweeper,
     scoped_tokens,
     step_up_config,
-    upstream_claims,
     upstream_mcp_config,
     upstream_mcp_registry,
     upstream_mcp_runtime,
@@ -1684,7 +1684,7 @@ def _configure_upstream_mcp(issuer_url: str) -> None:
     upstreams = upstream_mcp_config.load_declared()
     if upstreams is None:
         return
-    _claim_settings, membership = upstream_mcp_config.load_settings()
+    claim_settings, membership = upstream_mcp_config.load_settings()
     upstream_mcp_registry.register(upstreams)
     for upstream in upstreams:
         if upstream.grants:
@@ -1701,7 +1701,10 @@ def _configure_upstream_mcp(issuer_url: str) -> None:
     else:
         resolver = group_membership.SnapshotResolver(group_membership.get_store())
     upstream_mcp_runtime.configure(
-        upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url), groups=groups, resolver=resolver,
+        upstreams=upstreams, signer=identity_claim.load_signer(
+            issuer_url, overlap_seconds=claim_settings.key_overlap_hours * 3600,
+        ),
+        groups=groups, resolver=resolver,
     )
     logger.info("Upstream MCP server(s): %s", ", ".join(upstream.id for upstream in upstreams))
 

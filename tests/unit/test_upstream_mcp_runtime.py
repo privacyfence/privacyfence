@@ -9,9 +9,11 @@ from types import SimpleNamespace
 import pytest
 from mcp import types
 
-from privacyfence import oidc_provider, scoped_tokens, upstream_mcp_runtime
+from privacyfence import agent_identity, scoped_tokens, upstream_mcp_runtime
+from privacyfence.agent_identity import AgentIdentity, AgentSource
+from privacyfence.identity_claim import CallerNotAllowedError, ClaimSigner
 from privacyfence.principal import Principal, principal_scope
-from privacyfence.upstream_claims import ClaimSigner
+from privacyfence.upstream_claim_keys import KeySet
 from privacyfence.upstream_mcp_client import UpstreamMcpClientError
 from privacyfence import group_membership
 from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
@@ -50,11 +52,14 @@ _MEMBERS = {
     },
 }
 
-_AI_CLIENT_ACT = {"type": "ai_client", "attested": False, "name": "", "claimed_name": ""}
-
-
 def _tool(name: str) -> types.Tool:
     return types.Tool(name=name, description=f"{name}.", input_schema={"type": "object", "properties": {}})
+
+
+def _signer(tmp_path):
+    keys = KeySet(tmp_path / "keys.json")
+    keys.ensure()
+    return ClaimSigner(issuer="https://pf.example", keys=keys)
 
 
 @pytest.fixture
@@ -68,8 +73,7 @@ def configured(tmp_path, upstreams):
     path.write_text(json.dumps(_GROUPS), encoding="utf-8")
     members = tmp_path / "members.json"
     members.write_text(json.dumps(_MEMBERS), encoding="utf-8")
-    key = oidc_provider.load_or_create_signing_key(tmp_path / "key.pem")
-    signer = ClaimSigner(issuer="https://pf.example/upstream-mcp", key=key)
+    signer = _signer(tmp_path)
     upstream_mcp_runtime.configure(
         upstreams=upstreams, signer=signer, groups=GroupMapStore(path, frozenset({"kh", "wiki"})),
         resolver=group_membership.StaticFileResolver(members),
@@ -83,7 +87,10 @@ def _caller(upstream, principal, scope=None):
 
 
 def _scope(**fields):
-    base = {"id": "st-1", "label": "Nightly", "principal_email": "ann@hr.example"}
+    base = {
+        "id": "st-1", "label": "Nightly", "principal_email": "ann@hr.example", "principal_id": "u1",
+        "tools": frozenset({"kh_search"}),
+    }
     return SimpleNamespace(**{**base, **fields})
 
 
@@ -121,55 +128,85 @@ class TestConfigured:
         with principal_scope(Principal(id="u1", email="bob@x.example", email_verified=True)):
             claim = connector._caller()
         assert claim.sub == "u1"
-        assert claim.domains == ("general",)
+        assert claim.audiences == ("general",)
 
 
 class TestCallerFor:
-    def test_verified_person_gets_the_audiences_their_grants_give(self, configured):
+    def test_verified_person_gets_the_audiences_their_groups_give(self, configured):
         principal = Principal(id="u1", email="Ann@HR.example", email_verified=True)
         claim = _caller(configured[0], principal)
         assert claim.sub == "u1"
+        assert claim.principal_type == "claude_client"
         assert claim.email == "Ann@HR.example"
-        assert claim.email_verified is True
-        assert claim.domains == ("finance", "general", "hr")
-        assert claim.act == _AI_CLIENT_ACT
+        assert claim.audiences == ("finance", "general", "hr")
+        assert claim.tools == ()  # nothing listed yet
+        assert claim.act is None and claim.approved_by is None and claim.token_id is None
+
+    def test_tools_are_the_upstream_native_names_of_the_exposed_tools(self, configured):
+        runtime_entry = upstream_mcp_runtime._runtime.entries["kh"]
+        runtime_entry.catalog.update([_tool("search"), _tool("get_doc")])
+        principal = Principal(id="u1", email="bob@x.example", email_verified=True)
+        assert _caller(configured[0], principal).tools == ("get_doc", "search")
+        scope = _scope(principal_email_verified=True)
+        assert _caller(configured[0], principal, scope).tools == ("search",)
+
+    def test_act_carries_the_client_id_and_only_an_attested_agent(self, configured):
+        principal = Principal(id="u1", email="bob@x.example", email_verified=True)
+        attested = AgentIdentity(id="claude-desktop", name="Claude", version="1", source=AgentSource.OAUTH_CLIENT)
+        claimed = AgentIdentity(id="x", name="X", version="1", source=AgentSource.NONE)
+        with agent_identity.client_id_scope("client-1"), agent_identity.agent_scope(attested):
+            assert _caller(configured[0], principal).act == {"sub": "client-1", "agent": "claude-desktop"}
+        with agent_identity.client_id_scope("client-1"), agent_identity.agent_scope(claimed):
+            assert _caller(configured[0], principal).act == {"sub": "client-1"}
+        with agent_identity.agent_scope(attested):
+            assert _caller(configured[0], principal).act == {"agent": "claude-desktop"}
 
     def test_group_maps_are_per_upstream(self, configured):
         principal = Principal(id="u1", email="ann@hr.example", email_verified=True)
-        assert _caller(configured[1], principal).domains == ()
+        assert _caller(configured[1], principal).audiences == ()
 
-    def test_unverified_person_gets_no_audiences_and_no_email(self, configured):
+    def test_unverified_person_still_gets_a_claim_with_no_audiences_and_no_email(self, configured):
         claim = _caller(configured[0], Principal(id="u2", email="ann@hr.example"))
-        assert claim.domains == ()
-        assert claim.email == ""
-        assert claim.email_verified is False
+        assert claim.audiences == ()
+        assert claim.email is None
 
-    def test_scoped_token_without_upstream_audiences_gets_none(self, configured):
+    def test_scoped_token_is_an_n8n_workflow_named_after_the_token(self, configured):
         claim = _caller(
             configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True),
             _scope(principal_email_verified=True),
         )
-        assert claim.domains == ()
-        assert claim.email_verified is True
-        assert claim.act == {"type": "workflow", "token_id": "st-1", "label": "Nightly"}
+        assert claim.sub == "n8n-token:st-1"
+        assert claim.principal_type == "n8n_workflow"
+        assert claim.token_id == "st-1" and claim.approved_by == "u1"
+        assert claim.email is None and claim.act is None
+        assert claim.audiences == ()
 
     def test_scoped_token_with_upstream_audiences_narrows(self, configured):
         scope = _scope(principal_email_verified=True, upstream_audiences={"kh": frozenset({"hr", "legal"})})
         claim = _caller(configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True), scope)
         # "legal" was ticked but the owner does not hold it: a token never widens.
-        assert claim.domains == ("hr",)
+        assert claim.audiences == ("hr",)
 
     def test_scoped_token_of_an_unverified_owner_gets_none(self, configured):
         scope = _scope(upstream_audiences={"kh": frozenset({"general"})})
         claim = _caller(configured[0], Principal(id="u1", email="ann@hr.example"), scope)
-        assert claim.domains == ()
-        assert claim.email == ""
-        assert claim.email_verified is False
+        assert claim.audiences == ()
+        assert claim.email is None
 
     def test_scoped_token_audiences_for_another_upstream_do_not_apply(self, configured):
         scope = _scope(principal_email_verified=True, upstream_audiences={"wiki": frozenset({"general"})})
         claim = _caller(configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True), scope)
-        assert claim.domains == ()
+        assert claim.audiences == ()
+
+    @pytest.mark.parametrize(("allowed", "scoped"), [(("n8n_workflow",), False), (("claude_client",), True)])
+    def test_a_principal_type_the_upstream_does_not_allow_is_refused(self, configured, allowed, scoped):
+        from dataclasses import replace
+
+        upstream = replace(configured[0], allowed_principal_types=allowed)
+        principal = Principal(id="u1", email="ann@hr.example", email_verified=True)
+        scope = _scope(principal_email_verified=True) if scoped else None
+        with pytest.raises(CallerNotAllowedError):
+            _caller(upstream, principal, scope)
 
 
 class TestHeldAudiences:
@@ -204,9 +241,8 @@ class TestAudiencesForEmail:
         path.write_text(json.dumps(everyone), encoding="utf-8")
         store = group_membership.MembershipStore(tmp_path / "group_membership.json")
         groups = GroupMapStore(path, frozenset({"kh", "wiki"}))
-        key = oidc_provider.load_or_create_signing_key(tmp_path / "key.pem")
         upstream_mcp_runtime.configure(
-            upstreams=upstreams, signer=ClaimSigner(issuer="https://pf.example/upstream-mcp", key=key),
+            upstreams=upstreams, signer=_signer(tmp_path),
             groups=groups, resolver=group_membership.SnapshotResolver(store),
         )
         mapping = groups.group_audiences("kh")
@@ -223,7 +259,30 @@ class TestAudiencesForEmail:
     def test_a_scoped_token_gets_owner_now_intersected_with_chosen(self, configured):
         scope = _scope(principal_email_verified=True, upstream_audiences={"kh": frozenset({"general", "legal"})})
         claim = _caller(configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True), scope)
-        assert claim.domains == ("general",)
+        assert claim.audiences == ("general",)
+
+    def test_a_token_loses_an_audience_its_creator_loses_and_gets_it_back_on_approval(self, tmp_path, upstreams):
+        path = tmp_path / "admin_config.json"
+        path.write_text(json.dumps({"upstream_mcp": {"kh": {"groups": {"mgmt@co.example": ["mgmt"]}}}}), "utf-8")
+        store = group_membership.MembershipStore(tmp_path / "group_membership.json")
+        groups = GroupMapStore(path, frozenset({"kh", "wiki"}))
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams, signer=_signer(tmp_path), groups=groups,
+            resolver=group_membership.SnapshotResolver(store),
+        )
+        mapping = groups.group_audiences("kh")
+        scope = _scope(principal_email_verified=True, upstream_audiences={"kh": frozenset({"mgmt"})})
+        owner = Principal(id="u1", email="ann@hr.example", email_verified=True)
+        member = {"mgmt@co.example": ["ann@hr.example"]}
+        store.apply_snapshot(member, group_audiences=mapping, now=1000.0, max_additions=20)
+        store.approve("mgmt@co.example", "mgmt", "ann@hr.example", group_audiences=mapping, now=1001.0)
+        assert _caller(upstreams[0], owner, scope).audiences == ("mgmt",)
+        store.apply_snapshot({"mgmt@co.example": []}, group_audiences=mapping, now=2000.0, max_additions=20)
+        assert _caller(upstreams[0], owner, scope).audiences == ()
+        store.apply_snapshot(member, group_audiences=mapping, now=3000.0, max_additions=20)
+        assert _caller(upstreams[0], owner, scope).audiences == ()  # re-added: waits for an approval again
+        store.approve("mgmt@co.example", "mgmt", "ann@hr.example", group_audiences=mapping, now=3001.0)
+        assert _caller(upstreams[0], owner, scope).audiences == ("mgmt",)
 
 
 class TestStatus:

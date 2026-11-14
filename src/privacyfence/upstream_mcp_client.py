@@ -1,12 +1,12 @@
 """The client for an operator-declared upstream MCP server, and its tool catalog.
 
 ``UpstreamMcpClient`` opens a fresh Streamable HTTP session for every call, signed with a claim
-minted for that one request (``upstream_claims.ClaimAuth``), so a connection is never shared across
+minted for that one request (``identity_claim.IdentityClaimAuth``), so a connection is never shared across
 calls or principals. ``UpstreamToolCatalog`` turns the tools an upstream listed at startup into
 ``ToolSpec`` values for the declared tools only, and skips any whose schema this release cannot pass
 through safely.
 
-See ADR 0285 (upstream MCP servers as a connector) and ADR 0286 (the signed caller claim).
+See ADR 0285 (upstream MCP servers as a connector) and ADR 0286 and 0288 (the signed caller claim).
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from mcp import ClientSession, types
 from mcp.client.streamable_http import streamable_http_client
 
 from .connector import ToolParam, ToolSpec
-from .upstream_claims import CallerClaim, ClaimAuth, ClaimSigner, service_caller
+from .identity_claim import ClaimSigner, ClaimSigningError, IdentityCaller, IdentityClaimAuth
 from .upstream_mcp_config import READ_VERBS, DeclaredTool, UpstreamServer
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ _REF_KEYS = frozenset({"$ref", "$defs", "definitions"})
 
 
 class UpstreamMcpClientError(Exception):
-    """A call to the upstream failed. ``kind`` is ``unreachable``, ``too_large`` or ``tool_error``."""
+    """A call to the upstream failed. ``kind`` is ``unreachable``, ``too_large``, ``tool_error`` or ``claim_failed``."""
 
     def __init__(self, kind: str, detail: str = "") -> None:
         super().__init__(kind)
@@ -48,6 +48,23 @@ class CallResult:
     text: str
     structured: dict | None
     dropped_blocks: int
+    jti: str = ""
+    req: str = ""
+
+
+class _FailureRecorder:
+    """Wraps the signer so a signing failure is known even when the transport reports it as something else."""
+
+    def __init__(self, signer: ClaimSigner) -> None:
+        self._signer = signer
+        self.failed = False
+
+    def mint(self, **kwargs: Any) -> Any:
+        try:
+            return self._signer.mint(**kwargs)
+        except ClaimSigningError:
+            self.failed = True
+            raise
 
 
 class UpstreamMcpClient:
@@ -58,18 +75,28 @@ class UpstreamMcpClient:
         self._signer = signer
         self._transport = transport
 
-    async def _run(self, caller: CallerClaim, tool: str | None, action: Any) -> Any:
-        """Open a session, run ``action(session)`` once, close. Any transport failure is ``unreachable``."""
-        auth = ClaimAuth(self._signer, self._upstream, caller, tool)
+    async def _run(self, caller: IdentityCaller, action: Any) -> tuple[Any, IdentityClaimAuth | None]:
+        """Open a session, run ``action(session)`` once, close. Any transport failure is ``unreachable``.
+
+        Returns the action's result and the auth that signed it (``None`` when ``identity_claim`` is off)."""
+        upstream = self._upstream
+        auth: IdentityClaimAuth | None = None
+        recorder: _FailureRecorder | None = None
+        if upstream.identity_claim == "required":
+            recorder = _FailureRecorder(self._signer)
+            auth = IdentityClaimAuth(recorder, upstream.audience, caller, upstream.claim_lifetime_seconds)  # type: ignore[arg-type]
         try:
             async with httpx2.AsyncClient(
                 auth=auth, timeout=httpx2.Timeout(60.0, connect=10.0), transport=self._transport,
             ) as http:
-                async with streamable_http_client(self._upstream.url, http_client=http) as (read, write):
+                async with streamable_http_client(upstream.url, http_client=http) as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
-                        return await action(session)
-        except Exception:  # noqa: BLE001 -- the cause may quote the upstream; the caller gets a fixed message
+                        return await action(session), auth
+        except Exception:
+            if recorder is not None and recorder.failed:
+                logger.warning("Upstream %s call was not sent: the claim could not be signed", upstream.id)
+                raise UpstreamMcpClientError("claim_failed") from None  # noqa: BLE001 -- the cause may quote the upstream; the caller gets a fixed message
             logger.warning("Upstream %s could not be reached", self._upstream.id, exc_info=True)
             raise UpstreamMcpClientError("unreachable") from None
 
@@ -77,13 +104,14 @@ class UpstreamMcpClient:
         async def action(session: ClientSession) -> list[types.Tool]:
             return list((await session.list_tools()).tools)
 
-        return await self._run(service_caller(), None, action)
+        tools, _auth = await self._run(IdentityCaller(sub="privacyfence", principal_type="service"), action)
+        return tools
 
-    async def call_tool(self, tool: str, arguments: dict[str, Any], caller: CallerClaim) -> CallResult:
+    async def call_tool(self, tool: str, arguments: dict[str, Any], caller: IdentityCaller | None) -> CallResult:
         async def action(session: ClientSession) -> types.CallToolResult:
             return await session.call_tool(tool, arguments)
 
-        result = await self._run(caller, tool, action)
+        result, auth = await self._run(caller or IdentityCaller(sub="", principal_type="claude_client"), action)
         texts: list[str] = []
         dropped = 0
         for block in result.content:
@@ -97,7 +125,11 @@ class UpstreamMcpClient:
         if result.is_error:
             raise UpstreamMcpClientError("tool_error", text)
         structured = result.structured_content
-        return CallResult(text=text, structured=structured if isinstance(structured, dict) else None, dropped_blocks=dropped)
+        return CallResult(
+            text=text, structured=structured if isinstance(structured, dict) else None, dropped_blocks=dropped,
+            jti=(auth.last_call_jti or "") if auth is not None else "",
+            req=(auth.last_call_req or "") if auth is not None else "",
+        )
 
 
 def _clean(text: str) -> str:
