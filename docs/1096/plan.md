@@ -133,7 +133,7 @@ Files reach the server only through the upload slot (`privacyfence_create_upload
 
 - **The pip release.** `publish-pypi.yml` stays, with its name, because the trusted-publisher entries on pypi.org and test.pypi.org are bound to the workflow file name; it loses the `privacyfence` build, `publish-testpypi`, `publish-pypi` and `publish-r2`, and keeps `dedupe`, `wait_for_build`, a `build` job that builds only `privacyfence-sync`, `publish-testpypi-sync` (`needs: [build, wait_for_build]`) and `publish-pypi-sync` (`needs: [build, publish-testpypi-sync]`), each stable-only with its environment (`testpypi`, `pypi`) unchanged. The wheel is built only in `build-org-image` and `tests.yml` `org-docker-image`; it is not published, not attached to a release and not uploaded to R2. `dependency-audit.yml`'s `floor-audit` job, which exists because `pip install privacyfence` resolves from the pyproject ranges, is deleted; `test-python-compat`, `requires-python` and ADR 0295 are left alone (separate decision). `pyproject.toml` loses the PyPI sidebar metadata (keywords, classifiers, `[project.urls]`) and `twine`; `setup.py`, `MANIFEST.in`, `setuptools_scm` and `requirements/release.lock.txt` stay because they build the image's wheel. `tests.yml` `org-mode-smoke` stays as a required check: it keeps the nginx guide check and the installed-wheel daemon smoke test (`tests/integration/test_org_ubuntu_release_smoke.py`, reworded), and loses only the systemd unit check. The Glama listing (ADR 0114) installs the catalog server from PyPI; its build spec lives on Glama (manual step).
 - **Protected paths.** The tld protect-paths hook blocks edits to `.github/workflows/**` and any `package-lock.json` unless `hooks.protect_paths_allow` in `.tld/toolkit.yaml` lists them; today it lists only `build.yml`, `release.yml` and the toolkit file. The owner extends the list before implementation (manual step `mb1`).
-- **The release.yml retirement (issue 1093).** That work, planned separately and not merged, deletes `release.yml`, replaces `scripts/pre_release_check.py` by `scripts/release_check.py` and rewrites parts of `docs/releasing.md`, `CLAUDE.md` and `CONTRIBUTING.md`. The briefs here name the files as they are today and tell a worker to edit the replacement when it exists; the owner picks the order (manual step `mb2`).
+- **The release.yml retirement (issue 1093).** The owner decided that this plan goes first. Plan 1093 (not merged) deletes `release.yml`, replaces `scripts/pre_release_check.py` by `scripts/release_check.py` and rewrites parts of `docs/releasing.md`, `CLAUDE.md` and `CONTRIBUTING.md`; it is revised against `main` after this work merges. The briefs here therefore name `release.yml` and `scripts/pre_release_check.py` as they are today.
 
 ### 3.7 Docs and website
 
@@ -198,12 +198,6 @@ Old ADRs that get a Status line (body frozen): `Superseded by [ADR 0296]` for 00
 2b. Open a pull request with that change at https://github.com/privacyfence/privacyfence/pulls.
 3. Merge it. Done when `.tld/toolkit.yaml` on `main` lists every entry of step 2.
 
-**mb2-release-retirement-order (about 5 minutes).**
-
-1. Open https://github.com/privacyfence/privacyfence/issues/1093 (the retirement of `release.yml`).
-2. If its work is not merged, either merge it first (recommended: it is smaller, and this plan then edits the files it leaves) or accept that each worker merges `main` into the feature branch before a phase that edits the release docs, `build.yml` or the pre-release script.
-3. Done when you know which order you chose.
-
 ### After implementation
 
 **ma1-branch-protection (about 5 minutes).** Before merging the feature pull request:
@@ -259,7 +253,7 @@ The live QA report of the touched connectors is not manual: phase `p12d` dispatc
 - **7.x clients.** The 7.x desktop update checker (GitHub releases/latest) will offer 8.0, which has no installer. Not fixed here; 7.x gets no further release (`v7.0.2` stays the last, and it already carries the migration marker the start-up check relies on).
 - **Trusted publisher.** `privacyfence-sync`'s publisher entries on PyPI and TestPyPI name the workflow `publish-pypi.yml` and the environments `pypi` and `testpypi`; renaming the file or an environment breaks the next release. Tell: a diff that renames either. Stop with `status=blocked`.
 - **Existing pip installs.** `pip install privacyfence` keeps resolving to the last 7.x release forever; the plan can only say so in the docs and in the changelog (manual step `ma5`).
-- **Plan 1093 and this plan edit the same release docs.** See manual step `mb2`; a worker that finds a file or section named in a brief already changed, renamed or deleted reads the current text before editing and edits the replacement.
+- **Plan 1093 edits the same release docs.** This plan goes first (owner decision); a later merge of the 1093 work onto this one is that plan's job. A worker still reads the current text of a file before editing it.
 - **Lockfile regeneration needs `uv` and the package index.** If the phase `p17` worker cannot reach it, it stops with `status=blocked`; the owner then runs `scripts/update_dependency_locks.sh`.
 - **A phase brief names a symbol or line that does not exist.** Line numbers in the briefs come from commit `9eb7b4c1` and have drifted by up to about 40 lines on the current `main`; search by symbol first. Where a brief says `file:line`, grep for the symbol; if the symbol is absent or the surrounding code is clearly different from what the brief describes, stop with `status=blocked`.
 
@@ -275,10 +269,6 @@ manual_before:
     title: Let the phase workers edit the workflow files this plan changes
     why: The protect-paths hook blocks edits to .github/workflows/** and package-lock.json except for files listed in hooks.protect_paths_allow of .tld/toolkit.yaml; phases p02, p15a, p15b, p15c, p16, p18a, p20b and p24a edit or delete workflows and lockfiles the list does not name.
     done_when: .tld/toolkit.yaml on main lists every file named in the steps of mb1 under hooks.protect_paths_allow.
-  - id: mb2-release-retirement-order
-    title: Decide the order against the release.yml retirement (issue 1093)
-    why: Both changes edit docs/releasing.md, scripts/pre_release_check.py (or its replacement), CLAUDE.md, CONTRIBUTING.md and build.yml; the briefs name release.yml and pre_release_check.py and tell a worker to use the replacement when it exists.
-    done_when: Either the 1093 work is merged, or you accept that the workers merge main into the feature branch before each phase that edits those files.
 manual_after:
   - id: ma1-branch-protection
     title: Remove platform-windows and platform-macos from the required checks of main
@@ -1133,8 +1123,6 @@ phases:
       - .github/workflows/publish-n8n-node.yml
       - .github/workflows/publish-org-image.yml
       - scripts/release_run_guard.py
-      - scripts/release_check.py
-      - tests/unit/test_release_check.py
       - scripts/r2_release.py
       - scripts/pre_release_check.py
       - scripts/build_org_bundle.py
@@ -1153,7 +1141,7 @@ phases:
       3. `finalize-release`: `needs: [sbom, build-org-image]`; remove `actions: read`; delete the graphical-coverage step if still present; in "Attach release assets" delete the globs `PrivacyFence-*.dmg`, `PrivacyFence.mcpb`, `PrivacyFence-*-setup.exe`, `privacyfence_*.deb`, `sbom-shim-npm.cdx.json` and `scripts/build_org_bundle.py`; delete "Publish release manifest and promote to latest" and "Smoke-test the published download routes (HEAD)"; keep the sync plugin zip, the connector-config page, the pre-release notes step and the `stable` branch step last; rewrite the header comments about lines 972-1012 and the "Download build artifacts" comment so they name only what exists.
       4. scripts/r2_release.py: delete `_INSTALLERS`, `REQUIRED_ARTIFACT_IDS`, `classify_installer`, `build_manifest`, `verify`, `promote`, `finalize` and the manifest and `latest` paths; keep `channel`, `check-tag`, `upload`, `sha256_file`, `_r2_client`, `_head`, `_stored_sha256` and the module docstring (rewritten). Edit tests/unit/test_r2_release.py to the kept functions.
       5. scripts/build_org_bundle.py: delete it (it refuses `--mode org` and is desktop-only) together with tests/unit/test_build_org_bundle.py, and turn the link to it in docs/adr/0152 (about line 51) into plain text (docs/adr/README.md rule 2). Edit tests/unit/test_release_assets.py (it hard-codes `jobs["build"]` and asserts build_org_bundle at about lines 35-37) so it reads the `finalize-release` job and asserts the assets that remain; edit tests/unit/test_docs_configuration_reference.py and docs/configuration-reference.md to drop what they parse from build_org_bundle.py (grep both for it). Organization mode keeps reading a legacy `org/org_bundle.json`; do not touch that code.
-      6. scripts/pre_release_check.py: delete the "shim npm test" and "shim typecheck" checks (about lines 65-68) and fix tests/unit/test_pre_release_check.py. If the release-retirement work (issue 1093) has merged, scripts/pre_release_check.py is replaced by scripts/release_check.py (tests/unit/test_release_check.py): make the same deletion there instead and delete nothing else.
+      6. scripts/pre_release_check.py: delete the "shim npm test" and "shim typecheck" checks (about lines 65-68) and fix tests/unit/test_pre_release_check.py.
       7. .github/workflows/publish-n8n-node.yml (comments about lines 58-62 and 90) and .github/workflows/publish-org-image.yml (comments about lines 9-10, 23, 74 and 152): reword the comments that name the DMG, installer, .deb or publish-mcp-registry.yml so they name only build.yml; change no job and no timeout. scripts/release_run_guard.py: reword its docstring (about line 11) so it names no deleted workflow. publish-pypi.yml is handled by a later phase.
       8. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m mypy src/privacyfence, and python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/build.yml'))".
       Stop with status=blocked if the sbom or build-org-image job needs an artifact produced by a deleted job.
