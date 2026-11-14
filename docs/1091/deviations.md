@@ -64,7 +64,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- final: ADRs 0036, 0164 and 0236 and their index rows lacked the forward pointer to ADRs 0284 and 0285 that docs/adr/README.md rule 3 requires; fixed in fix-2
 
 ## Finishing
 
