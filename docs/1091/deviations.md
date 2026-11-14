@@ -55,7 +55,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p11-docs-and-adrs
 
-- pending
+- worker: the docs follow the merged code where the plan differs: GrantStore takes (path, upstream_ids); the reference server also requires nbf, sub and jti and checks iss only when --issuer is given
+- review: open from the worker report: ADRs 0036, 0164 and 0236 and their index rows do not yet carry an amended-by pointer to 0279/0280 (outside touches); the docs disagree on editing admin_config.json while the daemon runs (configuration-reference says not to, upstream-mcp.md says grants may be edited live) -- left for the final review
 
 ## Final review
 
