@@ -67,7 +67,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p15-admin-approvals
 
-- pending
+- scope: scope: src/privacyfence/upstream_mcp_runtime.py gained a public membership_source() so the routes can tell static from snapshot membership; accepted. Existing nav/capability assertions in test_settings_window_html.py were extended for the new membership section.
 
 ## p16-contract-and-examples
 
