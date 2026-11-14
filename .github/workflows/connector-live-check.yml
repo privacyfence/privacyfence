@@ -79,7 +79,7 @@ jobs:
       # instead of silently drifting from whatever this runner last had
       # installed. No actions/setup-python -- plain `python3` (whatever
       # this runner already has on PATH) is used rather than pinning an
-      # exact minor version: pyproject.toml only requires >=3.11, and
+      # exact minor version: pyproject.toml only requires >=3.11.5, and
       # that floor is all this job needs -- unlike
       # scripts/update_dependency_locks.sh, this doesn't touch a lockfile,
       # so there's no reproducibility reason to match tests.yml's 3.13
