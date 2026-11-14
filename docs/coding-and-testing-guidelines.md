@@ -341,7 +341,7 @@ Its client's test module (`tests/unit/test_<name>_client.py`) also carries a
 ### 2.7 Definition of done for a PR touching this repo
 
 This section is the authoritative copy. The `/dod` command runs the gate commands in the `verify`
-section of `.claude/toolkit.yaml`, which must be kept in step with this section, and checks the
+section of `.tld/toolkit.yaml`, which must be kept in step with this section, and checks the
 conditional rows against the branch's diff, and `.github/pull_request_template.md` repeats the
 checklist for the PR description.
 
@@ -402,6 +402,9 @@ checklist for the PR description.
       `bandit -r sync/src` pass (CI's `sync` job, a required check, runs the same three). If
       `sync/README.md` changed, copy it to
       `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
+- [ ] `n8n/**`: in `n8n/`, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test`
+      pass (CI's `n8n-node` job, a required check, runs the same), then
+      `pytest tests/integration/test_n8n_node_contract.py -v` passes.
 - [ ] `cloudflare/downloads/`: `npm test`, `npm run typecheck` and `npm run dry-run` there pass
       ([§1.9](#19-formatting-and-static-analysis)).
 

@@ -20,6 +20,7 @@ from .agent_identity import AgentIdentity, agent_scope
 from .principal import Principal, principal_scope
 
 if TYPE_CHECKING:
+    from .agent_runtimes import DeliveryTarget
     from .policy.scope_rows import ScopeRow
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ REVIEW_PATH = "/settings/scoped_tokens/proposals/{proposal_id}"
 ID_PREFIX = "stp-"
 GONE_MESSAGE = "This token proposal has expired or was already used."
 WIDENED_MESSAGE = "A proposed token can only be narrowed here. To add rules or tools, use New token."
+UPSTREAM_REFUSED_MESSAGE = "Upstream tools cannot be proposed; create the token in Settings."
 _TOO_MANY_MESSAGE = "Too many token proposals are waiting. Review or decline them in Settings → Scoped tokens."
 _REASON_LIMIT = 500
 _TOOL_NAME = "privacyfence_propose_scoped_token"
@@ -47,6 +49,8 @@ class TokenProposal:
     uncovered_tools: tuple[str, ...]
     created_at: float
     expires_at: float
+    delivery: DeliveryTarget | None = None
+    mcp_url: str = ""
 
 
 class ProposalError(ValueError):
@@ -147,7 +151,14 @@ def set_registry(registry: ProposalRegistry | None) -> None:
 def new_proposal(
     *, principal: Principal, request: dict[str, Any], source: str, agent: AgentIdentity, reason: str,
     uncovered_tools: Sequence[str] = (), now: float | None = None,
+    delivery: DeliveryTarget | None = None, mcp_url: str = "",
 ) -> TokenProposal:
+    from . import upstream_mcp_runtime  # function-local: the runtime reaches the connectors
+
+    for tool in request.get("tools", ()):
+        # An upstream tool is named "<id>_<tool>" (upstream_mcp_registry).
+        if any(str(tool).startswith(f"{upstream_id}_") for upstream_id in upstream_mcp_runtime.upstream_ids()):
+            raise ProposalError(UPSTREAM_REFUSED_MESSAGE)
     now = time.time() if now is None else now
     return TokenProposal(
         id=ID_PREFIX + secrets.token_hex(16),
@@ -159,6 +170,8 @@ def new_proposal(
         uncovered_tools=tuple(uncovered_tools),
         created_at=now,
         expires_at=now + PROPOSAL_TTL_SECONDS,
+        delivery=delivery,
+        mcp_url=mcp_url,
     )
 
 
@@ -178,6 +191,10 @@ def narrowing_error(proposed: dict[str, Any], final: dict[str, Any]) -> str | No
             return WIDENED_MESSAGE
     if not set(final["tools"]) <= set(proposed["tools"]) or final["days"] > proposed["days"]:
         return WIDENED_MESSAGE
+    proposed_domains = proposed.get("upstream_domains") or {}
+    for upstream_id, domains in (final.get("upstream_domains") or {}).items():
+        if not set(domains) <= set(proposed_domains.get(upstream_id, ())):
+            return WIDENED_MESSAGE
     for flag in ("allow_personal_data", "allow_personal_data_reads"):
         if final.get(flag) and not proposed.get(flag):
             return WIDENED_MESSAGE
@@ -216,8 +233,11 @@ def bundle_from_calls(
     return rules, sorted(tools), sorted(uncovered)
 
 
-def review_data(proposal: TokenProposal, own_rows: Sequence[ScopeRow]) -> dict[str, Any]:
-    """What the review page renders for ``proposal``."""
+def review_data(
+    proposal: TokenProposal, own_rows: Sequence[ScopeRow], *, runtime_host: str = "", project_id: str = "",
+) -> dict[str, Any]:
+    """What the review page renders for ``proposal``. ``runtime_host`` and ``project_id`` describe the
+    runtime a delivery proposal would write to."""
     from .policy import catalogue, describe, scope_rows  # function-local: import cycle
 
     by_id = {row.id: row for row in own_rows}
@@ -248,6 +268,12 @@ def review_data(proposal: TokenProposal, own_rows: Sequence[ScopeRow]) -> dict[s
         "source": proposal.source,
         "uncovered_tools": list(proposal.uncovered_tools),
         "expires_at": proposal.expires_at,
+        "delivery": None if proposal.delivery is None else {
+            "runtime": proposal.delivery.runtime,
+            "host": runtime_host,
+            "project_id": project_id,
+            "workflow_id": proposal.delivery.workflow_id,
+        },
     }
 
 

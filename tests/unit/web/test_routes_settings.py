@@ -1571,7 +1571,7 @@ def _scoped_token(token_id: str = "st-0123456789ab", label: str = "sales-sync"):
 
 def _scoped_wiring(
     calls: list, *, ok: bool = True, reason: str = "", create_error: str = "", known: bool = True,
-    rename_error: str = "",
+    rename_error: str = "", extend_error: str = "",
 ):
     from privacyfence.scoped_tokens import ScopedTokenError
 
@@ -1593,10 +1593,17 @@ def _scoped_wiring(
             raise ScopedTokenError(rename_error)
         return ("sales-sync", _scoped_token(token_id, label=label)) if known else None
 
+    def _extend(token_id, days):
+        calls.append(("extend", token_id, days))
+        if extend_error:
+            raise ScopedTokenError(extend_error)
+        return (100.0, _scoped_token(token_id)) if known else None
+
     return rs.ScopedTokenWiring(
         store_create=_create,
         store_revoke=_revoke,
         store_rename=_rename,
+        store_extend=_extend,
         store_revoke_all=lambda: calls.append(("revoke_all",)) or 3,
         send_secret=lambda s: calls.append(("send", s)) or (ok, reason),
         page_data=lambda: {"tokens": []},
@@ -1613,6 +1620,7 @@ class TestScopedTokenRoutes:
     REVOKE = "/api/settings/scoped_tokens/revoke"
     REVOKE_ALL = "/api/settings/scoped_tokens/revoke_all"
     RENAME = "/api/settings/scoped_tokens/rename"
+    EXTEND = "/api/settings/scoped_tokens/extend"
     BODY = {
         "label": "sales-sync", "days": 90, "rules": [{"kind": "copy", "rule_id": "r2"}, {"kind": "copy", "rule_id": "r1"}],
         "tools": ["gmail_list_messages", "drive_list_files"], "confirmed": True,
@@ -1720,7 +1728,7 @@ class TestScopedTokenRoutes:
         assert scoped_tokens.normalise_create_request({**base, "allow_personal_data": "yes"}) is None
 
     @pytest.mark.usefixtures("_data_dir")
-    @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL, RENAME])
+    @pytest.mark.parametrize("path", [CREATE, REVOKE, REVOKE_ALL, RENAME, EXTEND])
     def test_create_needs_confirmation_a_human_session_and_the_passkey(self, controller, sessions, path):
         body = {**self.BODY, "token_id": "st-0123456789ab"}
         client, calls = self._client(controller, sessions)
@@ -1878,6 +1886,53 @@ class TestScopedTokenRoutes:
         assert client.post(self.RENAME, json=body).status_code == 400
         assert calls == []
 
+    def test_extend_answers_the_new_expiry_and_audits_it(self, controller, sessions, monkeypatch):
+        recorded: list = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(
+            self.EXTEND, json={"csrf": csrf, "token_id": "st-0123456789ab", "days": 30, "confirmed": True},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"extended": {"id": "st-0123456789ab", "label": "sales-sync", "expires_at": 2.0}}
+        assert calls == [("extend", "st-0123456789ab", 30)]
+        assert [s for _p, s in recorded] == [
+            "Extended scoped token 'sales-sync' (st-0123456789ab) to 1970-01-01, 30 days",
+        ]
+
+    def test_extend_of_an_unknown_token_is_404(self, controller, sessions):
+        client, _calls = self._client(controller, sessions, wiring_kwargs={"known": False})
+        csrf = _authed(client, sessions)
+        r = client.post(self.EXTEND, json={"csrf": csrf, "token_id": "st-nope", "days": 5, "confirmed": True})
+        assert r.status_code == 404
+        assert r.json() == {"error": "No such token."}
+
+    def test_extend_shows_the_validation_text(self, controller, sessions):
+        client, _calls = self._client(controller, sessions, wiring_kwargs={"extend_error": "Too long."})
+        csrf = _authed(client, sessions)
+        r = client.post(self.EXTEND, json={"csrf": csrf, "token_id": "st-1", "days": 5, "confirmed": True})
+        assert r.status_code == 400
+        assert r.json() == {"error": "Too long."}
+
+    @pytest.mark.parametrize("days", [True, "30", 1.5, None, "missing"])
+    def test_an_extend_with_a_bad_days_is_a_400(self, controller, sessions, days):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        body = {"csrf": csrf, "token_id": "st-1", "days": days, "confirmed": True}
+        if days == "missing":
+            del body["days"]
+        assert client.post(self.EXTEND, json=body).status_code == 400
+        assert calls == []
+
+    def test_extend_is_refused_without_confirmation(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        r = client.post(self.EXTEND, json={"csrf": csrf, "token_id": "st-1", "days": 5})
+        assert r.status_code == 400
+        assert r.json() == {"error": "confirmation required"}
+        assert calls == []
+
     def test_audit_summaries_name_the_token_and_never_the_secret(self, controller, sessions, monkeypatch):
         recorded: list = []
         monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
@@ -1898,7 +1953,7 @@ class TestScopedTokenRoutes:
         client, _calls = self._client(controller, sessions)
         _authed(client, sessions)
         page = client.get("/settings").text
-        for route in ("create", "revoke", "revoke_all", "rename"):
+        for route in ("create", "revoke", "revoke_all", "rename", "extend"):
             assert f"['{route}'," in page
         assert "url = '/api/settings/scoped_tokens/' + scopedRoutes[action][0]; rest.confirmed = true;" in page
         assert (
@@ -1907,6 +1962,7 @@ class TestScopedTokenRoutes:
         assert "Revoke this token? Clients using it stop working at once." in page
         assert "Revoke all your scoped tokens?" in page
         assert "rename_scoped_token: ['rename', null]" in page
+        assert "extend_scoped_token: ['extend', null]" in page
         assert "if (scopedRoutes[action][1] && !window.confirm(scopedRoutes[action][1])) { return; }" in page
         assert "if (res.ok && scopedAction) { window.location.reload(); }" in page
         assert page.index("window.location.reload()") < page.index("window.__pfRender(res.state)")
@@ -2245,6 +2301,24 @@ class TestScopedTokenProposalRoutes:
         assert calls[0][1:3] == ("sales-sync", 90)
         assert calls[1] == ("send", self.SECRET)
         assert not self._live(proposal)
+
+    def test_a_delivery_proposal_is_refused_in_local_mode(self, controller, sessions):
+        from privacyfence import agent_runtimes
+
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        request = scoped_tokens.normalise_create_request(dict(self.REQUEST))
+        proposal = scoped_token_proposals.new_proposal(
+            principal=LOCAL_PRINCIPAL, request=request, source="bundle", agent=self.AGENT, reason="a weekly job",
+            delivery=agent_runtimes.DeliveryTarget("n8n", "wf1"), mcp_url="https://pf.example.com/mcp",
+        )
+        scoped_token_proposals.get_registry().add(proposal)
+
+        r = client.post(self.CREATE, json=self._body(proposal, csrf))
+
+        assert r.status_code == 400
+        assert r.json() == {"error": "This proposal delivers the token to n8n, which needs an organization server."}
+        assert calls == []
 
     def test_typed_label_must_match(self, controller, sessions):
         client, calls = self._client(controller, sessions)

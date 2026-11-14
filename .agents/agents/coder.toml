@@ -1,8 +1,0 @@
-extra_instructions = """
-Read AGENTS.md at the repo root before you start and follow it, including the "never touch" list.
-Before you hand over, walk the definition-of-done checklist in AGENTS.md (docs/coding-and-testing-guidelines.md §2.7):
-CHANGELOG line for a user-visible change, an ADR for a hard-to-reverse decision, `gated_call` plus an audit trail
-for every new or changed tool call, no content in logs or previews, a `<Name>ClientError` for new client code,
-and a reset in tests/conftest.py for new module-level state. State in your summary which items apply and how each is met.
-Run the check command; do not claim checks it does not cover (see AGENTS.md).
-"""

@@ -113,6 +113,7 @@ REQUIRED_STATUS_CHECKS = [
     "Sync client (Python 3.11)",
     "Sync client (Python 3.13)",
     "website-build",
+    "n8n-node",
 ]
 
 
