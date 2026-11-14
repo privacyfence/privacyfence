@@ -11,7 +11,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-status-expired
 
-- pending
+- None.
+- review: The 5 docs-link tests stay red until p5 writes ADRs 0283/0284 (same as p1). Worker had no tld CLI; no roles required.
 
 ## p3-extend-routes
 
