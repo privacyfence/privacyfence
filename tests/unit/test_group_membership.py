@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import stat
+import sys
 
 import pytest
 
@@ -173,7 +174,8 @@ class TestSnapshot:
 
     def test_state_persists_in_a_0600_file_and_reloads(self, store, tmp_path):
         snap(store, {MGMT: ["a@x.example"]})
-        assert stat.S_IMODE(os.stat(store._path).st_mode) == 0o600
+        if sys.platform != "win32":  # Windows has no POSIX mode bits; the file is still written and reloaded
+            assert stat.S_IMODE(os.stat(store._path).st_mode) == 0o600
         reloaded = MembershipStore(store._path)
         assert reloaded.members_of("A@x.example") == {MGMT}
         assert reloaded.updated_at == NOW
