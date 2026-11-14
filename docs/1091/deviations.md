@@ -52,11 +52,15 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - worker: beyond the brief: narrowing_error also refuses a reviewed proposal that adds data domains the proposal lacked, and the token list payload carries each token upstream_domains so Duplicate can prefill them; the proposal refusal matches tool names by the upstream id plus underscore prefix instead of an exact tool set
 - worker: org create-route tests were added to tests/unit/web/test_routes_org_settings.py because test_routes_settings.py covers only local mode; an upstream tool gated review or popup has no scope-catalogue entry yet, so only auto-gated upstream tools can be ticked in the New token form (the plan defers rules for them)
 - scope: tests/unit/web/test_routes_org_settings.py is outside touches; it holds the org create-route tests; accepted
+- review: main added a delivery path for AI-proposed tokens (runtime_credentials.deliver); fix-1 made it pass upstream_domains, held_domains and principal_email_verified like the Settings create route, with a test
 
 ## p11-docs-and-adrs
 
 - worker: the docs follow the merged code where the plan differs: GrantStore takes (path, upstream_ids); the reference server also requires nbf, sub and jti and checks iss only when --issuer is given
 - review: open from the worker report: ADRs 0036, 0164 and 0236 and their index rows do not yet carry an amended-by pointer to 0279/0280 (outside touches); the docs disagree on editing admin_config.json while the daemon runs (configuration-reference says not to, upstream-mcp.md says grants may be edited live) -- left for the final review
+- conflict: merging main (the n8n scoped-token delivery feature, PR 1094) conflicted in CHANGELOG.md, docs/adr/README.md, docs/configuration-reference.md, scoped_tokens.py, routes_settings.py and test_server.py; fix-1 kept both features
+- review: main took ADRs 0278-0282, so this plan ADRs 0278-0280 were renumbered to 0283-0285 everywhere outside docs/1091 on the owner decision (ask a-0213d8fce9cc9789); the plan text still names 0278-0280, so its final check for those ADRs is met by 0283-0285
+- review: tests/unit/test_docs_references_exist.py now exempts docs/adr/ citations in docs/<n>/plan.md as it already did for old-layout plans, because the frozen plan still names the old ADR filenames; owner decision (ask a-adfde717d85da958); the plan file is unchanged
 
 ## Final review
 
