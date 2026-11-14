@@ -22,6 +22,7 @@ OK_BODY = {"id": CRED_ID, "name": "PrivacyFence x", "type": "httpBearerAuth"}
 class FakeResponse:
     def __init__(self, status: int = 200, body: Any = None, *, raw: bytes | None = None) -> None:
         self.status_code = status
+        self.closed = False
         if raw is not None:
             self._raw = raw
         elif body is None:
@@ -30,6 +31,9 @@ class FakeResponse:
             import json
 
             self._raw = json.dumps(body).encode()
+
+    def close(self) -> None:
+        self.closed = True
 
     def iter_content(self, chunk_size: int = 1) -> Any:
         for i in range(0, len(self._raw), chunk_size):
@@ -163,6 +167,18 @@ class TestCheck:
 
 
 class TestErrors:
+    @pytest.mark.parametrize("response", [FakeResponse(503, {"message": "boom"}), FakeResponse(302)])
+    def test_a_refused_response_is_closed(self, monkeypatch, api, response):
+        Recorder(monkeypatch, response)
+        error_of(create, api)
+        assert response.closed
+
+    def test_a_successful_response_is_closed(self, monkeypatch, api):
+        response = FakeResponse(200, OK_BODY)
+        Recorder(monkeypatch, response)
+        create(api)
+        assert response.closed
+
     def test_status(self, monkeypatch, api):
         Recorder(monkeypatch, FakeResponse(503, {"message": "boom"}))
         err = error_of(create, api)
