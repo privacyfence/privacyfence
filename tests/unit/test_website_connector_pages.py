@@ -42,6 +42,9 @@ CONNECTORS: dict[str, tuple[str, str, str]] = {
     "peek": ("/connectors/peek/", "peek-setup", "Peek"),
     "miro": ("/connectors/miro/", "miro-setup", "Miro"),
 }
+# Operator-declared, no external provider: no product page, setup guide or README row
+# (docs/upstream-mcp.md is its documentation).
+NO_PAGE_MODULES = {"upstream_mcp"}
 PAGE_GUIDES = {page: guide for page, guide, _ in CONNECTORS.values()}
 CONNECTOR_PAGE = re.compile(r"^/connectors/[a-z0-9-]+/$")
 
@@ -54,7 +57,7 @@ def _readme_rows() -> set[str]:
 
 def test_every_connector_module_is_mapped():
     modules = {p.stem for p in (REPO / "src" / "privacyfence" / "connectors").glob("*.py")} - {"__init__"}
-    assert modules == set(CONNECTORS), "map each connector module to its page, setup guide and README row"
+    assert modules - NO_PAGE_MODULES == set(CONNECTORS), "map each connector module to its page, setup guide and README row"
 
 
 def test_every_connector_page_is_mapped_and_built():
