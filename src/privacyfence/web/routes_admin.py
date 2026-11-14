@@ -52,6 +52,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -60,7 +61,20 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from .. import admin_config, agent_runtimes, connector_configs, data_format, oauth_apps, org_mode, paths, relay_client, settings_window_html, web_shell
+from .. import (
+    admin_config,
+    agent_runtimes,
+    connector_configs,
+    data_format,
+    group_membership,
+    oauth_apps,
+    org_mode,
+    paths,
+    relay_client,
+    settings_window_html,
+    upstream_mcp_runtime,
+    web_shell,
+)
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
@@ -127,10 +141,15 @@ ADMIN_ACTIONS: dict[str, AdminAction] = {
     "toggle_pii_category": AdminAction(_ORG_ONLY, True, "self"),
     "set_default_policy": AdminAction(_ORG_ONLY, True, "self"),
     "set_category_policy": AdminAction(_ORG_ONLY, True, "self"),
+    "approve_group_membership": AdminAction(_ORG_ONLY, True, "self"),
+    "decline_group_membership": AdminAction(_ORG_ONLY, True, "self"),
 }
 
 # The actions ``org_install_policy.apply_change`` carries out.
 _PRIVACY_ACTIONS = frozenset(org_install_policy.SUPPORTED_ACTIONS)
+
+# The actions that decide pending group additions (``group_membership``).
+_GROUP_MEMBERSHIP_ACTIONS = frozenset({"approve_group_membership", "decline_group_membership"})
 
 # (name, type, required) for each declared parameter, in the order the page posts them.
 _Param = tuple[str, type, bool]
@@ -167,6 +186,8 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
     "toggle_pii_category": (("category_key", str, True),),
     "set_default_policy": (("group", str, True), ("policy", str, True)),
     "set_category_policy": (("group", str, True), ("category", str, True), ("policy", str, True)),
+    "approve_group_membership": (("group", str, True), ("audience", str, True), ("email", str, False)),
+    "decline_group_membership": (("group", str, True), ("audience", str, True), ("email", str, False)),
 }
 
 # The sections that take effect only when the server starts again, with the name the page shows.
@@ -307,6 +328,45 @@ def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[st
     return signin
 
 
+# At most this many addresses are listed for one pending (group, audience) row.
+_MAX_PENDING_EMAILS = 50
+
+
+def _group_membership_state() -> dict[str, Any]:
+    """Where membership comes from, when it last changed, the last refused snapshot and who is
+    waiting for approval. A static file has no approvals, so its section is read-only."""
+    source = upstream_mcp_runtime.membership_source()
+    state: dict[str, Any] = {"source": source, "updated_at": None, "pending": [], "last_rejected": None}
+    if source == "static":
+        return state
+    store = group_membership.get_store()
+    state["updated_at"] = store.updated_at
+    state["pending"] = [
+        {"group": row.group, "audience": row.audience, "count": len(row.emails),
+         "emails": list(row.emails[:_MAX_PENDING_EMAILS])}
+        for row in store.pending(upstream_mcp_runtime.all_group_audiences())
+    ]
+    rejected = store.last_rejected()
+    if rejected:
+        state["last_rejected"] = {"reason": str(rejected.get("reason", "")), "at": rejected.get("at")}
+    return state
+
+
+def _decide_group_membership(action: str, params: dict[str, Any]) -> str | None:
+    """Approve or decline; the audit text, or ``None`` when nothing was waiting."""
+    store = group_membership.get_store()
+    decide = store.approve if action == "approve_group_membership" else store.decline
+    group, audience = params["group"], params["audience"]
+    count = decide(
+        group, audience, params.get("email") or None,
+        group_audiences=upstream_mcp_runtime.all_group_audiences(), now=time.time(),
+    )
+    if count == 0:
+        return None
+    verb = "Approved" if action == "approve_group_membership" else "Declined"
+    return f"{verb} membership for {count} person(s) in {group} for audience {audience}"
+
+
 def _admin_state(
     *, mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     principal: Principal, install_wide_settings: dict[str, Any] | None = None, issuer_url: str = "",
@@ -337,6 +397,7 @@ def _admin_state(
         if install_wide_settings is not None:
             state["privacy"] = _privacy_rows(install_wide_settings)
         state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))
+        state["group_membership"] = _group_membership_state()
     return state
 
 
@@ -393,6 +454,15 @@ def _dispatch(
             logger.error("Could not write the install-wide settings.yaml: %s", exc)
             return _error("could not write settings.yaml", 500)
         changed: list[str] = []
+    elif action in _GROUP_MEMBERSHIP_ACTIONS:
+        try:
+            decided = _decide_group_membership(action, params)
+        except OSError as exc:
+            logger.error("Could not write the group membership file: %s", exc)
+            return _error("Could not save the group membership.", 500)
+        if decided is None:
+            return _error("Nothing is waiting for that approval.", 409)
+        summary, changed = decided, []
     else:
         try:
             summary, changed = admin_config.apply_change(

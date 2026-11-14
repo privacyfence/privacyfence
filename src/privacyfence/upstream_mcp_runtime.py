@@ -124,6 +124,13 @@ def all_group_audiences() -> dict[str, frozenset[str]]:
     return merged
 
 
+def membership_source() -> str:
+    """``static`` when a static file resolver supplies membership, else ``snapshot``."""
+    if _runtime is not None and isinstance(_runtime.resolver, group_membership.StaticFileResolver):
+        return "static"
+    return "snapshot"
+
+
 def max_additions() -> int:
     """The snapshot addition cap from the operator file's ``membership`` section."""
     if _runtime is None:
