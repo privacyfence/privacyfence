@@ -35,6 +35,7 @@ from privacyfence import (
     daemon_main,
     data_format,
     download_staging,
+    group_membership,
     gate,
     grist_auth,
     grist_provisioning,
@@ -159,6 +160,7 @@ def _reset() -> None:
     audit_log.set_released_request_id("")
     # The scoped-token store is a process-wide singleton over the data dir (ADR 0164).
     scoped_tokens.set_store(None)
+    group_membership.set_store(None)
     scoped_token_proposals.set_registry(None)
     runtime_credentials.set_store(None)
     runtime_credential_sweeper.stop()
