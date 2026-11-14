@@ -3,7 +3,7 @@
 The server is a real ``WebServer`` in organization mode; the upstream is the p6 reference server on
 another port, verifying PrivacyFence's claims against the server's own ``/upstream-mcp/jwks``. The
 AI client is the official ``mcp`` client with a real access token for a verified person whose
-admin-config grants give them the ``general`` domain only.
+group maps give them the ``general`` audience only.
 """
 from __future__ import annotations
 
@@ -27,7 +27,8 @@ from privacyfence import upstream_claims, upstream_mcp_registry, upstream_mcp_ru
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.connectors import upstream_mcp as connector_module
 from privacyfence.principal import Principal, current_principal
-from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+from privacyfence.group_membership import StaticFileResolver
+from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.org_session import OrgSessionStore
@@ -97,7 +98,10 @@ def stack(tmp_path, monkeypatch):
     issuer_url = f"http://localhost:{org_port}"
 
     (tmp_path / "admin_config.json").write_text(json.dumps({
-        "upstream_mcp": {"ref": {"grants": [{"match": "*", "domains": ["general"]}]}},
+        "upstream_mcp": {"ref": {"groups": {"everyone@example.com": ["general"]}}},
+    }), encoding="utf-8")
+    (tmp_path / "members.json").write_text(json.dumps({
+        "version": 1, "groups": {"everyone@example.com": ["ann@example.com"]},
     }), encoding="utf-8")
     upstreams = parse_upstreams({
         "version": 1,
@@ -116,7 +120,8 @@ def stack(tmp_path, monkeypatch):
     upstream_mcp_registry.register(upstreams)
     upstream_mcp_runtime.configure(
         upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url),
-        grants=GrantStore(tmp_path / "admin_config.json", frozenset({"ref"})),
+        groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"ref"})),
+        resolver=StaticFileResolver(tmp_path / "members.json"),
     )
 
     # The upstream verifies against the organization server's own key set.

@@ -799,7 +799,8 @@ class TestUpstreamMcpOrgMode:
     def _configure(tmp_path):
         from privacyfence import upstream_mcp_runtime
         from privacyfence.upstream_claims import ClaimSigner
-        from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+        from privacyfence.group_membership import StaticFileResolver
+        from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 
         upstreams = parse_upstreams({
             "version": 1,
@@ -812,7 +813,8 @@ class TestUpstreamMcpOrgMode:
             issuer=f"{ISSUER}/upstream-mcp", key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"),
         )
         upstream_mcp_runtime.configure(
-            upstreams=upstreams, signer=signer, grants=GrantStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            upstreams=upstreams, signer=signer, groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            resolver=StaticFileResolver(tmp_path / "members.json"),
         )
         return signer
 
