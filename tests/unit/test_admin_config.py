@@ -89,6 +89,7 @@ class TestLoadAndSave:
         assert loaded["unattended_sessions"] == {"enabled": False}
         assert loaded["imported_from_bundle_sha256"] == ""
         assert loaded["rooms"] == [] and loaded["authz"] == {}
+        assert loaded["upstream_mcp"] == {}
         assert loaded["org_server"] is True
 
     def test_normalization_fills_nested_keys(self, tmp_path):

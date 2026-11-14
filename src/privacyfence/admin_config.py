@@ -153,6 +153,8 @@ def _default_config() -> dict[str, Any]:
         "scoped_tokens": {},
         "agent_runtimes": {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}},
         "audit_forwarding": {},
+        # Domain grants for upstream MCP servers (upstream_mcp_config.GrantStore reads them).
+        "upstream_mcp": {},
     }
 
 

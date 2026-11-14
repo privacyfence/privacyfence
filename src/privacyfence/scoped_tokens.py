@@ -24,7 +24,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from . import auto_accept, paths, secure_files
 from .principal import Principal
@@ -85,6 +85,10 @@ class ScopedToken:
     tools: frozenset[str]
     allow_personal_data: bool = False  # ADR 0173: exports, downloads and page uploads may carry personal data
     allow_personal_data_reads: bool = False  # Gmail message/thread and Slack reads may carry personal data
+    # Upstream MCP servers: the data domains the token may see per upstream id, and whether
+    # the owner's email was verified when it was made. Read by ``upstream_mcp_runtime.caller_for``.
+    upstream_domains: Mapping[str, frozenset[str]] = field(default_factory=dict, hash=False)
+    principal_email_verified: bool = False
     # The token's own rules (ADR 0236), in the auto_accept: row format.
     rules: tuple["ScopeRow", ...] = field(default=(), hash=False)
     # The stored entry of a token written before tokens held their own rules, kept as read until it
@@ -229,10 +233,32 @@ def normalise_create_request(payload: dict[str, Any]) -> dict[str, Any] | None:
     allow_personal_data_reads = payload.get("allow_personal_data_reads", False)
     if not isinstance(allow_personal_data_reads, bool):
         return None
+    upstream_domains = _normalise_upstream_domains(payload.get("upstream_domains"))
+    if upstream_domains is None:
+        return None
     return {
         "label": label, "days": days, "rules": rules, "tools": sorted(tools),
         "allow_personal_data": allow_personal_data, "allow_personal_data_reads": allow_personal_data_reads,
+        "upstream_domains": upstream_domains,
     }
+
+
+def _normalise_upstream_domains(raw: Any) -> dict[str, list[str]] | None:
+    """``{upstream id: sorted, de-duplicated domain list}``, or ``None`` for a malformed value.
+    An upstream with no domain is left out, so the step-up fingerprint is the same either way."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, list[str]] = {}
+    for upstream_id, domains in raw.items():
+        if not isinstance(upstream_id, str) or not isinstance(domains, list):
+            return None
+        if not all(isinstance(domain, str) for domain in domains):
+            return None
+        if domains:
+            out[upstream_id] = sorted(set(domains))
+    return dict(sorted(out.items()))
 
 
 def _to_json(token: ScopedToken) -> dict[str, Any]:
@@ -255,6 +281,10 @@ def _to_json(token: ScopedToken) -> dict[str, Any]:
         data["allow_personal_data"] = True
     if token.allow_personal_data_reads:
         data["allow_personal_data_reads"] = True
+    if token.upstream_domains:
+        data["upstream_domains"] = {uid: sorted(doms) for uid, doms in sorted(token.upstream_domains.items())}
+    if token.principal_email_verified:
+        data["principal_email_verified"] = True
     data["rules"] = [scope_rows.row_to_dict(row) for row in token.rules]
     return data
 
@@ -283,6 +313,16 @@ def _limits_from_json(raw: Any) -> dict[str, frozenset[tuple[str, str]]]:
             parsed.add((pair[0], pair[1]))
         limits[rid] = frozenset(parsed)
     return limits
+
+
+def _upstream_domains_from_json(raw: Any) -> dict[str, frozenset[str]]:
+    """Lenient read: anything malformed is dropped, which only narrows the token."""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        uid: frozenset(d for d in doms if isinstance(d, str))
+        for uid, doms in raw.items() if isinstance(uid, str) and isinstance(doms, list)
+    }
 
 
 def _from_json(principal_id: str, raw: Any) -> ScopedToken:
@@ -318,6 +358,8 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
         tools=frozenset(str(t) for t in raw["tools"]),
         allow_personal_data=raw.get("allow_personal_data", False) is True,
         allow_personal_data_reads=raw.get("allow_personal_data_reads", False) is True,
+        upstream_domains=_upstream_domains_from_json(raw.get("upstream_domains")),
+        principal_email_verified=raw.get("principal_email_verified", False) is True,
         rules=tuple(rows),
         legacy_raw=legacy_raw,
     )
@@ -617,6 +659,9 @@ class ScopedTokenStore:
         policy: ScopedTokenPolicy,
         allow_personal_data: bool = False,
         allow_personal_data_reads: bool = False,
+        upstream_domains: Mapping[str, Iterable[str]] | None = None,
+        held_domains: Mapping[str, frozenset[str]] | None = None,
+        principal_email_verified: bool = False,
         now: float | None = None,
         token_id: str | None = None,
     ) -> tuple[ScopedToken, str]:
@@ -630,6 +675,11 @@ class ScopedTokenStore:
             raise ScopedTokenError("That token id is already in use.")
 
         tool_set = frozenset(tools)
+        chosen_domains = {uid: frozenset(doms) for uid, doms in (upstream_domains or {}).items() if doms}
+        held = held_domains or {}
+        for uid, doms in sorted(chosen_domains.items()):
+            for domain in sorted(doms - held.get(uid, frozenset())):
+                raise ScopedTokenError(f"You can only give a token domains you have: {domain}")
         new_rules, own_rows = self._prepare(label=label, rules=rules, policy=policy)
         with self._lock:
             self._refresh(principal)
@@ -655,6 +705,8 @@ class ScopedTokenStore:
                 tools=tool_set,
                 allow_personal_data=allow_personal_data,
                 allow_personal_data_reads=allow_personal_data_reads,
+                upstream_domains=chosen_domains,
+                principal_email_verified=principal_email_verified,
                 rules=tuple(token_rows),
             )
             self._tokens[principal.id] = [*existing, token]

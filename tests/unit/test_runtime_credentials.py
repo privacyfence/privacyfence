@@ -97,6 +97,35 @@ def _deliver(tokens, api, proposal=None, on_abandoned=None):
     )
 
 
+class TestDeliverUpstreamDomains:
+    def test_a_delivered_token_cannot_carry_domains_the_person_does_not_hold(self, tokens):
+        api = FakeApi()
+        bound = {**BOUND, "upstream_domains": {"kh": ["hr"]}}
+        outcome = rc.deliver(
+            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=api, token_store=tokens,
+            policy=ENABLED, held_domains={"kh": frozenset({"general"})}, principal_email_verified=True,
+        )
+        assert outcome.status == 400 and "domains you have: hr" in outcome.error
+        assert api.created == [] and tokens.tokens_for(ALICE) == []
+
+    def test_the_domains_and_the_verified_flag_reach_the_token_store(self, tokens, monkeypatch):
+        seen = {}
+
+        def create(principal, **kwargs):
+            seen.update(kwargs)
+            raise ScopedTokenError("stop here")
+
+        monkeypatch.setattr(tokens, "create", create)
+        bound = {**BOUND, "upstream_domains": {"kh": ["hr"]}}
+        rc.deliver(
+            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=FakeApi(), token_store=tokens,
+            policy=ENABLED, held_domains={"kh": frozenset({"hr"})}, principal_email_verified=True,
+        )
+        assert seen["upstream_domains"] == {"kh": ["hr"]}
+        assert seen["held_domains"] == {"kh": frozenset({"hr"})}
+        assert seen["principal_email_verified"] is True
+
+
 def _remove_the_record():
     rc.get_store().remove(rc.get_store().all()[0].credential_id)
 

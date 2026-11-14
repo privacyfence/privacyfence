@@ -409,6 +409,7 @@ def scoped_token_page_data(
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
             "allow_personal_data_reads": token.allow_personal_data_reads,
+            "upstream_domains": {uid: sorted(doms) for uid, doms in sorted(token.upstream_domains.items())},
             "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
             "last_denied_tool": seen.last_denied_tool,
             "runtime_credential": (
@@ -424,7 +425,7 @@ def scoped_token_page_data(
          "expires_at": p.expires_at}
         for p in scoped_token_proposals.get_registry().pending_for(principal.id)
     ]
-    return {
+    page: dict[str, Any] = {
         "delivery": delivery, "proposals": proposals, "proposals_enabled": policy.allow_ai_proposals,
         "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
         "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": rules,
@@ -438,6 +439,19 @@ def scoped_token_page_data(
             for entry in policy_catalogue.scope_catalogue() if entry["connector"] in connector_names
         ],
     }
+    from .. import upstream_mcp_runtime  # function-local, as in _build_org_app
+
+    if upstream_mcp_runtime.configured():
+        # The data domains a token may narrow are the ones the person holds themselves.
+        held = upstream_mcp_runtime.held_domains(principal, principal.email_verified)
+        page["upstreams"] = [
+            {
+                "id": row["id"], "label": row["label"], "tools": by_connector.get(str(row["id"]), []),
+                "domains": sorted(held.get(str(row["id"]), frozenset())),
+            }
+            for row in upstream_mcp_runtime.status()
+        ]
+    return page
 
 
 def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWiring:
@@ -1367,9 +1381,10 @@ def _build_org_app(
 
     from ..org_mode import AuthzPolicyConfig
     from . import (
-        routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security, routes_whats_new,
-        single_user_auth,
+        routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security, routes_upstream_mcp,
+        routes_whats_new, single_user_auth,
     )
+    from .. import upstream_mcp_runtime
     from .routes_settings import build_org_routes
 
     if org.provider.single_user != (org.idp is None):
@@ -1400,6 +1415,13 @@ def _build_org_app(
     extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url, sessions=org.sessions))
     if org.oidc is not None:
         extra_routes.extend(routes_oidc.build_routes(org.oidc, sessions=org.sessions))
+    claim_signer = upstream_mcp_runtime.signer()
+    if upstream_mcp_runtime.configured() and claim_signer is not None:
+        # ADR 0286: the key set an upstream verifies claims against; the lifespan fetches each
+        # upstream's tool list once the server runs.
+        extra_routes.extend(routes_upstream_mcp.build_routes(claim_signer))
+        if mcp_dispatcher is not None:
+            lifespans.append(upstream_mcp_runtime.lifespan(mcp_dispatcher.notify_tools_changed))
     # Mounted unconditionally here (every _build_org_app call is already
     # org mode) -- needs nothing from org.connector_registry, only
     # org.sessions, same reasoning /approvals'/security's own unconditional

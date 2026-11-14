@@ -1726,6 +1726,11 @@ def build_org_routes(
     def _current_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
 
+    def _session_email_verified(request: Request) -> bool:
+        """Whether this browser session's sign-in verified the person's email."""
+        session = sessions.get_session(request.cookies.get(org_session.SESSION_COOKIE, ""))
+        return session is not None and session.email_verified
+
     def _guard_step_up(principal: Principal, action: str, form_body: dict[str, Any]) -> JSONResponse | None:
         """Called after ``is_action_permitted`` already passed -- a passkey
         prompt for an action this principal isn't authorized to take either
@@ -2019,11 +2024,17 @@ def build_org_routes(
         return principal, bound
 
     async def _create_and_deliver(
-        principal: Principal, bound: dict[str, Any], *, audit_suffix: str = "",
+        principal: Principal, bound: dict[str, Any], *, session_email_verified: bool = False, audit_suffix: str = "",
     ) -> tuple[ScopedToken | None, Response]:
         """Mint the token and answer with its secret, once. Returns the token (``None`` when
         nothing was created) and the response to give."""
         store = scoped_token_store or get_store()
+        from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
+
+        held_domains = (
+            upstream_mcp_runtime.held_domains(principal, session_email_verified)
+            if upstream_mcp_runtime.configured() else {}
+        )
         with principal_scope(principal):
             try:
                 _ensure_principal_settings_loaded()
@@ -2036,6 +2047,9 @@ def build_org_routes(
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
                         allow_personal_data_reads=bound["allow_personal_data_reads"],
+                        upstream_domains=bound.get("upstream_domains") or None,
+                        principal_email_verified=session_email_verified,
+                        held_domains=held_domains,
                     ),
                 )
             except ScopedTokenError as exc:
@@ -2061,7 +2075,9 @@ def build_org_routes(
         if isinstance(gated, Response):
             return gated
         principal, bound = gated
-        _token, response = await _create_and_deliver(principal, bound)
+        _token, response = await _create_and_deliver(
+            principal, bound, session_email_verified=_session_email_verified(request),
+        )
         return response
 
     def _proposal_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -2085,6 +2101,7 @@ def build_org_routes(
 
     async def _deliver_proposal(
         principal: Principal, bound: dict[str, Any], proposal: scoped_token_proposals.TokenProposal,
+        *, session_email_verified: bool = False,
     ) -> Response:
         """Create the token from a delivery proposal and put it into the runtime. The secret goes to
         the runtime and is never in the answer (ADR 0278). The proposal comes back on a refusal that
@@ -2095,6 +2112,12 @@ def build_org_routes(
             registry.restore(proposal)
             return JSONResponse({"error": agent_runtimes.DELIVERY_UNAVAILABLE}, status_code=503)
         store = scoped_token_store or get_store()
+        from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
+
+        held_domains = (
+            upstream_mcp_runtime.held_domains(principal, session_email_verified)
+            if upstream_mcp_runtime.configured() else {}
+        )
         with principal_scope(principal):
             try:
                 _ensure_principal_settings_loaded()
@@ -2104,6 +2127,7 @@ def build_org_routes(
                 lambda: runtime_credentials.deliver(
                     principal=principal, bound=bound, proposal=proposal, config=agent_runtime, api=api,
                     token_store=store, policy=token_policy, on_abandoned=runtime_credential_sweeper.wake,
+                    held_domains=held_domains, principal_email_verified=session_email_verified,
                 ),
             )
             token = outcome.token
@@ -2145,8 +2169,12 @@ def build_org_routes(
         if proposal is None:
             return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
         if proposal.delivery is not None:
-            return await _deliver_proposal(principal, bound, proposal)
-        token, response = await _create_and_deliver(principal, bound, audit_suffix=" from a proposal")
+            return await _deliver_proposal(
+                principal, bound, proposal, session_email_verified=_session_email_verified(request),
+            )
+        token, response = await _create_and_deliver(
+            principal, bound, session_email_verified=_session_email_verified(request), audit_suffix=" from a proposal",
+        )
         if token is None:
             registry.restore(proposal)
             return response
@@ -2280,7 +2308,8 @@ def build_org_routes(
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
             mode=ORG_MODE, is_admin=principal.is_admin,
-            scoped_tokens=_org_scoped_token_data(principal), personal_transfer=True,
+            scoped_tokens=_org_scoped_token_data(dataclasses.replace(principal, email_verified=_session_email_verified(request))),
+            personal_transfer=True,
             scoped_proposal=scoped_proposal,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")

@@ -180,6 +180,17 @@ def _reset_singletons():
 
 
 @pytest.fixture(autouse=True)
+def _restore_upstream_tool_tables():
+    # upstream_mcp_registry.register writes the process-wide policy tables; a test that registers
+    # upstream tools must not leak them into the next one.
+    yield
+    from privacyfence import upstream_mcp_registry, upstream_mcp_runtime
+
+    upstream_mcp_registry.unregister_all()
+    upstream_mcp_runtime.reset()
+
+
+@pytest.fixture(autouse=True)
 def _clear_server_environment(monkeypatch):
     # These variables choose the mode and the listener; a developer's shell must never change what
     # a test sees. The identity-provider variables are cleared by prefix so a new one is covered

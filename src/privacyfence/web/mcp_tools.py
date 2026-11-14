@@ -23,6 +23,7 @@ something to hand the party it governs (web/session_auth.py's
 """
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -75,7 +76,10 @@ def tool_input_schema(spec: ToolSpec) -> dict[str, Any]:
     tools.ts's ``buildInputShape``. An optional param with a non-null
     default carries it forward as the schema's own ``default`` (informational
     for the client; PrivacyFence still applies the connector's own default
-    when the arg is actually omitted)."""
+    when the arg is actually omitted). A spec carrying a raw ``input_schema``
+    (an upstream MCP tool) returns a copy of it verbatim instead."""
+    if spec.input_schema is not None:
+        return copy.deepcopy(spec.input_schema)
     properties: dict[str, Any] = {}
     required: list[str] = []
     for p in spec.params:

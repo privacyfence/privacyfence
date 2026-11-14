@@ -435,6 +435,83 @@ class TestAllowPersonalDataReads:
         assert _tokens(tmp_path)["reads"]["allow_personal_data_reads"] is True
 
 
+class TestUpstreamDomains:
+    HELD = {"kh": frozenset({"general", "hr"})}
+
+    def test_extend_keeps_the_domains_and_the_verified_flag(self):
+        store = _store()
+        token, _ = _create(
+            store, label="scoped", days=10, upstream_domains={"kh": ["hr"]}, held_domains=self.HELD,
+            principal_email_verified=True,
+        )
+        _, extended = store.extend(LOCAL_PRINCIPAL, token.id, 30, policy=ENABLED, now=NOW)
+        assert extended.upstream_domains == {"kh": frozenset({"hr"})}
+        assert extended.principal_email_verified is True
+        found = _store().tokens_for(LOCAL_PRINCIPAL)[0]
+        assert found.upstream_domains == {"kh": frozenset({"hr"})}
+        assert found.principal_email_verified is True
+
+    def test_fields_round_trip_and_are_written_only_when_set(self, tmp_path):
+        store = _store()
+        plain, _ = _create(store, label="plain")
+        scoped, _ = _create(
+            store, label="scoped", upstream_domains={"kh": ["hr", "general"]}, held_domains=self.HELD,
+            principal_email_verified=True,
+        )
+        entries = {e["label"]: e for e in json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]}
+        assert "upstream_domains" not in entries["plain"]
+        assert "principal_email_verified" not in entries["plain"]
+        assert entries["scoped"]["upstream_domains"] == {"kh": ["general", "hr"]}
+        assert entries["scoped"]["principal_email_verified"] is True
+        assert scoped.upstream_domains == {"kh": frozenset({"general", "hr"})}
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", scoped.id).upstream_domains == {"kh": frozenset({"general", "hr"})}
+        assert restarted.get("local", scoped.id).principal_email_verified is True
+        assert restarted.get("local", plain.id).upstream_domains == {}
+        assert restarted.get("local", plain.id).principal_email_verified is False
+
+    def test_an_old_file_without_the_keys_loads_with_no_domains(self, tmp_path):
+        token, _ = _create(_store())
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        assert "upstream_domains" not in data["tokens"][0]
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).upstream_domains == {}
+        assert restarted.get("local", token.id).principal_email_verified is False
+
+    def test_a_domain_the_person_does_not_hold_is_refused(self, tmp_path):
+        store = _store()
+        with pytest.raises(ScopedTokenError, match="You can only give a token domains you have: finance"):
+            _create(store, upstream_domains={"kh": ["finance"]}, held_domains=self.HELD)
+        with pytest.raises(ScopedTokenError, match="domains you have: general"):
+            _create(store, upstream_domains={"kh": ["general"]})
+        with pytest.raises(ScopedTokenError, match="domains you have: general"):
+            _create(store, upstream_domains={"other": ["general"]}, held_domains=self.HELD)
+        assert store.tokens_for(LOCAL_PRINCIPAL) == []
+
+    def test_an_empty_domain_list_needs_nothing_held(self):
+        token, _ = _create(_store(), upstream_domains={"kh": []})
+        assert token.upstream_domains == {}
+
+    def test_normalisation_sorts_domains_and_changes_the_fingerprint(self):
+        base = {"label": "x", "days": 5, "tools": [], "rules": []}
+        plain = scoped_tokens.normalise_create_request(base)
+        one = scoped_tokens.normalise_create_request({**base, "upstream_domains": {"kh": ["hr", "general", "hr"]}})
+        two = scoped_tokens.normalise_create_request({**base, "upstream_domains": {"kh": ["general"]}})
+        assert plain is not None and one is not None and two is not None
+        assert one["upstream_domains"] == {"kh": ["general", "hr"]}
+        assert plain["upstream_domains"] == {}
+        assert one != two != plain
+        assert scoped_tokens.normalise_create_request({**base, "upstream_domains": {"kh": []}}) == plain
+
+    @pytest.mark.parametrize("bad", ["hr", ["hr"], {"kh": "hr"}, {"kh": [1]}, {1: ["hr"]}])
+    def test_normalisation_refuses_a_malformed_value(self, bad):
+        assert scoped_tokens.normalise_create_request(
+            {"label": "x", "days": 5, "tools": [], "rules": [], "upstream_domains": bad},
+        ) is None
+
+
 class TestPolicy:
     def test_policy_local_is_always_enabled_365(self):
         policy = scoped_tokens.policy_from_org_config({"scoped_tokens": {"enabled": False, "max_days": 5}}, org_mode=False)
