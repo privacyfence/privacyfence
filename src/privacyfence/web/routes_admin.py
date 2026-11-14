@@ -290,6 +290,18 @@ def _agent_runtimes_status() -> dict[str, Any]:
     return {"n8n": n8n}
 
 
+def _environment_locks_state() -> dict[str, dict[str, dict[str, Any]]]:
+    """The Admin fields the server's environment locks, with the variable that sets each."""
+    try:
+        locks = agent_runtimes.environment_locks()
+    except org_mode.ConfigurationError:
+        return {}
+    return {
+        section: {field: {"value": lock.value, "variable": lock.variable} for field, lock in fields.items()}
+        for section, fields in locks.items()
+    }
+
+
 def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[str, Any]:
     """``admin_config.signin_state`` plus, with the built-in Google sign-in, each sign-in domain and
     what the relay last said about it: ``verified`` (proven in DNS), ``refused`` (a public suffix or
@@ -330,6 +342,7 @@ def _admin_state(
         for key in _ORG_STATE_KEYS:
             state[key] = admin.get(key, {})
         state["agent_runtimes_status"] = _agent_runtimes_status()
+        state["environment_locks"] = _environment_locks_state()
         state["relay_status"] = relay_client.status()
         if paths.org_bundle_path().exists():
             state["legacy_bundle_warning"] = connector_configs.LEGACY_BUNDLE_WARNING
