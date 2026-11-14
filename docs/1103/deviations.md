@@ -76,6 +76,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p17-retire
 
 - gate: ADR numbers: main took 0288-0295 after the plan was written, so the three new ADRs are numbered 0296, 0297 and 0298 (the plan and its final check name 0288-0290). Orchestrator decision under the ADR README next-free rule; code and doc references and the pointer on main ADR 0288 (which seeded grants from the operator file) follow.
+- scope: scope: code comments citing the renumbered ADRs in audit_log.py, daemon_main.py, upstream_mcp_client.py, upstream_mcp_config.py, web/routes_upstream_mcp.py and tests/unit/test_audit_log.py; main ADR 0288 got a pointer-only Amended-by line and index row; one sentence of the existing CHANGELOG YAML/inline entry now says a grants key is ignored with a warning. All accepted.
+- worker: Leftovers reported, not edited: docs/org-mode-docker.md lines 232, 393 and 404 still show the grants key and data domains; UpstreamServer.grants and admin_config.seed_upstream_grants remain as dead code; tests/unit/test_upstream_mcp_config.py:373 comment cites ADR 0289 for the YAML/inline declaration (should be 0288).
 
 ## Final review
 
