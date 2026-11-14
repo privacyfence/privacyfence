@@ -32,8 +32,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- None.
 
 ## Finishing
 
 - final: Owner chose edit_plan on the board (ask a-754acc02fc8e5f40): four markdown links to ADRs 0283/0284 in docs/1098/plan.md became plain text so the docs-link tests pass; no other plan text changed.
+- final: Scope disposition: no out-of-scope paths in any phase; DoD gate green (21666 passed, coverage floor ok, ruff, bandit, mypy, mypy strict, shim tests and typecheck).
