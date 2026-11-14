@@ -53,7 +53,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p12-reference-server-final
 
-- pending
+- scope: scope: src/privacyfence/identity_claim.py (phase 5 file): worker deleted one stale docstring sentence naming the removed module so the acceptance grep returns nothing; no code change.
+- worker: Reference server build_app gained an optional clock parameter so the expired-claim test can move the verifier clock; the integration test now passes with the v1 signer.
 
 ## p13-membership-tool
 
