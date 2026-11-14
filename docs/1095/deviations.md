@@ -64,4 +64,5 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Finishing
 
-- pending
+- scope: scope disposition: p8-ci-dod pull_request_template.md accepted; p10-adrs-changelog test_docs_links.py accepted and test_docs_references_exist.py partly reverted because the merge of main took the identical exemption main already had
+- final: the definition-of-done gate ran on the feature branch (22100 tests passed, coverage floor held, ruff, bandit, mypy, strict-module and shim checks clean); no role is required at the dod or final points for these paths; the workers and the final reviewer had no toolkit, so every role and deviations check ran in the orchestrator session
