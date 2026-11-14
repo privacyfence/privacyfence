@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 Mode = Literal["local", "org"]
 
-DEFAULT_MODE: Mode = "local"
+DEFAULT_MODE: Mode = "org"
 DEFAULT_BIND_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
@@ -91,26 +91,30 @@ def _env(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
-def resolve_mode(org_config: dict[str, Any]) -> Mode:
-    """The bundle's ``mode``, else ``PRIVACYFENCE_MODE``, else ``"local"``.
+def refuse_local_mode(source_label: str, value: str) -> None:
+    """Refuse every ``mode`` value but ``org``: ``local`` with the move-to-organization text, any
+    other value with the plain "must be" text. Returns for ``org``."""
+    if value == "org":
+        return
+    if value == "local":
+        raise ConfigurationError(
+            f"{source_label} says \"local\": desktop mode is not part of PrivacyFence 8. Remove it "
+            "(organization mode is the only mode), or keep using PrivacyFence 7 for a desktop "
+            "install: https://privacyfence.eu/docs/moving-to-organization-mode/"
+        )
+    raise ConfigurationError(f"{source_label} must be \"org\".")
 
-    A bundle and the variable that disagree refuse the start rather than letting either win
-    silently: the person who set the variable would otherwise get the other mode without a word.
-    """
+
+def resolve_mode(org_config: dict[str, Any]) -> Mode:
+    """``"org"``, or a ``ConfigurationError`` when the bundle's ``mode`` or ``PRIVACYFENCE_MODE``
+    names anything else."""
     env_mode = _env(MODE_ENV)
-    if env_mode and env_mode not in ("local", "org"):
-        raise ConfigurationError(f"{MODE_ENV} must be \"local\" or \"org\", got {env_mode}")
+    if env_mode:
+        refuse_local_mode(MODE_ENV, env_mode)
     if "mode" in org_config:
         mode = org_config["mode"]
-        if mode not in ("local", "org"):
-            raise ConfigurationError(f"org_bundle.json's \"mode\" must be \"local\" or \"org\", got {mode!r}")
-        if env_mode and env_mode != mode:
-            raise ConfigurationError(
-                f"org_bundle.json says \"mode\": \"{mode}\" but {MODE_ENV} says \"{env_mode}\"; "
-                "remove one of them"
-            )
-        return mode
-    return env_mode or DEFAULT_MODE  # type: ignore[return-value]  # validated against both literals above
+        refuse_local_mode("org_bundle.json's \"mode\"", mode if isinstance(mode, str) else repr(mode))
+    return "org"
 
 
 def _own_idp_env_names_set() -> bool:

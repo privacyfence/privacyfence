@@ -69,6 +69,14 @@ ORG_CONFIG_ENABLING_EVERY_CONNECTOR = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _desktop_controller_mode(monkeypatch):
+    # The controller under test is the desktop one, whose connector rebuilds ask for the local
+    # mode; the mode itself is always "org" now, so this keeps the controller's own tests as they
+    # were until the controller is removed.
+    monkeypatch.setattr(org_mode, "resolve_mode", lambda org_config: "local")
+
+
 @pytest.fixture
 def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(resource_names, "_cache_file", lambda: tmp_path / "resource_name_cache.json")
