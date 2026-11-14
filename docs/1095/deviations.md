@@ -12,7 +12,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-mcp-client
 
-- pending
+- worker: judgement fills: an isError result without text gets a fixed message; the client sends a best-effort DELETE before throwing on an unsupported version or a failed initialized notification; constant FILE_BRIDGE_KEY renamed FILE_BRIDGE_META for a lint rule
+- review: worker had no toolkit so ran no dod or roles; no roles are required for these paths; orchestrator re-ran n8n test, lint, typecheck and the coverage gate after the merge
 
 ## p3-node-logic
 
