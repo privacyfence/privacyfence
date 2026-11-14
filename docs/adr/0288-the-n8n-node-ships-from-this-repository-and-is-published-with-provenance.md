@@ -1,4 +1,4 @@
-# ADR 0283: The n8n node ships from this repository as an npm package and is published with provenance on stable tags
+# ADR 0288: The n8n node ships from this repository as an npm package and is published with provenance on stable tags
 
 ## Status
 
@@ -50,4 +50,4 @@ from npm, show a provenance badge, and always match the PrivacyFence it talks to
 ## Related
 
 - Issue: [issue 1095](https://github.com/privacyfence/privacyfence/issues/1095); sources `n8n/package.json`, `n8n/LICENSE`, `.github/workflows/publish-n8n-node.yml`.
-- [ADR 0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md), ADRs 0284 to 0287.
+- [ADR 0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md), ADRs 0289 to 0292.

@@ -1030,6 +1030,13 @@ config once ([section 6](#a-6x-bundle-on-an-upgraded-server)). If you still pass
 reasoning is in [ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md) and
 [ADR 0258](adr/0258-administration-is-a-separate-admin-page.md).
 
+### Upstream MCP servers
+
+An organization can put its own MCP server, such as a knowledge hub, behind PrivacyFence: you declare its
+tools and how each is gated in a JSON file (`PRIVACYFENCE_UPSTREAM_MCP_FILE`), grant people data domains in
+`admin_config.json`, and PrivacyFence signs a 60-second claim naming the person and their domains onto every
+call so the server filters its own data. See [Upstream MCP servers](upstream-mcp.md).
+
 ### Install-wide and per-user policy
 
 Policy is split in two:
@@ -1159,7 +1166,7 @@ The version is not checked.
    failure text and no token is minted.
 
 Claude then calls `privacyfence_propose_scoped_token` with `deliver_to`, and `privacyfence_runtime_credential_status`
-for the credential's id. Revoking the token, or letting it expire, deletes the n8n credential within 5 minutes.
+for the credential's id. Revoking the token deletes the n8n credential within 5 minutes. An expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it.
 Anyone who can edit workflows in that n8n, the AI client included, can use and read the token
 ([Security and compliance](security-and-compliance.md#tokens-delivered-to-n8n), [ADR 0278](adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)).
 

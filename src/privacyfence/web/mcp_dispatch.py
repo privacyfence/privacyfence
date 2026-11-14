@@ -706,6 +706,12 @@ class McpDispatcher:
             "deprecation": LOCAL_MODE_DEPRECATION if self._mode == "local" else None,
         }
 
+        # ADR 0285: only when the operator configured upstream MCP servers.
+        from .. import upstream_mcp_runtime
+
+        if upstream_mcp_runtime.configured():
+            result["upstreams"] = upstream_mcp_runtime.status()
+
         if setup_complete:
             result["next_step"] = None
             result["message"] = (

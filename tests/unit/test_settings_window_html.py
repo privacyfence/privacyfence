@@ -771,6 +771,19 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
+    def test_the_form_offers_a_domain_fieldset_for_an_upstream_with_a_ticked_tool(self):
+        html = build_html(_make_state(), mode="org", scoped_tokens={
+            **self.DATA, "delivery": "once",
+            "upstreams": [{"id": "kh", "label": "Knowledge </script><b>hub", "tools": ["kh_search"], "domains": ["general", "hr"]}],
+        })
+        assert "Data domains for ' + esc(u.label)" in html
+        assert "The token sees only the domains you tick, and never more than you can see yourself." in html
+        assert "data-st-domain=" in html and "data-st-domain-upstream=" in html
+        assert "upstream_domains: scopedChosenDomains()" in html
+        assert "scopedUpstreamsWithTools()" in html
+        # The label rides in the JSON data, which cannot close the script element.
+        assert "</script><b>hub" not in html
+
     def test_the_form_offers_the_personal_data_checkbox_and_the_list_shows_its_badge(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "Let exports, downloads and page uploads carry personal data" in html
@@ -881,6 +894,15 @@ class TestScopedTokensSection:
         assert 'data-st-rename="' in html
         assert "aria-label=\"Rename ' + esc(t.label)" in html
         assert "rename_scoped_token" in html
+
+    def test_a_token_can_be_extended(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-st-extend="' in html
+        assert "aria-label=\"Extend ' + esc(t.label)" in html
+        assert "extend_scoped_token" in html
+        assert "Days from today" in html
+        assert "Extend token" in html
+        assert "kept until you extend or revoke the token" in html
 
     def test_tools_follow_the_chosen_rules(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
@@ -1788,7 +1810,7 @@ class TestOrgAdminSections:
         page = _render_org("tokens")
         assert "Let AI clients propose a scoped token for a person to review and create." in page
         assert 'data-f="allow_ai_proposals" data-t="bool" checked' in page
-        assert 'data-f="max_days" data-t="int" aria-label="Longest lifetime (days)" value="30"' in page
+        assert 'data-f="max_days" data-t="int" aria-label="Longest lifetime or extension (days)" value="30"' in page
         assert "Needs scoped tokens turned on." not in page
         off = _render_org("tokens", _org_state(scoped_tokens={"enabled": False, "max_days": 30, "allow_ai_proposals": False}))
         assert "Needs scoped tokens turned on." in off

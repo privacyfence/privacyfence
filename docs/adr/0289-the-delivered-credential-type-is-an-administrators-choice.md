@@ -1,4 +1,4 @@
-# ADR 0284: The delivered credential type is an administrator's choice, and the new type is checked against n8n before a token is minted
+# ADR 0289: The delivered credential type is an administrator's choice, and the new type is checked against n8n before a token is minted
 
 ## Status
 

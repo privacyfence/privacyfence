@@ -162,12 +162,32 @@ class TestRules:
         assert entries[0]["decision"] == "runtime_credential_deleted"
         assert entries[0]["summary"].endswith("token revoked")
 
-    def test_delivered_and_expired_is_deleted_as_expired(self, tmp_path, records, tokens, api):
+    def test_delivered_and_expired_is_kept_for_extend(self, tmp_path, records, tokens, api):
         _token(tokens)
         _record(records)
         _sweep(records, tokens, api, now=LATER)
+        assert len(records.all()) == 1
+        assert api.deleted == []
+        assert _decisions(tmp_path) == []
+
+    def test_extend_after_expiry_keeps_the_credential_usable(self, records, tokens, api):
+        _token(tokens)
+        _record(records)
+        _sweep(records, tokens, api, now=LATER)
+        assert tokens.extend(ALICE, "st-aaaaaaaaaaaa", 30, policy=ENABLED, now=LATER) is not None
+        _sweep(records, tokens, api, now=LATER + 86400)
+        assert len(records.all()) == 1
+        assert api.deleted == []
+
+    def test_a_revoked_expired_token_deletes_its_credential_as_revoked_for_extend(self, tmp_path, records, tokens, api):
+        _token(tokens)
+        _record(records)
+        _sweep(records, tokens, api, now=LATER)
+        assert tokens.revoke(ALICE, "st-aaaaaaaaaaaa")
+        _sweep(records, tokens, api, now=LATER)
         assert records.all() == []
-        assert _entries(tmp_path)[0]["summary"].endswith("token expired")
+        assert api.deleted == ["0123456789abcdef"]
+        assert _entries(tmp_path)[0]["summary"].endswith("token revoked")
 
     def test_delivered_with_an_unknown_token_state_is_skipped(self, records, tokens, api, monkeypatch):
         _record(records)

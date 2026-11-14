@@ -96,8 +96,8 @@ def _line_references(line: str) -> list[tuple[str | None, str]]:
 
 def _is_plan_doc(rel: str) -> bool:
     parts = rel.split("/")
-    if len(parts) == 2 and parts[0] == "docs" and parts[1].endswith("-plan.md"):
-        return True
+    if len(parts) == 2:
+        return parts[0] == "docs" and parts[1].endswith("-plan.md")
     return len(parts) == 3 and parts[0] == "docs" and parts[1].isdigit() and parts[2] == "plan.md"
 
 
@@ -151,6 +151,14 @@ def test_the_pattern_reads_both_forms():
 
 def test_a_plan_doc_may_name_an_adr_that_does_not_exist_yet(tmp_path):
     assert not _is_dangling("docs/x-plan.md", "docs/adr/0999-new.md", tmp_path)
+
+
+def test_a_numbered_plan_doc_may_name_an_adr_that_does_not_exist_yet(tmp_path):
+    assert not _is_dangling("docs/1091/plan.md", "docs/adr/0999-new.md", tmp_path)
+    assert _is_dangling("docs/1091/plan.md", "docs/other.md", tmp_path)
+    assert _is_dangling("docs/1091/notes.md", "docs/adr/0999-new.md", tmp_path)
+    assert _is_dangling("docs/abc/plan.md", "docs/adr/0999-new.md", tmp_path)
+    assert _is_dangling("docs/1091/sub/plan.md", "docs/adr/0999-new.md", tmp_path)
 
 
 def test_the_plan_exemption_is_narrow(tmp_path):

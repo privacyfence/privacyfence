@@ -23,6 +23,7 @@ something to hand the party it governs (web/session_auth.py's
 """
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -75,7 +76,10 @@ def tool_input_schema(spec: ToolSpec) -> dict[str, Any]:
     tools.ts's ``buildInputShape``. An optional param with a non-null
     default carries it forward as the schema's own ``default`` (informational
     for the client; PrivacyFence still applies the connector's own default
-    when the arg is actually omitted)."""
+    when the arg is actually omitted). A spec carrying a raw ``input_schema``
+    (an upstream MCP tool) returns a copy of it verbatim instead."""
+    if spec.input_schema is not None:
+        return copy.deepcopy(spec.input_schema)
     properties: dict[str, Any] = {}
     required: list[str] = []
     for p in spec.params:
@@ -365,8 +369,10 @@ RUNTIME_CREDENTIAL_STATUS_TOOL = types.Tool(
         "credential_name, credential_type, mcp_url and token_expires_at, plus node (the PrivacyFence "
         "node to put the credential on) for credential_type privacyFenceApi, or node_authentication "
         "bearerAuth for httpBearerAuth, which goes on an MCP Client node whose endpoint is mcp_url; "
-        "'pending' while the person has not decided; or 'not_delivered' for anything else. It never "
-        "returns the token. A scoped token cannot call it."
+        "'pending' while the person has not decided; 'expired' when the token ran out: its credential is "
+        "kept and the person can press Extend on the token in PrivacyFence Settings, Scoped tokens (do not "
+        "propose a new one); or 'not_delivered' for anything else. It never returns the token. A scoped "
+        "token cannot call it."
     ),
     input_schema={
         "type": "object",

@@ -314,7 +314,7 @@ is written. They are listed here because older runbooks and scripts still pass t
 | `--step-up-enabled`, `--step-up-disabled`, `--step-up-scope`, `--step-up-require-passkey`, `--step-up-no-require-passkey` | Admin → Step-up (`step_up`). Only stricter choices are offered there. |
 | `--step-up-rp-id`, `--step-up-rp-name` | `step_up.rp_id` and `step_up.rp_name` in `org/admin_config.json`, edited by hand, then restart. There is no Admin control for them, nor for `step_up.batch`. |
 | `--enable-unattended-sessions`, `--disable-unattended-sessions` | Admin → Features (`unattended_sessions.enabled`). |
-| `--enable-scoped-tokens`, `--disable-scoped-tokens`, `--scoped-token-max-days`, `--enable-scoped-token-proposals`, `--disable-scoped-token-proposals` | Admin → Scoped tokens (`scoped_tokens.enabled`, `max_days`, `allow_ai_proposals`). |
+| `--enable-scoped-tokens`, `--disable-scoped-tokens`, `--scoped-token-max-days`, `--enable-scoped-token-proposals`, `--disable-scoped-token-proposals` | Admin → Scoped tokens (`scoped_tokens.enabled`, `max_days`, `allow_ai_proposals`). `max_days` is the longest lifetime of a new token and the most a person can extend one by. |
 | `--downloads-inline-max-bytes`, `--downloads-link-ttl-seconds`, `--downloads-disable-staging`, `--agent-links`, `--no-agent-links`, `--exports`, `--no-exports` | Admin → File delivery (`download_delivery`). |
 | `--web-push`, `--no-web-push` | Admin → Features (`web_push.enabled`). |
 | `--enable-audit-forwarding`, `--disable-audit-forwarding`, `--audit-forwarding-kind`, `--audit-forwarding-syslog-host`, `--audit-forwarding-syslog-port`, `--audit-forwarding-syslog-protocol`, `--audit-forwarding-http-url`, `--audit-forwarding-http-bearer-token-env` | Admin → Audit forwarding (`audit_forwarding`). The page shows the bearer-token variable's name read-only; set `audit_forwarding.http.bearer_token_env` in `org/admin_config.json` by hand and put the token itself in that environment variable. |
@@ -382,6 +382,7 @@ lists; spaces around each item are ignored.
 | `PRIVACYFENCE_OIDC_CLIENTS` | none | The web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<issuer>/oidc`), comma-separated lower-case names. Organization mode and single-user mode only; local mode refuses the start. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` | none | The app's redirect addresses, comma-separated, matched exactly (`https://`, or `http://` for localhost). `<NAME>` is the app name in capitals with `-` as `_`. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET`, `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET_FILE` | none | The app's client secret (at least 32 characters), or the path of a file that holds it. Set one, never both. Never logged. See [Sign in to other apps with PrivacyFence](oidc-provider.md). |
+| `PRIVACYFENCE_UPSTREAM_MCP_FILE` | none | The path of a JSON file that declares other MCP servers PrivacyFence puts its tool policy in front of: their address, audience and each tool's gate and verb. Read once at startup; a change needs a restart. Organization mode only; any other mode refuses the start. Which people hold which data domains is the `upstream_mcp` key of `org/admin_config.json`. See [Upstream MCP servers](upstream-mcp.md). |
 | `PRIVACYFENCE_BUILTIN_APPS` | none | Development builds only: the path of a JSON file that stands in for the built-in apps a release carries. An object with the keys `google_web`, `slack`, `salesforce`, `atlassian_relay`, `miro` and `google_signin`, each `{"client_id": "…", "client_secret": "…"}`; `salesforce` may also carry `install_url`. A release build ignores the variable. |
 
 **Precedence.** A legacy bundle's `idp` section wins over `PRIVACYFENCE_IDP_*` and
@@ -397,10 +398,12 @@ single-user start instead of exposing the server on its address with a setup cod
 
 Written by the daemon when an administrator saves a change on the
 [Admin page](org-mode-setup-guide.md#the-admin-page); a desktop install keeps one too. It holds
-everything operational and is part of the backup. Do not edit it while the daemon runs, and do not
+everything operational and is part of the backup. Do not edit it while the daemon runs, except `upstream_mcp.<id>.grants`, which may be edited while it
+runs (see [upstream-mcp.md](upstream-mcp.md)); write the file in one step, while no one is saving on the
+Admin page. Do not
 rely on a hand edit surviving an Admin page save unless you restart afterwards. The only reason to
 edit it by hand is to relax a setting the page only lets you tighten (step-up), or to set a key the
-page has no control for. Stop the daemon, edit, start. A file that is not valid JSON, is not an
+page has no control for. For any other key, stop the daemon, edit, start. A file that is not valid JSON, is not an
 object, or has an unknown `version` refuses the start.
 
 | Key | Holds | Admin page |
@@ -420,7 +423,8 @@ object, or has an unknown `version` refuses the start.
 | `authz.allowed_domains`, `groups_claim`, `required_groups` | who may sign in | Sign-in |
 | `step_up.enabled`, `scope`, `require_passkey` | step-up for approvals; the page only offers stricter values | Step-up |
 | `step_up.rp_id`, `rp_name`, `batch` | the WebAuthn relying-party id and name, and `single_assertion` or `per_item` | none: edit the file, then restart |
-| `scoped_tokens.enabled`, `max_days`, `allow_ai_proposals` | scoped tokens; `allow_ai_proposals` lets an AI client propose one ([ADR 0253](adr/0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md)) | Scoped tokens |
+| `scoped_tokens.enabled`, `max_days`, `allow_ai_proposals` | scoped tokens; `allow_ai_proposals` lets an AI client propose one ([ADR 0253](adr/0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md)); `max_days` is the longest lifetime of a new token and the most a person can extend one by | Scoped tokens |
+| `upstream_mcp.<id>.grants` | the data domains each person holds on an [upstream MCP server](upstream-mcp.md#domain-grants): a list of `match` (`*`, `@<domain>` or an email) and `domains`. Unlike the other keys it is re-read when the file changes, so a hand edit applies to the next call without a restart. | none: edit the file |
 | `agent_runtimes.n8n.enabled`, `project_id`, `mcp_url`, `credential_type` | n8n delivery of AI-proposed scoped tokens ([ADR 0278](adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)): on or off, the n8n project the credential is created in (empty: the API key owner's personal space), and the PrivacyFence `/mcp` address Claude is told to use (empty: this server's address). `credential_type`: `httpBearerAuth` (the default: n8n's built-in bearer credential, for an MCP Client node) or `privacyFenceApi` (a PrivacyFence API credential for the [PrivacyFence node](n8n-node.md); it needs `mcp_url`, and a restart applies it). The n8n address and key come from the environment | Agent runtimes |
 | `audit_forwarding.enabled`, `kind`, `syslog.host`, `syslog.port`, `syslog.protocol`, `http.url`, `http.bearer_token_env` | audit forwarding; the token itself is read from the named environment variable and is never stored | Audit forwarding |
 
@@ -497,7 +501,7 @@ files are mode `0600`.
 | `org_bundle_signing_pubkey.txt`, `org_bundle_serial.txt` | the daemon | The pinned bundle signing key and the highest bundle serial accepted. Deleting the key file accepts a new key at the next start; keep the serial file unless you want to go back to an older bundle on purpose. After an upgrade, deleting the new-name pin is the rotation: the 6.x pin (`org_config_signing_pubkey.txt`) is not copied again. Delete the 6.x pins only when going back to 6.x is no longer wanted. |
 | `org_config.json`, `org_config_signing_pubkey.txt`, `org_config_serial.txt` | PrivacyFence 6 | The 6.x names, never changed by 7.x. |
 | `org_bundle_adopted.json` | the daemon | Records the copy from `org_config.json` (its hash and time), that the pins were adopted, and a retirement. |
-| `agent_runtime_credentials.json` | the daemon | One record per scoped token delivered to n8n: the n8n credential's id and name, the token id, the proposal, the project, the n8n address it went to and its state (`creating`, `delivered`, `abandoned`). Never a secret. The cleanup sweeper reads it to delete the credential when the token is revoked or expires. |
+| `agent_runtime_credentials.json` | the daemon | One record per scoped token delivered to n8n: the n8n credential's id and name, the token id, the proposal, the project, the n8n address it went to and its state (`creating`, `delivered`, `abandoned`). Never a secret. The cleanup sweeper reads it to delete the credential when the token is revoked. An expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it. |
 | `admin_config.json` | the daemon | [Above](#admin-config-orgadmin_configjson). Back it up. |
 | `connector_configs/`, `connector_config_signing_pubkey.txt`, `connector_config_serials.json` | the daemon | [Connector configs](#connector-configs). |
 | `relay_token.txt` | the daemon, on first need | The 43-character secret the server proves its host name with: it sends the secret to the relay and serves its SHA-256 at `/.well-known/privacyfence-relay`. Keep it private. With the built-in Google sign-in it is also behind every `_privacyfence-relay` DNS TXT record (`pf-relay=v1:<SHA-256 of "v1\|<host>\|<that hash>">`). Back it up: replacing it means publishing every record again. |

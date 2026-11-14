@@ -109,6 +109,35 @@ def _deliver(tokens, api, proposal=None, on_abandoned=None, config=CONFIG):
     )
 
 
+class TestDeliverUpstreamDomains:
+    def test_a_delivered_token_cannot_carry_domains_the_person_does_not_hold(self, tokens):
+        api = FakeApi()
+        bound = {**BOUND, "upstream_domains": {"kh": ["hr"]}}
+        outcome = rc.deliver(
+            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=api, token_store=tokens,
+            policy=ENABLED, held_domains={"kh": frozenset({"general"})}, principal_email_verified=True,
+        )
+        assert outcome.status == 400 and "domains you have: hr" in outcome.error
+        assert api.created == [] and tokens.tokens_for(ALICE) == []
+
+    def test_the_domains_and_the_verified_flag_reach_the_token_store(self, tokens, monkeypatch):
+        seen = {}
+
+        def create(principal, **kwargs):
+            seen.update(kwargs)
+            raise ScopedTokenError("stop here")
+
+        monkeypatch.setattr(tokens, "create", create)
+        bound = {**BOUND, "upstream_domains": {"kh": ["hr"]}}
+        rc.deliver(
+            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=FakeApi(), token_store=tokens,
+            policy=ENABLED, held_domains={"kh": frozenset({"hr"})}, principal_email_verified=True,
+        )
+        assert seen["upstream_domains"] == {"kh": ["hr"]}
+        assert seen["held_domains"] == {"kh": frozenset({"hr"})}
+        assert seen["principal_email_verified"] is True
+
+
 def _remove_the_record():
     rc.get_store().remove(rc.get_store().all()[0].credential_id)
 
@@ -588,10 +617,32 @@ class TestStatusFor:
         rc.get_store().add(_record(credential_id="bbbbbbbbbbbbbbbb", state=rc.ABANDONED))
         assert self._status(tokens, "stp-1") == {"state": "pending"}
 
-    def test_an_expired_token_is_not_delivered(self, tokens):
+    def test_an_expired_token_is_reported_expired_for_extend(self, tokens):
         proposal = _proposal()
         outcome = _deliver(tokens, FakeApi(), proposal)
-        assert self._status(tokens, proposal.id, now=outcome.token.expires_at + 1) == self.NOT_DELIVERED
+        when = outcome.token.expires_at
+
+        answer = self._status(tokens, proposal.id, now=when + 1)
+
+        assert answer == {
+            "state": "expired", "runtime": "n8n", "credential_id": outcome.record.credential_id,
+            "credential_name": outcome.record.credential_name, "credential_type": "httpBearerAuth",
+            "node_authentication": "bearerAuth", "mcp_url": "https://pf/mcp",
+            "token_expired_at": datetime.fromtimestamp(when, timezone.utc).isoformat(),
+            "message": rc.EXPIRED_MESSAGE,
+        }
+        assert outcome.token.id not in json.dumps(answer)
+
+    def test_an_extended_token_is_delivered_again_for_extend(self, tokens):
+        proposal = _proposal()
+        outcome = _deliver(tokens, FakeApi(), proposal)
+        later = outcome.token.expires_at + 10
+        _, extended = tokens.extend(ALICE, outcome.token.id, 30, policy=ENABLED, now=later)
+
+        answer = self._status(tokens, proposal.id, now=later + 1)
+
+        assert answer["state"] == "delivered"
+        assert answer["token_expires_at"] == datetime.fromtimestamp(extended.expires_at, timezone.utc).isoformat()
 
     def test_a_revoked_token_is_not_delivered(self, tokens):
         proposal = _proposal()

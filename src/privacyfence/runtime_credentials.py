@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 from . import agent_runtimes, audit_log, paths, secure_files
 from .n8n_api import N8nApi, N8nApiClientError
@@ -269,6 +269,7 @@ def deliver(
     *, principal: Principal, bound: dict[str, Any], proposal: TokenProposal,
     config: agent_runtimes.N8nRuntimeConfig, api: N8nApi, token_store: ScopedTokenStore,
     policy: ScopedTokenPolicy, on_abandoned: Callable[[], None] | None = None,
+    held_domains: Mapping[str, frozenset[str]] | None = None, principal_email_verified: bool = False,
 ) -> DeliveryOutcome:
     """Create the token and its credential in the runtime, recording both before either exists
     (ADR 0281). ``bound`` is the confirmed request; the secret goes to the runtime and nowhere else."""
@@ -329,6 +330,9 @@ def deliver(
                 tools=bound["tools"], policy=policy,
                 allow_personal_data=bound["allow_personal_data"],
                 allow_personal_data_reads=bound["allow_personal_data_reads"],
+                upstream_domains=bound.get("upstream_domains") or None,
+                held_domains=held_domains,
+                principal_email_verified=principal_email_verified,
                 token_id=token_id,
             )
         except ScopedTokenError as exc:
@@ -355,18 +359,27 @@ def deliver(
     return DeliveryOutcome(token, delivered, "", 200)
 
 
+EXPIRED_MESSAGE = (
+    "The token has expired, but its n8n credential is kept. Ask the person to open PrivacyFence Settings, "
+    "then Scoped tokens, and press Extend on this token; the same credential then works again. "
+    "Do not propose a new token."
+)
+
+
 def status_for(
     principal_id: str, proposal_id: str, *, token_store: ScopedTokenStore, registry: ProposalRegistry,
     now: float | None = None,
 ) -> dict[str, Any]:
     """The answer of ``privacyfence_runtime_credential_status`` (ADR 0280), looked up only by the
-    caller's own id and the proposal id. Never carries a token id, digest, secret or the runtime's host."""
+    caller's own id and the proposal id: ``delivered`` while the token is live, ``expired`` once it ran
+    out (its credential is kept and the person can extend the token), ``pending`` and ``not_delivered``.
+    Never carries a token id, digest, secret or the runtime's host."""
     now = time.time() if now is None else now
     not_delivered: dict[str, Any] = {"state": "not_delivered"}
     record = get_store().for_proposal(principal_id, proposal_id)
     if record is not None and record.state == DELIVERED:
         principal = Principal(id=principal_id)
-        if token_store.token_state(principal, record.token_id, now) != "live":
+        if token_store.token_state(principal, record.token_id, now) not in ("live", "expired"):
             return not_delivered
         token = next((t for t in token_store.tokens_for(principal) if t.id == record.token_id), None)
         if token is None:
@@ -380,8 +393,10 @@ def status_for(
         else:
             answer["node_authentication"] = "bearerAuth"
         answer["mcp_url"] = record.mcp_url
-        answer["token_expires_at"] = datetime.fromtimestamp(token.expires_at, timezone.utc).isoformat()
-        return answer
+        when = datetime.fromtimestamp(token.expires_at, timezone.utc).isoformat()
+        if not token.expired(now):
+            return {**answer, "token_expires_at": when}
+        return {**answer, "state": "expired", "token_expired_at": when, "message": EXPIRED_MESSAGE}
     proposal = registry.get(principal_id, proposal_id, now)
     if record is not None and record.state == CREATING or (record is None and proposal is not None):
         pending: dict[str, Any] = {"state": "pending"}

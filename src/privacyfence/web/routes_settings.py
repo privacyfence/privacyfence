@@ -315,6 +315,8 @@ _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
     # A name is what the audit log shows for the token, so renaming goes
     # through the same gates as creating and revoking.
     "/api/settings/scoped_tokens/rename",
+    # Extending revives a lapsed credential, so it goes through the same gates as creating one.
+    "/api/settings/scoped_tokens/extend",
     # Accepting an AI client's proposal mints a credential exactly as create does: the same gates,
     # bound to the proposal as well as the request.
     "/api/settings/scoped_tokens/create_from_proposal",
@@ -366,6 +368,9 @@ class ScopedTokenWiring:
     ``store_rename`` takes the token id and the new name and returns the old
     name and the renamed token (or ``None`` for an unknown id), raising
     ``ScopedTokenError`` like ``store_create``;
+    ``store_extend`` takes the token id and the number of days and returns the
+    old expiry and the extended token (or ``None`` for an unknown id), raising
+    ``ScopedTokenError`` like ``store_create``;
     ``send_secret`` hands the secret to the companion, which puts it on the
     clipboard, so no response from this module ever carries it;
     ``page_data`` is what ``window.__pfScopedTokens`` is built from."""
@@ -373,6 +378,7 @@ class ScopedTokenWiring:
     store_create: Callable[[str, int, list[dict[str, Any]], list[str], bool, bool], tuple[ScopedToken, str]]
     store_revoke: Callable[[str], ScopedToken | None]
     store_rename: Callable[[str, str], tuple[str, ScopedToken] | None]
+    store_extend: Callable[[str, int], tuple[float, ScopedToken] | None]
     store_revoke_all: Callable[[], int]
     send_secret: Callable[[str], tuple[bool, str]]
     page_data: Callable[[], dict[str, Any]]
@@ -387,6 +393,13 @@ def _scoped_rename_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
     token_id, label = payload.get("token_id"), payload.get("label")
     if isinstance(token_id, str) and isinstance(label, str):
         return {"token_id": token_id, "label": label}
+    return None
+
+
+def _scoped_extend_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
+    token_id, days = payload.get("token_id"), payload.get("days")
+    if isinstance(token_id, str) and isinstance(days, int) and not isinstance(days, bool):
+        return {"token_id": token_id, "days": days}
     return None
 
 
@@ -595,7 +608,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         "  var scopedRoutes = {create_scoped_token: ['create', orgPage ? 'Create this token? It is shown once "
         "and cannot be shown again.' : 'Create this token? It is copied to your "
         "clipboard once and cannot be shown again.'], revoke_scoped_token: ['revoke', 'Revoke this token? "
-        "Clients using it stop working at once.'], rename_scoped_token: ['rename', null], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
+        "Clients using it stop working at once.'], rename_scoped_token: ['rename', null], extend_scoped_token: ['extend', null], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
         "scoped tokens?'], create_proposed_scoped_token: ['create_from_proposal', null], "
         "decline_scoped_token_proposal: ['decline_proposal', 'Decline this token proposal?']};"
         "  var scopedAction = scopedRoutes.hasOwnProperty(action);"
@@ -1446,6 +1459,30 @@ def build_routes(
                 )
         return JSONResponse({"renamed": {"id": renamed.id, "label": renamed.label}})
 
+    async def scoped_token_extend(request: Request) -> Response:
+        assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
+
+        gated = await _scoped_token_request(
+            request, "extend_scoped_token", "extend a scoped token", _scoped_extend_fingerprint_body,
+        )
+        if isinstance(gated, Response):
+            return gated
+        _payload, bound = gated
+        try:
+            result = await run_in_threadpool(scoped_tokens.store_extend, bound["token_id"], bound["days"])
+        except ScopedTokenError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if result is None:
+            return JSONResponse({"error": "No such token."}, status_code=404)
+        _old_expiry, token = result
+        date = datetime.fromtimestamp(token.expires_at, timezone.utc).strftime("%Y-%m-%d")
+        with principal_scope(LOCAL_PRINCIPAL):
+            _record_settings_audit(
+                LOCAL_PRINCIPAL,
+                f"Extended scoped token '{token.label}' ({token.id}) to {date}, {bound['days']} days",
+            )
+        return JSONResponse({"extended": {"id": token.id, "label": token.label, "expires_at": token.expires_at}})
+
     async def scoped_token_revoke_all(request: Request) -> Response:
         assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
         gated = await _scoped_token_request(
@@ -1539,6 +1576,7 @@ def build_routes(
             Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
             Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
             Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
+            Route("/api/settings/scoped_tokens/extend", scoped_token_extend, methods=["POST"]),
             Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
             Route("/settings/scoped_tokens", scoped_tokens_page),
             Route("/settings/scoped_tokens/proposals/{proposal_id}", scoped_token_proposal_page),
@@ -1687,6 +1725,11 @@ def build_org_routes(
 
     def _current_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
+
+    def _session_email_verified(request: Request) -> bool:
+        """Whether this browser session's sign-in verified the person's email."""
+        session = sessions.get_session(request.cookies.get(org_session.SESSION_COOKIE, ""))
+        return session is not None and session.email_verified
 
     def _guard_step_up(principal: Principal, action: str, form_body: dict[str, Any]) -> JSONResponse | None:
         """Called after ``is_action_permitted`` already passed -- a passkey
@@ -1981,11 +2024,17 @@ def build_org_routes(
         return principal, bound
 
     async def _create_and_deliver(
-        principal: Principal, bound: dict[str, Any], *, audit_suffix: str = "",
+        principal: Principal, bound: dict[str, Any], *, session_email_verified: bool = False, audit_suffix: str = "",
     ) -> tuple[ScopedToken | None, Response]:
         """Mint the token and answer with its secret, once. Returns the token (``None`` when
         nothing was created) and the response to give."""
         store = scoped_token_store or get_store()
+        from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
+
+        held_domains = (
+            upstream_mcp_runtime.held_domains(principal, session_email_verified)
+            if upstream_mcp_runtime.configured() else {}
+        )
         with principal_scope(principal):
             try:
                 _ensure_principal_settings_loaded()
@@ -1998,6 +2047,9 @@ def build_org_routes(
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
                         allow_personal_data_reads=bound["allow_personal_data_reads"],
+                        upstream_domains=bound.get("upstream_domains") or None,
+                        principal_email_verified=session_email_verified,
+                        held_domains=held_domains,
                     ),
                 )
             except ScopedTokenError as exc:
@@ -2023,7 +2075,9 @@ def build_org_routes(
         if isinstance(gated, Response):
             return gated
         principal, bound = gated
-        _token, response = await _create_and_deliver(principal, bound)
+        _token, response = await _create_and_deliver(
+            principal, bound, session_email_verified=_session_email_verified(request),
+        )
         return response
 
     def _proposal_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -2047,6 +2101,7 @@ def build_org_routes(
 
     async def _deliver_proposal(
         principal: Principal, bound: dict[str, Any], proposal: scoped_token_proposals.TokenProposal,
+        *, session_email_verified: bool = False,
     ) -> Response:
         """Create the token from a delivery proposal and put it into the runtime. The secret goes to
         the runtime and is never in the answer (ADR 0278). The proposal comes back on a refusal that
@@ -2057,6 +2112,12 @@ def build_org_routes(
             registry.restore(proposal)
             return JSONResponse({"error": agent_runtimes.DELIVERY_UNAVAILABLE}, status_code=503)
         store = scoped_token_store or get_store()
+        from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
+
+        held_domains = (
+            upstream_mcp_runtime.held_domains(principal, session_email_verified)
+            if upstream_mcp_runtime.configured() else {}
+        )
         with principal_scope(principal):
             try:
                 _ensure_principal_settings_loaded()
@@ -2066,6 +2127,7 @@ def build_org_routes(
                 lambda: runtime_credentials.deliver(
                     principal=principal, bound=bound, proposal=proposal, config=agent_runtime, api=api,
                     token_store=store, policy=token_policy, on_abandoned=runtime_credential_sweeper.wake,
+                    held_domains=held_domains, principal_email_verified=session_email_verified,
                 ),
             )
             token = outcome.token
@@ -2107,8 +2169,12 @@ def build_org_routes(
         if proposal is None:
             return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
         if proposal.delivery is not None:
-            return await _deliver_proposal(principal, bound, proposal)
-        token, response = await _create_and_deliver(principal, bound, audit_suffix=" from a proposal")
+            return await _deliver_proposal(
+                principal, bound, proposal, session_email_verified=_session_email_verified(request),
+            )
+        token, response = await _create_and_deliver(
+            principal, bound, session_email_verified=_session_email_verified(request), audit_suffix=" from a proposal",
+        )
         if token is None:
             registry.restore(proposal)
             return response
@@ -2180,6 +2246,30 @@ def build_org_routes(
                 )
         return JSONResponse({"renamed": {"id": renamed.id, "label": renamed.label}})
 
+    async def scoped_token_extend(request: Request) -> Response:
+        gated = await _org_scoped_token_request(request, "extend_scoped_token", _scoped_extend_fingerprint_body)
+        if isinstance(gated, Response):
+            return gated
+        principal, bound = gated
+        store = scoped_token_store or get_store()
+        try:
+            result = await run_in_threadpool(
+                store.extend, principal, bound["token_id"], bound["days"], policy=token_policy,
+            )
+        except ScopedTokenError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if result is None:
+            return JSONResponse({"error": "No such token."}, status_code=404)
+        _old_expiry, token = result
+        date = datetime.fromtimestamp(token.expires_at, timezone.utc).strftime("%Y-%m-%d")
+        text = f"Extended scoped token '{token.label}' ({token.id}) to {date}, {bound['days']} days"
+        record = runtime_credentials.get_store().for_token(principal.id, token.id)
+        if record is not None and record.state == runtime_credentials.DELIVERED:
+            text += f", delivered to n8n as '{runtime_credentials.strip_control(record.credential_name)}'"
+        with principal_scope(principal):
+            _record_settings_audit(principal, f"{text} (principal={principal.id})")
+        return JSONResponse({"extended": {"id": token.id, "label": token.label, "expires_at": token.expires_at}})
+
     async def scoped_token_revoke_all(request: Request) -> Response:
         gated = await _org_scoped_token_request(request, "revoke_all_scoped_tokens", lambda payload: {})
         if isinstance(gated, Response):
@@ -2218,7 +2308,8 @@ def build_org_routes(
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
             mode=ORG_MODE, is_admin=principal.is_admin,
-            scoped_tokens=_org_scoped_token_data(principal), personal_transfer=True,
+            scoped_tokens=_org_scoped_token_data(dataclasses.replace(principal, email_verified=_session_email_verified(request))),
+            personal_transfer=True,
             scoped_proposal=scoped_proposal,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
@@ -2428,6 +2519,7 @@ def build_org_routes(
         Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
         Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
+        Route("/api/settings/scoped_tokens/extend", scoped_token_extend, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
         Route("/settings/scoped_tokens", scoped_tokens_page),
         Route("/settings/scoped_tokens/proposals/{proposal_id}", scoped_token_proposal_page),

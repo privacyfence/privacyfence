@@ -4,7 +4,8 @@
 
 Accepted — 2026-11-13. Implemented.
 Amends [ADR 0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) for delivered proposals only.
-Amended by [0284](0284-the-delivered-credential-type-is-an-administrators-choice.md).
+Amended by [0289](0289-the-delivered-credential-type-is-an-administrators-choice.md).
+Amended by [ADR 0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md).
 
 ## Context
 
