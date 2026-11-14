@@ -155,15 +155,17 @@ variable removed: these tests need no vendor account or credential, and must kee
 ### Other workflows that gate a PR
 
 - **`dependency-audit.yml`** — on a PR or a push to `main`/`releases/**` that touches
-  `pyproject.toml`, `requirements/*.lock.txt` or either `package.json`/`package-lock.json`, weekly
+  `pyproject.toml`, `requirements/*.lock.txt` or any `package.json`/`package-lock.json`, weekly
   (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a lock file is out of step with
   `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`,
   `docs.lock.txt` (the website's docs generator) and `release.lock.txt` (the hash-pinned `uv` and
   `pip-audit` that CI itself installs, compiled from `requirements/release.in`) and reports
   `dev.lock.txt` informationally; `floor-audit` resolves `pyproject.toml` at the lowest version each
   range allows (`uv pip compile --resolution lowest-direct`) and blocks on any finding in that set,
-  because `pip install privacyfence` can land there; `npm-audit` blocks on high/critical in the shim's
-  runtime dependencies (`--omit=dev`); `npm-audit-worker` blocks on high/critical across the whole
+  because `pip install privacyfence` can land there; `npm-audit` blocks on high/critical in the
+  runtime dependencies (`--omit=dev`) of the shim and of the n8n node (whose `n8n-workflow` peer is a
+  pinned devDependency, so its tree is dev-only; the whole n8n tree is reported informationally,
+  ADR 0296); `npm-audit-worker` blocks on high/critical across the whole
   `cloudflare/downloads/` tree, dev dependencies included, because `wrangler` deploys with a
   production token.
 - **`deploy-download-worker.yml`'s `verify` job** — on a PR, or a push to `main`, that touches

@@ -1,4 +1,4 @@
-# ADR 0297: Audiences come from group membership, and scoped tokens only narrow them
+# ADR 0298: Audiences come from group membership, and scoped tokens only narrow them
 
 ## Status
 
@@ -30,7 +30,7 @@ the one unrestricted audience; every other one is restricted. `grants` are gone:
 
 **Resolvers.** A resolver answers `audiences_for(email, group_audiences)`. `StaticFileResolver` reads a
 JSON file and is for bootstrap and tests; `SnapshotResolver`, the default, reads the membership the sync
-tool stored (ADR 0298). Default deny: an empty or unverified email, an unknown group and a group the map no
+tool stored (ADR 0299). Default deny: an empty or unverified email, an unknown group and a group the map no
 longer names give no audience.
 
 **Approvals are bound to (email, group, audience).** An audience is granted only if the group's current map
@@ -59,7 +59,7 @@ creator who loses an audience takes it from the token on the next call. A token 
 - An organization that sets `trust_unverified_email` for a domain accepts that its unverified addresses can
   hold the audiences of the groups they are in.
 - A removal from a group stops working at the next call; an addition to a restricted audience waits for an
-  administrator (ADR 0298).
+  administrator (ADR 0299).
 - A development build's scoped token loses its domains; there is no migration, nothing was released.
 - The Admin page has a control for approvals, not for the group map, which is still a file edit.
 
@@ -77,5 +77,5 @@ creator who loses an audience takes it from the token on the next call. A token 
 [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md),
 [ADR 0285](0285-upstream-mcp-servers-are-declared-connectors.md),
 [ADR 0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md),
-[ADR 0296](0296-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md),
-[ADR 0298](0298-group-membership-is-updated-through-a-scoped-token-tool.md).
+[ADR 0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md),
+[ADR 0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md).

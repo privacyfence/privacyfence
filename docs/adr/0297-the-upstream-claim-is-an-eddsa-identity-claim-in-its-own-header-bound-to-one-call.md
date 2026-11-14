@@ -1,4 +1,4 @@
-# ADR 0296: The upstream claim is an EdDSA identity claim in its own header, bound to one call
+# ADR 0297: The upstream claim is an EdDSA identity claim in its own header, bound to one call
 
 ## Status
 

@@ -1,4 +1,4 @@
-"""The Ed25519 key set for the claims PrivacyFence signs onto upstream MCP requests (ADR 0296, amends 0286).
+"""The Ed25519 key set for the claims PrivacyFence signs onto upstream MCP requests (ADR 0297, amends 0286).
 
 ``/upstream-mcp/jwks`` needs no sign-in: an upstream fetches it server-side to verify a claim. The
 keys are separate from the OIDC provider's, so a claim can never be confused with an ID token.

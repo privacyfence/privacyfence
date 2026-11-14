@@ -1,4 +1,4 @@
-# ADR 0298: Group membership is updated through a scoped-token tool
+# ADR 0299: Group membership is updated through a scoped-token tool
 
 ## Status
 
@@ -9,7 +9,7 @@ the Admin page's "Group membership" section. Issue [#1103](https://github.com/pr
 
 ## Context
 
-Audiences come from Workspace groups (ADR 0297), so something outside PrivacyFence, an n8n job that reads the
+Audiences come from Workspace groups (ADR 0298), so something outside PrivacyFence, an n8n job that reads the
 Directory, has to tell PrivacyFence who is in which group. That job must be able to do it unattended, and
 a stolen credential for it must not be able to give anyone access to restricted data on its own.
 
@@ -64,4 +64,4 @@ rejects it. The audit log records `group_membership_applied`, `_rejected`, `_den
 
 [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md),
 [ADR 0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md),
-[ADR 0297](0297-audiences-come-from-group-membership-and-tokens-only-narrow-them.md).
+[ADR 0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md).

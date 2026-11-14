@@ -7,9 +7,9 @@ Every call PrivacyFence forwards carries a short signed claim, bound to that one
 person, the audiences they hold and what is calling; the upstream filters its own queries by it.
 
 Why it is built this way: [ADR 0285](adr/0285-upstream-mcp-servers-are-declared-connectors.md),
-[ADR 0296](adr/0296-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md),
-[ADR 0297](adr/0297-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) and
-[ADR 0298](adr/0298-group-membership-is-updated-through-a-scoped-token-tool.md).
+[ADR 0297](adr/0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md),
+[ADR 0298](adr/0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) and
+[ADR 0299](adr/0299-group-membership-is-updated-through-a-scoped-token-tool.md).
 
 - **Operators:** [write the file](#the-operator-file), [map groups to audiences](#groups-and-audiences),
   [keep membership current](#group-membership), restart.

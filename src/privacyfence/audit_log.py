@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 #   6 -- deny feedback (ADR 0084): + deny_intent, deny_note_chars
 #   7 -- approval linkage (ADR 0093): + expired_decision; bridge_download_served /
 #        staged_download_served rows carry the releasing request's request_id and agent
-#   8 -- upstream identity claim (ADR 0296): + claim_jti, claim_sub, claim_principal_type,
+#   8 -- upstream identity claim (ADR 0297): + claim_jti, claim_sub, claim_principal_type,
 #        claim_audiences, claim_act, claim_req, upstream_status, metadata
 CURRENT_SCHEMA_VERSION = 8
 
@@ -168,9 +168,9 @@ class AuditEntry:
                             #  into an agent runtime and its cleanup, ADR 0278 and ADR 0281; they
                             #  render as plain entries and none counts as an approval.
                             #  "upstream_forwarded" is the execution record of one call forwarded
-                            #  to an upstream MCP server, ADR 0296, and carries the claim_* fields
+                            #  to an upstream MCP server, ADR 0297, and carries the claim_* fields
                             #  and upstream_status; the group_membership_* decisions record the
-                            #  membership sync tool and the admin's approvals, ADR 0298; none of
+                            #  membership sync tool and the admin's approvals, ADR 0299; none of
                             #  them counts as an approval either)
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
                             #  web/routes_security.py's register_verify/delete_credential,
@@ -445,7 +445,7 @@ class AuditEntry:
                               # "auto_accepted"), with decided_at set to when it was made. "" on a
                               # card nobody answered, on every other decision, and on every entry
                               # recorded before this field existed.
-    # ---- Upstream identity claim (schema 8, ADR 0296) ----
+    # ---- Upstream identity claim (schema 8, ADR 0297) ----
     # Set on an "upstream_forwarded" entry; "" / [] / {} on every other entry and on every
     # entry recorded before these fields existed. The claim string itself is never recorded.
     claim_jti: str = ""       # the jti of the claim minted for the tools/call request

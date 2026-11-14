@@ -1257,7 +1257,7 @@ class TestApprovalLinkageFields:
 
 
 class TestUpstreamClaimFields:
-    """Schema 8 (ADR 0296): the claim_* fields, upstream_status and metadata describe one
+    """Schema 8 (ADR 0297): the claim_* fields, upstream_status and metadata describe one
     forwarded upstream call."""
 
     _KEYS = (
