@@ -49,7 +49,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p10-scoped-token-domains
 
-- pending
+- worker: beyond the brief: narrowing_error also refuses a reviewed proposal that adds data domains the proposal lacked, and the token list payload carries each token upstream_domains so Duplicate can prefill them; the proposal refusal matches tool names by the upstream id plus underscore prefix instead of an exact tool set
+- worker: org create-route tests were added to tests/unit/web/test_routes_org_settings.py because test_routes_settings.py covers only local mode; an upstream tool gated review or popup has no scope-catalogue entry yet, so only auto-gated upstream tools can be ticked in the New token form (the plan defers rules for them)
+- scope: tests/unit/web/test_routes_org_settings.py is outside touches; it holds the org create-route tests; accepted
 
 ## p11-docs-and-adrs
 
