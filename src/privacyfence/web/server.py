@@ -110,9 +110,8 @@ from ..policy.registry import Verb
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..scoped_tokens import ScopedToken
 from ..resource_names import get_resolver
-from ..settings_controller import (
-    SettingsController, cached_row_value, row_value_items, sentence_parts, set_main_dispatcher,
-)
+from ..settings_controller import SettingsController
+from ..settings_state import cached_row_value, row_value_items, sentence_parts, set_main_dispatcher
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from ..web_push import PushNotifier, PushSubscriptionStore

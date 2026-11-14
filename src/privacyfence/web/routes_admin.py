@@ -64,7 +64,8 @@ from .. import admin_config, agent_runtimes, connector_configs, data_format, oau
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
-from ..settings_controller import REPO_URL, SettingsController, _pii_general_fields, _privacy_state_from_config
+from ..settings_controller import SettingsController
+from ..settings_state import REPO_URL, _pii_general_fields, _privacy_state_from_config
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
 from . import org_install_policy, org_session, org_stats

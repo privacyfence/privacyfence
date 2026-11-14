@@ -69,7 +69,7 @@ import yaml
 from .. import pii_detector, privacy_filter
 from ..audit_log import compute_security_config_hash, set_security_config_hash_for_all_principals
 from ..secure_files import atomic_write_text
-from ..settings_controller import PRIVACY_CATEGORY_LABELS, PRIVACY_GROUP_LABELS
+from ..settings_state import PRIVACY_CATEGORY_LABELS, PRIVACY_GROUP_LABELS
 
 logger = logging.getLogger(__name__)
 

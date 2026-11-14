@@ -64,7 +64,7 @@ from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import scope_rows
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.principal import Principal, principal_scope
-from privacyfence.settings_controller import _privacy_state_from_config, _short_id
+from privacyfence.settings_state import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session
 from privacyfence.web import routes_settings as ros

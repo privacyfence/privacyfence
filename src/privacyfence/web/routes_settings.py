@@ -164,8 +164,9 @@ from ..scoped_tokens import (
     DEFAULT_DAYS, PROPOSALS_DISABLED_MESSAGE, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore,
     get_store, normalise_create_request,
 )
-from ..settings_controller import (
-    REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
+from ..settings_controller import SettingsController
+from ..settings_state import (
+    REPO_URL, _about_state_dict, _auto_accept_state_from_rows,
     _parse_value_list, _rule_usage_map,
     audit_rows, cached_row_value, rule_resource_ids,
 )

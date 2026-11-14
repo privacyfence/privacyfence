@@ -175,7 +175,7 @@ class TestResolvers:
         assert _resolver_for("grist", "documents")(client, "abc") == "Budget"
 
     def test_grist_document_rule_maps_to_the_resource_type(self):
-        from privacyfence.settings_controller import RULE_NAME_TO_RESOURCE_TYPE
+        from privacyfence.settings_state import RULE_NAME_TO_RESOURCE_TYPE
         assert RULE_NAME_TO_RESOURCE_TYPE["grist.document"].config_key == "documents"
 
     def test_resolve_salesforce_report_raises_when_every_lookup_fails(self):
