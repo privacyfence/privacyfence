@@ -369,3 +369,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md) | The single-user person is admin@privacyfence.localhost | Accepted; amends 0272 |
 | [0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) | Links to a docs page the next release publishes fall back to GitHub until it does | Accepted; amends 0099 |
 | [0277](0277-the-websites-primary-call-to-action-is-install.md) | The website's primary call to action is Install | Accepted |
+| [0278](0278-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196 |
+| [0279](0279-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274 |
+| [0280](0280-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272 |

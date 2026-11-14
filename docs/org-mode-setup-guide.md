@@ -1030,6 +1030,13 @@ config once ([section 6](#a-6x-bundle-on-an-upgraded-server)). If you still pass
 reasoning is in [ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md) and
 [ADR 0258](adr/0258-administration-is-a-separate-admin-page.md).
 
+### Upstream MCP servers
+
+An organization can put its own MCP server, such as a knowledge hub, behind PrivacyFence: you declare its
+tools and how each is gated in a JSON file (`PRIVACYFENCE_UPSTREAM_MCP_FILE`), grant people data domains in
+`admin_config.json`, and PrivacyFence signs a 60-second claim naming the person and their domains onto every
+call so the server filters its own data. See [Upstream MCP servers](upstream-mcp.md).
+
 ### Install-wide and per-user policy
 
 Policy is split in two:
