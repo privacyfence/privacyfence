@@ -246,7 +246,9 @@ jobs:
       # the coverage-floor ratchet's, to own -- duplicating it per Python
       # version here would just be redundant CI time).
       - name: Run test suite (100% pass rate required)
-        run: pytest -v --ignore=tests/integration/test_shim_mcp_contract.py \
+        run: >-
+          pytest -v
+          --ignore=tests/integration/test_shim_mcp_contract.py
           --ignore=tests/integration/test_n8n_node_contract.py
 
       # Same failure-diagnostics capture as the `test` job's identically-named step --
