@@ -91,4 +91,4 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Finishing
 
-- pending
+- final: Scope drift disposition: p12, p13 and p15 drift accepted; p17 drift partly reverted by later commits. The definition-of-done gate was red once on the coverage ratchet (routes_admin.py 97.86% against 98.0%); fix-3 fixed it with tests and the full coverage run, mypy, bandit and the mcpb/shim tests now pass. The qa-record-fixture row does not apply: no connector client talks to an external service in this change.
