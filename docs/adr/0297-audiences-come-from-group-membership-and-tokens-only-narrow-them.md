@@ -24,8 +24,8 @@ claim, in `ScopedToken.upstream_audiences`, `held_audiences` and the New token f
 **Groups map to audiences.** `admin_config.json` holds `upstream_mcp.<id>.groups`, an object of group name
 (lower case, email-shaped) to a list of audience names, at most 200 groups, re-read when the file changes. A
 person's audiences are the union over the groups they belong to, from a **verified** email only. `all` is
-the one unrestricted audience; every other one is restricted. `grants` are gone: the operator file still
-parses a `grants` key and ignores it with a warning, and the seeding of grants from the declaration
+the one unrestricted audience; every other one is restricted. `grants` are gone: the operator file refuses a
+`grants` key at start with a message that points at the groups, and the seeding of grants from the declaration
 (ADR 0288) no longer happens.
 
 **Resolvers.** A resolver answers `audiences_for(email, group_audiences)`. `StaticFileResolver` reads a

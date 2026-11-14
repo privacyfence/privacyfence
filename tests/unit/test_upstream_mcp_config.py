@@ -370,7 +370,7 @@ class TestGroupMapStore:
 
 
 # ----- #
-# ----- YAML, inline text, size, repeated keys and settings (ADR 0289)
+# ----- YAML, inline text, size, repeated keys and settings (ADR 0288)
 # ----- #
 
 INLINE = "PRIVACYFENCE_UPSTREAM_MCP"
@@ -508,7 +508,6 @@ class TestOperatorClaimKeys:
         assert server.identity_claim == "required"
         assert server.claim_lifetime_seconds == 60
         assert server.allowed_principal_types == ("claude_client", "n8n_workflow")
-        assert server.grants == ()
 
     def test_valid_values(self):
         (server,) = _parse(_doc(identity_claim="off", claim_lifetime_seconds=5, allowed_principal_types=["n8n_workflow"]))
@@ -528,10 +527,22 @@ class TestOperatorClaimKeys:
     def test_principal_types_refused(self, value):
         _refused(_doc(allowed_principal_types=value), "upstreams[0].allowed_principal_types")
 
-    def test_removed_grants_key_is_flagged_not_seeded(self):
-        (server,) = _parse(_doc(grants=[{"match": "*", "domains": ["general"]}]))
-        assert len(server.grants) == 1
-        _refused(_doc(grants={"match": "*"}), "upstreams[0].grants: must be a list")
+    def test_a_grants_key_is_refused_with_the_groups_message(self):
+        message = _refused(_doc(grants=[{"match": "*", "domains": ["general"]}]), "upstreams[0].grants")
+        assert "grants were replaced by groups" in message
+        assert "upstream_mcp.<id>.groups" in message
+        assert "admin_config.json" in message
+
+    def test_a_grants_key_is_refused_in_a_yaml_file(self, tmp_path):
+        path = _file(tmp_path, "u.yaml", YAML_DOC + "    grants:\n      - match: '*'\n        domains: [general]\n")
+        message = _refused_file(path)
+        assert "upstreams[0].grants" in message
+        assert "grants were replaced by groups" in message
+
+    def test_a_grants_key_is_refused_in_the_inline_text(self, monkeypatch):
+        monkeypatch.setenv(cfg.ENV_VAR_INLINE, YAML_DOC + "    grants:\n      - match: '*'\n        domains: [general]\n")
+        with pytest.raises(ConfigurationError, match="grants were replaced by groups"):
+            cfg.load_declared()
 
 
 class TestSettings:

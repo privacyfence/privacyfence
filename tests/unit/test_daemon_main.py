@@ -2540,15 +2540,11 @@ class TestMaybeStartWebServerOrgMode:
         ):
             daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
 
-    def test_upstream_mcp_operator_grants_are_ignored_not_seeded(self, monkeypatch, tmp_path, caplog):
-        from privacyfence import admin_config
-
+    def test_upstream_mcp_operator_grants_refuse_the_start(self, monkeypatch, tmp_path):
         grants = [{"match": "*", "domains": ["general"]}]
         monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(grants))
-        with caplog.at_level(logging.WARNING, logger=daemon_main.logger.name):
+        with pytest.raises(org_mode.ConfigurationError, match="grants were replaced by groups"):
             self._start_org(monkeypatch, tmp_path)
-        assert "grants were replaced by groups and are ignored" in caplog.text
-        assert (admin_config.load() or {}).get("upstream_mcp", {}) == {}
 
     def test_upstream_mcp_static_membership_file_builds_a_static_resolver(self, monkeypatch, tmp_path):
         from privacyfence import group_membership, upstream_mcp_runtime
@@ -2575,19 +2571,6 @@ class TestMaybeStartWebServerOrgMode:
         monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
         with pytest.raises(org_mode.ConfigurationError, match="grants were replaced by groups"):
             self._start_org(monkeypatch, tmp_path)
-
-    def test_upstream_mcp_collision_leaves_admin_config_unseeded(self, monkeypatch, tmp_path):
-        from privacyfence import admin_config
-
-        grants = [{"match": "*", "domains": ["general"]}]
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(grants))
-        monkeypatch.setattr(
-            daemon_main.upstream_mcp_registry, "register",
-            lambda upstreams: (_ for _ in ()).throw(org_mode.ConfigurationError("collides")),
-        )
-        with pytest.raises(org_mode.ConfigurationError, match="collides"):
-            self._start_org(monkeypatch, tmp_path)
-        assert admin_config.load() is None or admin_config.load()["upstream_mcp"] == {}
 
     def test_build_connectors_appends_the_upstream_connectors_when_configured(self, tmp_path):
         from privacyfence import upstream_mcp_runtime

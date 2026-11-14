@@ -56,7 +56,7 @@ _SINGLE_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 _GATES = ("auto", "review", "popup")
 _VERBS = frozenset(verb.value for verb in Verb)
 _UPSTREAM_KEYS = frozenset({
-    "id", "label", "url", "audience", "tools", "grants",
+    "id", "label", "url", "audience", "tools",
     "identity_claim", "claim_lifetime_seconds", "allowed_principal_types",
 })
 _IDENTITY_CLAIM_MODES = ("required", "off")
@@ -89,7 +89,6 @@ class UpstreamServer:
     identity_claim: str = "required"  # "required" | "off"
     claim_lifetime_seconds: int = 60  # 5..60
     allowed_principal_types: tuple[str, ...] = _PRINCIPAL_TYPES
-    grants: tuple[object, ...] = ()  # the removed operator "grants" key: parsed only so the daemon can warn; never used
 
 
 @dataclass(frozen=True)
@@ -263,6 +262,11 @@ def _parse_one(raw: object, base: str, seen: set[str], fail, source: str) -> Ups
     if not isinstance(raw, dict):
         raise fail(base, "must be an object")
     for key in raw:
+        if key == "grants":
+            raise fail(
+                f"{base}.grants",
+                "grants were replaced by groups; set upstream_mcp.<id>.groups in admin_config.json instead",
+            )
         if key not in _UPSTREAM_KEYS:
             raise fail(f"{base}.{key}", "is not a known key")
     upstream_id = raw.get("id")
@@ -304,13 +308,10 @@ def _parse_one(raw: object, base: str, seen: set[str], fail, source: str) -> Ups
         or any(not isinstance(item, str) or item not in _PRINCIPAL_TYPES for item in types)
     ):
         raise fail(f"{base}.allowed_principal_types", "must be a non-empty list of claude_client and n8n_workflow")
-    grants = raw.get("grants", [])
-    if not isinstance(grants, list):
-        raise fail(f"{base}.grants", "must be a list")
     return UpstreamServer(
         id=upstream_id, label=label, url=url, audience=audience, tools=tools,
         identity_claim=claim_mode, claim_lifetime_seconds=lifetime,
-        allowed_principal_types=tuple(sorted(set(types))), grants=tuple(grants),
+        allowed_principal_types=tuple(sorted(set(types))),
     )
 
 

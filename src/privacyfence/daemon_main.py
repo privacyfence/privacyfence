@@ -1688,12 +1688,6 @@ def _configure_upstream_mcp(issuer_url: str) -> None:
         return
     claim_settings, membership = upstream_mcp_config.load_settings()
     upstream_mcp_registry.register(upstreams)
-    for upstream in upstreams:
-        if upstream.grants:
-            logger.warning(
-                "Upstream %s declares grants in the operator file; grants were replaced by groups and are ignored.",
-                upstream.id,
-            )
     groups = upstream_mcp_config.GroupMapStore(
         admin_config.admin_config_path(), frozenset(upstream.id for upstream in upstreams),
     )
