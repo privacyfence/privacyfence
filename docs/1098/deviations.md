@@ -28,6 +28,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - worker: Worker ended blocked: 4 docs-link tests still fail on links inside docs/1098/plan.md; it also found docs/connect-claude-code.md and ADR 0278 outside touches.
 - review: Docs diff reviewed inside touches; tld CLI absent in the worker, no roles required. Owner asked on the board how to fix the plan links and whether to touch the two extra docs.
+- review: Follow-up fix-1, approved by the owner on the board (ask a-754acc02fc8e5f40): docs/connect-claude-code.md now lists Extend and no longer says expiry cannot be edited; ADR 0278 needed no change.
 
 ## Final review
 
