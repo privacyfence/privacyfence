@@ -100,6 +100,7 @@ from . import (
     oidc_provider,
     org_bundle_signing,
     org_mode,
+    paths,
     peek_provisioning,
     policy_upgrade,
     relay_client,
@@ -2821,7 +2822,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Before anything reads or rewrites data: a newer release's data is not ours to touch.
     try:
-        data_format.check_not_newer(data_format.read_marker())
+        data_format.check_upgrade_source(paths.data_dir())
     except org_mode.ConfigurationError as exc:
         return _refuse_to_start(f"Configuration error: {exc}")
 

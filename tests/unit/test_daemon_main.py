@@ -28,10 +28,9 @@ import sys
 import pytest
 import yaml
 
-from privacyfence import admin_config, app_credentials, daemon_main, data_format, org_mode
+from privacyfence import admin_config, app_credentials, daemon_main, data_format, org_mode, paths
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.telegram import TelegramConnector
-from privacyfence.paths import data_dir
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE
@@ -86,6 +85,13 @@ def fake_client_class(*, result=None, connection_error: Exception | None = None,
 
 
 @pytest.fixture(autouse=True)
+def _isolated_data_dir(monkeypatch, tmp_path):
+    """main() checks the data directory before anything else; in a source checkout that is the
+    repository root, so every test gets its own empty one."""
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_telegram(monkeypatch):
     """build_connectors() wires up Telegram independently of any org config --
     only telegram_app_credentials() (baked into the local checkout, or set via
@@ -96,6 +102,11 @@ def _no_ambient_telegram(monkeypatch):
     specific tests below override this themselves via their own
     monkeypatch.setattr calls."""
     monkeypatch.setattr(daemon_main, "telegram_app_credentials", lambda: None)
+
+
+def data_dir() -> Path:
+    """The data directory the isolating fixture above points at, looked up at call time."""
+    return paths.data_dir()
 
 
 _GOOGLE_CLIENT_ATTRS = [
@@ -251,7 +262,7 @@ class TestLoadConfig:
     def test_main_refuses_data_from_a_newer_format_before_reading_any_config(self, tmp_path, monkeypatch, capsys):
         marker = tmp_path / "data_format.json"
         marker.write_text(json.dumps({"format": 8, "written_by": "8.0.0", "completed_at": "2030-01-01T00:00:00+00:00"}))
-        monkeypatch.setattr(data_format, "marker_path", lambda: marker)
+        monkeypatch.setattr(data_format, "marker_path", lambda root=None: marker)
         monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
 
         assert daemon_main.main([]) == 1
@@ -259,6 +270,17 @@ class TestLoadConfig:
         err = capsys.readouterr().err
         assert "This data was last used by PrivacyFence 8.0.0 (data format 8)." in err
         assert "Install 8.0.0 or newer." in daemon_main.last_startup_error()
+
+    def test_main_refuses_a_desktop_data_directory_before_reading_any_config(self, tmp_path, monkeypatch, capsys):
+        (tmp_path / "mcp_token").write_text("secret")
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+
+        assert daemon_main.main([]) == 1
+
+        err = capsys.readouterr().err
+        assert "belongs to a PrivacyFence desktop install" in err
+        assert str(tmp_path) in err
+        assert "belongs to a PrivacyFence desktop install" in daemon_main.last_startup_error()
 
     def test_v1_sections_an_earlier_release_converted_are_removed(self, tmp_path):
         # 4.1-4.4 converted auto_accept_rules into auto_accept: on startup, set the marker, and
@@ -4953,7 +4975,7 @@ class TestPersonalDataSweep:
         monkeypatch.setattr(daemon_main, "erase_overdue_caches", sweep)
         monkeypatch.setattr(daemon_main, "PERSONAL_DATA_SWEEP_INTERVAL_SECONDS", 0)
         daemon_main._run_personal_data_sweep()
-        assert roots == [data_dir(), data_dir()]
+        assert roots == [daemon_main.data_dir(), daemon_main.data_dir()]
 
     def test_failure_is_logged_and_retried(self, monkeypatch, caplog):
         def sweep(root):

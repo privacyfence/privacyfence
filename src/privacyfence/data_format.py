@@ -28,21 +28,24 @@ from .secure_files import atomic_write_json, atomic_write_text
 logger = logging.getLogger(__name__)
 
 DATA_FORMAT = 7
+MINIMUM_FORMAT = 7
+DESKTOP_TRACES = ("web_base_url", "mcp_token")
+PERSON_DATA = ("users", "org", "credentials", "authority")
 MARKER_FILENAME = "data_format.json"
 NOT_READY_PREFIX = "Not ready for PrivacyFence 8: "
 
 _status: dict[str, Any] = {"ready": False, "problems": []}
 
 
-def marker_path() -> Path:
-    return paths.data_dir() / MARKER_FILENAME
+def marker_path(root: Path | None = None) -> Path:
+    return (paths.data_dir() if root is None else root) / MARKER_FILENAME
 
 
-def read_marker() -> dict[str, Any] | None:
+def read_marker(root: Path | None = None) -> dict[str, Any] | None:
     """The stored marker, or ``None`` when there is none. A file that cannot be read, is not a
     JSON object or has no integer ``format`` also gives ``None`` (with a warning), so the next
     successful pass writes a fresh one."""
-    path = marker_path()
+    path = marker_path(root)
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -69,6 +72,49 @@ def check_not_newer(marker: dict[str, Any] | None) -> None:
         f"This data was last used by PrivacyFence {written_by} (data format {marker['format']}). "
         f"This release, {__version__}, cannot read it. Install {written_by} or newer."
     )
+
+
+_DESKTOP_TEXT = (
+    "This data directory ({root}) belongs to a PrivacyFence desktop install. PrivacyFence 8 runs only as an "
+    "organization server or the Docker image and does not read desktop data. Keep using PrivacyFence 7 on this "
+    "computer, or move to organization mode: https://privacyfence.eu/docs/moving-to-organization-mode/"
+)
+_CHECKPOINT_TEXT = (
+    "This data directory ({root}) has not been prepared for PrivacyFence 8. Install the latest PrivacyFence 7, "
+    'start it once, check that the Admin page says "Ready for PrivacyFence 8: yes", then start this release '
+    "again: https://privacyfence.eu/docs/moving-to-organization-mode/"
+)
+
+
+def _says_org(root: Path) -> bool:
+    """Whether ``org/org_bundle.json`` says ``"mode": "org"``; anything unreadable says no."""
+    try:
+        bundle = json.loads((root / "org" / "org_bundle.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(bundle, dict) and bundle.get("mode") == "org"
+
+
+def check_upgrade_source(root: Path) -> None:
+    """Refuse a data directory 8.x cannot trust (ADR 0297); write the marker into a fresh one.
+
+    In order: data a newer release has moved on; desktop-install traces outside an organization
+    server; data that 7.x has not marked as fully upgraded."""
+    marker = read_marker(root)
+    check_not_newer(marker)
+
+    traces = [name for name in DESKTOP_TRACES if (root / name).exists() or (root / "authority" / name).exists()]
+    if traces and not _says_org(root):
+        raise ConfigurationError(_DESKTOP_TEXT.format(root=root))
+
+    if marker is None or marker["format"] < MINIMUM_FORMAT:
+        if any((root / name).exists() for name in PERSON_DATA):
+            raise ConfigurationError(_CHECKPOINT_TEXT.format(root=root))
+        atomic_write_json(marker_path(root), {
+            "format": DATA_FORMAT,
+            "written_by": __version__,
+            "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
 
 
 def status() -> dict[str, Any]:
