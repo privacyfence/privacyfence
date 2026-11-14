@@ -96,7 +96,9 @@ def _line_references(line: str) -> list[tuple[str | None, str]]:
 
 def _is_plan_doc(rel: str) -> bool:
     parts = rel.split("/")
-    return len(parts) == 2 and parts[0] == "docs" and parts[1].endswith("-plan.md")
+    if len(parts) == 2 and parts[0] == "docs" and parts[1].endswith("-plan.md"):
+        return True
+    return len(parts) == 3 and parts[0] == "docs" and parts[1].isdigit() and parts[2] == "plan.md"
 
 
 def _is_dangling(rel: str, path: str, root: Path = REPO_ROOT) -> bool:
