@@ -42,6 +42,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - worker: The operator-file grants key is still parsed (UpstreamServer.grants) but ignored with a startup warning, and admin_config.seed_upstream_grants stays with no caller, because removing them touches files outside the phase (tests/integration/test_org_docker_deploy_files.py, tests/unit/test_admin_config.py, docs/org-mode-docker.md). To be settled before the final review.
 - worker: claim.key_overlap_hours is parsed but unused until phase 10 builds the new signer; docs/approvals-and-policy.md and docs/connector-qa.md still describe grants.
 - gate: Owner decision (board ask a-be024333bc4d3bb4): remove the operator-file grants key and the dead seeding code; fix-1 does it and the key is then refused with the groups message.
+- gate: Owner decision (board ask a-be024333bc4d3bb4): remove the operator-file grants key and the dead seeding code; follow-up fix-1 did it (also edited docs/upstream-mcp.md and tests/unit/test_daemon_main.py: grants-ignored test became start-refused, seeding-collision test deleted). A grants key now fails the load with the groups message.
 
 ## p10-claim-switch
 
@@ -80,6 +81,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - scope: scope: code comments citing the renumbered ADRs in audit_log.py, daemon_main.py, upstream_mcp_client.py, upstream_mcp_config.py, web/routes_upstream_mcp.py and tests/unit/test_audit_log.py; main ADR 0288 got a pointer-only Amended-by line and index row; one sentence of the existing CHANGELOG YAML/inline entry now says a grants key is ignored with a warning. All accepted.
 - worker: Leftovers reported, not edited: docs/org-mode-docker.md lines 232, 393 and 404 still show the grants key and data domains; UpstreamServer.grants and admin_config.seed_upstream_grants remain as dead code; tests/unit/test_upstream_mcp_config.py:373 comment cites ADR 0289 for the YAML/inline declaration (should be 0288).
 - conflict: Merging origin/main (ADRs 0294, 0295 and an n8n delivery change) conflicted in docs/adr/README.md (kept both: 0294, 0295, then 0296-0298) and docs/configuration-reference.md (kept main wording of the scoped_tokens and agent_runtimes rows plus this feature groups row in place of the grants row). Unit suite 22446 passed after the merge.
+- conflict: Main took ADR 0296 again after phase 17, so the three new ADRs are finally 0297, 0298 and 0299 (files renamed, every reference in code comments, docs, the changelog and the ADR index follows); the plan text, the earlier deviation line and the manifest final check still say 0288-0290 / 0296-0298.
 
 ## Final review
 
