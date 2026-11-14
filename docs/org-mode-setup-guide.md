@@ -75,7 +75,7 @@ other section applies unchanged.
 ## 2. Prerequisites
 
 - **A Linux server.** Ubuntu 24.04 is the reference: it ships Python 3.12, and you add
-  `python3-venv`. Any other Linux with Python 3.11 or newer, the `venv` module and systemd works the
+  `python3-venv`. Any other Linux with Python 3.11.5 or newer, the `venv` module and systemd works the
   same way. Do not install the PrivacyFence `.deb` on this host. The `.deb` is the desktop package:
   it creates its own `privacyfence` account and `/var/lib/privacyfence` layout, and the daemon
   installed here would pick that layout up.
