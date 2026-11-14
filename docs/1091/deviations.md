@@ -5,7 +5,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-tool-input-schema
 
-- pending
+- worker: none reported
+- review: worker also updated the existing test_to_dict_contains_all_fields (inside the touched test file) to expect the new input_schema key; accepted
+- retry: worker stopped as blocked because the tld toolkit was missing in worker sessions; owner chose orchestrator-run roles (ask a-6883f76fcafb9108); no roles are required for this phase; code merged unchanged
+- review: post-merge checks deselect tests/unit/test_docs_references_exist.py::test_every_current_docs_reference_exists until p11 creates the docs the plan cites (owner decision, ask a-6883f76fcafb9108)
 
 ## p2-upstream-config
 
