@@ -59,6 +59,8 @@ updates:
     directory: "/n8n"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     groups:
       n8n-node-dependencies:
         patterns: ["*"]
