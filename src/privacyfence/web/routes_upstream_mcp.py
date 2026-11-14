@@ -1,4 +1,4 @@
-"""The key set for the claims PrivacyFence signs onto upstream MCP requests (ADR 0284).
+"""The key set for the claims PrivacyFence signs onto upstream MCP requests (ADR 0286).
 
 ``/upstream-mcp/jwks`` needs no sign-in: an upstream fetches it server-side to verify a claim. The
 key is separate from the OIDC provider's, so a claim can never be confused with an ID token.

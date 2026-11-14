@@ -61,7 +61,7 @@ class Principal:
 
     ``email_verified`` is whether PrivacyFence treats the email as verified
     (org_identity.session_email_verified, set at sign-in); upstream domain
-    grants key on email only when it is true (ADR 0285)."""
+    grants key on email only when it is true (ADR 0287)."""
 
     id: str
     email: str = ""

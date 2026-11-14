@@ -367,7 +367,9 @@ RUNTIME_CREDENTIAL_STATUS_TOOL = types.Tool(
         "with the proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to, "
         "after the person has confirmed it. Returns state 'delivered' with credential_id, "
         "credential_name, credential_type, node_authentication, mcp_url and token_expires_at; 'pending' "
-        "while the person has not decided; or 'not_delivered' for anything else. Put credential_id on "
+        "while the person has not decided; 'expired' when the token ran out: its credential is kept and "
+        "the person can press Extend on the token in PrivacyFence Settings, Scoped tokens (do not propose "
+        "a new one); or 'not_delivered' for anything else. Put credential_id on "
         "the MCP Client node with authentication bearerAuth and endpoint mcp_url. It never returns the "
         "token. A scoped token cannot call it."
     ),

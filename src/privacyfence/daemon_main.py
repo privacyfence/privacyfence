@@ -1672,7 +1672,7 @@ def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
 
 
 def _configure_upstream_mcp(issuer_url: str) -> None:
-    """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` set (ADR 0283): load the operator
+    """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` set (ADR 0285): load the operator
     file, register the declared tools into the policy tables, and configure the runtime. Raises
     ``org_mode.ConfigurationError`` (the start is refused) on any problem."""
     path = os.environ.get(upstream_mcp_config.ENV_VAR, "").strip()

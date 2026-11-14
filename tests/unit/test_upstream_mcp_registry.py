@@ -1,4 +1,4 @@
-"""Tests for upstream_mcp_registry: declared upstream tools land in every policy table (ADR 0283)."""
+"""Tests for upstream_mcp_registry: declared upstream tools land in every policy table (ADR 0285)."""
 from __future__ import annotations
 
 import copy

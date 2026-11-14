@@ -145,7 +145,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md) | One route layer per surface (approvals, settings), with an auth adapter per mode, not a second module | Accepted |
 | [0034](0034-sensitive-settings-writes-require-step-up-in-both-modes.md) | Sensitive settings writes require WebAuthn step-up in both local and org mode | Accepted |
 | [0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) | Agent attribution reads the handshake on every call; org mode attests only admin-pinned OAuth clients | Accepted; amended by 0224; decision 3 superseded by 0225 |
-| [0036](0036-card-copy-names-the-caller-through-one-placeholder.md) | Card copy names the caller through one placeholder, filled from the verified name or "the AI system"; connectors never learn who is asking | Accepted (retroactive); amended by 0284 |
+| [0036](0036-card-copy-names-the-caller-through-one-placeholder.md) | Card copy names the caller through one placeholder, filled from the verified name or "the AI system"; connectors never learn who is asking | Accepted (retroactive); amended by 0286 |
 | [0037](0037-a-local-override-is-a-relabel-and-never-attests.md) | A local `agent_overrides:` match is a relabel recorded as claimed on every install; local mode has no attested source | Accepted |
 | [0038](0038-gmail-draft-signature-is-shown-but-not-write-scanned.md) | A Gmail draft's appended signature is shown in the approval popup but not write-scanned | Accepted |
 | [0039](0039-installers-refuse-an-os-below-the-support-matrix.md) | Every installer refuses an OS below the support matrix's floor | Accepted |
@@ -255,8 +255,8 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted; amended by 0207 |
 | [0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md) | `grist_update_csv` can clear a value from an empty cell | Accepted; amends 0148 |
 | [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
-| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198; amended by 0236; amended by 0285; related: 0250 |
-| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072; amended by 0278 |
+| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198; amended by 0236; related: 0250; amended by 0283; amended by 0287 |
+| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072; amended by 0278; amended by 0283 |
 | [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148; amended by 0174, 0236 |
 | [0167](0167-a-card-number-must-have-a-length-its-first-digit-allows.md) | A card number must have a length its first digit allows | Accepted |
 | [0168](0168-earlier-drive-file-versions-are-read-under-the-file-read-rule.md) | Earlier Drive file versions are read under the file-read rule | Accepted |
@@ -327,7 +327,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0233](0233-a-miro-write-covers-a-batch-of-up-to-twenty-under-one-card.md) | A Miro write covers a batch of up to twenty items or connector lines under one approval card | Accepted; relates to 0231 |
 | [0234](0234-slack-reads-report-the-users-own-read-state.md) | Slack message reads report the user's own read state from Slack's read markers | Accepted; relates to 0226, 0227 |
 | [0235](0235-a-separate-auto-approved-tool-checks-the-read-state-of-named-messages.md) | A separate, auto-approved tool checks the read state of named Slack messages | Accepted; relates to 0234 |
-| [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198; amended by 0285 |
+| [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198; amended by 0287 |
 | [0237](0237-the-wheel-bundles-the-changelog-through-a-setup-py-build-hook.md) | The wheel bundles `CHANGELOG.md` through a `setup.py` build hook | Accepted; relates to 0023 |
 | [0238](0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md) | Org mode shows each person the changes since the version they last saw | Accepted; relates to 0014, 0023, 0237 |
 | [0239](0239-the-peek-connector-uses-peeks-visibilities-and-new-pages-are-restricted.md) | The Peek connector uses Peek's own visibilities, and new pages are restricted | Accepted; relates to 0158 |
@@ -371,9 +371,11 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0277](0277-the-websites-primary-call-to-action-is-install.md) | The website's primary call to action is Install | Accepted |
 | [0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md) | A scoped token can be delivered into an agent runtime, n8n first, as a credential PrivacyFence writes itself | Accepted; amends 0165, 0250; relates to 0164, 0220 |
 | [0279](0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md) | The n8n address and API key come only from the server environment | Accepted; relates to 0241, 0257 |
-| [0280](0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md) | `privacyfence_runtime_credential_status` reports a delivered proposal's credential to the client that proposed it | Accepted; amends 0250 |
-| [0281](0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md) | A sweeper deletes the runtime credential of a revoked, expired or undelivered token | Accepted; relates to 0164, 0165 |
+| [0280](0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md) | `privacyfence_runtime_credential_status` reports a delivered proposal's credential to the client that proposed it | Accepted; amends 0250; amended by 0284 |
+| [0281](0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md) | A sweeper deletes the runtime credential of a revoked, expired or undelivered token | Accepted; relates to 0164, 0165; amended by 0284 |
 | [0282](0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md) | Runtime delivery is organization-mode only and starts only from an AI proposal | Accepted; relates to 0250, 0261 |
-| [0283](0283-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196 |
-| [0284](0284-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274 |
-| [0285](0285-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272 |
+| [0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md) | Only a person can extend a scoped token, from today and capped by max_days | Accepted; amends 0164, 0165 |
+| [0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md) | An expired token's n8n credential is kept until the token is revoked | Accepted; amends 0280, 0281; relates to 0283 |
+| [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196 |
+| [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274 |
+| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272 |

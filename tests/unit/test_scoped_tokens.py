@@ -188,6 +188,71 @@ class TestStore:
             assert getattr(found, attr) == getattr(token, attr)
         assert _store().tokens_for(LOCAL_PRINCIPAL)[0].label == "b"
 
+    def test_extend_moves_only_the_expiry(self):
+        store = _store()
+        token, secret = _create(store, days=10)
+        later = NOW + 5 * 86400
+        _, extended = store.extend(LOCAL_PRINCIPAL, token.id, 30, policy=ENABLED, now=later)
+        assert extended.expires_at == later + 30 * 86400
+        found = store.find(secret, later)
+        assert found == extended
+        for attr in ("digest", "id", "label", "rules", "tools", "allow_personal_data"):
+            assert getattr(found, attr) == getattr(token, attr)
+
+    def test_extend_revives_an_expired_token(self):
+        store = _store()
+        token, secret = _create(store, days=1)
+        after = NOW + 3 * 86400
+        assert store.find(secret, after) is None
+        store.extend(LOCAL_PRINCIPAL, token.id, 10, policy=ENABLED, now=after)
+        assert store.find(secret, after) is not None
+
+    def test_extend_persists(self):
+        store = _store()
+        token, _ = _create(store, days=10)
+        _, extended = store.extend(LOCAL_PRINCIPAL, token.id, 30, policy=ENABLED, now=NOW)
+        assert _store().tokens_for(LOCAL_PRINCIPAL)[0].expires_at == extended.expires_at
+
+    def test_extend_refuses_a_shorter_or_equal_expiry(self):
+        store = _store()
+        token, _ = _create(store, days=30)
+        for days in (10, 30):
+            with pytest.raises(ScopedTokenError) as err:
+                store.extend(LOCAL_PRINCIPAL, token.id, days, policy=ENABLED, now=NOW)
+            assert str(err.value) == scoped_tokens.EXTEND_NOT_LONGER
+        assert store.tokens_for(LOCAL_PRINCIPAL)[0].expires_at == token.expires_at
+
+    def test_extend_refuses_days_out_of_range(self):
+        store = _store()
+        token, _ = _create(store)
+        policy = ScopedTokenPolicy(enabled=True, max_days=120)
+        for days in (0, 121):
+            with pytest.raises(ScopedTokenError) as err:
+                store.extend(LOCAL_PRINCIPAL, token.id, days, policy=policy, now=NOW)
+            assert str(err.value) == "A token lasts 1 to 120 days."
+
+    def test_extend_of_an_unknown_or_foreign_token_is_none(self):
+        other = Principal(id="other")
+        store = _store(LOCAL_PRINCIPAL, other)
+        theirs, _ = _create(store, principal=other)
+        assert store.extend(LOCAL_PRINCIPAL, "st-000000000000", 30, policy=ENABLED, now=NOW) is None
+        assert store.extend(LOCAL_PRINCIPAL, theirs.id, 365, policy=ENABLED, now=NOW) is None
+
+    def test_extend_returns_the_old_expiry(self):
+        store = _store()
+        token, _ = _create(store, days=10)
+        old, _ = store.extend(LOCAL_PRINCIPAL, token.id, 30, policy=ENABLED, now=NOW)
+        assert old == token.expires_at
+
+    def test_extend_is_refused_when_tokens_are_not_enabled(self):
+        store = _store()
+        token, _ = _create(store)
+        with pytest.raises(ScopedTokenError) as err:
+            store.extend(LOCAL_PRINCIPAL, token.id, 30, policy=ScopedTokenPolicy(enabled=False, max_days=365), now=NOW)
+        assert str(err.value) == (
+            "Scoped tokens are not enabled on this install. Your administrator turns them on on the Admin page."
+        )
+
     def test_rename_returns_the_old_label(self):
         store = _store()
         token, _ = _create(store, label="a")
@@ -372,6 +437,19 @@ class TestAllowPersonalDataReads:
 
 class TestUpstreamDomains:
     HELD = {"kh": frozenset({"general", "hr"})}
+
+    def test_extend_keeps_the_domains_and_the_verified_flag(self):
+        store = _store()
+        token, _ = _create(
+            store, label="scoped", days=10, upstream_domains={"kh": ["hr"]}, held_domains=self.HELD,
+            principal_email_verified=True,
+        )
+        _, extended = store.extend(LOCAL_PRINCIPAL, token.id, 30, policy=ENABLED, now=NOW)
+        assert extended.upstream_domains == {"kh": frozenset({"hr"})}
+        assert extended.principal_email_verified is True
+        found = _store().tokens_for(LOCAL_PRINCIPAL)[0]
+        assert found.upstream_domains == {"kh": frozenset({"hr"})}
+        assert found.principal_email_verified is True
 
     def test_fields_round_trip_and_are_written_only_when_set(self, tmp_path):
         store = _store()

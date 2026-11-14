@@ -6,7 +6,7 @@ calls or principals. ``UpstreamToolCatalog`` turns the tools an upstream listed 
 ``ToolSpec`` values for the declared tools only, and skips any whose schema this release cannot pass
 through safely.
 
-See ADR 0283 (upstream MCP servers as a connector) and ADR 0284 (the signed caller claim).
+See ADR 0285 (upstream MCP servers as a connector) and ADR 0286 (the signed caller claim).
 """
 from __future__ import annotations
 
