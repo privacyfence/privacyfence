@@ -276,6 +276,23 @@ class TestReviewData:
         p = _proposal(request=_request(rules=[{"kind": "copy", "rule_id": "gone"}]))
         assert stp.review_data(p, [])["rules"][0]["sentence"] == "A rule that no longer exists"
 
+    def test_delivery_is_none_for_a_plain_proposal(self):
+        p = _proposal()
+        assert p.delivery is None and p.mcp_url == ""
+        assert stp.review_data(p, [])["delivery"] is None
+
+    def test_delivery_names_the_runtime_host_and_workflow(self):
+        from privacyfence.agent_runtimes import DeliveryTarget
+        p = _proposal(delivery=DeliveryTarget("n8n", "wf1"), mcp_url="https://pf.example.com/mcp")
+        assert p.mcp_url == "https://pf.example.com/mcp"
+        data = stp.review_data(p, [], runtime_host="n8n.example.com", project_id="proj1")
+        assert data["delivery"] == {
+            "runtime": "n8n", "host": "n8n.example.com", "project_id": "proj1", "workflow_id": "wf1",
+        }
+        assert stp.review_data(p, [])["delivery"] == {
+            "runtime": "n8n", "host": "", "project_id": "", "workflow_id": "wf1",
+        }
+
     def test_agent_label_is_the_label_text(self):
         from privacyfence import agent_label
         assert stp.review_data(_proposal(), [])["agent_label"] == agent_label.label_for(AGENT).text

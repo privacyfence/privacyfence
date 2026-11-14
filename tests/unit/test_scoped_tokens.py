@@ -1380,3 +1380,84 @@ class TestCanonicalizeVerbsInFile:
         assert scoped_tokens.renamed_verbs(["copy", 3]) is None
         assert scoped_tokens.renamed_verbs(["read", "move"]) is None
         assert scoped_tokens.renamed_verbs(["share", "send", "read"]) == ["read", "send"]
+
+
+class TestChosenTokenId:
+    def test_new_token_id_has_the_stored_shape(self):
+        first, second = scoped_tokens.new_token_id(), scoped_tokens.new_token_id()
+        assert scoped_tokens.TOKEN_ID_RE.match(first) and first != second
+
+    def test_a_chosen_id_is_used(self):
+        store = _store()
+        chosen = scoped_tokens.new_token_id()
+        token, _ = _create(store, token_id=chosen)
+        assert token.id == chosen
+        assert [t.id for t in store.tokens_for(LOCAL_PRINCIPAL)] == [chosen]
+
+    def test_no_id_is_picked_by_the_store(self):
+        token, _ = _create(_store())
+        assert scoped_tokens.TOKEN_ID_RE.match(token.id)
+
+    def test_an_id_in_use_is_refused(self):
+        store = _store()
+        chosen = scoped_tokens.new_token_id()
+        _create(store, token_id=chosen)
+        with pytest.raises(ScopedTokenError, match="That token id is already in use."):
+            _create(store, label="other", token_id=chosen)
+        assert len(store.tokens_for(LOCAL_PRINCIPAL)) == 1
+
+    @pytest.mark.parametrize("bad", ["", "st-123", "st-ABCDEF123456", "x-0123456789ab", "st-0123456789abc"])
+    def test_a_malformed_id_is_refused(self, bad):
+        with pytest.raises(ScopedTokenError, match="That token id is already in use."):
+            _create(_store(), token_id=bad)
+
+    def test_the_same_id_is_free_for_another_person(self):
+        other = Principal(id="other")
+        store = _store(LOCAL_PRINCIPAL, other)
+        chosen = scoped_tokens.new_token_id()
+        _create(store, token_id=chosen)
+        token, _ = _create(store, principal=other, token_id=chosen)
+        assert token.id == chosen
+
+
+class TestTokenState:
+    def test_live_expired_and_absent(self):
+        store = _store()
+        token, _ = _create(store)
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW + 1) == "live"
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=token.expires_at) == "expired"
+        assert store.token_state(LOCAL_PRINCIPAL, "st-000000000000", now=NOW) == "absent"
+
+    def test_now_defaults_to_the_clock(self):
+        store = _store()
+        token, _ = _create(store, now=1.0)
+        assert store.token_state(LOCAL_PRINCIPAL, token.id) == "expired"
+
+    def test_a_revoked_token_is_absent(self):
+        store = _store()
+        token, _ = _create(store)
+        store.revoke(LOCAL_PRINCIPAL, token.id)
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW) == "absent"
+
+    def test_a_missing_file_is_absent(self):
+        assert _store().token_state(LOCAL_PRINCIPAL, "st-000000000000", now=NOW) == "absent"
+
+    def test_a_corrupt_file_is_unknown(self, tmp_path):
+        store = _store()
+        token, _ = _create(store)
+        _file(tmp_path).write_text("{not json", encoding="utf-8")
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW) == "unknown"
+
+    def test_a_repaired_file_is_read_again(self, tmp_path):
+        store = _store()
+        token, _ = _create(store)
+        good = _file(tmp_path).read_text(encoding="utf-8")
+        # Distinct mtimes a whole second apart: two quick in-place writes can share one timestamp
+        # on a coarse clock, and Windows keeps 100 ns units, so nanosecond-apart values would
+        # collapse to one; the reload check would then read the repaired file as unchanged.
+        _file(tmp_path).write_text("{not json", encoding="utf-8")
+        os.utime(_file(tmp_path), ns=(10**9, 10**9))
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW) == "unknown"
+        _file(tmp_path).write_text(good + " ", encoding="utf-8")
+        os.utime(_file(tmp_path), ns=(2 * 10**9, 2 * 10**9))
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW) == "live"

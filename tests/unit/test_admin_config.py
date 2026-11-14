@@ -198,6 +198,7 @@ class TestImportCopies:
             "authz": {"allowed_domains": ["example.com"]},
             "step_up": {"enabled": True, "scope": "writes"},
             "scoped_tokens": {"max_ttl": 5},
+            "agent_runtimes": {"n8n": {"enabled": True, "project_id": "", "mcp_url": ""}},
             "audit_forwarding": {"http": {"bearer_token_env": "TOKEN_VAR"}},
         }
         config = _import(copy.deepcopy(bundle))
@@ -998,6 +999,29 @@ class TestPlainSections:
     @pytest.mark.parametrize("days", [1, 365])
     def test_scoped_token_days_at_the_edges(self, clean_env, days):
         assert _change("set_scoped_tokens", {"enabled": True, "max_days": days, "allow_ai_proposals": False})[0]
+
+
+class TestAgentRuntimes:
+    PARAMS = {"enabled": True, "project_id": "proj1", "mcp_url": "https://pf.example.com/mcp"}
+
+    def test_the_default_is_present(self, clean_env):
+        assert admin_config._default_config()["agent_runtimes"] == {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}}
+
+    def test_a_change_saves_the_three_fields(self, clean_env):
+        assert _change("set_agent_runtimes", self.PARAMS) == ("Changed agent runtimes", ["agent_runtimes"])
+        assert _stored()["agent_runtimes"] == {"n8n": self.PARAMS}
+        assert _change("set_agent_runtimes", self.PARAMS) == ("", [])
+
+    @pytest.mark.parametrize("project_id", ["has space", "a" * 37, "x/y"])
+    def test_a_bad_project_id_is_refused(self, clean_env, project_id):
+        with pytest.raises(admin_config.AdminConfigError):
+            _change("set_agent_runtimes", {**self.PARAMS, "project_id": project_id})
+        assert admin_config.load() is None
+
+    @pytest.mark.parametrize("mcp_url", ["http://pf.example.com/mcp", "ftp://x/mcp", "https://u:p@pf.example.com", "not a url"])
+    def test_a_bad_mcp_url_is_refused(self, clean_env, mcp_url):
+        with pytest.raises(admin_config.AdminConfigError):
+            _change("set_agent_runtimes", {**self.PARAMS, "mcp_url": mcp_url})
 
 
 class TestTightenStepUp:

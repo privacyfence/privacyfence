@@ -1136,6 +1136,31 @@ The reasoning is in [ADR 0224](adr/0224-an-org-registration-is-attested-by-its-r
 [ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md) and
 [ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md).
 
+### Delivering tokens to n8n
+
+An AI client that builds n8n workflows can ask PrivacyFence to put a scoped token into n8n as a credential,
+instead of giving the token to a person to copy. The person still reviews, narrows and confirms the token in
+Settings. Organization mode only; it needs scoped tokens and AI token proposals turned on under **Admin →
+Scoped tokens**, and n8n **2.40.0 or later** (the first version whose credentials API takes a project).
+The version is not checked.
+
+1. In n8n, open **Settings → n8n API** and create an API key **as the user the n8n MCP server connects as**, so
+   that user's workflows can use the credential. On n8n Enterprise give the key only the scopes
+   `credential:create` and `credential:delete`; other editions cannot limit a key, which has full access.
+2. Give the server two environment variables (never the Admin page; the address and key are never editable
+   there): `PRIVACYFENCE_N8N_URL` (an `https://` address) and `PRIVACYFENCE_N8N_API_KEY`, or
+   `PRIVACYFENCE_N8N_API_KEY_FILE` for a Docker secret. If n8n uses an internal CA, also set
+   `REQUESTS_CA_BUNDLE` to the CA file. Restart.
+3. Where your n8n edition has projects, create a dedicated project for the credentials and enter its id.
+4. Open **Admin → Agent runtimes**, check that the address and key show as set, tick **Turn on n8n delivery**,
+   optionally set the **n8n project id** (empty means the key owner's personal space) and **PrivacyFence MCP
+   address for n8n** (empty means this server's address), and save. Restart when asked.
+
+Claude then calls `privacyfence_propose_scoped_token` with `deliver_to`, and `privacyfence_runtime_credential_status`
+for the credential's id. Revoking the token, or letting it expire, deletes the n8n credential within 5 minutes.
+Anyone who can edit workflows in that n8n, the AI client included, can use and read the token
+([Security and compliance](security-and-compliance.md#tokens-delivered-to-n8n), [ADR 0278](adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)).
+
 ## 12. Approvals and step-up
 
 Each person sees and decides only their own approvals, on `/approvals`. What gets gated, and how

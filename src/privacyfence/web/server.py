@@ -96,8 +96,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import (
-    __version__, agent_label, auto_accept, latency, paths, privilege_separation, relay_client,
-    scoped_token_proposals, scoped_tokens, web_shell, webauthn_stepup,
+    __version__, agent_label, agent_runtimes, auto_accept, latency, paths, privilege_separation, relay_client,
+    runtime_credentials, scoped_token_proposals, scoped_tokens, web_shell, webauthn_stepup,
 )
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
@@ -390,6 +390,13 @@ def scoped_token_page_data(
             by_connector.setdefault(connector, []).append(name)
     tokens = []
     activity = store.activity_for(principal)
+    # Delivery records exist only in organization mode; looking them up on a local install would
+    # create the org directory (ADR 0281).
+    delivered = (
+        {r.token_id: r for r in runtime_credentials.get_store().all()
+         if r.principal_id == principal.id and r.state == runtime_credentials.DELIVERED}
+        if delivery == "once" else {}
+    )
     for token in own_tokens:
         seen = activity.get(token.id, scoped_tokens.TokenActivity())
         expired = token.expired(now)
@@ -405,6 +412,13 @@ def scoped_token_page_data(
             "upstream_domains": {uid: sorted(doms) for uid, doms in sorted(token.upstream_domains.items())},
             "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
             "last_denied_tool": seen.last_denied_tool,
+            "runtime_credential": (
+                None if token.id not in delivered else {
+                    "runtime": delivered[token.id].runtime,
+                    "credential_name": delivered[token.id].credential_name,
+                    "workflow_id": delivered[token.id].workflow_id,
+                }
+            ),
         })
     proposals = [
         {"id": p.id, "label": p.request["label"], "agent_label": agent_label.label_for(p.agent).text,
@@ -1476,6 +1490,7 @@ def _build_org_app(
             nav_items=web_shell.ORG_NAV_ITEMS,
         ))
     scoped_token_policy = scoped_tokens.policy_from_org_config(org.org_config, org_mode=True)
+    agent_runtime = agent_runtimes.N8nRuntimeConfig.from_org_config(org.org_config)
     org_scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None
     if mcp_dispatcher is not None:
         dispatcher = mcp_dispatcher
@@ -1504,6 +1519,7 @@ def _build_org_app(
         # needs /mcp, so without a dispatcher the page offers none.
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_tokens.get_store(),
         scoped_token_page_data=org_scoped_token_page_data,
+        agent_runtime=agent_runtime,
     ))
     # The Admin API shares the effective config dict, so a live change reaches every holder.
     extra_routes.extend(routes_admin.build_org_routes(
