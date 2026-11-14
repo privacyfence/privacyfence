@@ -30,7 +30,7 @@ CARD = re.compile(
     re.S,
 )
 # The organization-only group membership sync tool is administration, not a connector a person connects to,
-# so the website does not list it (owner decision on #1103).
+# so the website does not list it.
 NOT_ON_THE_WEBSITE = {"privacyfence-administration"}
 REFERENCE = {
     m["anchor"]: m.groupdict()
