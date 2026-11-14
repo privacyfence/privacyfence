@@ -355,5 +355,5 @@ class TestUpstreamTools:
 
     def test_the_review_cannot_add_a_domain(self):
         proposed = _request()
-        assert stp.narrowing_error(proposed, {**proposed, "upstream_domains": {}}) is None
-        assert stp.narrowing_error(proposed, {**proposed, "upstream_domains": {"kh": ["hr"]}}) == stp.WIDENED_MESSAGE
+        assert stp.narrowing_error(proposed, {**proposed, "upstream_audiences": {}}) is None
+        assert stp.narrowing_error(proposed, {**proposed, "upstream_audiences": {"kh": ["hr"]}}) == stp.WIDENED_MESSAGE

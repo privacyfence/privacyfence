@@ -1,4 +1,4 @@
-"""upstream_mcp_runtime: the caller claim, held domains, status and the startup tool-list fetch."""
+"""upstream_mcp_runtime: the caller claim, held audiences, status and the startup tool-list fetch."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ class TestUnconfigured:
         assert upstream_mcp_runtime.connectors_for_principal() == []
         assert upstream_mcp_runtime.status() == []
         assert upstream_mcp_runtime.signer() is None
-        assert upstream_mcp_runtime.held_domains(Principal(id="u", email="a@b.example"), True) == {}
+        assert upstream_mcp_runtime.held_audiences(Principal(id="u", email="a@b.example"), True) == {}
 
     def test_lifespan_with_nothing_configured_does_nothing(self):
         async def run():
@@ -113,7 +113,7 @@ class TestConfigured:
 
 
 class TestCallerFor:
-    def test_verified_person_gets_the_domains_their_grants_give(self, configured):
+    def test_verified_person_gets_the_audiences_their_grants_give(self, configured):
         principal = Principal(id="u1", email="Ann@HR.example", email_verified=True)
         claim = _caller(configured[0], principal)
         assert claim.sub == "u1"
@@ -126,13 +126,13 @@ class TestCallerFor:
         principal = Principal(id="u1", email="ann@hr.example", email_verified=True)
         assert _caller(configured[1], principal).domains == ()
 
-    def test_unverified_person_gets_no_domains_and_no_email(self, configured):
+    def test_unverified_person_gets_no_audiences_and_no_email(self, configured):
         claim = _caller(configured[0], Principal(id="u2", email="ann@hr.example"))
         assert claim.domains == ()
         assert claim.email == ""
         assert claim.email_verified is False
 
-    def test_scoped_token_without_upstream_domains_gets_none(self, configured):
+    def test_scoped_token_without_upstream_audiences_gets_none(self, configured):
         claim = _caller(
             configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True),
             _scope(principal_email_verified=True),
@@ -141,32 +141,32 @@ class TestCallerFor:
         assert claim.email_verified is True
         assert claim.act == {"type": "workflow", "token_id": "st-1", "label": "Nightly"}
 
-    def test_scoped_token_with_upstream_domains_narrows(self, configured):
-        scope = _scope(principal_email_verified=True, upstream_domains={"kh": frozenset({"hr", "legal"})})
+    def test_scoped_token_with_upstream_audiences_narrows(self, configured):
+        scope = _scope(principal_email_verified=True, upstream_audiences={"kh": frozenset({"hr", "legal"})})
         claim = _caller(configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True), scope)
         # "legal" was ticked but the owner does not hold it: a token never widens.
         assert claim.domains == ("hr",)
 
     def test_scoped_token_of_an_unverified_owner_gets_none(self, configured):
-        scope = _scope(upstream_domains={"kh": frozenset({"general"})})
+        scope = _scope(upstream_audiences={"kh": frozenset({"general"})})
         claim = _caller(configured[0], Principal(id="u1", email="ann@hr.example"), scope)
         assert claim.domains == ()
         assert claim.email == ""
         assert claim.email_verified is False
 
-    def test_scoped_token_domains_for_another_upstream_do_not_apply(self, configured):
-        scope = _scope(principal_email_verified=True, upstream_domains={"wiki": frozenset({"general"})})
+    def test_scoped_token_audiences_for_another_upstream_do_not_apply(self, configured):
+        scope = _scope(principal_email_verified=True, upstream_audiences={"wiki": frozenset({"general"})})
         claim = _caller(configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True), scope)
         assert claim.domains == ()
 
 
 class TestHeldDomains:
     def test_one_entry_per_upstream(self, configured):
-        held = upstream_mcp_runtime.held_domains(Principal(id="u1", email="ann@hr.example"), True)
+        held = upstream_mcp_runtime.held_audiences(Principal(id="u1", email="ann@hr.example"), True)
         assert held == {"kh": frozenset({"general", "hr", "finance"}), "wiki": frozenset()}
 
     def test_an_unverified_person_holds_nothing(self, configured):
-        held = upstream_mcp_runtime.held_domains(Principal(id="u1", email="ann@hr.example"), False)
+        held = upstream_mcp_runtime.held_audiences(Principal(id="u1", email="ann@hr.example"), False)
         assert held == {"kh": frozenset(), "wiki": frozenset()}
 
 

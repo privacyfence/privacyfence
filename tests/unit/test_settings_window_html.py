@@ -771,15 +771,15 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
-    def test_the_form_offers_a_domain_fieldset_for_an_upstream_with_a_ticked_tool(self):
+    def test_the_form_offers_an_audience_fieldset_for_an_upstream_with_a_ticked_tool(self):
         html = build_html(_make_state(), mode="org", scoped_tokens={
             **self.DATA, "delivery": "once",
-            "upstreams": [{"id": "kh", "label": "Knowledge </script><b>hub", "tools": ["kh_search"], "domains": ["general", "hr"]}],
+            "upstreams": [{"id": "kh", "label": "Knowledge </script><b>hub", "tools": ["kh_search"], "audiences": ["general", "hr"]}],
         })
-        assert "Data domains for ' + esc(u.label)" in html
-        assert "The token sees only the domains you tick, and never more than you can see yourself." in html
-        assert "data-st-domain=" in html and "data-st-domain-upstream=" in html
-        assert "upstream_domains: scopedChosenDomains()" in html
+        assert "Audiences for ' + esc(u.label)" in html
+        assert "The token sees only the audiences you tick, and never more than you can see yourself." in html
+        assert "data-st-audience=" in html and "data-st-audience-upstream=" in html
+        assert "upstream_audiences: scopedChosenAudiences()" in html
         assert "scopedUpstreamsWithTools()" in html
         # The label rides in the JSON data, which cannot close the script element.
         assert "</script><b>hub" not in html

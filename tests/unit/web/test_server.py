@@ -2423,7 +2423,7 @@ def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypat
     )
 
 
-def test_scoped_token_page_data_lists_upstreams_with_the_domains_the_person_holds(tmp_path, monkeypatch):
+def test_scoped_token_page_data_lists_upstreams_with_the_audiences_the_person_holds(tmp_path, monkeypatch):
     from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens, upstream_mcp_runtime
     from privacyfence.web.server import scoped_token_page_data
 
@@ -2446,20 +2446,20 @@ def test_scoped_token_page_data_lists_upstreams_with_the_domains_the_person_hold
         seen.append((principal.id, email_verified))
         return {"kh": frozenset({"hr", "general"})}
 
-    monkeypatch.setattr(upstream_mcp_runtime, "held_domains", held)
+    monkeypatch.setattr(upstream_mcp_runtime, "held_audiences", held)
     store.create(
         alice, label="kh", days=30, rules=[], tools=["kh_search"], policy=policy,
-        upstream_domains={"kh": ["hr"]}, held_domains={"kh": frozenset({"hr"})},
+        upstream_audiences={"kh": ["hr"]}, held_audiences={"kh": frozenset({"hr"})},
     )
     with principal_scope(alice):
         auto_accept.init_config_path(str(tmp_path / "settings.yaml"))
         data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive", "kh"})
 
     assert data["upstreams"] == [
-        {"id": "kh", "label": "Knowledge hub", "tools": ["kh_search"], "domains": ["general", "hr"]},
+        {"id": "kh", "label": "Knowledge hub", "tools": ["kh_search"], "audiences": ["general", "hr"]},
     ]
     assert seen == [("alice", True)]
-    assert data["tokens"][0]["upstream_domains"] == {"kh": ["hr"]}
+    assert data["tokens"][0]["upstream_audiences"] == {"kh": ["hr"]}
 
 
 def test_scoped_token_page_data_has_no_upstreams_key_when_none_is_configured(tmp_path, monkeypatch):
