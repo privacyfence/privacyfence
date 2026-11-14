@@ -474,10 +474,32 @@ class TestStatusFor:
         rc.get_store().add(_record(credential_id="bbbbbbbbbbbbbbbb", state=rc.ABANDONED))
         assert self._status(tokens, "stp-1") == {"state": "pending"}
 
-    def test_an_expired_token_is_not_delivered(self, tokens):
+    def test_an_expired_token_is_reported_expired_for_extend(self, tokens):
         proposal = _proposal()
         outcome = _deliver(tokens, FakeApi(), proposal)
-        assert self._status(tokens, proposal.id, now=outcome.token.expires_at + 1) == self.NOT_DELIVERED
+        when = outcome.token.expires_at
+
+        answer = self._status(tokens, proposal.id, now=when + 1)
+
+        assert answer == {
+            "state": "expired", "runtime": "n8n", "credential_id": outcome.record.credential_id,
+            "credential_name": outcome.record.credential_name, "credential_type": "httpBearerAuth",
+            "node_authentication": "bearerAuth", "mcp_url": "https://pf/mcp",
+            "token_expired_at": datetime.fromtimestamp(when, timezone.utc).isoformat(),
+            "message": rc.EXPIRED_MESSAGE,
+        }
+        assert outcome.token.id not in json.dumps(answer)
+
+    def test_an_extended_token_is_delivered_again_for_extend(self, tokens):
+        proposal = _proposal()
+        outcome = _deliver(tokens, FakeApi(), proposal)
+        later = outcome.token.expires_at + 10
+        _, extended = tokens.extend(ALICE, outcome.token.id, 30, policy=ENABLED, now=later)
+
+        answer = self._status(tokens, proposal.id, now=later + 1)
+
+        assert answer["state"] == "delivered"
+        assert answer["token_expires_at"] == datetime.fromtimestamp(extended.expires_at, timezone.utc).isoformat()
 
     def test_a_revoked_token_is_not_delivered(self, tokens):
         proposal = _proposal()
