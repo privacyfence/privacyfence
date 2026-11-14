@@ -5,7 +5,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-claim-keys
 
-- pending
+- worker: Worker interpreted: revoking a pending key un-retires the signing key waiting to hand over; revoke refuses when no other key can sign now; the CLI uses the default 24 h overlap until phase 9/10 wires claim.key_overlap_hours.
+- worker: Worker reported blocked only because the tld plugin is absent in its container; no roles are required for its files, so I accepted the head after scope check and the unit suite.
 
 ## p2-membership-store
 
