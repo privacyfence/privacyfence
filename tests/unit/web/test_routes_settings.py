@@ -2246,6 +2246,24 @@ class TestScopedTokenProposalRoutes:
         assert calls[1] == ("send", self.SECRET)
         assert not self._live(proposal)
 
+    def test_a_delivery_proposal_is_refused_in_local_mode(self, controller, sessions):
+        from privacyfence import agent_runtimes
+
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        request = scoped_tokens.normalise_create_request(dict(self.REQUEST))
+        proposal = scoped_token_proposals.new_proposal(
+            principal=LOCAL_PRINCIPAL, request=request, source="bundle", agent=self.AGENT, reason="a weekly job",
+            delivery=agent_runtimes.DeliveryTarget("n8n", "wf1"), mcp_url="https://pf.example.com/mcp",
+        )
+        scoped_token_proposals.get_registry().add(proposal)
+
+        r = client.post(self.CREATE, json=self._body(proposal, csrf))
+
+        assert r.status_code == 400
+        assert r.json() == {"error": "This proposal delivers the token to n8n, which needs an organization server."}
+        assert calls == []
+
     def test_typed_label_must_match(self, controller, sessions):
         client, calls = self._client(controller, sessions)
         csrf = _authed(client, sessions)

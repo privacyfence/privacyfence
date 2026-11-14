@@ -316,16 +316,19 @@ CREATE_UPLOAD_SLOT_TOOL = types.Tool(
 PROPOSE_SCOPED_TOKEN_TOOL = types.Tool(
     name="privacyfence_propose_scoped_token",
     description=(
-        "Propose a scoped token (a named, expiring bearer credential limited to some rules and tools, "
-        "for a routine or scheduled job) for the person to review in PrivacyFence Settings. Returns at "
-        "once with review_url: give it to the person. Nothing is created until they review it, type its "
-        "name and confirm; they may narrow it. You never receive the token, nor whether it was created. "
-        "Set from_session=true to build its rules and tools from the calls approved in this session, or "
-        "pass rules (each {kind:'new', group, value, verbs} with group and verbs from "
+        "Propose a scoped token (a named, expiring bearer credential limited to rules and tools, "
+        "for a scheduled job) for the person to review in PrivacyFence Settings. Returns "
+        "review_url: give it to the person. Nothing is created until they type its "
+        "name and confirm; they may narrow it. Without deliver_to you never receive the token, nor whether "
+        "it was created. With deliver_to, PrivacyFence puts the token into n8n itself and "
+        "privacyfence_runtime_credential_status reports the credential's id; anyone who can edit "
+        "workflows in that n8n can then use the token. "
+        "from_session=true builds its rules and tools from this session's approved calls; otherwise pass "
+        "rules (each {kind:'new', group, value, verbs} with group and verbs from "
         "privacyfence_list_policy's scope_groups and value a comma-separated id list, or {kind:'copy', "
         "rule_id}) and tools. days defaults to 90. Ask for allow_personal_data or "
-        "allow_personal_data_reads only if the job needs them. Refused in an unattended session. "
-        "reason: one sentence on what the token is for (logged and shown to the person)."
+        "allow_personal_data_reads only if needed. Refused if unattended. "
+        "reason: what the token is for (logged, shown to the person)."
     ),
     input_schema={
         "type": "object",
@@ -338,10 +341,46 @@ PROPOSE_SCOPED_TOKEN_TOOL = types.Tool(
             "tools": {"type": "array", "items": {"type": "string"}},
             "allow_personal_data": {"type": "boolean"},
             "allow_personal_data_reads": {"type": "boolean"},
+            "deliver_to": {
+                "type": "object",
+                "description": (
+                    "Optional. Ask PrivacyFence to put the token into an agent runtime instead of giving it "
+                    "to the person: {\"runtime\": \"n8n\", \"workflow_id\": \"<the n8n workflow id, optional>\"}. "
+                    "Only on organization servers where the administrator set up n8n delivery. The workflow id "
+                    "is recorded for the audit log; n8n does not tie the credential to it."
+                ),
+            },
         },
         "required": ["reason", "label"],
     },
     annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+)
+
+RUNTIME_CREDENTIAL_STATUS_TOOL = types.Tool(
+    name="privacyfence_runtime_credential_status",
+    description=(
+        "Report whether a proposed token was delivered to n8n, and the n8n credential to use. Call it "
+        "with the proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to, "
+        "after the person has confirmed it. Returns state 'delivered' with credential_id, "
+        "credential_name, credential_type, node_authentication, mcp_url and token_expires_at; 'pending' "
+        "while the person has not decided; or 'not_delivered' for anything else. Put credential_id on "
+        "the MCP Client node with authentication bearerAuth and endpoint mcp_url. It never returns the "
+        "token. A scoped token cannot call it."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "reason": {"type": "string"},
+            "proposal_id": {
+                "type": "string",
+                "description": (
+                    "The proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to."
+                ),
+            },
+        },
+        "required": ["proposal_id", "reason"],
+    },
+    annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
 )
 
 META_TOOLS: tuple[types.Tool, ...] = (
@@ -354,5 +393,6 @@ META_TOOLS: tuple[types.Tool, ...] = (
     PRIVACYFENCE_STATUS_TOOL,
     CREATE_UPLOAD_SLOT_TOOL,
     PROPOSE_SCOPED_TOKEN_TOOL,
+    RUNTIME_CREDENTIAL_STATUS_TOOL,
 )
 META_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in META_TOOLS)

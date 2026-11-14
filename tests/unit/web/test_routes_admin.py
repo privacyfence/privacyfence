@@ -51,6 +51,7 @@ ACTION_BODIES = {
     "set_authz": {"allowed_domains": "example.com", "groups_claim": "", "required_groups": ""},
     "tighten_step_up": {"enabled": True, "require_passkey": True, "scope": "writes"},
     "set_scoped_tokens": SCOPED_TOKENS,
+    "set_agent_runtimes": {"enabled": True, "project_id": "proj1", "mcp_url": ""},
     "set_audit_forwarding": {
         "enabled": False, "kind": "syslog", "syslog_host": "logs.example.com", "syslog_port": 514,
         "syslog_protocol": "udp", "http_url": "",
@@ -342,6 +343,65 @@ class TestAudit:
         assert r.status_code == 404
 
 
+class TestAgentRuntimes:
+    BODY = {"enabled": True, "project_id": "proj1", "mcp_url": ""}
+
+    def test_the_action_is_org_only_sensitive_and_restarts(self):
+        spec = routes_admin.ADMIN_ACTIONS["set_agent_runtimes"]
+        assert (spec.modes, spec.sensitive, spec.applies) == (frozenset({"org"}), True, "restart")
+        assert routes_admin.RESTART_LABELS["agent_runtimes"] == "Agent runtimes"
+
+    def test_it_is_unknown_in_local_mode(self):
+        world = World()
+        r = routes_admin._dispatch(
+            ADMIN, "set_agent_runtimes", self.BODY, mode="local", bundle=world.bundle,
+            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
+            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
+        )
+        assert r.status_code == 404
+
+    def test_it_needs_a_passkey_then_saves_and_flags_a_restart(self):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        _enrol(ADMIN)
+        r = _passkey_post(world, "set_agent_runtimes", self.BODY, csrf)
+        assert r.status_code == 200, r.text
+        assert admin_config.load()["agent_runtimes"]["n8n"]["project_id"] == "proj1"
+        assert world.client.get("/api/admin/state").json()["restart_needed"] == ["Agent runtimes"]
+
+    @pytest.mark.parametrize("field", ["base_url", "url", "api_key_variable", "key_variable", "api_key"])
+    def test_an_address_or_key_field_is_refused_as_unknown(self, field):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.post("set_agent_runtimes", {**self.BODY, field: "https://evil.example"}, csrf)
+        assert r.status_code == 400
+        assert admin_config.load()["agent_runtimes"]["n8n"]["enabled"] is False
+
+    def test_the_state_reports_the_address_and_whether_the_key_is_set_never_its_value(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_URL", "https://n8n.internal.example/")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", ENV_SECRET)
+        world = World()
+        world.sign_in(ADMIN)
+        r = world.client.get("/api/admin/state")
+        assert ENV_SECRET not in r.text
+        assert r.json()["agent_runtimes_status"] == {"n8n": {
+            "url": "https://n8n.internal.example", "url_variable": "PRIVACYFENCE_N8N_URL",
+            "key_variable": "PRIVACYFENCE_N8N_API_KEY", "key_set": True,
+        }}
+
+    def test_an_unset_address_and_key_and_a_malformed_address(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_N8N_URL", raising=False)
+        monkeypatch.delenv("PRIVACYFENCE_N8N_API_KEY", raising=False)
+        monkeypatch.delenv("PRIVACYFENCE_N8N_API_KEY_FILE", raising=False)
+        world = World()
+        world.sign_in(ADMIN)
+        n8n = world.client.get("/api/admin/state").json()["agent_runtimes_status"]["n8n"]
+        assert (n8n["url"], n8n["key_set"]) == ("", False) and "url_error" not in n8n
+        monkeypatch.setenv("PRIVACYFENCE_N8N_URL", "http://insecure.example")
+        n8n = world.client.get("/api/admin/state").json()["agent_runtimes_status"]["n8n"]
+        assert n8n["url"] == "" and "https://" in n8n["url_error"]
+
+
 class TestState:
     def test_state_never_carries_a_secret(self, monkeypatch):
         monkeypatch.setenv("SENTINEL_BEARER", ENV_SECRET)
@@ -359,7 +419,8 @@ class TestState:
         world.sign_in(ADMIN)
         state = world.client.get("/api/admin/state").json()
         assert {"services", "rooms", "unattended_sessions", "download_delivery", "web_push", "authz",
-                "step_up", "scoped_tokens", "audit_forwarding", "restart_needed", "relay_status"} <= set(state)
+                "step_up", "scoped_tokens", "agent_runtimes", "agent_runtimes_status", "audit_forwarding",
+                "restart_needed", "relay_status"} <= set(state)
         assert {"privacy", "stats"} <= set(state)
         assert state["restart_needed"] == []
 

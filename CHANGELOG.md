@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **An AI client can have a scoped token delivered into n8n.** On an organization server, an administrator sets `PRIVACYFENCE_N8N_URL` and `PRIVACYFENCE_N8N_API_KEY` and turns on Admin → Agent runtimes. `privacyfence_propose_scoped_token` then takes `deliver_to: {"runtime": "n8n"}`; once the person confirms, PrivacyFence creates the token as an n8n credential, and the new `privacyfence_runtime_credential_status` tool reports its id. Revoking or expiry deletes the credential within 5 minutes. Anyone who can edit workflows in that n8n can use and read the token ([ADR 0278](docs/adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)).
+
 ## [7.0.2] — 2026-11-06
 
 ### Fixed

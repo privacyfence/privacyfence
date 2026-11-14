@@ -1361,6 +1361,13 @@ _JS = r"""
       activity += ' \u00b7 Last denied ' + stamp(t.last_denied_at) + ' (' + t.last_denied_tool + ')';
     }
     var activityHtml = '<div class="pf-hint pf-st-activity">' + esc(activity) + '</div>';
+    if (t.runtime_credential) {
+      var inRuntime = 'In n8n as \'' + t.runtime_credential.credential_name + '\'';
+      if (t.runtime_credential.workflow_id) {
+        inRuntime += ' \u00b7 for workflow ' + t.runtime_credential.workflow_id + ' (as reported by the AI client)';
+      }
+      activityHtml += '<div class="pf-hint pf-st-runtime" data-st-runtime="1">' + esc(inRuntime) + '</div>';
+    }
     var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
@@ -1650,6 +1657,14 @@ _JS = r"""
     html += '<div class="pf-hint">An AI client proposed this token. Untick anything the job does not need. You can only narrow it here; to add more, use New token.</div>';
     html += '<div class="pf-hint" data-sp-agent="1">Proposed by: ' + esc(p.agent_label) + '. The AI client reports this name itself; PrivacyFence does not verify it.</div>';
     html += '<div class="pf-hint" data-sp-reason="1">Reason given: ' + esc(p.reason) + '</div>';
+    if (p.delivery) {
+      var where = p.delivery.project_id ? 'project ' + p.delivery.project_id : 'the personal space of the n8n API key\'s owner';
+      var which = p.delivery.workflow_id ? ' The AI client says it is for workflow ' + p.delivery.workflow_id + '; n8n does not tie the credential to it.' : '';
+      html += '<div class="pf-st-notice" role="status" data-sp-delivery="1">' + esc(
+        'PrivacyFence will put this token into n8n at ' + p.delivery.host + ' as a credential, in ' + where +
+        '. Anyone who can edit workflows there, the AI client included, can use the token and read it until it expires or you revoke it.' +
+        which + ' Data the workflow reads is kept in n8n\'s execution history.') + '</div>';
+    }
     html += '<label><span class="field-label">Name</span><input type="text" class="field" aria-label="Token name" data-sp-label="1" maxlength="60" value="' + esc(ui.spLabel) + '"/></label>';
     html += '<label><span class="field-label">Days valid</span><input type="number" class="field" aria-label="Days valid" data-sp-days="1" min="1" max="' +
       esc(p.days) + '" value="' + esc(ui.spDays) + '"/></label>';
@@ -1705,7 +1720,7 @@ _JS = r"""
       rules: rules, tools: tools,
       allow_personal_data: !!(p.allow_personal_data && ui.spPersonalData),
       allow_personal_data_reads: !!(p.allow_personal_data_reads && ui.spPersonalDataReads),
-      sentences: sentences
+      sentences: sentences, delivery: !!p.delivery
     };
   }
 
@@ -1727,7 +1742,7 @@ _JS = r"""
       return d;
     }
     box.appendChild(div('pf-modal-title', 'Delegate access to this token?'));
-    box.appendChild(div('pf-modal-desc', 'You are delegating access. Anything that holds this token can act as you within these rules, for ' +
+    box.appendChild(div('pf-modal-desc', (req.delivery ? 'You are delegating access to n8n.' : 'You are delegating access.') + ' Anything that holds this token can act as you within these rules, for ' +
       req.days + ' days, with no approval card and no prompt. PrivacyFence cannot tell who is using it. ' +
       'Revoke it in Settings → Scoped tokens if it leaks or the job is retired.'));
     if (req.allow_personal_data || req.allow_personal_data_reads) {
@@ -1761,7 +1776,7 @@ _JS = r"""
       return b;
     }
     var cancel = btn('', 'Cancel');
-    var go = btn(' primary', 'Delegate access');
+    var go = btn(' primary', req.delivery ? 'Create and deliver to n8n' : 'Delegate access');
     function close() { overlay.remove(); document.removeEventListener('keydown', onEsc, true); }
     function onEsc(ev) { if (ev.key === 'Escape') { ev.preventDefault(); close(); } }
     function sync() {
@@ -2064,7 +2079,7 @@ _JS = r"""
   var ADMIN_NAV_ITEMS = [
     ['services', 'Services'], ['features', 'Features'], ['org_config', 'Organization configuration'],
     ['delivery', 'File delivery'], ['access', 'Sign-in'], ['step_up', 'Step-up'],
-    ['tokens', 'Scoped tokens'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
+    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
   ];
 
   // The provider setup doc for each service on the website: the doc's file name without .md.
@@ -2386,7 +2401,7 @@ _JS = r"""
   // data-f (the action's parameter name), and `saveAdminForm` reads them back by type.
   var ADMIN_FORMS = {
     delivery: 'set_download_delivery', access: 'set_authz', step_up: 'tighten_step_up',
-    tokens: 'set_scoped_tokens', audit: 'set_audit_forwarding',
+    tokens: 'set_scoped_tokens', runtimes: 'set_agent_runtimes', audit: 'set_audit_forwarding',
   };
   var AUDIT_KINDS = [['syslog', 'Syslog'], ['http', 'HTTP endpoint']];
   var SYSLOG_PROTOCOLS = [['udp', 'UDP'], ['tcp', 'TCP']];
@@ -2532,6 +2547,25 @@ _JS = r"""
     return '<div class="pf-page"><h1 class="pf-page-title">Scoped tokens</h1>' + formCardHtml('tokens', rows, 'scoped tokens') + '</div>';
   }
 
+  // The n8n address and API key come from the server's environment (ADR 0278-0282): they are shown
+  // with their variable names, never as inputs, so an admin session cannot point the key elsewhere.
+  function renderRuntimes(state) {
+    var r = (sectionWithDefaults(state, 'agent_runtimes').n8n) || {};
+    var status = ((state.agent_runtimes_status || {}).n8n) || {};
+    var urlVar = status.url_variable || 'PRIVACYFENCE_N8N_URL';
+    var keyVar = status.key_variable || 'PRIVACYFENCE_N8N_API_KEY';
+    var urlText = status.url || ('Not set: set ' + urlVar);
+    if (status.url_error) { urlText = status.url_error; }
+    var rows = [
+      checkRow('Let AI clients ask for a token to be delivered into n8n.', 'enabled', r.enabled, 'Turn on n8n delivery'),
+      textFieldRow('n8n project id', 'Leave empty to use the API key owner\u2019s personal space.', 'project_id', r.project_id || ''),
+      textFieldRow('PrivacyFence MCP address for n8n', 'Leave empty to use this server\u2019s address.', 'mcp_url', r.mcp_url || ''),
+      rowHtml('n8n address', esc(urlText), ''),
+      rowHtml('n8n API key', esc(status.key_set ? 'Set' : 'Not set: set ' + keyVar), ''),
+    ];
+    return '<div class="pf-page"><h1 class="pf-page-title">Agent runtimes</h1>' + formCardHtml('runtimes', rows, 'agent runtimes') + '</div>';
+  }
+
   // The bearer token's variable name is shown, never an input: the server sends that variable's
   // value to the URL above it, so a page that could set both could send any secret anywhere.
   function renderAuditForwarding(state) {
@@ -2582,6 +2616,7 @@ _JS = r"""
       case 'access': return renderAccess(state);
       case 'step_up': return renderStepUp(state);
       case 'tokens': return renderTokens(state);
+      case 'runtimes': return renderRuntimes(state);
       case 'audit': return renderAuditForwarding(state);
       case 'privacy': return renderAdminPrivacy(state);
       case 'stats': return renderStats(state);
@@ -3361,6 +3396,7 @@ def _admin_section_defaults() -> dict[str, dict[str, Any]]:
         "authz": {"allowed_domains": [], "groups_claim": "", "required_groups": []},
         "step_up": {"enabled": False, "require_passkey": False, "scope": DEFAULT_STEP_UP_SCOPE},
         "scoped_tokens": {"enabled": False, "max_days": scoped_tokens.DEFAULT_DAYS, "allow_ai_proposals": False},
+        "agent_runtimes": {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}},
         "audit_forwarding": {
             "enabled": False, "kind": org_mode.DEFAULT_AUDIT_FORWARDING_KIND,
             "syslog": {"host": "", "port": org_mode.DEFAULT_SYSLOG_PORT, "protocol": org_mode.DEFAULT_SYSLOG_PROTOCOL},
@@ -3392,7 +3428,7 @@ def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
         "sections": dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"), is_admin,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats"), is_admin,
         ),
         "not_applicable_actions": [],
         "defaults": _admin_section_defaults() if is_admin else {},
