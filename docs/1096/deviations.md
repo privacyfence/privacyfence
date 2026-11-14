@@ -49,7 +49,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p05-startup-data-check
 
-- pending
+- worker: tests/conftest.py (outside touches): the marker_path stub fixture now takes the optional root argument that marker_path gained.
+- scope: scope: tests/conftest.py
+- conflict: CHANGELOG.md conflicted with the p18b entry in [Unreleased] ### Changed; both entries kept.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks, including 100% line and branch coverage of data_format (owner choice orch_roles); no roles are required for this diff.
 
 ## p06-local-cli
 
