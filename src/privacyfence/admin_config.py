@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .agent_runtimes import N8nRuntimeConfig
+from .agent_runtimes import N8nRuntimeConfig, environment_locks
 from . import app_credentials, connector_configs, grist_auth, paths, peek_client, scoped_tokens, secure_files
 from .org_mode import (
     ADMIN_EMAILS_ENV,
@@ -875,32 +875,52 @@ def _apply_tighten_step_up(config: dict[str, Any], params: dict[str, Any]) -> tu
     return "Made step-up stricter", ["step_up"]
 
 
+def _hold_locked(
+    section: str, posted: dict[str, Any], stored: dict[str, Any]
+) -> dict[str, Any]:
+    """``posted`` with each field the environment locks held at what is stored.
+
+    A posted value that differs from the lock is refused. One that repeats it saves nothing: the
+    stored value stays (or stays absent), so the environment's value is never written.
+    """
+    try:
+        locks = environment_locks()[section]
+    except ConfigurationError as exc:
+        raise AdminConfigError(str(exc)) from exc
+    result = dict(posted)
+    for field, lock in locks.items():
+        if result.get(field) != lock.value:
+            raise AdminConfigError(f"This is set by {lock.variable} on the server.")
+        if field in stored:
+            result[field] = stored[field]
+        else:
+            result.pop(field)
+    return result
+
+
 def _apply_scoped_tokens(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
     max_days = _param(params, "max_days", int)
     if not 1 <= max_days <= scoped_tokens.LOCAL_MAX_DAYS:
         raise AdminConfigError(f"Scoped tokens can last from 1 to {scoped_tokens.LOCAL_MAX_DAYS} days.")
-    candidate = {
-        **config["scoped_tokens"],
+    posted = {
         "enabled": _param(params, "enabled", bool),
         "max_days": max_days,
         "allow_ai_proposals": _param(params, "allow_ai_proposals", bool),
     }
+    candidate = {**config["scoped_tokens"], **_hold_locked("scoped_tokens", posted, config["scoped_tokens"])}
     return _replace_section(config, "scoped_tokens", candidate, "Changed scoped tokens")
 
 
 def _apply_agent_runtimes(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
     section = config["agent_runtimes"]
     current = section.get("n8n") if isinstance(section.get("n8n"), dict) else {}
-    candidate = {
-        **section,
-        "n8n": {
-            **current,
-            "enabled": _param(params, "enabled", bool),
-            "project_id": _param(params, "project_id", str).strip(),
-            "mcp_url": _param(params, "mcp_url", str).strip(),
-            "credential_type": _param(params, "credential_type", str).strip(),
-        },
+    posted = {
+        "enabled": _param(params, "enabled", bool),
+        "project_id": _param(params, "project_id", str).strip(),
+        "mcp_url": _param(params, "mcp_url", str).strip(),
+        "credential_type": _param(params, "credential_type", str).strip(),
     }
+    candidate = {**section, "n8n": {**current, **_hold_locked("agent_runtimes", posted, current)}}
     _validated(N8nRuntimeConfig.from_org_config, "agent_runtimes", candidate)
     return _replace_section(config, "agent_runtimes", candidate, "Changed agent runtimes")
 

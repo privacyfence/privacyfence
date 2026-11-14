@@ -146,7 +146,7 @@ A multi-user server with the environment alone, no bundle to build:
    | `.env` | root | 0600 | Host name and image tag, read by Compose as root. |
    | `privacyfence.env` | root | 0600 | May hold plain secrets. |
    | `upstream_mcp.yaml` (optional) | root | 0644 | Addresses and audiences, no secrets. |
-   | `idp_client_secret`, `peek_provisioning_key`, `grist_provisioning_key` | `10001:10001` | 0400 | Read inside the container by the image's user, through Docker secrets. |
+   | `idp_client_secret`, `peek_provisioning_key`, `grist_provisioning_key`, `n8n_api_key` | `10001:10001` | 0400 | Read inside the container by the image's user, through Docker secrets. |
 
    PrivacyFence's own data does not go in this folder: it stays in the named volume `pf-data` (for a
    host directory instead, see [A bind-mounted data directory](#a-bind-mounted-data-directory)). Back
@@ -228,6 +228,12 @@ A multi-user server with the environment alone, no bundle to build:
     `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` in `privacyfence.env` to offer them and turn them on from
     the server ([Peek setup](peek-setup.md#automatic-accounts),
     [Grist setup](grist-setup.md#automatic-api-keys)).
+    **Optional, n8n:** to let AI clients have a scoped token delivered into n8n, put the n8n API key in a
+    file `n8n_api_key` (made like the other secret files), name it with
+    `PRIVACYFENCE_N8N_API_KEY_FILE=/run/secrets/n8n_api_key` next to `PRIVACYFENCE_N8N_URL`, uncomment the
+    `n8n_api_key` secret in `compose.yaml`, and set `PRIVACYFENCE_N8N_DELIVERY` to `true`. That also turns
+    on scoped tokens and AI proposals, and locks them on Admin
+    ([setup guide](org-mode-setup-guide.md#delivering-tokens-to-n8n)).
 11. **Optional, upstream MCP servers:** declare other MCP servers that PrivacyFence puts its approvals
     and audit in front of, and who may see which data domain. Write the declaration in a YAML file or
     inline ([Upstream MCP file](#upstream-mcp-file)).
@@ -290,12 +296,14 @@ services:
     # Keep the identity provider's client secret out of `docker inspect`: put it in a file, name
     # that file with PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret in
     # privacyfence.env, and uncomment this and the top-level `secrets:` block below. The Peek and
-    # Grist provisioning keys work the same way, with PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE and
-    # PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE.
+    # Grist provisioning keys and the n8n API key work the same way, with
+    # PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE, PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE and
+    # PRIVACYFENCE_N8N_API_KEY_FILE.
     # secrets:
     #   - idp_client_secret
     #   - peek_provisioning_key
     #   - grist_provisioning_key
+    #   - n8n_api_key
     volumes:
       - pf-data:/var/lib/privacyfence-org/.privacyfence
       # Upstream MCP servers (docs/upstream-mcp.md): create upstream_mcp.yaml first, mount it read-only and name
@@ -337,6 +345,8 @@ networks:
 #     file: ./peek_provisioning_key
 #   grist_provisioning_key:
 #     file: ./grist_provisioning_key
+#   n8n_api_key:
+#     file: ./n8n_api_key
 
 volumes:
   pf-data:
@@ -436,7 +446,8 @@ starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
 | `PRIVACYFENCE_ALLOWED_DOMAINS` | none | The allowed sign-in domains, with either sign-in method; first start only, then Admin → Sign-in. |
 | `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL` | `false` | `true` on Microsoft Entra ID so allowed domains work; it trusts only addresses in `PRIVACYFENCE_ALLOWED_DOMAINS`. |
 | `PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL` | none | The Peek and Grist addresses. |
-| `PRIVACYFENCE_N8N_URL`, `PRIVACYFENCE_N8N_API_KEY_FILE` | none | The n8n address and the API key as a Docker secret file (the plain `PRIVACYFENCE_N8N_API_KEY` also works; never both), for delivering AI-proposed tokens to n8n ([setup guide](org-mode-setup-guide.md#delivering-tokens-to-n8n)). |
+| `PRIVACYFENCE_N8N_URL`, `PRIVACYFENCE_N8N_API_KEY_FILE` | none | The n8n address and the API key as a Docker secret file (the plain `PRIVACYFENCE_N8N_API_KEY` also works; never both), for delivering AI-proposed tokens to n8n. Switch the delivery on with the next row ([setup guide](org-mode-setup-guide.md#delivering-tokens-to-n8n)). |
+| `PRIVACYFENCE_N8N_DELIVERY`, `PRIVACYFENCE_N8N_PROJECT_ID`, `PRIVACYFENCE_N8N_MCP_URL` | none | `PRIVACYFENCE_N8N_DELIVERY=true` turns on n8n delivery, scoped tokens and AI proposals (it refuses the start without the n8n address and key); any other value refuses the start. The project id (letters and digits) and the PrivacyFence MCP address (`https://`, or `http://` on localhost) fill the matching Admin fields. A variable that is set locks its field on Admin. |
 | `PRIVACYFENCE_PEEK_AUTO_PROVISION`, `PRIVACYFENCE_GRIST_AUTO_PROVISION` | none | Unset or empty: the Admin page decides. `true`: the service is offered and Automatic accounts are on, locked on Admin → Services. Needs the address and key; ignored without the web server. |
 | `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE`, `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE` | none | The provisioning keys as Docker secret files. The plain `…_PROVISIONING_KEY` forms also work; never both. |
 | `PRIVACYFENCE_UPSTREAM_MCP_FILE` | none | The path inside the container of the YAML or JSON file that declares the upstream MCP servers ([Upstream MCP file](#upstream-mcp-file)). |

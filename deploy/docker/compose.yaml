@@ -28,12 +28,14 @@ services:
     # Keep the identity provider's client secret out of `docker inspect`: put it in a file, name
     # that file with PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret in
     # privacyfence.env, and uncomment this and the top-level `secrets:` block below. The Peek and
-    # Grist provisioning keys work the same way, with PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE and
-    # PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE.
+    # Grist provisioning keys and the n8n API key work the same way, with
+    # PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE, PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE and
+    # PRIVACYFENCE_N8N_API_KEY_FILE.
     # secrets:
     #   - idp_client_secret
     #   - peek_provisioning_key
     #   - grist_provisioning_key
+    #   - n8n_api_key
     volumes:
       - pf-data:/var/lib/privacyfence-org/.privacyfence
       # Upstream MCP servers (docs/upstream-mcp.md): create upstream_mcp.yaml first, mount it read-only and name
@@ -75,6 +77,8 @@ networks:
 #     file: ./peek_provisioning_key
 #   grist_provisioning_key:
 #     file: ./grist_provisioning_key
+#   n8n_api_key:
+#     file: ./n8n_api_key
 
 volumes:
   pf-data:

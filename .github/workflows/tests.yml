@@ -196,7 +196,7 @@ jobs:
 
   # Prove the
   # package actually works on every Python version pyproject.toml's
-  # `requires-python = ">=3.11"` claims to support -- both below and above
+  # `requires-python = ">=3.11.5"` claims to support -- both below and above
   # the 3.13 the `test` job above happens to pin. Deliberately independent of `test`
   # (no `needs:`) so this runs in parallel and a failure here doesn't hide
   # behind/wait on the full job.
@@ -225,7 +225,7 @@ jobs:
         # already runs in full. 3.14 is here because it is the default
         # `python3` on current Ubuntu releases -- the interpreter a
         # `pip install privacyfence` on a fresh box actually resolves
-        # against, which `requires-python = ">=3.11"` already claims to
+        # against, which `requires-python = ">=3.11.5"` already claims to
         # support and nothing proved until now.
         python-version: ['3.11', '3.12', '3.14']
 

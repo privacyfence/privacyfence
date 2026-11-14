@@ -2,7 +2,7 @@
 # The organization-mode image (docs/org-mode-docker.md). Built only through scripts/build_org_image.sh,
 # which stages this directory's files, requirements/runtime.lock.txt and exactly one privacyfence
 # wheel into the build context.
-FROM python:3.12-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM python:3.12-slim-trixie@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 
 ARG PRIVACYFENCE_VERSION
 LABEL org.opencontainers.image.title="PrivacyFence (organization mode)" \

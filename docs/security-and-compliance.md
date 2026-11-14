@@ -431,6 +431,10 @@ one case where a token's secret leaves PrivacyFence.
   never logged, audited, stored by PrivacyFence or returned
   ([ADR 0279](adr/0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md)). On n8n Enterprise
   give it only `credential:create` and `credential:delete`; other editions cannot limit a key.
+- **The environment can switch delivery on.** `PRIVACYFENCE_N8N_DELIVERY=true` also turns on scoped tokens and AI
+  token proposals, and locks them (with the n8n switch) on Admin, so an administrator session cannot turn them off
+  while it is set. Whoever controls the server's environment already controls the n8n key. Unsetting the variable
+  hands both back to Admin ([ADR 0294](adr/0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md)).
 - **The status tool.** `privacyfence_runtime_credential_status` tells an AI client whether the person
   accepted, the credential's id, name and the MCP address, and when the token expires; a later revoke
   turns the answer into `not_delivered`, and an expiry into `expired`, carrying `token_expired_at` and a message asking the person to extend. It never returns the token, a token id or the n8n host, and answers only

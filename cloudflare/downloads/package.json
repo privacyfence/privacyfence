@@ -12,11 +12,11 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.23.0",
-    "@cloudflare/workers-types": "5.20261027.1",
+    "@cloudflare/workers-types": "5.20261110.1",
     "@vitest/coverage-istanbul": "4.1.12",
     "typescript": "7.0.2",
     "vitest": "4.1.12",
-    "wrangler": "4.153.0"
+    "wrangler": "4.160.1"
   },
   "overrides": {
     "vitest": "4.1.12",

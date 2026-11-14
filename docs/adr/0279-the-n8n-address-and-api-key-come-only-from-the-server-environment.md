@@ -4,6 +4,7 @@
 
 Accepted — 2026-11-13. Implemented.
 Relates to [ADR 0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md) and [ADR 0241](0241-privacyfence-provisions-peek-accounts-with-a-scoped-key-and-only-calls-peek.md).
+Amended by [ADR 0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md): `PRIVACYFENCE_N8N_DELIVERY`, `PRIVACYFENCE_N8N_PROJECT_ID` and `PRIVACYFENCE_N8N_MCP_URL` set `enabled`, `project_id` and `mcp_url` from the environment, locked on Admin.
 
 ## Context
 
