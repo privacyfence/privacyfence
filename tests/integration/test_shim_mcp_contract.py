@@ -34,6 +34,7 @@ import pytest
 from mcp import ClientSession  # noqa: E402
 from mcp.client.stdio import StdioServerParameters, stdio_client  # noqa: E402
 
+from privacyfence import agent_runtimes  # noqa: E402
 from privacyfence import local_files as local_files_module  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence import scoped_tokens  # noqa: E402
@@ -234,6 +235,26 @@ async def running_mcp_server(shim_home, monkeypatch):
 
 
 @pytest.fixture
+async def running_delivery_server(shim_home, monkeypatch):
+    """An organization-mode dispatcher with token proposals and n8n delivery on."""
+    monkeypatch.setattr(paths_module, "data_dir", lambda: _shim_data_dir(shim_home))
+    monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+    dispatcher = McpDispatcher(
+        lambda: {"annotations_test": ReadWriteDeleteConnector()}, mode="org",
+        scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
+        agent_runtime=agent_runtimes.N8nRuntimeConfig(True, "https://n8n.example.com", "", ""),
+    )
+    port = _free_port()
+    server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
+    server.start()
+    try:
+        _wait_until_connectable("localhost", port)
+        yield
+    finally:
+        server.stop()
+
+
+@pytest.fixture
 async def running_annotations_server(shim_home, monkeypatch):
     """Same shape as running_mcp_server, registering ReadWriteDeleteConnector."""
     monkeypatch.setattr(paths_module, "data_dir", lambda: _shim_data_dir(shim_home))
@@ -365,8 +386,28 @@ async def test_the_shim_passes_the_daemons_truthful_annotations_through(
         "annotations_test_write": (False, False, False),
         "annotations_test_delete": (False, True, False),
     }
+    # The status tool is offered only where n8n delivery is set up, which this daemon has not.
+    assert mcp_tools_module.RUNTIME_CREDENTIAL_STATUS_TOOL.name not in tools
     for meta_tool in mcp_tools_module.META_TOOLS:
-        assert tools[meta_tool.name] == meta_tool.annotations, meta_tool.name
+        if meta_tool is not mcp_tools_module.RUNTIME_CREDENTIAL_STATUS_TOOL:
+            assert tools[meta_tool.name] == meta_tool.annotations, meta_tool.name
+
+
+async def test_the_shim_passes_the_status_tools_annotations_through_where_delivery_is_on(
+    running_delivery_server, built_shim_entry, shim_home,
+):
+    params = StdioServerParameters(
+        command="node",
+        args=[str(built_shim_entry)],
+        env={"HOME": str(shim_home), "USERPROFILE": str(shim_home), "LOCALAPPDATA": str(shim_home)},
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = {t.name: t.annotations for t in (await session.list_tools()).tools}
+
+    status_tool = mcp_tools_module.RUNTIME_CREDENTIAL_STATUS_TOOL
+    assert tools[status_tool.name] == status_tool.annotations
 
 
 async def test_shim_file_bridge_upload_and_download_round_trip(

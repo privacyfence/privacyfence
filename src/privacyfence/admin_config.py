@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .agent_runtimes import N8nRuntimeConfig
 from . import app_credentials, connector_configs, grist_auth, paths, peek_client, scoped_tokens, secure_files
 from .org_mode import (
     ADMIN_EMAILS_ENV,
@@ -73,6 +74,7 @@ OPERATIONAL_SECTIONS = (
     "authz",
     "step_up",
     "scoped_tokens",
+    "agent_runtimes",
     "audit_forwarding",
 )
 LEGACY_BUNDLE_KEYS = (
@@ -81,6 +83,7 @@ LEGACY_BUNDLE_KEYS = (
     "authz",
     "step_up",
     "scoped_tokens",
+    "agent_runtimes",
     "audit_forwarding",
     "unattended_sessions",
     "rooms",
@@ -148,7 +151,12 @@ def _default_config() -> dict[str, Any]:
         "authz": {},
         "step_up": {},
         "scoped_tokens": {},
+        "agent_runtimes": {
+            "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
+        },
         "audit_forwarding": {},
+        # Domain grants for upstream MCP servers (upstream_mcp_config.GrantStore reads them).
+        "upstream_mcp": {},
     }
 
 
@@ -202,6 +210,22 @@ def mark_org_server() -> dict[str, Any]:
             config["org_server"] = True
             _write(config)
         return config
+
+
+def seed_upstream_grants(section: dict[str, dict[str, Any]]) -> list[str]:
+    """Add the ``upstream_mcp`` entries of ``section`` whose id is not in the file yet; returns the
+    seeded ids. An id already present (even with no grants) is never touched, and nothing is
+    removed: after the first start admin_config.json owns the grants (ADR 0288)."""
+    with _write_lock:
+        config = load() or _default_config()
+        seeded: list[str] = []
+        for upstream_id, entry in section.items():
+            if upstream_id not in config["upstream_mcp"]:
+                config["upstream_mcp"][upstream_id] = copy.deepcopy(entry)
+                seeded.append(upstream_id)
+        if seeded:
+            _write(config)
+        return seeded
 
 
 def _write(data: dict[str, Any]) -> None:
@@ -461,6 +485,7 @@ _ACTION_MODES: dict[str, frozenset[str]] = {
     "set_authz": _ORG_ONLY,
     "tighten_step_up": _ORG_ONLY,
     "set_scoped_tokens": _ORG_ONLY,
+    "set_agent_runtimes": _ORG_ONLY,
     "set_audit_forwarding": _ORG_ONLY,
     "remove_connector_config": _ORG_ONLY,
 }
@@ -863,6 +888,23 @@ def _apply_scoped_tokens(config: dict[str, Any], params: dict[str, Any]) -> tupl
     return _replace_section(config, "scoped_tokens", candidate, "Changed scoped tokens")
 
 
+def _apply_agent_runtimes(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    section = config["agent_runtimes"]
+    current = section.get("n8n") if isinstance(section.get("n8n"), dict) else {}
+    candidate = {
+        **section,
+        "n8n": {
+            **current,
+            "enabled": _param(params, "enabled", bool),
+            "project_id": _param(params, "project_id", str).strip(),
+            "mcp_url": _param(params, "mcp_url", str).strip(),
+            "credential_type": _param(params, "credential_type", str).strip(),
+        },
+    }
+    _validated(N8nRuntimeConfig.from_org_config, "agent_runtimes", candidate)
+    return _replace_section(config, "agent_runtimes", candidate, "Changed agent runtimes")
+
+
 def _apply_audit_forwarding(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
     current = config["audit_forwarding"]
     current_http = current.get("http") if isinstance(current.get("http"), dict) else {}
@@ -950,6 +992,8 @@ def apply_change(
             result = _apply_tighten_step_up(config, params)
         elif action == "set_scoped_tokens":
             result = _apply_scoped_tokens(config, params)
+        elif action == "set_agent_runtimes":
+            result = _apply_agent_runtimes(config, params)
         elif action == "remove_connector_config":
             result = _apply_remove_connector_config(params)
         else:

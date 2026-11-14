@@ -93,6 +93,15 @@ ALL_OPERATIONS: frozenset[str] = frozenset(
 )
 
 
+def refresh_all_operations() -> None:
+    """Rebind ``ALL_OPERATIONS`` from the current ``TOOL_REGISTRY`` (after upstream MCP tools are
+    registered or removed, ADR 0285). Readers must go through the module attribute."""
+    global ALL_OPERATIONS
+    ALL_OPERATIONS = frozenset(
+        entry.operation for entry in TOOL_REGISTRY.values() if entry.operation is not None
+    )
+
+
 # ── Value builders ──────────────────────────────────────────────────────────────────────────────
 #
 # One per scope whose rule carries a value. Each derives the value that would put *this* call's item

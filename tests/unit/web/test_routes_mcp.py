@@ -27,7 +27,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.connection import Connection
 
-from privacyfence import local_files, scoped_tokens
+from privacyfence import agent_runtimes, local_files, scoped_tokens
 from privacyfence.agent_identity import UNKNOWN_AGENT
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -36,7 +36,7 @@ from privacyfence.policy import scope_rows
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.scoped_tokens import ScopedToken, ScopedTokenStore
 from privacyfence.web.mcp_dispatch import McpDispatcher
-from privacyfence.web.mcp_tools import META_TOOL_NAMES
+from privacyfence.web.mcp_tools import META_TOOL_NAMES, RUNTIME_CREDENTIAL_STATUS_TOOL
 from privacyfence.web import routes_mcp as rm
 from privacyfence.web.routes_mcp import SERVER_INSTRUCTIONS, build_mcp_asgi_app, mcp_lifespan
 
@@ -69,6 +69,8 @@ class EchoConnector(Connector):
 
 
 TOKEN = "mcp-test-token"
+# What a dispatcher without n8n delivery lists: the status tool is offered only where delivery is set up.
+_META_TOOL_NAMES_WITHOUT_DELIVERY = META_TOOL_NAMES - {RUNTIME_CREDENTIAL_STATUS_TOOL.name}
 
 
 class _OrgVerifier(TokenVerifier):
@@ -161,6 +163,17 @@ def _dispatcher(connectors: dict[str, Connector] | None = None, **kwargs) -> Mcp
     store = dict(connectors or {})
     kwargs.setdefault("scoped_token_policy", scoped_tokens.policy_from_org_config({}, org_mode=False))
     return McpDispatcher(lambda: store, **kwargs)
+
+
+def _delivery_dispatcher(connectors: dict[str, Connector] | None = None) -> McpDispatcher:
+    """An organization-mode dispatcher with token proposals and n8n delivery both on."""
+    return _dispatcher(
+        connectors or {"echo": EchoConnector()}, mode="org",
+        scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
+        agent_runtime=agent_runtimes.N8nRuntimeConfig(
+            enabled=True, base_url="https://n8n.example.com", project_id="", mcp_url="",
+        ),
+    )
 
 
 _INIT_BODY = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
@@ -349,7 +362,7 @@ class TestListTools:
             result = await session.list_tools()
         names = {t.name for t in result.tools}
         assert "echo_say" in names
-        assert META_TOOL_NAMES <= names
+        assert _META_TOOL_NAMES_WITHOUT_DELIVERY <= names
 
     async def test_reflects_a_live_connector_set_change_between_calls(self):
         store: dict[str, Connector] = {}
@@ -395,7 +408,7 @@ class TestListTools:
 
         names = {t.name for t in result.tools}
         assert "echo_say" in names, "signed-in principal's connector tools must be advertised"
-        assert META_TOOL_NAMES <= names
+        assert _META_TOOL_NAMES_WITHOUT_DELIVERY <= names
 
     async def test_org_mode_does_not_advertise_the_local_principals_connectors(self):
         """The same scoping, in the other direction, and the sharper half of
@@ -417,7 +430,7 @@ class TestListTools:
 
         names = {t.name for t in result.tools}
         assert "echo_say" not in names, "must not advertise another principal's connectors"
-        assert META_TOOL_NAMES <= names
+        assert _META_TOOL_NAMES_WITHOUT_DELIVERY <= names
 
 
 # --------------------------------------------------------------------------- #
@@ -731,6 +744,65 @@ class TestProposeScopedTokenOverTheWire:
         assert entry["agent_id"] == "" and entry["agent_source"] == ""
 
 
+class TestRuntimeCredentialStatusTool:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+        init_audit_logger(str(tmp_path))
+        self._audit_dir = tmp_path
+        scoped_tokens.set_store(ScopedTokenStore(lambda: []))
+
+    async def _names(self, dispatcher, **kwargs) -> set[str]:
+        async with _connected_session(dispatcher, **kwargs) as session:
+            return {t.name for t in (await session.list_tools()).tools}
+
+    async def test_listed_only_with_delivery_on(self, monkeypatch):
+        verifier = _OrgVerifier("alice@example.com")
+        with_delivery = await self._names(_delivery_dispatcher(), verifier=verifier)
+        no_proposals = await self._names(
+            _dispatcher(
+                {"echo": EchoConnector()}, mode="org",
+                scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, False),
+                agent_runtime=agent_runtimes.N8nRuntimeConfig(True, "https://n8n.example.com", "", ""),
+            ), verifier=verifier,
+        )
+        local_mode = await self._names(_dispatcher({"echo": EchoConnector()}))
+        no_runtime = await self._names(_dispatcher({"echo": EchoConnector()}, mode="org"), verifier=verifier)
+        monkeypatch.delenv("PRIVACYFENCE_N8N_API_KEY")
+        no_key = await self._names(_delivery_dispatcher(), verifier=verifier)
+
+        assert RUNTIME_CREDENTIAL_STATUS_TOOL.name in with_delivery
+        for names in (no_proposals, local_mode, no_runtime, no_key):
+            assert RUNTIME_CREDENTIAL_STATUS_TOOL.name not in names
+
+    async def test_a_call_answers_over_the_wire_and_is_audited(self):
+        async with _connected_session(_delivery_dispatcher(), verifier=_OrgVerifier("alice@example.com")) as session:
+            result = await session.call_tool(
+                "privacyfence_runtime_credential_status", {"proposal_id": "stp-none", "reason": "checking"},
+            )
+
+        assert result.is_error is False
+        assert result.structured_content == {"state": "not_delivered"}
+        entries = [
+            json.loads(line) for week_file in self._audit_dir.rglob(f"{current_week()}.jsonl")
+            for line in week_file.read_text(encoding="utf-8").splitlines()
+        ]
+        [entry] = [e for e in entries if e["decision"] == "runtime_credential_status_read"]
+        assert entry["claude_reason"] == "checking"
+        assert entry["agent_id"] != UNKNOWN_AGENT.id
+
+    async def test_a_call_without_delivery_is_refused(self):
+        async with _connected_session(_dispatcher({"echo": EchoConnector()})) as session:
+            result = await session.call_tool(
+                "privacyfence_runtime_credential_status", {"proposal_id": "stp-none", "reason": "checking"},
+            )
+        assert result.is_error is True
+        assert agent_runtimes.DELIVERY_UNAVAILABLE in result.content[0].text
+
+
 class TestScopedTokens:
     @pytest.fixture(autouse=True)
     def _audit(self, tmp_path, monkeypatch):
@@ -758,6 +830,22 @@ class TestScopedTokens:
         async with self._scoped_session(dispatcher) as (session, _store):
             result = await session.list_tools()
         assert {t.name for t in result.tools} == {"echo_say"} | rm.SCOPED_META_TOOLS
+
+    async def test_a_scoped_token_neither_sees_nor_can_call_the_status_tool(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+        dispatcher = _delivery_dispatcher({"echo": TwoToolConnector()})
+        assert dispatcher.runtime_delivery_enabled()
+        async with self._scoped_session(dispatcher) as (session, _store):
+            listed = await session.list_tools()
+            refused = await session.call_tool(
+                "privacyfence_runtime_credential_status", {"proposal_id": "stp-1", "reason": "check"},
+            )
+        assert RUNTIME_CREDENTIAL_STATUS_TOOL.name not in {t.name for t in listed.tools}
+        assert "privacyfence_runtime_credential_status" not in rm.SCOPED_META_TOOLS
+        assert refused.is_error is True
+        assert refused.content[0].text == (
+            "Request denied: this token may not call privacyfence_runtime_credential_status."
+        )
 
     async def test_an_out_of_scope_tool_is_refused_and_audited(self):
         connector = TwoToolConnector()
@@ -831,7 +919,7 @@ class TestScopedTokens:
 
         content = result.structured_content
         assert (content["token"]["days_left"], content["token"]["expiring_soon"]) == (5, True)
-        assert content["message"].endswith(" This token expires in 5 day(s); ask its owner for a new one.")
+        assert content["message"].endswith(" This token expires in 5 day(s); ask its owner to extend it in PrivacyFence Settings, Scoped tokens.")
 
     async def test_begin_unattended_needs_no_admin_opt_in(self):
         dispatcher = _dispatcher({})  # unattended_sessions_enabled defaults False
@@ -1268,6 +1356,17 @@ class TestToolAnnotationsOverTheWire:
         dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
         headers = {_REMOVED_HEADER: header} if header is not None else None
         async with _connected_session(dispatcher, headers=headers) as session:
+            result = await session.list_tools()
+        advertised = {t.name: t.annotations for t in result.tools if t.name in META_TOOL_NAMES}
+        assert advertised == {
+            t.name: t.annotations for t in META_TOOLS if t.name != RUNTIME_CREDENTIAL_STATUS_TOOL.name
+        }
+
+    async def test_the_status_tool_keeps_its_own_annotations_where_delivery_is_on(self, monkeypatch):
+        from privacyfence.web.mcp_tools import META_TOOLS
+
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+        async with _connected_session(_delivery_dispatcher(), verifier=_OrgVerifier("alice@example.com")) as session:
             result = await session.list_tools()
         advertised = {t.name: t.annotations for t in result.tools if t.name in META_TOOL_NAMES}
         assert advertised == {t.name: t.annotations for t in META_TOOLS}

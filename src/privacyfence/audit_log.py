@@ -154,7 +154,13 @@ class AuditEntry:
                             # "sign_in_code_minted" |
                             # "step_up_requirement_enabled" | "step_up_requirement_disabled" |
                             # "scoped_token_proposed" | "scoped_token_proposal_accepted" |
-                            # "scoped_token_proposal_declined" | "scoped_token_proposal_expired"
+                            # "scoped_token_proposal_declined" | "scoped_token_proposal_expired" |
+                            # "runtime_credential_delivered" | "runtime_credential_delivery_failed" |
+                            # "runtime_credential_deleted" | "runtime_credential_delete_failed" |
+                            # "runtime_credential_orphaned" | "runtime_credential_status_read"
+                            # (the runtime_credential_* decisions record a scoped token's delivery
+                            #  into an agent runtime and its cleanup, ADR 0278 and ADR 0281; they
+                            #  render as plain entries and none counts as an approval)
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
                             #  web/routes_security.py's register_verify/delete_credential,
                             #  recorded for either mode's own passkey enrollment surface. Tamper-

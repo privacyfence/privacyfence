@@ -125,7 +125,7 @@ PrivacyFence-governed action. It also advertises tool-list change notifications:
 disable or re-enable a service in Settings, connected clients are told to refresh their tool list.
 
 The tool list holds one tool per enabled, signed-in connector tool, plus the `privacyfence_*`
-tools below: eight always, and `privacyfence_propose_scoped_token` only where token proposals are on (always on a local install, by the administrator's choice in organization mode). Each connector tool carries MCP annotations that say what it does: a read is
+tools below: eight always, `privacyfence_propose_scoped_token` only where token proposals are on (always on a local install, by the administrator's choice in organization mode), and `privacyfence_runtime_credential_status` where n8n delivery is also set up. Each connector tool carries MCP annotations that say what it does: a read is
 read-only and idempotent; a write is neither. Only the three tools that delete something,
 `calendar_delete_event` (an event), `drive_sheets_delete_dimensions` (rows or columns of a
 spreadsheet) and `peek_delete_page` (a Peek page with its comments and visit history), are marked
@@ -184,7 +184,7 @@ rules are in [Approvals and policy](approvals-and-policy.md).
 
 ## PrivacyFence's own tools
 
-PrivacyFence adds eight tools of its own, plus `privacyfence_propose_scoped_token` where token proposals are on (always on a local install, by the administrator's choice in organization mode). They are not connector tools and have no gate. Unlike
+PrivacyFence adds eight tools of its own, plus `privacyfence_propose_scoped_token` where token proposals are on (always on a local install, by the administrator's choice in organization mode) and `privacyfence_runtime_credential_status` where n8n delivery is also set up. They are not connector tools and have no gate. Unlike
 connector tools, each carries its real MCP annotations.
 
 | Tool | What it does | Required arguments | Annotations |
@@ -196,7 +196,8 @@ connector tools, each carries its real MCP annotations.
 | `privacyfence_await_approval` | Waits for one or more pending approvals and reports each one's status (`pending`, `approved`, `denied`, `expired`, `unknown`), never content; a denial's intent and note, when you gave them, come under `denial_feedback` (see [When you deny a call](tools-reference.md#when-you-deny-a-call)). Waits at most 120 seconds per call (default 30). | `approval_ids` | read-only, idempotent |
 | `privacyfence_begin_unattended_session` | Declares this connection a scheduled run with nobody watching. See [Unattended sessions](#unattended-sessions). | `reason` | not read-only, non-destructive, idempotent |
 | `privacyfence_end_unattended_session` | Clears that declaration for this connection. | `reason` | not read-only, non-destructive, idempotent |
-| `privacyfence_propose_scoped_token` | Proposes a scoped token for a routine, built from the calls approved in this session (`from_session`) or from rules and tools it names. Returns a review link at once and nothing else: you review and can only narrow it in **Settings → Scoped tokens**, confirm by typing its name, and copy the token yourself. Claude never receives the token or learns whether it was created. Not offered to a scoped token, refused in an unattended session. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md). | `reason`, `label` | not read-only, non-destructive, not idempotent |
+| `privacyfence_propose_scoped_token` | Proposes a scoped token for a routine, built from the calls approved in this session (`from_session`) or from rules and tools it names. Returns a review link at once and nothing else: you review and can only narrow it in **Settings → Scoped tokens**, confirm by typing its name, and copy the token yourself. Claude never receives the token or learns whether it was created. With `deliver_to: {runtime: "n8n", workflow_id}` (organization servers with n8n delivery set up) PrivacyFence instead puts the token into n8n itself once you confirm. Not offered to a scoped token, refused in an unattended session. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md). | `reason`, `label` | not read-only, non-destructive, not idempotent |
+| `privacyfence_runtime_credential_status` | Reports whether a proposal made with `deliver_to` was delivered to n8n, and the credential to use (`credential_id`, `credential_name`, `credential_type`, `mcp_url`, `token_expires_at`, and `node` for a [PrivacyFence node](n8n-node.md) credential); `pending` while you have not decided, `expired` (with `token_expired_at` and a message asking the person to extend the token) once the token has lapsed, `not_delivered` otherwise. Never returns the token. Only for an organization server with n8n delivery; not offered to a scoped token. See [ADR 0280](adr/0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md). | `proposal_id`, `reason` | read-only, non-destructive, idempotent |
 | `privacyfence_create_upload_slot` | Gives a client without the extension a one-time URL to upload a local file to. See [Files](#files). | `filename`, `reason` (plus `size_bytes`) | not read-only, non-destructive, not idempotent |
 
 `reason` is one sentence from the AI system on why it is making the call. It is logged, and it is

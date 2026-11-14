@@ -771,6 +771,19 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
+    def test_the_form_offers_a_domain_fieldset_for_an_upstream_with_a_ticked_tool(self):
+        html = build_html(_make_state(), mode="org", scoped_tokens={
+            **self.DATA, "delivery": "once",
+            "upstreams": [{"id": "kh", "label": "Knowledge </script><b>hub", "tools": ["kh_search"], "domains": ["general", "hr"]}],
+        })
+        assert "Data domains for ' + esc(u.label)" in html
+        assert "The token sees only the domains you tick, and never more than you can see yourself." in html
+        assert "data-st-domain=" in html and "data-st-domain-upstream=" in html
+        assert "upstream_domains: scopedChosenDomains()" in html
+        assert "scopedUpstreamsWithTools()" in html
+        # The label rides in the JSON data, which cannot close the script element.
+        assert "</script><b>hub" not in html
+
     def test_the_form_offers_the_personal_data_checkbox_and_the_list_shows_its_badge(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "Let exports, downloads and page uploads carry personal data" in html
@@ -882,6 +895,15 @@ class TestScopedTokensSection:
         assert "aria-label=\"Rename ' + esc(t.label)" in html
         assert "rename_scoped_token" in html
 
+    def test_a_token_can_be_extended(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-st-extend="' in html
+        assert "aria-label=\"Extend ' + esc(t.label)" in html
+        assert "extend_scoped_token" in html
+        assert "Days from today" in html
+        assert "Extend token" in html
+        assert "kept until you extend or revoke the token" in html
+
     def test_tools_follow_the_chosen_rules(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "data-st-other-tools" in html
@@ -929,7 +951,8 @@ class TestScopedTokenProposal:
             "This token proposal has expired, was declined or was already used.",
             "No rule covers these tools, so the token\\'s calls to them will be denied: ",
             "Delegate access to this token?",
-            "You are delegating access. Anything that holds this token can act as you within these rules, for ",
+            "'You are delegating access to n8n.' : 'You are delegating access.'",
+            " Anything that holds this token can act as you within these rules, for ",
             "Revoke it in Settings → Scoped tokens if it leaks or the job is retired.",
             "This token may also return or upload personal data.",
             "Type the token name to confirm",
@@ -938,9 +961,26 @@ class TestScopedTokenProposal:
         ):
             assert text in html
 
+    def test_delivery_strings_present(self):
+        html = build_html(_make_state(), scoped_tokens=TestScopedTokensSection.DATA, scoped_proposal=self.PROPOSAL)
+        for text in (
+            "PrivacyFence will put this token into n8n at ",
+            " as a credential, in ",
+            "the personal space of the n8n API key\\'s owner",
+            ". Anyone who can edit workflows there, the AI client included, can use the token and read it until it expires or you revoke it.",
+            "The AI client says it is for workflow ",
+            "; n8n does not tie the credential to it.",
+            " Data the workflow reads is kept in n8n\\'s execution history.",
+            "You are delegating access to n8n.",
+            "Create and deliver to n8n",
+            "In n8n as \\'",
+            " (as reported by the AI client)",
+        ):
+            assert text in html, text
+
     def test_delegate_button_text(self):
         html = build_html(_make_state(), scoped_tokens=TestScopedTokensSection.DATA, scoped_proposal=self.PROPOSAL)
-        assert "btn(' primary', 'Delegate access')" in html
+        assert "btn(' primary', req.delivery ? 'Create and deliver to n8n' : 'Delegate access')" in html
         assert "btn('', 'Cancel')" in html
 
     def test_waiting_list_renders_when_proposals_exist(self):
@@ -1128,7 +1168,7 @@ class TestAdminSurfaceCapabilities:
     def test_an_org_admin_gets_every_section_and_nothing_is_suppressed(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin", mode="org", is_admin=True))
         assert caps["sections"] == dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"), True,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats"), True,
         )
         assert caps["not_applicable_actions"] == []
 
@@ -1172,8 +1212,8 @@ class TestAdminSurfaceCapabilities:
         assert pairs == [
             ("services", "Services"), ("features", "Features"), ("org_config", "Organization configuration"),
             ("delivery", "File delivery"), ("access", "Sign-in"), ("step_up", "Step-up"),
-            ("tokens", "Scoped tokens"), ("audit", "Audit forwarding"), ("privacy", "Privacy Filter"),
-            ("stats", "Stats"),
+            ("tokens", "Scoped tokens"), ("runtimes", "Agent runtimes"), ("audit", "Audit forwarding"),
+            ("privacy", "Privacy Filter"), ("stats", "Stats"),
         ]
 
 
@@ -1229,8 +1269,8 @@ class TestServicesSection:
         assert re.findall(r'aria-label="([^"]+)" data-nav', local) == ["Services", "Features", "Organization configuration"]
         org = _render_admin(_admin_state(_row("google", "Google")), mode="org", is_admin=True)
         assert re.findall(r'aria-label="([^"]+)" data-nav', org) == [
-            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Audit forwarding",
-            "Privacy Filter", "Stats",
+            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes",
+            "Audit forwarding", "Privacy Filter", "Stats",
         ]
         assert 'aria-selected="true"' in org
 
@@ -1694,6 +1734,11 @@ def _org_state(**overrides):
         authz={"allowed_domains": ["example.com", "example.org"], "groups_claim": "groups", "required_groups": ["pf-users"]},
         step_up={"enabled": True, "require_passkey": False, "scope": "writes_and_pii_reads"},
         scoped_tokens={"enabled": True, "max_days": 30, "allow_ai_proposals": True},
+        agent_runtimes={"n8n": {"enabled": True, "project_id": "proj1", "mcp_url": "https://pf.example.com/mcp"}},
+        agent_runtimes_status={"n8n": {
+            "url": "https://n8n.internal.example", "url_variable": "PRIVACYFENCE_N8N_URL",
+            "key_variable": "PRIVACYFENCE_N8N_API_KEY", "key_set": True,
+        }},
         audit_forwarding={
             "enabled": True, "kind": "http", "syslog": {"host": "logs.example.com", "port": 6514, "protocol": "tcp"},
             "http": {"url": "https://siem.example.com/in", "bearer_token_env": "SIEM_TOKEN"},
@@ -1723,14 +1768,14 @@ class TestOrgAdminSections:
     def test_the_org_admin_surface_has_all_of_the_org_sections(self):
         caps = _admin_caps(build_html(_org_state(), surface="admin", mode="org", is_admin=True))
         keys = [k for k, v in caps["sections"].items() if v]
-        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"]
+        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats"]
         page = _render_org("services")
-        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Audit forwarding", "Privacy Filter", "Stats"):
+        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Audit forwarding", "Privacy Filter", "Stats"):
             assert f'aria-label="{label}"' in page
 
     def test_the_local_admin_surface_has_none_of_them(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin"))
-        assert not {"delivery", "access", "step_up", "tokens", "audit", "privacy", "stats"} & set(caps["sections"])
+        assert not {"delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats"} & set(caps["sections"])
 
     def test_the_delivery_form_is_prefilled(self):
         page = _render_org("delivery")
@@ -1765,10 +1810,34 @@ class TestOrgAdminSections:
         page = _render_org("tokens")
         assert "Let AI clients propose a scoped token for a person to review and create." in page
         assert 'data-f="allow_ai_proposals" data-t="bool" checked' in page
-        assert 'data-f="max_days" data-t="int" aria-label="Longest lifetime (days)" value="30"' in page
+        assert 'data-f="max_days" data-t="int" aria-label="Longest lifetime or extension (days)" value="30"' in page
         assert "Needs scoped tokens turned on." not in page
         off = _render_org("tokens", _org_state(scoped_tokens={"enabled": False, "max_days": 30, "allow_ai_proposals": False}))
         assert "Needs scoped tokens turned on." in off
+
+    def test_the_agent_runtimes_form_has_its_rows_and_no_input_for_the_address_or_key(self):
+        page = _render_org("runtimes")
+        for text in (
+            "Let AI clients ask for a token to be delivered into n8n.", "n8n project id",
+            "Leave empty to use the API key owner\u2019s personal space.", "PrivacyFence MCP address for n8n",
+            "Leave empty to use this server\u2019s address.", "n8n address", "n8n API key",
+            "https://n8n.internal.example",
+        ):
+            assert text in page, text
+        assert 'data-f="enabled" data-t="bool" checked' in page
+        assert 'data-f="project_id"' in page and 'value="proj1"' in page
+        assert 'data-f="mcp_url"' in page and 'value="https://pf.example.com/mcp"' in page
+        assert sorted(re.findall(r'data-f="(\w+)"', page)) == ["credential_type", "enabled", "mcp_url", "project_id"]
+        assert "Credential type in n8n" in page
+        assert '<option value="httpBearerAuth" selected>' in page and '<option value="privacyFenceApi"' in page
+        assert "n8n.internal.example\" " not in page and re.search(r'value="https://n8n', page) is None
+
+    def test_unset_address_and_key_say_which_variable_to_set(self):
+        state = _org_state(agent_runtimes_status={"n8n": {
+            "url": "", "url_variable": "PRIVACYFENCE_N8N_URL", "key_variable": "PRIVACYFENCE_N8N_API_KEY", "key_set": False,
+        }})
+        page = _render_org("runtimes", state)
+        assert "Not set: set PRIVACYFENCE_N8N_URL" in page and "Not set: set PRIVACYFENCE_N8N_API_KEY" in page
 
     def test_the_audit_form_is_prefilled_and_the_bearer_token_name_has_no_input(self):
         page = _render_org("audit")
@@ -1805,7 +1874,7 @@ class TestOrgAdminSections:
         state["audit_forwarding"]["bearer_token_value"] = _SENTINEL
         state["step_up"]["secret"] = _SENTINEL
         state["authz"]["client_secret"] = _SENTINEL
-        for section in ("delivery", "access", "step_up", "tokens", "audit", "privacy", "stats", "features", "services"):
+        for section in ("delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats", "features", "services"):
             assert _SENTINEL not in _render_org(section, state)
 
 
@@ -1854,7 +1923,7 @@ class TestAdminFormSave:
     def test_each_form_names_its_action(self):
         actions = {
             "delivery": "set_download_delivery", "access": "set_authz", "step_up": "tighten_step_up",
-            "tokens": "set_scoped_tokens", "audit": "set_audit_forwarding",
+            "tokens": "set_scoped_tokens", "runtimes": "set_agent_runtimes", "audit": "set_audit_forwarding",
         }
         for form, action in actions.items():
             assert self._save(form, [])[0]["action"] == action

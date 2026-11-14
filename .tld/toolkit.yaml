@@ -73,6 +73,10 @@ verify:
         --cov-report=term-missing --cov-fail-under=100`, `mypy sync/src` and `bandit -r sync/src` must pass. If
         sync/README.md changed, copy it to
         plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md.
+    - when: ["n8n/**"]
+      do: >-
+        In n8n/: `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test` must pass, then
+        `pytest tests/integration/test_n8n_node_contract.py -v`.
     - when: ["cloudflare/downloads/**"]
       do: "In cloudflare/downloads/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
     - when: ["cloudflare/oauth-relay/**"]
@@ -140,3 +144,23 @@ hooks:
 
 admin:
   policy: .tld/admin-policy.yaml
+
+deps:
+  cooldown_days: 3
+  time_budget_minutes: 90
+  audit:
+    - ecosystem: "pip"
+      run: "pip-audit --strict -r requirements/runtime.lock.txt"
+    - ecosystem: "npm"
+      run: "npm audit --omit=dev --audit-level=high"
+      cwd: "mcpb/shim"
+    - ecosystem: "npm"
+      run: "npm audit --omit=dev --audit-level=high"
+      cwd: "cloudflare/downloads"
+    - ecosystem: "npm"
+      run: "npm audit --omit=dev --audit-level=high"
+      cwd: "cloudflare/oauth-relay"
+  lock_freshness:
+    - when: ["pyproject.toml"]
+      run: "scripts/update_dependency_locks.sh"
+      lockfiles: ["requirements/*.lock.txt"]
