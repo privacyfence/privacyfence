@@ -57,6 +57,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - review: worker had no toolkit so ran no dod or roles, none are required for these paths; orchestrator re-ran ruff, the full unit suite (21653 passed) and the n8n tests after the merge
 - conflict: merging main brought ADRs 0283 to 0287 of other work, so the five ADRs of this change are renumbered 0288 to 0292 (files, index rows, the amendment lines of 0278 and 0280 and the cross links); the plan text and its final_checks still name 0283 to 0287
 - conflict: merge of main: status_for and the status tool description combine main expired state with the credential_type and node fields; docs, ADR index, changelog (one Changed list) keep both sides; tests/unit/test_docs_references_exist.py takes main version, which already exempts docs/<n>/plan.md
+- conflict: a second merge of main brought its ADR 0288, so the five ADRs of this change are renumbered again, now 0289 to 0293 (files, index rows, the amendment lines of 0278 and 0280, cross links); the plan text still names 0283 to 0287
 
 ## Final review
 
