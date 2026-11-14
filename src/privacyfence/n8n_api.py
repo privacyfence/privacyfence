@@ -62,6 +62,7 @@ class N8nApi:
         unreachable = False
         status = 0
         body = b""
+        response: requests.Response | None = None
         try:
             response = self._session.request(
                 method,
@@ -77,6 +78,10 @@ class N8nApi:
                 body = b"".join(self._chunks(response))
         except requests.RequestException:
             unreachable = True  # raised below, so the exception chain never holds the original
+        finally:
+            # A streamed response holds its connection until it is read or closed.
+            if response is not None:
+                response.close()
         if unreachable:
             raise N8nApiClientError(f"n8n at {self.host} could not be reached.")
         if status in ok:

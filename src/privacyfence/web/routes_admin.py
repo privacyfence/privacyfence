@@ -282,6 +282,8 @@ def _agent_runtimes_status() -> dict[str, Any]:
     try:
         n8n["key_set"] = bool(agent_runtimes.api_key())
     except org_mode.ConfigurationError:
+        # The message names the variable, never the key; the page shows the key as not set.
+        logger.warning("The n8n API key cannot be read (ADR 0279); the Admin page shows it as not set.")
         n8n["key_set"] = False
     return {"n8n": n8n}
 

@@ -229,6 +229,26 @@ class TestRules:
         assert any("skipped" in m for m in caplog.messages)
 
 
+class TestOneBadRecord:
+    def test_a_malformed_credential_id_does_not_stop_the_other_records(self, records, tokens, api, caplog):
+        real_delete = api.delete_credential
+
+        def delete_like_the_client(credential_id):
+            if credential_id != "fedcba9876543210":
+                raise ValueError("Not a PrivacyFence credential id.")
+            return real_delete(credential_id)
+
+        api.delete_credential = delete_like_the_client
+        _record(records, credential_id="not a credential id", proposal_id="stp-1")
+        _record(records, credential_id="fedcba9876543210", proposal_id="stp-2", token_id="st-bbbbbbbbbbbb")
+        with caplog.at_level(logging.WARNING):
+            _sweep(records, tokens, api)
+        assert api.deleted == ["fedcba9876543210"]
+        assert [r.credential_id for r in records.all()] == ["not a credential id"]
+        assert any("skipped a record: ValueError" in m for m in caplog.messages)
+        assert "not a credential id" not in caplog.text
+
+
 class TestDeleteFailures:
     def test_record_kept_and_audited_once_within_a_day(self, tmp_path, records, tokens):
         failing = FakeApi(delete_error=N8nApiClientError("n8n said no"))

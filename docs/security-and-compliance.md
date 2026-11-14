@@ -426,10 +426,10 @@ one case where a token's secret leaves PrivacyFence.
   never logged, audited, stored by PrivacyFence or returned
   ([ADR 0279](adr/0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md)). On n8n Enterprise
   give it only `credential:create` and `credential:delete`; other editions cannot limit a key.
-- **The status tool.** `privacyfence_runtime_credential_status` tells the proposing client whether the person
+- **The status tool.** `privacyfence_runtime_credential_status` tells an AI client whether the person
   accepted, the credential's id, name and the MCP address, and when the token expires; a later revoke or expiry
   turns the answer into `not_delivered`. It never returns the token, a token id or the n8n host, and answers only
-  for the client's own proposals ([ADR 0280](adr/0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md)).
+  for the signed-in person's own proposals, so any AI client signed in as that person can read it ([ADR 0280](adr/0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md)).
 - **Workflow data stays in n8n.** What a workflow reads through PrivacyFence is kept in n8n's execution history,
   under n8n's retention settings.
 - **Fail fast.** A call no token rule covers is denied at once, so a workflow never waits for an approval.

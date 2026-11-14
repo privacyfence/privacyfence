@@ -3,6 +3,7 @@ audited, and what the page state carries."""
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -400,6 +401,18 @@ class TestAgentRuntimes:
         monkeypatch.setenv("PRIVACYFENCE_N8N_URL", "http://insecure.example")
         n8n = world.client.get("/api/admin/state").json()["agent_runtimes_status"]["n8n"]
         assert n8n["url"] == "" and "https://" in n8n["url_error"]
+
+
+    def test_an_unreadable_key_shows_as_not_set_and_warns_without_the_key(self, monkeypatch, caplog):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", ENV_SECRET)
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY_FILE", "/nonexistent/key")
+        world = World()
+        world.sign_in(ADMIN)
+        with caplog.at_level(logging.WARNING):
+            r = world.client.get("/api/admin/state")
+        assert r.json()["agent_runtimes_status"]["n8n"]["key_set"] is False
+        assert any("n8n API key cannot be read" in m for m in caplog.messages)
+        assert ENV_SECRET not in caplog.text and ENV_SECRET not in r.text
 
 
 class TestState:
