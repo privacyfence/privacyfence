@@ -1,4 +1,4 @@
-"""Tests for web/routes_security.py: passkey enrollment, in org mode and local mode alike."""
+"""Tests for web/routes_security.py: passkey enrollment, org mode."""
 from __future__ import annotations
 
 import json
@@ -11,12 +11,11 @@ from starlette.testclient import TestClient
 
 from privacyfence import paths, web_shell, webauthn_stepup as wa
 from privacyfence.audit_log import current_week, init_audit_logger
-from privacyfence.principal import LOCAL_PRINCIPAL, Principal
+from privacyfence.principal import Principal
 from privacyfence.step_up_config import StepUpConfig
-from privacyfence.web import org_session, routes_security as rs, session_auth
+from privacyfence.web import org_session, routes_security as rs
 
 ISSUER = "https://pf.example.com"
-LOCAL_ISSUER = "http://localhost:8765"
 ALICE = Principal(id="alice", email="alice@example.com", display_name="Alice")
 BOB = Principal(id="bob", email="bob@example.com", display_name="Bob")
 
@@ -58,52 +57,6 @@ def _app(*, step_up=None, sessions=None, recovery_limiter=None):
     return app, sessions
 
 
-def _local_app(
-    *, step_up=None, sessions=None, dev_unseparated_notice=None, confirm_first_enrollment=None,
-    deliver_recovery_code=None, require_human_session=False,
-):
-    """local mode's own wiring -- session_auth's three functions bound to a
-    ``LocalSessionStore``, always resolving to ``LOCAL_PRINCIPAL``, exactly
-    what web/server.py's local branch of ``build_app`` passes.
-
-    ``confirm_first_enrollment`` defaults to a stub that confirms, rather than
-    to ``None``: local mode's real wiring always passes one (web/server.py's
-    ``confirm_first_passkey_enrollment``), so leaving it unset here would make
-    every local-mode test in this file exercise a shape that mode never has.
-    TestFirstEnrollmentGate below is where the refusing direction is driven.
-    """
-    sessions = sessions or session_auth.LocalSessionStore()
-    step_up = step_up or StepUpConfig(rp_id="localhost", rp_name="PrivacyFence")
-    routes = rs.build_routes(
-        resolve_principal=lambda request: (
-            LOCAL_PRINCIPAL if session_auth.authenticated(request, sessions) else None
-        ),
-        check_csrf=session_auth.check_csrf,
-        check_origin=session_auth.check_origin,
-        unauthenticated_response=session_auth.unauthorized_html,
-        session_cookie_name=session_auth.SESSION_COOKIE,
-        step_up=step_up, issuer_url=LOCAL_ISSUER,
-        # Local mode has no /connect route (that's routes_connect.py's
-        # org-mode-only surface) -- matches web/server.py's actual wiring.
-        back_link=("/settings/connectors", "Back to Connectors"),
-        dev_unseparated_notice=dev_unseparated_notice,
-        confirm_first_enrollment=confirm_first_enrollment or (lambda: (True, "")),
-        # Unlike confirm_first_enrollment above this defaults
-        # to None, because that is what local mode's real wiring passes on
-        # anything but a packaged build (web/server.py's build_app) -- the
-        # companion path is driven by the tests that pass one.
-        deliver_recovery_code=deliver_recovery_code,
-        # web/server.py passes session_auth.is_human_session on a
-        # privilege-separated install only; the default here is the
-        # unseparated shape, and TestRecoverCredentialHardening drives the other.
-        is_human_session=(
-            (lambda request: session_auth.is_human_session(request, sessions)) if require_human_session else None
-        ),
-    )
-    app = Starlette(routes=routes)
-    return app, sessions
-
-
 def _client(app, follow_redirects=False) -> TestClient:
     return TestClient(app, base_url=ISSUER, follow_redirects=follow_redirects)
 
@@ -111,12 +64,6 @@ def _client(app, follow_redirects=False) -> TestClient:
 def _signed_in(client, sessions, principal) -> str:
     session_id = sessions.create(principal)
     client.cookies.set(org_session.SESSION_COOKIE, session_id)
-    return session_id
-
-
-def _signed_in_local(client, sessions) -> str:
-    session_id = sessions.create()
-    client.cookies.set(session_auth.SESSION_COOKIE, session_id)
     return session_id
 
 
@@ -309,39 +256,6 @@ class TestSecurityPage:
             client = _client(app)
             _signed_in(client, sessions, ALICE)
             assert expected in client.get("/security").text
-
-    def test_local_mode_links_back_to_the_connectors_settings_tab(self):
-        # Local mode's caller passes no nav_items (it has no web_shell-
-        # wrapped page of its own to be consistent with -- module
-        # docstring), so this stays the small, unwrapped document it always
-        # was, with its own footer back_link intact.
-        app, sessions = _local_app()
-        client = _client(app)
-        _signed_in_local(client, sessions)
-        r = client.get("/security")
-        assert 'href="/settings/connectors"' in r.text
-        assert 'href="/connect"' not in r.text
-        assert 'class="pf-shell-nav"' not in r.text
-
-    def test_no_dev_unseparated_notice_by_default(self):
-        app, sessions = _local_app()
-        client = _client(app)
-        _signed_in_local(client, sessions)
-        r = client.get("/security")
-        assert "DEV_ALLOW_UNSEPARATED" not in r.text
-
-    def test_shows_the_dev_unseparated_notice_when_given_one(self):
-        # ADR 0003 decision 7's /security half -- daemon_main.py's startup
-        # log carries the same fact, see privilege_separation.
-        # dev_unseparated_notice()'s own docstring.
-        app, sessions = _local_app(
-            dev_unseparated_notice="PRIVACYFENCE_DEV_ALLOW_UNSEPARATED is set -- not protected",
-        )
-        client = _client(app)
-        _signed_in_local(client, sessions)
-        r = client.get("/security")
-        assert "not protected" in r.text
-
 
 class TestRegisterOptions:
     def test_returns_options_bound_to_the_configured_rp(self):
@@ -694,67 +608,6 @@ class TestCrossPrincipalIsolation:
 
 # In-process ASGI TestClient, no real socket -- unit per testing-policy.md's
 # seven-layer taxonomy.
-@pytest.mark.unit
-class TestLocalModeEnrollment:
-    """The exact same ``build_routes`` wired to web/
-    session_auth.py instead of org_session -- local mode has exactly one
-    identity (``LOCAL_PRINCIPAL``), so there's no cross-principal isolation
-    to prove the way ``TestCrossPrincipalIsolation`` above does for org
-    mode; this proves the generalized signature drives a real enroll/list/
-    delete flow end to end against local mode's own session store, and that
-    the two modes differ where they're supposed to (the unauthenticated
-    response)."""
-
-    def test_page_is_the_local_unauthorized_page_when_signed_out(self):
-        # Not a redirect to /login (org mode's own page) -- local mode has
-        # no such route, and shows session_auth.py's own recovery page
-        # instead (401, not 302).
-        app, _sessions = _local_app()
-        r = TestClient(app, base_url=LOCAL_ISSUER).get("/security")
-        assert r.status_code == 401
-        assert "Not authorized" in r.text
-
-    def test_enroll_list_and_delete_as_local_principal(self):
-        app, sessions = _local_app()
-        client = TestClient(app, base_url=LOCAL_ISSUER, follow_redirects=False)
-        session_id = _signed_in_local(client, sessions)
-
-        r = client.get("/security")
-        assert r.status_code == 200
-        assert "No passkeys added yet." in r.text
-
-        r = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
-        assert r.status_code == 200
-        assert r.json()["options"]["rp"]["id"] == "localhost"
-
-        fake_verified = type("V", (), {
-            "credential_id": b"raw-id", "credential_public_key": b"pub-key", "sign_count": 0,
-            "credential_device_type": type("D", (), {"value": "single_device"})(),
-            "credential_backed_up": False,
-        })()
-        with patch.object(wa.webauthn, "verify_registration_response", return_value=fake_verified):
-            r = client.post("/api/security/webauthn/register/verify", json={
-                "csrf": session_id, "credential": {"id": "x"}, "label": "My Laptop",
-            })
-        assert r.status_code == 200
-        assert wa.list_credentials(LOCAL_PRINCIPAL)[0].label == "My Laptop"
-
-        # The only enrolled credential -- deleting it needs a fresh
-        # assertion first (see TestDeleteLastCredentialRequiresStepUp).
-        cred_id = wa.list_credentials(LOCAL_PRINCIPAL)[0].credential_id
-        first = client.post(f"/security/credentials/{cred_id}/delete", json={"csrf": session_id})
-        assert first.status_code == 428
-        fake_verified = type(
-            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
-        )()
-        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
-            r = client.post(f"/security/credentials/{cred_id}/delete", json={
-                "csrf": session_id, "webauthn_assertion": {"id": cred_id},
-            })
-        assert r.status_code == 200
-        assert wa.list_credentials(LOCAL_PRINCIPAL) == []
-
-
 # In-process ASGI TestClient, no real socket -- unit per testing-policy.md's
 # seven-layer taxonomy.
 @pytest.mark.unit
@@ -956,8 +809,7 @@ def _audit_entries(tmp_path) -> list[dict]:
 
 @pytest.mark.unit
 class TestRecoverCredentialHardening:
-    """POST /security/recover's three guards: every attempt is audited, an
-    unattested local session is refused where the caller asks, and attempts
+    """POST /security/recover's guards: every attempt is audited, and attempts
     are rate-limited per session and globally."""
 
     WRONG = "0000-0000-0000-0000"
@@ -1001,46 +853,6 @@ class TestRecoverCredentialHardening:
         assert "webauthn_recovery_refused" not in _audit_decisions(tmp_path)
         r = client.post("/security/recover", json={"csrf": session_id, "code": self.WRONG})
         assert r.status_code == 401
-
-    def test_an_unattested_local_session_is_refused_and_audited(self, tmp_path):
-        app, sessions = _local_app(require_human_session=True)
-        client = _client(app)
-        session_id = _signed_in_local(client, sessions)
-        code = _register_first_credential(client, session_id)["recovery_code"]
-
-        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
-
-        assert r.status_code == 403
-        assert r.json()["error"] == "human_session_required"
-        assert "use a recovery code" in r.json()["message"]
-        assert wa.list_credentials(LOCAL_PRINCIPAL) != []
-        # Refused before the code was looked at, so it is still good.
-        assert wa.has_recovery_code(LOCAL_PRINCIPAL) is True
-        summaries = [e["summary"] for e in _audit_entries(tmp_path) if e["decision"] == "webauthn_recovery_refused"]
-        assert summaries == ["Recovery code refused: the session was not opened by a person (unattested)"]
-
-    def test_a_human_local_session_may_recover(self):
-        app, sessions = _local_app(require_human_session=True)
-        client = _client(app)
-        session_id = sessions.create(provenance=session_auth.PROVENANCE_HUMAN)
-        client.cookies.set(session_auth.SESSION_COOKIE, session_id)
-        code = _register_first_credential(client, session_id)["recovery_code"]
-
-        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
-
-        assert r.status_code == 200
-        assert wa.list_credentials(LOCAL_PRINCIPAL) == []
-
-    def test_without_the_check_an_unattested_session_is_not_refused(self):
-        # Org mode and an unseparated local install pass no is_human_session.
-        app, sessions = _local_app()
-        client = _client(app)
-        session_id = _signed_in_local(client, sessions)
-        code = _register_first_credential(client, session_id)["recovery_code"]
-
-        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
-
-        assert r.status_code == 200
 
     def test_the_attempt_after_the_per_session_budget_is_refused_even_with_the_right_code(self, tmp_path):
         app, sessions = _app()
@@ -1350,120 +1162,14 @@ class TestEnrollmentGateWithACredentialAlreadyEnrolled:
 
         assert replayed.status_code == 400
 
-    def test_local_mode_is_gated_the_same_way(self, _fake_data_dir):
-        # 0.1 applies to both modes. Local mode's principal is LOCAL_PRINCIPAL
-        # and its rp_id is localhost, but nothing else differs here.
-        _enroll_for_real(LOCAL_PRINCIPAL, _software_authenticator(), rp_id="localhost", origin=LOCAL_ISSUER)
-        app, sessions = _local_app()
-        client = TestClient(app, base_url=LOCAL_ISSUER)
-        session_id = _signed_in_local(client, sessions)
-
-        r = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
-
-        assert r.status_code == 428
-        assert r.json()["error"] == "step_up_required"
-
 
 class TestFirstEnrollmentGate:
-    """0.2: with nothing enrolled there is no credential to assert with, so
-    the gate is ``confirm_first_enrollment`` -- the companion, in local mode.
-    """
+    """With nothing enrolled there is no credential to assert with."""
 
-    def test_a_first_enrollment_asks_the_gate(self, _fake_data_dir):
-        asked = []
-        app, sessions = _local_app(confirm_first_enrollment=lambda: (asked.append(1), (True, ""))[1])
-        client = TestClient(app, base_url=LOCAL_ISSUER)
-        session_id = _signed_in_local(client, sessions)
-
-        r = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
-
-        assert r.status_code == 200
-        assert asked == [1]
-
-    def test_a_denied_first_enrollment_is_a_403_carrying_the_reason(self, _fake_data_dir):
-        app, sessions = _local_app(
-            confirm_first_enrollment=lambda: (False, "Start PrivacyFence's companion and try again."),
-        )
-        client = TestClient(app, base_url=LOCAL_ISSUER)
-        session_id = _signed_in_local(client, sessions)
-
-        r = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
-
-        assert r.status_code == 403
-        assert r.json()["error"] == "first_enrollment_not_confirmed"
-        # The reason reaches the browser verbatim -- somebody who cannot
-        # enroll is already standing on the page that has to tell them why.
-        assert r.json()["detail"] == "Start PrivacyFence's companion and try again."
-
-    def test_a_denied_first_enrollment_opens_no_ceremony(self, _fake_data_dir):
-        app, sessions = _local_app(confirm_first_enrollment=lambda: (False, "denied"))
-        client = TestClient(app, base_url=LOCAL_ISSUER)
-        session_id = _signed_in_local(client, sessions)
-        refused = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
-        # No registration options came back, so there is no challenge to
-        # complete -- the refusal is before begin_registration(), not a 403
-        # served alongside a usable ceremony.
-        assert "options" not in refused.json()
-
-        agent_key = _software_authenticator()
-        verify = client.post("/api/security/webauthn/register/verify", json={
-            "csrf": session_id,
-            "credential": agent_key.register(challenge=b"whatever", rp_id="localhost", origin=LOCAL_ISSUER),
-            "label": "Agent key",
-        })
-
-        assert verify.status_code == 400
-        assert wa.list_credentials(LOCAL_PRINCIPAL) == []
-
-    def test_a_denied_first_enrollment_is_audited(self, _fake_data_dir):
-        app, sessions = _local_app(confirm_first_enrollment=lambda: (False, "nobody answered"))
-        client = TestClient(app, base_url=LOCAL_ISSUER)
-        session_id = _signed_in_local(client, sessions)
-
-        client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
-
-        assert "webauthn_enrollment_refused" in _audit_decisions(_fake_data_dir)
-
-    def test_a_confirmed_first_enrollment_completes(self, _fake_data_dir):
-        app, sessions = _local_app()
-        client = TestClient(app, base_url=LOCAL_ISSUER)
-        session_id = _signed_in_local(client, sessions)
-
-        opened = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
-        authenticator = _software_authenticator()
-        verify = client.post("/api/security/webauthn/register/verify", json={
-            "csrf": session_id,
-            "credential": authenticator.register(
-                challenge=_b64u_challenge(opened.json()["options"]["challenge"]),
-                rp_id="localhost", origin=LOCAL_ISSUER,
-            ),
-            "label": "My Laptop",
-        })
-
-        assert verify.status_code == 200, verify.text
-        assert [c.label for c in wa.list_credentials(LOCAL_PRINCIPAL)] == ["My Laptop"]
-
-    def test_the_gate_is_only_consulted_when_nothing_is_enrolled(self, _fake_data_dir):
-        # With a credential on file the assertion half applies instead, so the
-        # companion is never asked -- a human who already has a passkey should
-        # not also need the tray icon running to add another.
-        _enroll_for_real(LOCAL_PRINCIPAL, _software_authenticator(), rp_id="localhost", origin=LOCAL_ISSUER)
-        asked = []
-        app, sessions = _local_app(confirm_first_enrollment=lambda: (asked.append(1), (True, ""))[1])
-        client = TestClient(app, base_url=LOCAL_ISSUER)
-        session_id = _signed_in_local(client, sessions)
-
-        r = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
-
-        assert r.status_code == 428
-        assert asked == []
-
-    def test_org_mode_passes_no_gate_and_its_first_enrollment_proceeds(self, _fake_data_dir):
+    def test_a_first_enrollment_proceeds_on_the_idp_session_alone(self, _fake_data_dir):
         # Deliberate, and documented as such in docs/security-and-compliance.md
-        # rather than papered over: org mode has no companion, and its session
-        # is at least an external authentication, which a local-mode bootstrap
-        # cookie is not. This test exists so that stays a decision rather than
-        # an oversight nobody notices.
+        # rather than papered over. This test exists so that stays a decision
+        # rather than an oversight nobody notices.
         app, sessions = _app()
         client = _client(app)
         session_id = _signed_in(client, sessions, ALICE)
@@ -1559,196 +1265,71 @@ class TestRegisterVerifyRequiresAnAuthorizedCeremony:
 
 # In-process ASGI TestClient, no real socket -- unit per testing-policy.md's
 # seven-layer taxonomy.
-@pytest.mark.unit
-class TestRecoveryCodeDeliveredByTheCompanion:
-    """On a packaged local-mode install the one-time recovery code never
-    appears in this response at all -- the companion puts it on the human's
-    own desktop. Otherwise an agent that reaches an enrollment receives a
-    credential-store reset token as a side effect.
-    """
 
-    def _register(self, client, session_id):
-        return _register_first_credential(client, session_id)
-
-    def test_the_code_is_not_in_the_response_body(self):
-        delivered = []
-        app, sessions = _local_app(
-            deliver_recovery_code=lambda code: delivered.append(code) or (True, ""),
-        )
+class TestNoRecentSignInsSection:
+    def test_the_page_has_no_recent_sign_ins_section_and_logs_no_warning(self, caplog):
+        app, sessions = _app()
         client = _client(app)
-        session_id = _signed_in_local(client, sessions)
+        _signed_in(client, sessions, ALICE)
 
-        data = self._register(client, session_id)
-
-        assert "recovery_code" not in data
-        assert data["recovery_shown_by_companion"] is True
-        assert len(delivered) == 1
-        assert wa.has_recovery_code(LOCAL_PRINCIPAL) is True
-
-    def test_the_stored_code_is_the_one_the_human_was_shown(self):
-        delivered = []
-        app, sessions = _local_app(
-            deliver_recovery_code=lambda code: delivered.append(code) or (True, ""),
-        )
-        client = _client(app)
-        session_id = _signed_in_local(client, sessions)
-
-        self._register(client, session_id)
-
-        assert wa.consume_recovery_code(LOCAL_PRINCIPAL, delivered[0]) is True
-
-    def test_a_code_nobody_could_be_shown_is_not_stored(self):
-        # Otherwise has_recovery_code() would be true forever for a value no
-        # human has, and no later enrollment would ever issue another.
-        app, sessions = _local_app(
-            deliver_recovery_code=lambda code: (False, "start the companion app"),
-        )
-        client = _client(app)
-        session_id = _signed_in_local(client, sessions)
-
-        data = self._register(client, session_id)
-
-        assert wa.has_recovery_code(LOCAL_PRINCIPAL) is False
-        assert data["recovery_shown_by_companion"] is False
-        # The reason is shown to whoever is standing at /security, so it has
-        # to be the companion's own words rather than a generic failure.
-        assert data["recovery_detail"] == "start the companion app"
-
-    def test_the_passkey_itself_is_still_enrolled(self):
-        # A recovery code that could not be delivered must not cost the
-        # enrollment: the credential is the thing that was actually proven.
-        app, sessions = _local_app(deliver_recovery_code=lambda code: (False, "no display"))
-        client = _client(app)
-        session_id = _signed_in_local(client, sessions)
-
-        data = self._register(client, session_id)
-
-        assert data["status"] == "ok"
-        assert wa.has_credentials(LOCAL_PRINCIPAL) is True
-
-    def test_no_delivery_hook_keeps_the_pre_1_3_behavior(self):
-        # Org mode, and any local-mode install that is not a packaged build:
-        # the code comes back in the body and _PAGE_JS shows it.
-        app, sessions = _local_app()
-        client = _client(app)
-        session_id = _signed_in_local(client, sessions)
-
-        data = self._register(client, session_id)
-
-        assert data["recovery_code"]
-        assert "recovery_shown_by_companion" not in data
-        assert wa.has_recovery_code(LOCAL_PRINCIPAL) is True
-
-    def test_a_second_enrollment_asks_the_companion_for_nothing(self):
-        # Same rule as before: a code is issued only when there is no unused
-        # one on file, so an ordinary second passkey puts no dialog on
-        # anybody's desktop.
-        delivered = []
-        app, sessions = _local_app(
-            deliver_recovery_code=lambda code: delivered.append(code) or (True, ""),
-        )
-        client = _client(app)
-        session_id = _signed_in_local(client, sessions)
-        self._register(client, session_id)
-
-        r = _register_another_credential(client, session_id)
-
-        assert r.status_code == 200
-        assert len(delivered) == 1
-
-
-class TestRecentSignInsSection:
-    """Every path to a session is audited, but an audit entry nobody reads is evidence after the
-    fact -- so the recent ones land on the page a human already visits to
-    reason about what can approve on this install."""
-
-    def _mint_entries(self, tmp_path, *summaries):
-        """Writes entries the way web/control_channel.py's ``_audit_mint``
-        does -- through the real audit logger, not by hand into the file, so
-        this breaks if the two ever disagree about the decision value."""
-        from datetime import datetime, timezone
-
-        from privacyfence.audit_log import AuditEntry, get_audit_logger
-        from privacyfence.web.control_channel import SIGN_IN_MINT_DECISION
-
-        for summary in summaries:
-            get_audit_logger().record(AuditEntry(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                week=current_week(), request_id="r1", connector="", tool="", tool_name="",
-                summary=summary, sender="local", decision=SIGN_IN_MINT_DECISION,
-                auto_accept_rule="", latency_seconds=0.0, pii_detected=False,
-            ))
-
-    def _page(self):
-        app, sessions = _local_app()
-        client = TestClient(app, base_url=LOCAL_ISSUER)
-        _signed_in_local(client, sessions)
-        return client.get("/security").text
-
-    def test_a_mint_is_listed_with_what_the_session_it_made_can_do(self, tmp_path):
-        self._mint_entries(
-            tmp_path,
-            "Issued a sign-in code that can approve (confirmed by the companion app)",
-        )
-
-        body = self._page()
-
-        assert "Recent sign-ins" in body
-        assert "Issued a sign-in code that can approve" in body
-        assert "treat this install as compromised" in body
-
-    def test_a_refused_mint_is_listed_too(self, tmp_path):
-        """"Somebody asked for a session that can approve and was turned
-        down" is exactly the line worth seeing on this page."""
-        self._mint_entries(
-            tmp_path,
-            "Refused a sign-in code that can approve: the companion did not confirm it",
-        )
-
-        assert "Refused a sign-in code" in self._page()
-
-    def test_only_the_most_recent_few_are_shown_newest_first(self, tmp_path):
-        self._mint_entries(tmp_path, *[f"Issued a sign-in code number {i}" for i in range(8)])
-
-        body = self._page()
-
-        assert "number 7" in body
-        assert "number 3" in body  # 8 minus the five shown
-        assert "number 2" not in body
-        assert body.index("number 7") < body.index("number 3")
-
-    def test_an_install_that_has_minted_nothing_renders_no_section(self):
-        assert "Recent sign-ins" not in self._page()
-
-    def test_other_audit_entries_are_not_listed_here(self, tmp_path):
-        from datetime import datetime, timezone
-
-        from privacyfence.audit_log import AuditEntry, get_audit_logger
-
-        get_audit_logger().record(AuditEntry(
-            timestamp=datetime.now(timezone.utc).isoformat(), week=current_week(), request_id="r1",
-            connector="gmail", tool="gmail_send", tool_name="Send", summary="Email the Q3 numbers",
-            sender="local", decision="approved", auto_accept_rule="", latency_seconds=0.0,
-            pii_detected=False,
-        ))
-
-        body = self._page()
+        with caplog.at_level("WARNING"):
+            body = client.get("/security").text
 
         assert "Recent sign-ins" not in body
-        assert "Q3 numbers" not in body
+        assert "Passkeys" in body
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
 
-    def test_an_unreadable_audit_log_costs_the_section_not_the_page(self, monkeypatch, tmp_path):
-        """This is the least important section on the page, and the page is
-        where somebody goes to fix a passkey problem -- failing the whole
-        render because the log could not be read would be a poor trade."""
-        self._mint_entries(tmp_path, "Issued a sign-in code that can approve")
 
-        def _boom(limit=20):
-            raise OSError("audit log unreadable")
+class TestRegisterVerifyRequestChecks:
+    def test_a_wrong_csrf_is_a_401(self):
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
 
-        monkeypatch.setattr(rs.get_audit_logger(), "recent_entries", _boom)
+        r = client.post("/api/security/webauthn/register/verify", json={"csrf": "wrong", "credential": {}})
 
-        body = self._page()
+        assert r.status_code == 401
 
-        assert "Recent sign-ins" not in body
-        assert "Passkeys" in body  # the page itself still renders
+
+class TestAuditFailureNeverFailsTheRequest:
+    def test_an_audit_logger_that_raises_is_logged_and_the_enrollment_completes(self, monkeypatch, caplog):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        monkeypatch.setattr(rs.get_audit_logger(), "record", lambda entry: (_ for _ in ()).throw(OSError("disk full")))
+
+        with caplog.at_level("WARNING"):
+            body = _register_first_credential(client, session_id)
+
+        assert body["status"] == "ok"
+        assert any("Audit log write failed" in r.getMessage() for r in caplog.records)
+
+
+class TestRenderSecurityPageShapes:
+    def _creds(self, created_at):
+        return [type("C", (), {
+            "credential_id": "c1", "label": "Key", "created_at": created_at, "backed_up": False,
+            "last_used_at": None,
+        })()]
+
+    def _render(self, **kwargs):
+        return rs._render_security_page(
+            principal=ALICE, creds=kwargs.pop("creds", []), csrf="csrf", nonce="n",
+            step_up=StepUpConfig(rp_id="pf.example.com"), back_link=("/connect", "Back to connections"), **kwargs,
+        )
+
+    def test_without_nav_items_the_page_is_the_plain_document_with_its_back_link(self):
+        html = self._render()
+
+        assert 'href="/connect"' in html
+        assert 'class="pf-shell-nav"' not in html
+
+    def test_an_unrepresentable_creation_time_still_renders_the_row(self):
+        html = self._render(creds=self._creds(10**30))
+
+        assert "Key" in html
+
+    def test_custom_nav_items_are_used_as_given(self):
+        html = self._render(nav_items=(("/connect", "Connections", "connect"),))
+
+        assert "Connections" in html

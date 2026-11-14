@@ -46,59 +46,31 @@ class _Disconnector:
 
 class TestSubscribe:
     async def test_first_connect_gets_full_state_immediately(self):
-        stream = StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
+        stream = StateStream(list_pending=lambda: [])
         chunks = []
-        async for chunk in stream.subscribe(_Disconnector(after=0), receives_settings=True):
+        async for chunk in stream.subscribe(_Disconnector(after=0)):
             chunks.append(chunk)
         events = [_parse_sse(c) for c in chunks]
-        assert ("settings", {"a": 1}) in events
         assert ("approvals", []) in events
 
-    async def test_no_settings_event_when_no_controller_is_wired(self):
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
-        chunks = []
-        async for chunk in stream.subscribe(_Disconnector(after=0), receives_settings=True):
-            chunks.append(chunk)
-        events = [_parse_sse(c)[0] for c in chunks]
-        assert "settings" not in events
-        assert "approvals" in events
-
-    async def test_a_pushed_settings_update_is_delivered(self):
-        stream = StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
-
-        async def driver():
-            gen = stream.subscribe(_Disconnector(after=2), receives_settings=True)
-            out = []
-            async for chunk in gen:
-                out.append(chunk)
-                if len(out) == 1:
-                    # Push happens after the initial full-state flush,
-                    # while the generator is waiting in its queue.get().
-                    stream.push_settings({"a": 2})
-            return out
-
-        chunks = await driver()
-        events = [_parse_sse(c) for c in chunks]
-        assert ("settings", {"a": 2}) in events
-
     async def test_reconnect_gets_full_state_again_not_a_patch(self):
-        stream = StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
-        first = [c async for c in stream.subscribe(_Disconnector(after=0), receives_settings=True)]
-        second = [c async for c in stream.subscribe(_Disconnector(after=0), receives_settings=True)]
+        stream = StateStream(list_pending=lambda: [])
+        first = [c async for c in stream.subscribe(_Disconnector(after=0))]
+        second = [c async for c in stream.subscribe(_Disconnector(after=0))]
         assert first == second
 
     async def test_subscriber_is_removed_on_disconnect(self):
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
-        async for _ in stream.subscribe(_Disconnector(after=0), receives_settings=True):
+        stream = StateStream(list_pending=lambda: [])
+        async for _ in stream.subscribe(_Disconnector(after=0)):
             pass
-        assert stream._subscribers == {}
+        assert stream._subscribers == set()
 
     async def test_approvals_change_is_delivered_without_an_explicit_push(self):
         pending = []
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: pending)
+        stream = StateStream(list_pending=lambda: pending)
 
         async def driver():
-            gen = stream.subscribe(_Disconnector(after=3), receives_settings=True)
+            gen = stream.subscribe(_Disconnector(after=3))
             out = []
             async for chunk in gen:
                 out.append(chunk)
@@ -120,14 +92,14 @@ class TestSubscribeTouch:
     connection."""
 
     async def test_touch_is_called_once_per_tick(self):
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
+        stream = StateStream(list_pending=lambda: [])
         calls = []
 
         def touch():
             calls.append(1)
             return True
 
-        async for _ in stream.subscribe(_Disconnector(after=3), touch=touch, receives_settings=True):
+        async for _ in stream.subscribe(_Disconnector(after=3), touch=touch):
             pass
 
         assert len(calls) == 3
@@ -136,14 +108,14 @@ class TestSubscribeTouch:
         # A False from `touch` (session idle-/absolute-expired) closes the
         # connection the same way a client disconnect does -- never
         # streaming to a tab whose session the store has already evicted.
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
+        stream = StateStream(list_pending=lambda: [])
         calls = []
 
         def touch():
             calls.append(1)
             return len(calls) < 2
 
-        chunks = [c async for c in stream.subscribe(_Disconnector(after=100), touch=touch, receives_settings=True)]
+        chunks = [c async for c in stream.subscribe(_Disconnector(after=100), touch=touch)]
 
         assert len(calls) == 2
         events = [_parse_sse(c)[0] for c in chunks]
@@ -151,29 +123,10 @@ class TestSubscribeTouch:
 
     async def test_no_touch_given_behaves_as_before(self):
         # `touch` is optional -- server.py only ever omits it for callers
-        # with no session store of their own (there are none left in local
-        # mode, but nothing here should require passing it).
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
-        chunks = [c async for c in stream.subscribe(_Disconnector(after=2), receives_settings=True)]
+        # with no session store of their own .
+        stream = StateStream(list_pending=lambda: [])
+        chunks = [c async for c in stream.subscribe(_Disconnector(after=2))]
         assert len(chunks) == 1
-
-
-class TestReceivesSettings:
-    async def test_a_subscriber_without_it_never_gets_a_settings_event(self):
-        stream = StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
-        gen = stream.subscribe(_Disconnector(after=3), receives_settings=False)
-        events = [_parse_sse(await gen.__anext__())[0]]
-        stream.push_settings({"a": 2})
-        events += [_parse_sse(c)[0] async for c in gen]
-        assert events == ["approvals"]
-
-    async def test_a_settings_push_still_reaches_the_subscriber_that_receives_them(self):
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
-        gen = stream.subscribe(_Disconnector(after=3), receives_settings=True)
-        await gen.__anext__()
-        stream.push_settings({"a": 2})
-        assert _parse_sse(await gen.__anext__()) == ("settings", {"a": 2})
-        await gen.aclose()
 
 
 class _FakeApproval:
@@ -186,13 +139,13 @@ class _FakeApproval:
 
 class TestPushDebouncing:
     def test_a_burst_of_pushes_collapses_to_the_latest(self):
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
+        stream = StateStream(list_pending=lambda: [])
         queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-        stream._subscribers[queue] = True
+        stream._subscribers.add(queue)
 
-        stream.push_settings({"a": 1})
-        stream.push_settings({"a": 2})
-        stream.push_settings({"a": 3})
+        stream._broadcast("approvals", {"a": 1})
+        stream._broadcast("approvals", {"a": 2})
+        stream._broadcast("approvals", {"a": 3})
 
         assert queue.qsize() == 1
         event, data = queue.get_nowait()
@@ -241,12 +194,11 @@ class TestCallOnMainDispatcher:
 class TestClose:
     @staticmethod
     def _stream() -> StateStream:
-        return StateStream(settings_snapshot=lambda: {"a": 1}, list_pending=lambda: [])
+        return StateStream(list_pending=lambda: [])
 
     async def test_close_ends_an_open_subscription(self):
         stream = self._stream()
-        gen = stream.subscribe(_Disconnector(after=10**6), receives_settings=True)
-        await gen.__anext__()
+        gen = stream.subscribe(_Disconnector(after=10**6))
         await gen.__anext__()
         stream.close()
         with pytest.raises(StopAsyncIteration):
@@ -255,8 +207,28 @@ class TestClose:
     async def test_a_subscription_opened_after_close_ends_after_its_initial_events(self):
         stream = self._stream()
         stream.close()
-        gen = stream.subscribe(_Disconnector(after=10**6), receives_settings=True)
-        await gen.__anext__()
+        gen = stream.subscribe(_Disconnector(after=10**6))
         await gen.__anext__()
         with pytest.raises(StopAsyncIteration):
             await asyncio.wait_for(gen.__anext__(), 0.5)
+
+
+class TestBroadcastReachesAnOpenSubscription:
+    async def test_a_broadcast_event_is_delivered_to_the_open_subscription(self):
+        stream = StateStream(list_pending=lambda: [])
+        gen = stream.subscribe(_Disconnector(after=10**6))
+        await gen.__anext__()
+        stream._broadcast("approvals", [{"id": "a1"}])
+        assert _parse_sse(await asyncio.wait_for(gen.__anext__(), 2)) == ("approvals", [{"id": "a1"}])
+        await gen.aclose()
+
+
+    async def test_close_wakes_a_subscription_that_is_waiting_for_an_event(self):
+        stream = StateStream(list_pending=lambda: [])
+        gen = stream.subscribe(_Disconnector(after=10**6))
+        await gen.__anext__()
+        waiting = asyncio.ensure_future(gen.__anext__())
+        await asyncio.sleep(0.05)
+        stream.close()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(waiting, 0.5)
