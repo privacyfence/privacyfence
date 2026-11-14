@@ -10,7 +10,11 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p01-org-test-harness
 
-- pending
+- worker: Deleted the local-only browser tests for the bootstrap link, local /settings pages and local-mode links, and the local_server_with_settings fixture: the org WebServer ignores controller=, so they cannot be mounted. The brief said to delete nothing else; the later phase would have deleted them.
+- worker: Dropped the bridge_download_served audit-row assertions (a file-bridge row) from the pending-approval test.
+- worker: Browser smoke signs in with an org session cookie for LOCAL_PRINCIPAL, not the single-user principal, so cards registered on helper threads stay visible.
+- worker: The brief names tests/integration/test_org_mode_smoke.py, which does not exist; test_upstream_mcp_org.py and the org fixture of test_browser_smoke.py were the templates.
+- retry: First worker had no tld CLI and no Plan-Phase trailer; one rerun stopped for the same reason; a finish worker re-ran the full browser smoke (230 passed) and added the trailer commit. The orchestrator ran the checks (owner choice orch_roles); no roles are required for test-only files.
 
 ## p02-orphans
 
