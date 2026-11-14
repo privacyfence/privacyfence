@@ -17,7 +17,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-verified-email
 
-- pending
+- worker: none from the brief
+- retry: worker stopped as blocked because the tld toolkit was missing in worker sessions; no roles are required for this phase; code merged unchanged after orchestrator checks (unit suite, daemon and shim contract tests)
 
 ## p4-upstream-claims
 
