@@ -1930,6 +1930,45 @@ class TestAdminFormSave:
 
 
 @needs_node
+class TestAdminEnvironmentLocks:
+    LOCKS = {
+        "agent_runtimes": {
+            "enabled": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+            "project_id": {"value": "envproj", "variable": "PRIVACYFENCE_N8N_PROJECT_ID"},
+        },
+        "scoped_tokens": {
+            "enabled": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+            "allow_ai_proposals": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+        },
+    }
+
+    def test_locked_fields_render_disabled_with_the_variable_name(self):
+        state = _org_state(
+            environment_locks=self.LOCKS,
+            scoped_tokens={"enabled": False, "max_days": 30, "allow_ai_proposals": False},
+            agent_runtimes={"n8n": {"enabled": False, "project_id": "stored", "mcp_url": ""}},
+        )
+        html = build_html(state, surface="admin", mode="org", is_admin=True)
+        assert "Set by ' + lock.variable + ' on the server." in html
+        assert "(locked ? ' disabled' : '')" in html
+        runtimes = _render_org("runtimes", state)
+        assert "Set by PRIVACYFENCE_N8N_PROJECT_ID on the server." in runtimes
+        assert 'value="envproj"' in runtimes and 'value="stored"' not in runtimes
+        assert 'data-f="project_id" data-t="text" disabled' in runtimes
+        assert 'data-f="enabled" data-t="bool" checked disabled' in runtimes
+        assert 'data-f="mcp_url" data-t="text" aria-label' in runtimes  # not locked
+        tokens = _render_org("tokens", state)
+        assert tokens.count("Set by PRIVACYFENCE_N8N_DELIVERY on the server.") == 2
+        assert 'data-f="enabled" data-t="bool" checked disabled' in tokens
+        assert "Needs scoped tokens turned on." not in tokens
+        assert 'data-f="max_days"' in tokens and 'data-f="max_days" data-t="int" disabled' not in tokens
+
+    def test_without_locks_nothing_is_disabled_or_annotated(self):
+        tokens = _render_org("tokens", _org_state())
+        assert "Set by " not in tokens and "disabled" not in tokens
+
+
+@needs_node
 def test_a_fresh_server_shows_the_defaults_in_force():
     page = _render_org("delivery", _org_state(download_delivery={}))
     assert 'value="100000"' in page and 'value="300"' in page and 'data-f="agent_links" data-t="bool" checked' in page

@@ -1141,7 +1141,7 @@ The reasoning is in [ADR 0224](adr/0224-an-org-registration-is-attested-by-its-r
 An AI client that builds n8n workflows can ask PrivacyFence to put a scoped token into n8n as a credential,
 instead of giving the token to a person to copy. The person still reviews, narrows and confirms the token in
 Settings. Organization mode only; it needs scoped tokens and AI token proposals turned on under **Admin →
-Scoped tokens**, and n8n **2.40.0 or later** (the first version whose credentials API takes a project).
+Scoped tokens** (or by `PRIVACYFENCE_N8N_DELIVERY=true`, see "From the environment" below), and n8n **2.40.0 or later** (the first version whose credentials API takes a project).
 The version is not checked.
 
 1. In n8n, open **Settings → n8n API** and create an API key **as the user the n8n MCP server connects as**, so
@@ -1164,6 +1164,16 @@ The version is not checked.
    Tool. For the PrivacyFence node, PrivacyFence also asks n8n for the credential type's schema before it
    creates anything; if your n8n Enterprise API key cannot read that, delivery fails with the generic
    failure text and no token is minted.
+
+**From the environment.** Instead of step 4, an operator can switch delivery on in `privacyfence.env`
+without opening Admin: the project id from step 3 goes into `PRIVACYFENCE_N8N_PROJECT_ID`, the
+PrivacyFence MCP address (optional) into `PRIVACYFENCE_N8N_MCP_URL`, and setting
+`PRIVACYFENCE_N8N_DELIVERY` to `true` is enough to turn delivery on. It also turns on scoped tokens and AI
+token proposals, so nothing needs to be ticked under **Admin → Scoped tokens**. A variable that is set locks
+its field on the Admin page (the page shows the value and the variable's name); the longest token lifetime
+stays editable. The server refuses to start when `PRIVACYFENCE_N8N_DELIVERY=true` has no n8n address or
+key, or when a value is malformed. Remove a variable and its field goes back to what Admin stored
+([ADR 0288](adr/0288-n8n-delivery-can-be-switched-on-from-the-server-environment.md)).
 
 Claude then calls `privacyfence_propose_scoped_token` with `deliver_to`, and `privacyfence_runtime_credential_status`
 for the credential's id. Revoking the token deletes the n8n credential within 5 minutes. An expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it.

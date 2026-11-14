@@ -676,6 +676,33 @@ class TestOperationalSections:
         assert admin["authz"] == {"allowed_domains": ["a.example"]}
 
 
+class TestN8nEnvironmentOverlay:
+    def test_delivery_overlays_and_leaves_admin_unchanged(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "proj1")
+        admin = make_admin()
+        admin["agent_runtimes"] = {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}}
+        admin["scoped_tokens"] = {"enabled": False, "max_days": 30, "allow_ai_proposals": False}
+        before = copy.deepcopy(admin)
+        result = compose({}, admin)
+        assert result["agent_runtimes"]["n8n"]["enabled"] is True
+        assert result["agent_runtimes"]["n8n"]["project_id"] == "proj1"
+        assert result["scoped_tokens"]["enabled"] is True
+        assert result["scoped_tokens"]["allow_ai_proposals"] is True
+        assert admin == before
+        assert admin["agent_runtimes"]["n8n"]["enabled"] is False
+        assert admin["scoped_tokens"]["enabled"] is False
+
+    def test_local_mode_ignores_the_variables(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "bad value")
+        admin = make_admin()
+        admin["scoped_tokens"] = {"enabled": False, "max_days": 30, "allow_ai_proposals": False}
+        result = compose({}, admin, mode="local")
+        assert result["scoped_tokens"] == admin["scoped_tokens"]
+        assert "agent_runtimes" not in result or result["agent_runtimes"] == admin.get("agent_runtimes")
+
+
 def test_neither_input_is_mutated(builtins, monkeypatch):
     builtins("google_web", "atlassian_relay")
     monkeypatch.setenv(PEEK_VAR, "https://peek.example")
