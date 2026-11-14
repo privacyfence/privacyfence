@@ -3,17 +3,15 @@
 
 A T3 test runs a real, unmodified AI-client CLI -- today Claude Code
 (tests/integration/test_claude_code_contract.py) -- against a real
-local-mode ``/mcp`` endpoint and asserts that the client connects. This
+single-user org ``/mcp`` endpoint and asserts that the client connects. This
 module owns the two halves every such test shares, so a second client is a
 new test file and a new ``package.json`` entry, not a second copy of either:
 
-- ``local_daemon()`` starts the same in-process ``WebServer`` that
-  test_mcp_daemon_contract.py starts -- a real uvicorn server on a real,
-  free loopback port, with a real ``McpDispatcher`` in front of one real
-  connector -- under a throwaway data directory, so the ``mcp_token`` it
-  mints (``load_or_create_mcp_token``) and the ``mcp_url`` file it writes
-  never touch the developer's own ``~/.privacyfence``. It yields
-  ``(mcp_url, token)``.
+- ``org_daemon()`` starts the same in-process single-user org ``WebServer`` that
+  test_mcp_daemon_contract.py starts (tests/integration/org_server_harness.py) -- a real uvicorn
+  server on a real, free loopback port, with a real ``McpDispatcher`` in front of one real
+  connector -- under a throwaway data directory, so nothing it writes touches the developer's
+  own data directory. It yields ``(mcp_url, token)``.
 - ``client_env()`` builds the environment a client CLI runs under: a
   throwaway ``HOME`` (and ``USERPROFILE``/``XDG_CONFIG_HOME``, so the
   client's config file lands there on every platform) and **no** variable
@@ -39,19 +37,15 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
-import socket
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
-from privacyfence import paths as paths_module
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.web.mcp_dispatch import McpDispatcher
-from privacyfence.web.server import WebServer
-from privacyfence.web_approval_ui import WebApprovalUI
+from tests.integration.org_server_harness import single_user_org_server
 
 AI_CLIENTS_DIR = Path(__file__).resolve().parent / "ai_clients"
 
@@ -84,42 +78,13 @@ class HarnessConnector(Connector):
         return {"echoed": args}
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _wait_until_connectable(host: str, port: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    last_exc: OSError | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
-        except OSError as exc:
-            last_exc = exc
-            time.sleep(0.05)
-    raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
-
-
 @contextmanager
-def local_daemon(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, str]]:
-    """Run a local-mode ``/mcp`` endpoint whose state lives in ``data_dir``;
+def org_daemon(tmp_path: Path) -> Iterator[tuple[str, str]]:
+    """Run a single-user org ``/mcp`` endpoint whose state lives under ``tmp_path``;
     yield ``(mcp_url, token)``."""
-    data_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(paths_module, "data_dir", lambda: data_dir)
-    dispatcher = McpDispatcher(lambda: {"contract_test": HarnessConnector()})
-    port = _free_port()
-    server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
-    server.start()
-    try:
-        _wait_until_connectable("localhost", port)
-        assert server.mcp_url is not None
-        assert server.mcp_token is not None
-        yield server.mcp_url, server.mcp_token
-    finally:
-        server.stop()
+    dispatcher = McpDispatcher(lambda: {"contract_test": HarnessConnector()}, mode="org")
+    with single_user_org_server(tmp_path, dispatcher=dispatcher) as server:
+        yield server.mcp_url, server.bearer()
 
 
 def client_env(home: Path) -> dict[str, str]:

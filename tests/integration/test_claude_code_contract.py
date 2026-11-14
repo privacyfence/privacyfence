@@ -31,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.integration.ai_client_harness import client_env, local_daemon, resolve_client_command
+from tests.integration.ai_client_harness import client_env, org_daemon, resolve_client_command
 
 # Covers an `npx --yes ...@latest` download on the canary; the pinned binary
 # takes well under a second per command.
@@ -68,10 +68,8 @@ def _run(command: list[str], home: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_claude_code_connects_to_the_local_daemon_without_any_anthropic_credential(
-    claude_code, throwaway_home, monkeypatch
-):
-    with local_daemon(throwaway_home / ".privacyfence", monkeypatch) as (mcp_url, token):
+def test_claude_code_connects_to_the_org_server_without_any_anthropic_credential(claude_code, throwaway_home):
+    with org_daemon(throwaway_home / ".privacyfence") as (mcp_url, token):
         added = _run(
             [
                 *claude_code, "mcp", "add", "--transport", "http", "--scope", "user",
