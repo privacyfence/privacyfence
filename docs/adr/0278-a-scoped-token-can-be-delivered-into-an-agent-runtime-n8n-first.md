@@ -4,7 +4,7 @@
 
 Accepted — 2026-11-13. Implemented.
 Amends [ADR 0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) and [ADR 0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md).
-Amended by [0289](0289-the-delivered-credential-type-is-an-administrators-choice.md) and [0290](0290-the-privacyfenceapi-credential-holds-the-address-and-the-token.md).
+Amended by [0290](0290-the-delivered-credential-type-is-an-administrators-choice.md) and [0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md).
 
 ## Context
 

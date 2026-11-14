@@ -21,6 +21,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     groups:
       # Actions bump together in one PR -- they're independent third-party
       # projects, not a coupled dependency graph, so there's nothing a
@@ -32,6 +34,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     # pyproject.toml pins runtime deps with a floor (">=") and a handful of
     # explicit ceilings whose reasons are documented inline there (mcp,
     # webauthn, starlette, uvicorn) -- Dependabot respects an existing
@@ -45,6 +49,8 @@ updates:
     directory: "/mcpb/shim"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     groups:
       shim-dependencies:
         patterns: ["*"]
@@ -61,6 +67,8 @@ updates:
     directory: "/cloudflare/downloads"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     groups:
       # package.json's `overrides.vitest` pin routes around a known npm/arborist resolution bug
       # in this exact dependency set (see deploy-download-worker.yml's "Install dependencies"
@@ -73,6 +81,8 @@ updates:
     directory: "/cloudflare/oauth-relay"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     groups:
       # Same overrides.vitest pin and resolution bug as the downloads Worker above.
       oauth-relay-worker-dependencies:
@@ -82,6 +92,8 @@ updates:
     directory: "/tests/integration/ai_clients"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     # Test-only: the AI-client CLIs tests.yml's T3 contract tests run
     # (tests/integration/ai_client_harness.py). A bump here is the pinned
     # half of what .github/workflows/ai-client-canary.yml already runs
@@ -94,6 +106,8 @@ updates:
     directory: "/deploy/docker"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 3
     # Digest bumps only: moving off Python 3.12 is a deliberate change, like the .deb's runner (ADR 0203).
     ignore:
       - dependency-name: "python"

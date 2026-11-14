@@ -5,6 +5,7 @@
 Accepted — 2026-11-14. Amends [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)
 and [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md). Implemented:
 `upstream_mcp_config.py` (`GrantStore`, `domains_for`), `principal.py`, `scoped_tokens.py`.
+Amended by [ADR 0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md).
 
 ## Context
 

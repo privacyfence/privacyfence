@@ -1,9 +1,9 @@
-# ADR 0291: The n8n node carries its own handshake-only MCP client with no dependencies
+# ADR 0292: The n8n node carries its own handshake-only MCP client with no dependencies
 
 ## Status
 
 Accepted — 2026-11-14. Implemented.
-Relates to [ADR 0288](0288-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md).
+Relates to [ADR 0289](0289-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md).
 
 ## Context
 
@@ -43,4 +43,4 @@ and the daemon's routing of a session-less ordinary POST ends in a 400. Tracking
 ## Related
 
 - Issue: [issue 1095](https://github.com/privacyfence/privacyfence/issues/1095); sources `n8n/nodes/PrivacyFence/transport/mcpClient.ts`, `n8n/nodes/PrivacyFence/transport/sse.ts`.
-- [ADR 0288](0288-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md).
+- [ADR 0289](0289-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md).

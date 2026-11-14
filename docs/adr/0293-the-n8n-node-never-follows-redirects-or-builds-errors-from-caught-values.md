@@ -1,9 +1,9 @@
-# ADR 0292: The n8n node never follows a redirect and never builds an error or an item from a caught error, a request or a credential value
+# ADR 0293: The n8n node never follows a redirect and never builds an error or an item from a caught error, a request or a credential value
 
 ## Status
 
 Accepted — 2026-11-14. Implemented.
-Relates to [ADR 0290](0290-the-privacyfenceapi-credential-holds-the-address-and-the-token.md).
+Relates to [ADR 0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md).
 
 ## Context
 
@@ -48,4 +48,4 @@ exception that carried them. n8n shows errors and items to anyone who can open t
 ## Related
 
 - Issue: [issue 1095](https://github.com/privacyfence/privacyfence/issues/1095); sources `n8n/nodes/PrivacyFence/PrivacyFence.node.ts`, `n8n/nodes/PrivacyFence/transport/mcpClient.ts`.
-- [ADR 0290](0290-the-privacyfenceapi-credential-holds-the-address-and-the-token.md).
+- [ADR 0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md).

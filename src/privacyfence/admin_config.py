@@ -212,6 +212,22 @@ def mark_org_server() -> dict[str, Any]:
         return config
 
 
+def seed_upstream_grants(section: dict[str, dict[str, Any]]) -> list[str]:
+    """Add the ``upstream_mcp`` entries of ``section`` whose id is not in the file yet; returns the
+    seeded ids. An id already present (even with no grants) is never touched, and nothing is
+    removed: after the first start admin_config.json owns the grants (ADR 0288)."""
+    with _write_lock:
+        config = load() or _default_config()
+        seeded: list[str] = []
+        for upstream_id, entry in section.items():
+            if upstream_id not in config["upstream_mcp"]:
+                config["upstream_mcp"][upstream_id] = copy.deepcopy(entry)
+                seeded.append(upstream_id)
+        if seeded:
+            _write(config)
+        return seeded
+
+
 def _write(data: dict[str, Any]) -> None:
     secure_files.atomic_write_json(admin_config_path(), data, indent=2, sort_keys=True)
 

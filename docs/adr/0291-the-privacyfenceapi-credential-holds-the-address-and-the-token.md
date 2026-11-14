@@ -1,4 +1,4 @@
-# ADR 0290: The privacyFenceApi credential holds the address and the token, and has no authenticate block
+# ADR 0291: The privacyFenceApi credential holds the address and the token, and has no authenticate block
 
 ## Status
 
@@ -47,4 +47,4 @@ Tracking issue: https://github.com/privacyfence/privacyfence/issues/1095.
 ## Related
 
 - Issue: [issue 1095](https://github.com/privacyfence/privacyfence/issues/1095); sources `n8n/credentials/PrivacyFenceApi.credentials.ts`, `n8n/nodes/PrivacyFence/PrivacyFence.node.ts`.
-- [ADR 0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md), [ADR 0289](0289-the-delivered-credential-type-is-an-administrators-choice.md).
+- [ADR 0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md), [ADR 0290](0290-the-delivered-credential-type-is-an-administrators-choice.md).
