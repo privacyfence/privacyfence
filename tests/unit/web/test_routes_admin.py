@@ -822,6 +822,16 @@ class TestGroupMembership:
         assert "@acme.com" not in membership_audit[-1][2].replace(self.GROUP, "")
         assert not any("Approved membership" in summary for _, summary in audit)
 
+    def test_a_failed_membership_write_is_500(self, store, monkeypatch, audit, membership_audit):
+        def boom(*args, **kwargs):
+            raise OSError("read-only")
+
+        monkeypatch.setattr(routes_admin, "_decide_group_membership", boom)
+        world, csrf = self._signed_in()
+        r = _passkey_post(world, "approve_group_membership", {"group": self.GROUP, "audience": "mgmt"}, csrf)
+        assert (r.status_code, r.json()) == (500, {"error": "Could not save the group membership."})
+        assert membership_audit == []
+
     def test_approving_one_email_leaves_the_other_pending(self, store):
         world, csrf = self._signed_in()
         body = {"group": self.GROUP, "audience": "mgmt", "email": "a@acme.com"}
@@ -1762,3 +1772,40 @@ class TestAdminPage:
         assert '"org_config": true' in r.text
         assert '"relay_status"' not in r.text
         assert SECRET not in r.text
+
+
+class TestRecordGroupMembershipAudit:
+    """The real ``_record_group_membership_audit`` (the route tests replace it with a stand-in)."""
+
+    SUMMARY = "Approved membership for 2 person(s) in staff for audience https://x.example (admin=alice)"
+
+    def test_records_the_decision_as_its_own_audit_entry(self, monkeypatch):
+        entries = []
+
+        class FakeLogger:
+            def record(self, entry):
+                entries.append(entry)
+
+        monkeypatch.setattr(routes_admin, "get_audit_logger", lambda: FakeLogger())
+        principal = Principal(id="alice")
+        for decision in ("group_membership_approved", "group_membership_declined"):
+            routes_admin._record_group_membership_audit(principal, decision, self.SUMMARY)
+
+        assert [e.decision for e in entries] == ["group_membership_approved", "group_membership_declined"]
+        for entry in entries:
+            assert entry.sender == principal.id
+            assert entry.connector == "privacyfence"
+            assert entry.summary == self.SUMMARY
+            assert "@" not in entry.summary
+
+    def test_an_audit_failure_is_logged_not_raised(self, monkeypatch, caplog):
+        class BrokenLogger:
+            def record(self, entry):
+                raise OSError("disk full")
+
+        monkeypatch.setattr(routes_admin, "get_audit_logger", lambda: BrokenLogger())
+        with caplog.at_level(logging.WARNING):
+            routes_admin._record_group_membership_audit(
+                Principal(id="alice"), "group_membership_approved", self.SUMMARY,
+            )
+        assert "Audit log write failed for a group membership decision" in caplog.text

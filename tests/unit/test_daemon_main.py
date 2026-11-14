@@ -5687,6 +5687,26 @@ class TestRotateUpstreamClaimKey:
         daemon_main.run_rotate_upstream_claim_key()
         assert seen == [86400]
 
+    @pytest.mark.parametrize("command", ["rotate", "revoke"])
+    def test_an_invalid_operator_file_is_refused_without_a_traceback(
+        self, org, monkeypatch, tmp_path, capsys, command,
+    ):
+        from privacyfence import upstream_mcp_config
+
+        operator = tmp_path / "operator.yaml"
+        operator.write_text("version: 1\nupstreams: []\nclaim: [not, an, object]\n")
+        monkeypatch.setenv(upstream_mcp_config.ENV_VAR, str(operator))
+        monkeypatch.delenv(upstream_mcp_config.ENV_VAR_INLINE, raising=False)
+        if command == "rotate":
+            code = daemon_main.run_rotate_upstream_claim_key()
+        else:
+            code = daemon_main.run_revoke_upstream_claim_key("nope")
+        captured = capsys.readouterr()
+        assert code == 1
+        assert captured.err.startswith("Configuration error: ")
+        assert "Traceback" not in captured.err
+        assert not (tmp_path / "upstream_claim_keys.json").exists()
+
     def test_revoke_removes_a_key_and_reports_it(self, org, capsys):
         daemon_main.run_rotate_upstream_claim_key()
         capsys.readouterr()
