@@ -22,9 +22,6 @@ bug.
 from __future__ import annotations
 
 import json
-import socket
-import time
-import uuid
 
 import httpx
 import httpx2
@@ -35,13 +32,13 @@ from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
 from privacyfence import approval_ui  # noqa: E402
 from privacyfence import gate  # noqa: E402
-from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence.approvals import PendingApprovalRegistry  # noqa: E402
 from privacyfence.audit_log import init_audit_logger  # noqa: E402
 from privacyfence.connector import Connector, ToolParam, ToolSpec  # noqa: E402
 from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
-from privacyfence.web.server import WebServer  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
+
+from tests.integration.org_server_harness import SingleUserOrgServer, single_user_org_server  # noqa: E402
 
 # Real internal stack (a real socket-bound WebServer, the official mcp
 # client, a real httpx POST), no external network -- integration per
@@ -91,33 +88,8 @@ class GatedTestConnector(Connector):
         )
 
 
-def _free_port() -> int:
-    """A real, currently-unused TCP port -- see
-    test_mcp_daemon_contract.py's identical helper for why this is needed
-    up front rather than letting the OS pick one."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _wait_until_connectable(host: str, port: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    last_exc: OSError | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
-        except OSError as exc:
-            last_exc = exc
-            time.sleep(0.05)
-    raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
-
-
 @pytest.fixture
-def running_deferred_server(tmp_path, monkeypatch):
-    home = tmp_path / f"pf-deferred-{uuid.uuid4().hex[:8]}" / ".privacyfence"
-    home.mkdir(parents=True)
-    monkeypatch.setattr(paths_module, "data_dir", lambda: home)
+def running_deferred_server(tmp_path):
     init_audit_logger(str(tmp_path / "audit"))
 
     connector = GatedTestConnector()
@@ -132,20 +104,14 @@ def running_deferred_server(tmp_path, monkeypatch):
     approval_ui.init_approval_ui(web_ui)
     # The registry is handed to the dispatcher too, as daemon_main.py does,
     # so privacyfence_await_approval can see the approvals this test makes.
-    dispatcher = McpDispatcher(lambda: {"gated_test": connector}, registry=registry)
+    dispatcher = McpDispatcher(lambda: {"gated_test": connector}, mode="org", registry=registry)
 
-    port = _free_port()
-    server = WebServer(web_ui, host="localhost", port=port, mcp_dispatcher=dispatcher)
-    server.start()
-    try:
-        _wait_until_connectable("localhost", port)
+    with single_user_org_server(tmp_path, web_ui=web_ui, dispatcher=dispatcher) as server:
         yield connector, server
-    finally:
-        server.stop()
 
 
-async def _call_gated_tool(server: WebServer, message: str):
-    headers = {"Authorization": f"Bearer {server.mcp_token}"}
+async def _call_gated_tool(server: SingleUserOrgServer, message: str):
+    headers = {"Authorization": f"Bearer {server.bearer()}"}
     async with httpx2.AsyncClient(headers=headers) as http_client:
         async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
@@ -155,14 +121,14 @@ async def _call_gated_tool(server: WebServer, message: str):
                 )
 
 
-async def _decide(server: WebServer, approval_id: str, result: str, **extra: str) -> httpx.Response:
+async def _decide(server: SingleUserOrgServer, approval_id: str, result: str, **extra: str) -> httpx.Response:
     """Exactly what a human's browser does when they click Allow/Deny on a
     card at /approvals/{id} -- the session cookie doubles as the CSRF token
     (session_auth.py's own check_csrf), same as
     tests/unit/web/test_routes_approvals.py's ``_signed_in`` helper."""
-    session_id = server.sessions.create()
+    session_id = server.session_cookie()
     async with httpx.AsyncClient(
-        base_url=f"http://localhost:{server.port}", cookies={"pf_session": session_id},
+        base_url=server.base_url, cookies={"pf_org_session": session_id},
     ) as http_client:
         return await http_client.post(
             f"/api/approvals/{approval_id}/decide",
@@ -202,7 +168,7 @@ async def test_deferred_approval_round_trip_accept(running_deferred_server):
     assert not (await _wait_and_list_pending(server))
 
 
-async def _wait_and_list_pending(server: WebServer) -> list:
+async def _wait_and_list_pending(server: SingleUserOrgServer) -> list:
     # web_ui isn't kept around by the fixture beyond construction, but
     # gate.py's global approval_ui singleton still points at the exact
     # instance the fixture built -- same object the /approvals routes serve
@@ -231,8 +197,8 @@ async def test_deferred_approval_round_trip_deny(running_deferred_server):
     assert not (await _wait_and_list_pending(server))
 
 
-async def _await_approval(server: WebServer, approval_id: str):
-    headers = {"Authorization": f"Bearer {server.mcp_token}"}
+async def _await_approval(server: SingleUserOrgServer, approval_id: str):
+    headers = {"Authorization": f"Bearer {server.bearer()}"}
     async with httpx2.AsyncClient(headers=headers) as http_client:
         async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:

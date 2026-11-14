@@ -12,23 +12,17 @@ from __future__ import annotations
 
 import json
 import shutil
-import socket
 import subprocess
-import time
-import uuid
 from pathlib import Path
 
 import pytest
 
-from privacyfence import paths as paths_module
 from privacyfence import scoped_tokens
 from privacyfence.auto_accept import TOOL_TO_GATE
 from privacyfence.connector import Connector, ToolParam, ToolSpec
-from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import SCOPED_META_TOOLS
-from privacyfence.web.server import WebServer
-from privacyfence.web_approval_ui import WebApprovalUI
+from tests.integration.org_server_harness import SINGLE_USER, single_user_org_server
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 N8N_DIR = REPO_ROOT / "n8n"
@@ -65,25 +59,6 @@ class EchoConnector(Connector):
         return {"echoed": args}
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _wait_until_connectable(host: str, port: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    last_exc: OSError | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
-        except OSError as exc:
-            last_exc = exc
-            time.sleep(0.05)
-    raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
-
-
 @pytest.fixture(scope="session")
 def n8n_dependencies() -> Path:
     npm = shutil.which("npm")
@@ -97,34 +72,26 @@ def n8n_dependencies() -> Path:
 
 
 @pytest.fixture
-def daemon(monkeypatch):
-    """A real WebServer with a store over a tmp dir; yields (mcp_url, store, token, secret)."""
-    home = Path(f"/tmp/pf-n8n-ct-{uuid.uuid4().hex[:8]}")
-    home.mkdir()
-    monkeypatch.setattr(paths_module, "data_dir", lambda: home)
+def daemon(tmp_path, monkeypatch):
+    """A real single-user org server with a store over a tmp dir; yields (mcp_url, store, token, secret)."""
     # A token can only name tools the gate knows; register the echo tool as an ungated one.
     monkeypatch.setitem(TOOL_TO_GATE, ECHO_TOOL, "auto")
     policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-    store = scoped_tokens.ScopedTokenStore(lambda: [LOCAL_PRINCIPAL])
-    store.load()
-    scoped_tokens.set_store(store)
-    token, secret = store.create(
-        LOCAL_PRINCIPAL, label="n8n-contract", days=30, rules=[], tools=[ECHO_TOOL], policy=policy,
-    )
     dispatcher = McpDispatcher(
-        lambda: {"contract_test": EchoConnector()},
-        scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+        lambda: {"contract_test": EchoConnector()}, mode="org",
+        scoped_token_policy=policy,
     )
-    port = _free_port()
-    server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
-    server.start()
-    try:
-        _wait_until_connectable("localhost", port)
-        yield server.mcp_url, store, token, secret
-    finally:
-        server.stop()
-        scoped_tokens.set_store(None)
-        shutil.rmtree(home, ignore_errors=True)
+    with single_user_org_server(tmp_path, dispatcher=dispatcher) as server:
+        store = scoped_tokens.ScopedTokenStore(lambda: [SINGLE_USER])
+        store.load()
+        scoped_tokens.set_store(store)
+        try:
+            token, secret = store.create(
+                SINGLE_USER, label="n8n-contract", days=30, rules=[], tools=[ECHO_TOOL], policy=policy,
+            )
+            yield server.mcp_url, store, token, secret
+        finally:
+            scoped_tokens.set_store(None)
 
 
 def _drive(url: str, secret: str, tool: str, arguments: dict | None = None) -> dict:
@@ -156,7 +123,7 @@ def test_a_tool_outside_the_token_is_denied(daemon, n8n_dependencies):
 
 def test_a_revoked_token_gives_the_refused_token_text(daemon, n8n_dependencies):
     url, store, token, secret = daemon
-    assert store.revoke(LOCAL_PRINCIPAL, token.id)
+    assert store.revoke(SINGLE_USER, token.id)
     out = _drive(url, secret, ECHO_TOOL, {"message": "x"})
 
     assert "refused the token" in out["error"]
