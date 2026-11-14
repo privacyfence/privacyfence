@@ -5,7 +5,7 @@
       "name": "Claude Desktop",
       "slug": "claude-desktop",
       "deployments": ["local", "organization"],
-      "connects": "through the PrivacyFence extension (PrivacyFence.mcpb)"
+      "connects": "as a custom connector to /mcp, with passkey or OAuth sign-in"
     },
     {
       "name": "Claude Code",
@@ -23,7 +23,7 @@
       "name": "ChatGPT",
       "slug": "chatgpt",
       "deployments": ["local", "organization"],
-      "connects": "from ChatGPT desktop straight to /mcp with your own token, or from ChatGPT on the web as a Developer Mode app with OAuth sign-in"
+      "connects": "from ChatGPT on the web as a Developer Mode app, with OAuth sign-in"
     },
     {
       "name": "Gemini Enterprise",

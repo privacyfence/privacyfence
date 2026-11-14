@@ -39,12 +39,12 @@
       <div class="card-grid grid-auto">
         <article class="card stack" id="claude-desktop">
           <h3>Claude Desktop</h3>
-          <p><strong>Your own computer and organization mode.</strong> On your own computer, with the Docker image and your passkey, or in the deprecated desktop mode through PrivacyFence's extension, <code>PrivacyFence.mcpb</code>. With an organization deployment, as a custom connector with your organization sign-in.</p>
+          <p><strong>Your own computer and organization mode.</strong> As a custom connector: to the Docker image on your own computer with your passkey, or to an organization deployment with your organization sign-in.</p>
           <p><a href="/ai-agents/claude-desktop/">Claude Desktop with PrivacyFence</a></p>
         </article>
         <article class="card stack" id="claude-code">
           <h3>Claude Code</h3>
-          <p><strong>Your own computer and organization mode.</strong> On your own computer, straight to <code>/mcp</code>: with your passkey on the Docker image, or with your own token in the deprecated desktop mode. With an organization deployment, it registers itself and you sign in with your organization account.</p>
+          <p><strong>Your own computer and organization mode.</strong> On your own computer, straight to <code>/mcp</code> with your passkey on the Docker image. With an organization deployment, it registers itself and you sign in with your organization account.</p>
           <p><a href="/ai-agents/claude-code/">Claude Code with PrivacyFence</a></p>
         </article>
         <article class="card stack" id="claude-ai">
@@ -54,7 +54,7 @@
         </article>
         <article class="card stack" id="chatgpt">
           <h3>ChatGPT</h3>
-          <p><strong>Desktop mode (deprecated) and organization mode.</strong> On your own computer, ChatGPT desktop connects straight to <code>/mcp</code> with your own token; checked on macOS. With an organization deployment, ChatGPT on the web connects as a Developer Mode app, and you sign in with your organization account.</p>
+          <p><strong>Organization mode.</strong> ChatGPT on the web connects as a Developer Mode app, and you sign in with your organization account.</p>
           <p><a href="/ai-agents/chatgpt/">ChatGPT with PrivacyFence</a></p>
         </article>
         <article class="card stack" id="gemini-enterprise">
@@ -77,7 +77,7 @@
       </div>
       <div class="page-copy stack">
         <p>PrivacyFence tells every client truthfully what each tool does: reads are read-only, writes are writes, and the tools that delete something (<code>calendar_delete_event</code>, <code>drive_sheets_delete_dimensions</code> and <code>peek_delete_page</code>) are marked destructive. A client may use that to ask you before a write, and may let you always allow a tool. Either way, a gated call still waits for PrivacyFence's approval card, and that card is the confirmation that decides.</p>
-        <p>On your own computer every client uses the same credential, so the card names the requester <strong>Undetected</strong>. In an organization deployment the card shows the name the client sends as a claim, marked <strong>Not verified</strong>, until an administrator pins that client's registration.</p>
+        <p>The card shows the name the client sends as a claim, marked <strong>Not verified</strong>, until an administrator pins that client's registration.</p>
         <p><a href="/docs/how-it-works/#which-ai-system-is-asking">Which AI system is asking</a> · <a href="/compare/">PrivacyFence compared with the alternatives</a></p>
       </div>
     </section>
