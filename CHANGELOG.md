@@ -53,6 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The AI agent pages describe the custom-connector and Docker path.** The Claude Desktop, Claude Code, ChatGPT and overview pages no longer describe the extension, desktop mode or the companion app; they connect to the Docker image or an organization server and link the install page.
 - **The website describes PrivacyFence as the Docker image or an organization server.** The enterprise, FAQ, security, privacy, GDPR, how-it-works and Telegram pages and the architecture diagram no longer describe the desktop installers, the extension or the companion app, and the install page names the Docker guide for a reverse proxy.
 - **8.x refuses a data directory that is not ready for it.** On start, PrivacyFence checks the data directory: one that belongs to a desktop install, or that a 7.x release has not yet marked "Ready for PrivacyFence 8: yes", is refused with a message and left untouched. See [Moving to organization mode](docs/moving-to-organization-mode.md) ([ADR 0297](docs/adr/0297-8x-refuses-a-data-directory-that-is-not-ready-for-it.md)).
 - **PrivacyFence needs Python 3.11.5 or newer** (it was 3.11). The fixed releases of `soupsieve`, which `beautifulsoup4` depends on, do not install on 3.11.0 to 3.11.4. Desktop installers and the Docker image are not affected.
