@@ -137,6 +137,30 @@ class TestDeliverUpstreamDomains:
         assert seen["held_audiences"] == {"kh": frozenset({"hr"})}
         assert seen["principal_email_verified"] is True
 
+    def test_a_delivered_token_is_never_created_as_an_admin(self, tokens, monkeypatch):
+        seen = {}
+
+        def create(principal, **kwargs):
+            seen.update(kwargs)
+            raise ScopedTokenError("stop here")
+
+        monkeypatch.setattr(tokens, "create", create)
+        rc.deliver(
+            principal=ALICE, bound=BOUND, proposal=_proposal(), config=CONFIG, api=FakeApi(), token_store=tokens,
+            policy=ENABLED, held_audiences={}, principal_email_verified=True,
+        )
+        assert seen["is_admin"] is False
+
+    def test_a_delivered_sync_token_is_refused(self, tokens):
+        api = FakeApi()
+        bound = {**BOUND, "tools": ["privacyfence_update_group_membership"]}
+        outcome = rc.deliver(
+            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=api, token_store=tokens,
+            policy=ENABLED, held_audiences={}, principal_email_verified=True,
+        )
+        assert outcome.status == 400 and "Only an administrator can create a token" in outcome.error
+        assert api.created == [] and tokens.tokens_for(ALICE) == []
+
 
 def _remove_the_record():
     rc.get_store().remove(rc.get_store().all()[0].credential_id)

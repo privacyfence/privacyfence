@@ -333,6 +333,7 @@ def deliver(
                 upstream_audiences=bound.get("upstream_audiences") or None,
                 held_audiences=held_audiences,
                 principal_email_verified=principal_email_verified,
+                is_admin=False,  # a sync token is created in Settings only (plan 3.8)
                 token_id=token_id,
             )
         except ScopedTokenError as exc:

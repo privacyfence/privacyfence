@@ -1508,6 +1508,33 @@ class TestChosenTokenId:
         assert token.id == chosen
 
 
+class TestSyncTokenIsAdminOnly:
+    SYNC = "privacyfence_update_group_membership"
+
+    def test_a_non_admin_cannot_create_it_and_nothing_is_stored(self):
+        store = _store()
+        with pytest.raises(ScopedTokenError, match="Only an administrator can create a token for " + self.SYNC):
+            _create(store, tools=[self.SYNC])
+        assert store.tokens_for(LOCAL_PRINCIPAL) == []
+
+    def test_an_admin_can_create_it(self):
+        store = _store()
+        token, _ = _create(store, tools=[self.SYNC], is_admin=True)
+        assert self.SYNC in token.tools
+
+    def test_other_tools_need_no_admin(self):
+        token, _ = _create(_store(), tools=[TOOL])
+        assert TOOL in token.tools
+
+    def test_an_expired_or_revoked_sync_token_no_longer_reaches_the_tool(self):
+        store = _store()
+        token, _ = _create(store, tools=[self.SYNC], is_admin=True)
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW + 1) == "live"
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=token.expires_at) == "expired"
+        store.revoke(LOCAL_PRINCIPAL, token.id)
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW + 1) == "absent"
+
+
 class TestTokenState:
     def test_live_expired_and_absent(self):
         store = _store()

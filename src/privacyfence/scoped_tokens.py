@@ -662,6 +662,7 @@ class ScopedTokenStore:
         upstream_audiences: Mapping[str, Iterable[str]] | None = None,
         held_audiences: Mapping[str, frozenset[str]] | None = None,
         principal_email_verified: bool = False,
+        is_admin: bool = False,
         now: float | None = None,
         token_id: str | None = None,
     ) -> tuple[ScopedToken, str]:
@@ -669,12 +670,16 @@ class ScopedTokenStore:
         output): a ``new`` rule, a ``copy`` of one of the person's Auto-accept rows, or a
         ``duplicate`` of a row of one of their tokens (ADR 0236). A caller that must record the id
         before the token exists passes ``token_id`` (``new_token_id()``); it must be unused by the person."""
+        from .connectors.group_membership import TOOL_NAME as GROUP_MEMBERSHIP_TOOL  # function-local: import cycle
         from .policy import scope_rows
 
         if token_id is not None and not TOKEN_ID_RE.match(token_id):
             raise ScopedTokenError("That token id is already in use.")
 
         tool_set = frozenset(tools)
+        if GROUP_MEMBERSHIP_TOOL in tool_set and not is_admin:
+            # The sync tool changes who holds which audience, so only an administrator may mint it (plan 3.8).
+            raise ScopedTokenError(f"Only an administrator can create a token for {GROUP_MEMBERSHIP_TOOL}.")
         chosen_audiences = {uid: frozenset(doms) for uid, doms in (upstream_audiences or {}).items() if doms}
         held = held_audiences or {}
         for uid, doms in sorted(chosen_audiences.items()):
