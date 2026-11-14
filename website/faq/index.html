@@ -39,10 +39,9 @@
           <li><a href="#before-approval">What does the AI see before I approve?</a></li>
           <li><a href="#routine">Can routine requests run without approval?</a></li>
           <li><a href="#certification">Is PrivacyFence certified?</a></li>
-          <li><a href="#modes">Single-user, organization or desktop mode?</a></li>
+          <li><a href="#modes">Single-user or organization server?</a></li>
           <li><a href="#built-in-apps">Do I have to register an app with Google, Slack and the others?</a></li>
           <li><a href="#cost">Is it free?</a></li>
-          <li><a href="#verify">How do I verify a download?</a></li>
         </ul>
       </nav>
 
@@ -90,11 +89,11 @@
         </article>
 
         <article class="faq-item page-copy stack" id="modes">
-          <h2>Single-user, organization or desktop mode?</h2>
-          <p><strong>PrivacyFence 7 deprecates desktop mode, and PrivacyFence 8 removes it.</strong> Desktop installs keep working through 7.x, without the built-in apps. Move to the Docker image on your computer or to an organization server (<a href="/docs/moving-to-organization-mode/">moving to organization mode</a>).</p>
-          <p><strong>Single-user mode</strong> runs PrivacyFence's Docker image on one person's computer. It is published only on localhost, and set up with a one-time code from the container's log, then a passkey. Single-user mode is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server. <a href="/install/">How to install it</a>.</p>
-          <p><strong>Organization mode</strong> runs one PrivacyFence on a Linux server your organization controls, from environment variables in Docker or under systemd, behind HTTPS. People sign in through your organization's OpenID Connect identity provider, or, for a small Google Workspace team, through PrivacyFence's built-in Google sign-in, which needs nothing registered at Google and admits only verified Workspace accounts. Administrators set the privacy filter and PII check for everyone on the Admin page, and web clients can connect too.</p>
-          <p><a href="/enterprise/">Desktop and organization mode side by side</a></p>
+          <h2>Single-user or organization server?</h2>
+          <p>PrivacyFence runs as the Docker image, or as an organization server. <a href="/install/">How to install it</a>.</p>
+          <p><strong>Single-user</strong> runs PrivacyFence's Docker image on one person's computer. It is published only on localhost, and set up with a one-time code from the container's log, then a passkey. Single-user Docker is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server. <a href="/install/">How to install it</a>.</p>
+          <p><strong>Organization mode</strong> runs one PrivacyFence on a Linux server your organization controls, from environment variables in Docker, behind HTTPS. People sign in through your organization's OpenID Connect identity provider, or, for a small Google Workspace team, through PrivacyFence's built-in Google sign-in, which needs nothing registered at Google and admits only verified Workspace accounts. Administrators set the privacy filter and PII check for everyone on the Admin page, and web clients can connect too.</p>
+          <p><a href="/enterprise/">Single-user and organization server side by side</a></p>
         </article>
 
         <article class="faq-item page-copy stack" id="built-in-apps">
@@ -108,15 +107,6 @@
           <h2>Is it free?</h2>
           <p><strong>Yes.</strong> PrivacyFence is open source under the Apache License 2.0, with no paid tier, no account and no commercial offering. The services you connect are your own accounts with Google, Slack, Salesforce, Atlassian, Telegram, Grist or Peek, on whatever plan you already have.</p>
           <p><a href="https://github.com/privacyfence/privacyfence">Source code on GitHub</a></p>
-        </article>
-
-        <article class="faq-item page-copy stack" id="verify">
-          <h2>How do I verify a download?</h2>
-          <p>The <a href="/download/">download page</a> lists the SHA-256 checksum of every installer. Compute the checksum of the file you downloaded and compare the two before running it; if they differ, do not run the file.</p>
-          <pre class="verify-commands"><code>shasum -a 256 &lt;file&gt;                    # macOS
-sha256sum &lt;file&gt;                        # Linux
-Get-FileHash &lt;file&gt; -Algorithm SHA256   # Windows</code></pre>
-          <p>Stable releases are also signed: the macOS installer is signed and notarized by Apple, and the Windows installer is Authenticode-signed. Pre-release builds may not be. Each install guide has the exact command: <a href="/docs/install-macos/#download-and-verify">macOS</a>, <a href="/docs/install-windows/#download-and-verify">Windows</a>, <a href="/docs/install-linux/#download-and-verify">Linux</a>.</p>
         </article>
       </div>
     </section>

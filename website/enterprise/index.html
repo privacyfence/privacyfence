@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Organization server or single-user Docker — PrivacyFence</title>
-  <meta name="description" content="Run PrivacyFence as one organization server with identity-provider or built-in Google sign-in, or for one person in Docker: the organization server compared with desktop mode, prerequisites and limits.">
+  <meta name="description" content="Run PrivacyFence as one organization server with identity-provider or built-in Google sign-in, or for one person in Docker: the organization server compared with single-user Docker, prerequisites and limits.">
   <meta name="pf-content-group" content="marketing">
   <meta name="theme-color" content="#f6f8fb">
   <link rel="canonical" href="https://privacyfence.eu/enterprise/">
@@ -17,7 +17,7 @@
   <meta property="og:site_name" content="PrivacyFence">
   <meta property="og:url" content="https://privacyfence.eu/enterprise/">
   <meta property="og:title" content="PrivacyFence for organizations">
-  <meta property="og:description" content="Run PrivacyFence as one organization server with identity-provider or built-in Google sign-in, or for one person in Docker: the organization server compared with desktop mode, prerequisites and limits.">
+  <meta property="og:description" content="Run PrivacyFence as one organization server with identity-provider or built-in Google sign-in, or for one person in Docker: the organization server compared with single-user Docker, prerequisites and limits.">
   <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
 </head>
 <body>
@@ -34,30 +34,30 @@
     <section class="page-section shell" aria-labelledby="compare-heading">
       <div class="section-heading">
         <p class="kicker">Side by side</p>
-        <h2 id="compare-heading">Desktop mode and organization mode.</h2>
+        <h2 id="compare-heading">Single-user Docker and an organization server.</h2>
       </div>
       <div class="table-scroll wide">
         <table>
           <thead>
-            <tr><th scope="col"></th><th scope="col">Desktop mode (deprecated)</th><th scope="col">Organization mode</th></tr>
+            <tr><th scope="col"></th><th scope="col">Single-user Docker</th><th scope="col">Organization mode</th></tr>
           </thead>
           <tbody>
-            <tr><th scope="row">Where it runs</th><td>Each person's own computer: macOS, Windows or Debian/Ubuntu</td><td>One Linux server the organization runs, behind its HTTPS reverse proxy</td></tr>
-            <tr><th scope="row">Who uses it</th><td>The people signed in to that computer, each with their own connectors, rules and approvals</td><td>Everyone your identity provider lets in, each kept apart: connectors, approvals, passkeys and audit log per person</td></tr>
-            <tr><th scope="row">Sign-in</th><td>None: the companion app opens the pages already signed in</td><td>Your OpenID Connect identity provider, or the built-in Google sign-in</td></tr>
-            <tr><th scope="row">AI clients</th><td>Claude Desktop, Claude Code and ChatGPT desktop (macOS) on the same computer</td><td>Claude Desktop, Claude Code and web clients such as claude.ai, ChatGPT and Gemini Enterprise, through OAuth 2.1</td></tr>
-            <tr><th scope="row">Install</th><td>The installer (<code>.dmg</code>, <code>.exe</code> or <code>.deb</code>)</td><td>The <code>privacyfence-org</code> Docker image with Caddy, configured from environment variables; or <code>pip install privacyfence</code> under systemd</td></tr>
-            <tr><th scope="row">Protection from the AI client</th><td>Privilege separation: PrivacyFence runs under its own service account</td><td>The AI client reaches the server only through <code>/mcp</code></td></tr>
+            <tr><th scope="row">Where it runs</th><td>One person's own computer, in Docker</td><td>One Linux server the organization runs, behind its HTTPS reverse proxy</td></tr>
+            <tr><th scope="row">Who uses it</th><td>One person, with their own connectors, rules and approvals</td><td>Everyone your identity provider lets in, each kept apart: connectors, approvals, passkeys and audit log per person</td></tr>
+            <tr><th scope="row">Sign-in</th><td>A one-time code from the container's log, then a passkey</td><td>Your OpenID Connect identity provider, or the built-in Google sign-in</td></tr>
+            <tr><th scope="row">AI clients</th><td>Claude Desktop and Claude Code on the same computer, at <code>http://localhost:8765/mcp</code></td><td>Claude Desktop, Claude Code and web clients such as claude.ai, ChatGPT and Gemini Enterprise, through OAuth 2.1</td></tr>
+            <tr><th scope="row">Install</th><td>The PrivacyFence Docker image, <a href="/install/">as the install page describes</a></td><td>The <code>privacyfence-org</code> Docker image with Caddy, configured from environment variables</td></tr>
+            <tr><th scope="row">Protection from the AI client</th><td>None against an AI agent that can run <code>docker</code> on the same computer; use a separate account with rootless Docker or a virtual machine</td><td>The AI client reaches the server only through <code>/mcp</code></td></tr>
             <tr><th scope="row">Policy</th><td>Set by the person, in Settings</td><td>Privacy filter and PII detection set install-wide by admins; each person keeps their own always-allow rules</td></tr>
-            <tr><th scope="row">Passkey step-up</th><td>On by default with the installers</td><td>On the Admin page; there it can only be made stricter</td></tr>
+            <tr><th scope="row">Passkey step-up</th><td>Set up with the first passkey</td><td>On the Admin page; there it can only be made stricter</td></tr>
             <tr><th scope="row">Connector apps</th><td>The organization's own apps, in a config bundle</td><td>PrivacyFence's built-in apps, or the organization's own, uploaded on the Admin page</td></tr>
             <tr><th scope="row">Verified AI-system identity</th><td>No: every request is shown as Undetected</td><td>Admins pin OAuth clients to known AI systems</td></tr>
-            <tr><th scope="row">Audit log</th><td>On the computer</td><td>On the server, and optionally forwarded to syslog or an HTTP endpoint</td></tr>
+            <tr><th scope="row">Audit log</th><td>In the Docker volume on the computer</td><td>On the server, and optionally forwarded to syslog or an HTTP endpoint</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="page-copy">PrivacyFence 7 deprecates desktop mode, and PrivacyFence 8 removes it. Desktop installs keep working through 7.x, without the built-in apps. Move to the Docker image on your computer or to an organization server (<a href="/docs/moving-to-organization-mode/">moving to organization mode</a>).</p>
-      <p class="page-copy">In both modes, connector credentials stay with PrivacyFence and never reach the AI client. Desktop mode is described in <a href="/docs/getting-started/">Getting started</a>, the difference in trust in <a href="/docs/security-and-compliance/#deployment-modes">Security and compliance</a>.</p>
+      <p class="page-copy">PrivacyFence runs as the Docker image on one computer, or as an organization server. <a href="/install/">How to install it</a>.</p>
+      <p class="page-copy">In both, connector credentials stay with PrivacyFence and never reach the AI client. The difference in trust is in <a href="/docs/security-and-compliance/#deployment-modes">Security and compliance</a>.</p>
     </section>
 
     <section class="page-section shell" aria-labelledby="prereq-heading">
@@ -68,7 +68,7 @@
       <div class="card-grid grid-auto">
         <article class="card stack">
           <h3>A Linux server</h3>
-          <p>Docker Engine 24 or newer with the Compose plugin 2.24 or newer. Without Docker: Python 3.11.5 or newer and systemd, as in the deployment guide. Do not install the desktop <code>.deb</code> on this host.</p>
+          <p>Docker Engine 24 or newer with the Compose plugin 2.24 or newer.</p>
         </article>
         <article class="card stack">
           <h3>A hostname and TLS</h3>
@@ -129,7 +129,7 @@
         <div>
           <p class="kicker">Deploy</p>
           <h2>Set up a central deployment.</h2>
-          <p>The organization deployment guide takes an administrator from an empty server to the first sign-in, with Docker and Caddy or with systemd behind your own proxy, and a validation checklist.</p>
+          <p>The organization deployment guide takes an administrator from an empty server to the first sign-in, with Docker and Caddy or behind your own reverse proxy, and a validation checklist.</p>
         </div>
         <div class="actions vertical cluster">
           <a class="button primary" href="/docs/org-mode-docker/">Docker deployment guide</a>

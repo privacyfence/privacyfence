@@ -295,8 +295,3 @@ def test_no_page_claims_there_is_no_privacyfence_server(path):
     text = _text(PAGES[path])
     assert "there are none" not in text
     assert "no PrivacyFence-operated server is involved" not in text
-
-
-@pytest.mark.parametrize("path", ["/faq/"])
-def test_desktop_mode_deprecation_notice(path):
-    assert "PrivacyFence 8 removes it" in _text(PAGES[path])
