@@ -5596,6 +5596,82 @@ class TestRevokeScopedTokens:
         assert capsys.readouterr().out.startswith("Revoked 0 scoped token(s) for local.\n")
 
 
+class TestRotateUpstreamClaimKey:
+    """``privacyfence-app --rotate-upstream-claim-key`` / ``--revoke-upstream-claim-key`` (plan 3.4)."""
+
+    @pytest.fixture
+    def org(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_claim_keys
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        return upstream_claim_keys.KeySet(tmp_path / upstream_claim_keys.FILENAME)
+
+    def test_rotate_creates_the_first_key_adds_a_second_and_reports_it(self, org, capsys):
+        assert daemon_main.run_rotate_upstream_claim_key() == 0
+
+        out = capsys.readouterr().out
+        kids = [k["kid"] for k in org.jwks()["keys"]]
+        assert len(kids) == 2
+        newest = kids[-1]
+        assert out.startswith(f"Rotated: new key {newest} starts signing at 20")
+        assert out.endswith("Z; the previous key stays published for the configured overlap.\n")
+
+    def test_revoke_removes_a_key_and_reports_it(self, org, capsys):
+        daemon_main.run_rotate_upstream_claim_key()
+        capsys.readouterr()
+        old, new = [k["kid"] for k in org.jwks()["keys"]]
+
+        assert daemon_main.run_revoke_upstream_claim_key(new) == 0
+
+        assert capsys.readouterr().out == f"Revoked key {new}.\n"
+        assert [k["kid"] for k in org.jwks()["keys"]] == [old]
+
+    def test_revoke_an_unknown_key_exits_1(self, org, capsys):
+        assert daemon_main.run_revoke_upstream_claim_key("nope") == 1
+
+        captured = capsys.readouterr()
+        assert captured.err == "No such key.\n"
+        assert captured.out == ""
+
+    def test_revoke_the_only_signing_key_exits_1(self, org, capsys):
+        daemon_main.run_rotate_upstream_claim_key()
+        capsys.readouterr()
+        old = org.jwks()["keys"][0]["kid"]  # the new key has not started signing yet
+
+        assert daemon_main.run_revoke_upstream_claim_key(old) == 1
+
+        captured = capsys.readouterr()
+        assert "only key that can sign" in captured.err
+        assert captured.out == ""
+        assert old in {k["kid"] for k in org.jwks()["keys"]}
+
+    @pytest.mark.parametrize(
+        "argv, runner, expected",
+        [
+            (["--rotate-upstream-claim-key"], "run_rotate_upstream_claim_key", []),
+            (["--revoke-upstream-claim-key", "abc"], "run_revoke_upstream_claim_key", ["abc"]),
+        ],
+    )
+    def test_the_flags_run_after_the_runtime_identity_check(self, monkeypatch, argv, runner, expected):
+        from privacyfence import privilege_separation
+
+        calls: list[str] = []
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, runner, lambda *args: calls.extend(args) or 0)
+
+        assert daemon_main.main(argv) == 0
+        assert calls == ["identity", *expected]
+
+        def _refuse():
+            raise privilege_separation.PrivilegeSeparationError("wrong account")
+
+        calls.clear()
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
+        assert daemon_main.main(argv) != 0
+        assert calls == []
+
+
 class TestGristRelease:
     """``privacyfence-app --grist-release PRINCIPAL_ID``."""
 
