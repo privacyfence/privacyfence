@@ -176,6 +176,25 @@ async def test_a_signing_failure_sends_nothing_and_is_claim_failed(signer, monke
     assert spy.requests == []
 
 
+def test_arguments_that_cannot_be_canonicalised_mark_the_claim_as_failed(signer):
+    # The SDK itself serialises NaN as null, so the end-to-end path cannot carry it; the auth is the guard.
+    import json
+
+    import httpx2
+
+    from privacyfence.identity_claim import ClaimSigningError, IdentityClaimAuth
+    from privacyfence.upstream_mcp_client import _FailureRecorder
+
+    recorder = _FailureRecorder(signer)
+    auth = IdentityClaimAuth(recorder, "general", _caller("general"), 30)  # type: ignore[arg-type]
+    body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"q":NaN}}}'
+    request = httpx2.Request("POST", "http://upstream.test/mcp", content=body.encode())
+    assert json.loads(body)["params"]["arguments"]["q"] != json.loads(body)["params"]["arguments"]["q"]
+    with pytest.raises(ClaimSigningError):
+        next(auth.auth_flow(request))
+    assert auth.request_unhashable is True  # the client reports claim_failed from this flag
+
+
 async def test_a_result_over_the_cap_is_too_large(signer):
     big = [{"id": "9", "audience": "general", "title": "Big", "body": "x" * 1_000_001}]
     async with _client(signer, documents=big) as client:

@@ -70,7 +70,7 @@ mistake in the declaration refuses the start; the message names the path of the 
 
 | Rule | Detail |
 |---|---|
-| Keys | `version` must be `1`. Only `version`, `upstreams`, `claim` and `membership` at the top; only `id`, `label`, `url`, `audience`, `tools`, `identity_claim`, `claim_lifetime_seconds` and `allowed_principal_types` in an upstream (an old `grants` key is still accepted and ignored with a warning); only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
+| Keys | `version` must be `1`. Only `version`, `upstreams`, `claim` and `membership` at the top; only `id`, `label`, `url`, `audience`, `tools`, `identity_claim`, `claim_lifetime_seconds` and `allowed_principal_types` in an upstream (an old `grants` key is refused with `grants were replaced by groups`); only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
 | Size | At most 8 upstreams and 50 tools per upstream; the file or inline text is at most 256 KiB. |
 | Repeated key | A key that appears twice in one mapping or object is refused (`the file repeats a key.` or `the text repeats a key.`), so a repeated tool name cannot silently keep the last gate. |
 | Format | A YAML file is checked by the same rules as JSON; a wrong top level still reads `must be a JSON object`. |

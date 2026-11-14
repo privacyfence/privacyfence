@@ -53,8 +53,10 @@ import json
 import logging
 import os
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from starlette.requests import Request
@@ -75,6 +77,7 @@ from .. import (
     upstream_mcp_runtime,
     web_shell,
 )
+from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector_registry import ConnectorRegistry
 from ..org_mode import Mode
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
@@ -364,8 +367,8 @@ def _group_membership_state() -> dict[str, Any]:
     return state
 
 
-def _decide_group_membership(action: str, params: dict[str, Any]) -> str | None:
-    """Approve or decline; the audit text, or ``None`` when nothing was waiting."""
+def _decide_group_membership(action: str, params: dict[str, Any]) -> tuple[str, str] | None:
+    """Approve or decline; the audit decision and text, or ``None`` when nothing was waiting."""
     store = group_membership.get_store()
     decide = store.approve if action == "approve_group_membership" else store.decline
     group, audience = params["group"], params["audience"]
@@ -375,8 +378,27 @@ def _decide_group_membership(action: str, params: dict[str, Any]) -> str | None:
     )
     if count == 0:
         return None
-    verb = "Approved" if action == "approve_group_membership" else "Declined"
-    return f"{verb} membership for {count} person(s) in {group} for audience {audience}"
+    approved = action == "approve_group_membership"
+    verb = "Approved" if approved else "Declined"
+    decision = "group_membership_approved" if approved else "group_membership_declined"
+    return decision, f"{verb} membership for {count} person(s) in {group} for audience {audience}"
+
+
+def _record_group_membership_audit(principal: Principal, decision: str, summary: str) -> None:
+    """An admin's approve or decline is its own audit decision (ADR 0299); no email address goes in."""
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="privacyfence", tool="", tool_name="",
+            summary=summary,
+            sender=principal.id,
+            decision=decision,
+            auto_accept_rule="", latency_seconds=0.0, pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for a group membership decision: %s", exc)
 
 
 def _admin_state(
@@ -468,6 +490,7 @@ def _dispatch(
             return _error("could not write settings.yaml", 500)
         changed: list[str] = []
     elif action in _GROUP_MEMBERSHIP_ACTIONS:
+        membership_decision = ""
         try:
             decided = _decide_group_membership(action, params)
         except OSError as exc:
@@ -475,7 +498,8 @@ def _dispatch(
             return _error("Could not save the group membership.", 500)
         if decided is None:
             return _error("Nothing is waiting for that approval.", 409)
-        summary, changed = decided, []
+        membership_decision, summary = decided
+        changed = []
     else:
         try:
             summary, changed = admin_config.apply_change(
@@ -489,7 +513,10 @@ def _dispatch(
     if summary:
         who = f"admin={principal.id}" if mode == "org" else "principal=local"
         with principal_scope(principal):
-            _record_settings_audit(principal, f"{summary} ({who})")
+            if action in _GROUP_MEMBERSHIP_ACTIONS:
+                _record_group_membership_audit(principal, membership_decision, f"{summary} ({who})")
+            else:
+                _record_settings_audit(principal, f"{summary} ({who})")
         if spec.applies == "live":
             refresh_live(changed)
     return JSONResponse({

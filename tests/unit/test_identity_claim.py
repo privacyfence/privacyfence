@@ -233,6 +233,10 @@ class TestIdentityClaimAuth:
         with pytest.raises(ic.ClaimSigningError):
             _send(ic.IdentityClaimAuth(broken, AUD, PERSON, 30), _tools_call())
 
+    def test_arguments_that_cannot_be_canonicalised_are_a_signing_error(self, signer):
+        with pytest.raises(ic.ClaimSigningError):
+            _send(self._auth(signer), _tools_call("search", {"query": float("nan")}))
+
 
 def test_load_signer(tmp_path, monkeypatch):
     from privacyfence import paths

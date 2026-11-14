@@ -142,6 +142,15 @@ def audit(monkeypatch):
 
 
 @pytest.fixture
+def membership_audit(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(
+        routes_admin, "_record_group_membership_audit", lambda p, d, s: recorded.append((p.id, d, s)),
+    )
+    return recorded
+
+
+@pytest.fixture
 def relay_checks(monkeypatch):
     calls = []
     monkeypatch.setattr(relay_client, "request_check", lambda: calls.append(1))
@@ -797,7 +806,7 @@ class TestGroupMembership:
         r = world.post("decline_group_membership", body, csrf, headers={"Origin": "https://evil.example"})
         assert r.status_code == 403
 
-    def test_approving_makes_the_resolver_grant_the_audience(self, store, audit):
+    def test_approving_makes_the_resolver_grant_the_audience(self, store, audit, membership_audit):
         resolver = group_membership.SnapshotResolver(store)
         assert "mgmt" not in resolver.audiences_for("a@acme.com", self.MAP)
         world, csrf = self._signed_in()
@@ -806,10 +815,12 @@ class TestGroupMembership:
         assert "mgmt" in resolver.audiences_for("a@acme.com", self.MAP)
         assert "mgmt" in resolver.audiences_for("b@acme.com", self.MAP)
         assert r.json()["group_membership"]["pending"] == []
-        assert audit[-1][1] == (
-            f"Approved membership for 2 person(s) in {self.GROUP} for audience mgmt (admin=carol)"
-        )
-        assert "@acme.com" not in audit[-1][1].replace(self.GROUP, "")
+        assert membership_audit == [(
+            "carol", "group_membership_approved",
+            f"Approved membership for 2 person(s) in {self.GROUP} for audience mgmt (admin=carol)",
+        )]
+        assert "@acme.com" not in membership_audit[-1][2].replace(self.GROUP, "")
+        assert not any("Approved membership" in summary for _, summary in audit)
 
     def test_approving_one_email_leaves_the_other_pending(self, store):
         world, csrf = self._signed_in()
@@ -818,13 +829,15 @@ class TestGroupMembership:
         assert r.status_code == 200
         assert [p["emails"] for p in r.json()["group_membership"]["pending"]] == [["b@acme.com"]]
 
-    def test_declining_removes_the_pending_row_and_grants_nothing(self, store, audit):
+    def test_declining_removes_the_pending_row_and_grants_nothing(self, store, audit, membership_audit):
         world, csrf = self._signed_in()
         r = _passkey_post(world, "decline_group_membership", {"group": self.GROUP, "audience": "mgmt", "email": ""}, csrf)
         assert r.status_code == 200, r.text
         assert r.json()["group_membership"]["pending"] == []
         assert "mgmt" not in group_membership.SnapshotResolver(store).audiences_for("a@acme.com", self.MAP)
-        assert audit[-1][1].startswith(f"Declined membership for 2 person(s) in {self.GROUP} for audience mgmt")
+        assert membership_audit[-1][1] == "group_membership_declined"
+        assert membership_audit[-1][2].startswith(f"Declined membership for 2 person(s) in {self.GROUP} for audience mgmt")
+        assert "@acme.com" not in membership_audit[-1][2].replace(self.GROUP, "")
 
     def test_nothing_waiting_is_a_409(self, store):
         world, csrf = self._signed_in()

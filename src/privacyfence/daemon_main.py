@@ -2728,6 +2728,16 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
 # --rotate-upstream-claim-key / --revoke-upstream-claim-key
 # ---------------------------------------------------------------------------- #
 
+def _upstream_claim_keyset() -> Any:
+    """The claim key set with the operator file's overlap, so the command's prune keeps what the server publishes."""
+    from . import upstream_claim_keys, upstream_mcp_config
+
+    claim_settings, _ = upstream_mcp_config.load_settings()
+    return upstream_claim_keys.KeySet(
+        org_dir() / upstream_claim_keys.FILENAME, overlap_seconds=claim_settings.key_overlap_hours * 3600,
+    )
+
+
 def run_rotate_upstream_claim_key() -> int:
     """Add a new Ed25519 key to the upstream identity-claim key set (plan 3.4).
 
@@ -2736,9 +2746,8 @@ def run_rotate_upstream_claim_key() -> int:
     published for the overlap. Runs as the account that owns the data, after the
     runtime identity check; a running server re-reads the file on its next call.
     """
-    from . import upstream_claim_keys
 
-    keys = upstream_claim_keys.KeySet(org_dir() / upstream_claim_keys.FILENAME)
+    keys = _upstream_claim_keyset()
     keys.ensure()
     new = keys.rotate()
     starts = datetime.fromtimestamp(new.signs_from, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2753,7 +2762,7 @@ def run_revoke_upstream_claim_key(kid: str) -> int:
     """Remove one key from the upstream identity-claim key set and its JWKS at once."""
     from . import upstream_claim_keys
 
-    keys = upstream_claim_keys.KeySet(org_dir() / upstream_claim_keys.FILENAME)
+    keys = _upstream_claim_keyset()
     keys.ensure()
     try:
         removed = keys.revoke(kid)
