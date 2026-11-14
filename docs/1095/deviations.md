@@ -35,7 +35,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p7-publish-workflow
 
-- pending
+- review: the stable-channel step exits 1 on pre-release tags as the plan specifies, so a pre-release tag shows this workflow as failed with a notice; worker had no toolkit so ran no dod or roles, none are required for these paths; orchestrator re-ran ruff and the unit suite after the merge
 
 ## p8-ci-dod
 
