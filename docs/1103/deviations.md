@@ -83,9 +83,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - conflict: Merging origin/main (ADRs 0294, 0295 and an n8n delivery change) conflicted in docs/adr/README.md (kept both: 0294, 0295, then 0296-0298) and docs/configuration-reference.md (kept main wording of the scoped_tokens and agent_runtimes rows plus this feature groups row in place of the grants row). Unit suite 22446 passed after the merge.
 - conflict: Main took ADR 0296 again after phase 17, so the three new ADRs are finally 0297, 0298 and 0299 (files renamed, every reference in code comments, docs, the changelog and the ADR index follows); the plan text, the earlier deviation line and the manifest final check still say 0288-0290 / 0296-0298.
 - scope: scope: docs/adr/0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md (pointer-only Amended-by line on main ADR 0288); accepted.
-- scope: scope: docs/adr/0296-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md (new ADR file, later renumbered to 0297-0299 (see the conflict entry)); accepted.
-- scope: scope: docs/adr/0297-audiences-come-from-group-membership-and-tokens-only-narrow-them.md (new ADR file, later renumbered to 0297-0299 (see the conflict entry)); accepted.
-- scope: scope: docs/adr/0298-group-membership-is-updated-through-a-scoped-token-tool.md (new ADR file, later renumbered to 0297-0299 (see the conflict entry)); accepted.
+- scope: scope: 1dec93655:docs/adr/0296-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md (new ADR file, later renumbered to 0297-0299 (see the conflict entry)); accepted.
+- scope: scope: 1dec93655:docs/adr/0297-audiences-come-from-group-membership-and-tokens-only-narrow-them.md (new ADR file, later renumbered to 0297-0299 (see the conflict entry)); accepted.
+- scope: scope: 1dec93655:docs/adr/0298-group-membership-is-updated-through-a-scoped-token-tool.md (new ADR file, later renumbered to 0297-0299 (see the conflict entry)); accepted.
 - scope: scope: src/privacyfence/audit_log.py (ADR number in a code comment after the renumbering); accepted.
 - scope: scope: src/privacyfence/daemon_main.py (ADR number in a code comment after the renumbering); accepted.
 - scope: scope: src/privacyfence/upstream_mcp_client.py (ADR number in a code comment after the renumbering); accepted.
