@@ -1150,7 +1150,7 @@ The version is not checked.
    address for n8n** (empty means this server's address), and save. Restart when asked.
 
 Claude then calls `privacyfence_propose_scoped_token` with `deliver_to`, and `privacyfence_runtime_credential_status`
-for the credential's id. Revoking the token, or letting it expire, deletes the n8n credential within 5 minutes.
+for the credential's id. Revoking the token deletes the n8n credential within 5 minutes. An expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it.
 Anyone who can edit workflows in that n8n, the AI client included, can use and read the token
 ([Security and compliance](security-and-compliance.md#tokens-delivered-to-n8n), [ADR 0278](adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)).
 

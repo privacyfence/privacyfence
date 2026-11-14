@@ -1366,6 +1366,7 @@ _JS = r"""
       if (t.runtime_credential.workflow_id) {
         inRuntime += ' \u00b7 for workflow ' + t.runtime_credential.workflow_id + ' (as reported by the AI client)';
       }
+      if (t.expired) { inRuntime += ' \u00b7 kept until you extend or revoke the token'; }
       activityHtml += '<div class="pf-hint pf-st-runtime" data-st-runtime="1">' + esc(inRuntime) + '</div>';
     }
     var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
@@ -1381,7 +1382,9 @@ _JS = r"""
     var badges = chips ? '<div class="pf-chips pf-st-badges">' + chips + '</div>' : '';
     var control = '<div class="pf-row-controls"><div class="button" role="button" tabindex="0" aria-label="Duplicate ' + esc(t.label) + '" data-st-duplicate="' +
       esc(t.id) + '">Duplicate</div><div class="button" role="button" tabindex="0" aria-label="Rename ' + esc(t.label) +
-      '" data-st-rename="' + esc(t.id) + '">Rename</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
+      '" data-st-rename="' + esc(t.id) + '">Rename</div><div class="button' + (t.expired ? ' primary' : '') +
+      '" role="button" tabindex="0" aria-label="Extend ' + esc(t.label) + '" data-st-extend="' + esc(t.id) +
+      '">Extend</div><div class="button danger" role="button" tabindex="0" aria-label="Revoke ' + esc(t.label) + '" ' +
       dataAttr('revoke_scoped_token', { token_id: t.id }) + '>Revoke</div></div>';
     return rowHtml(t.label, badges + esc(scopedExpiryText(t)) + activityHtml + detail, control, 'pf-st-row');
   }
@@ -1928,6 +1931,80 @@ _JS = r"""
     });
     buttons.appendChild(cancel);
     buttons.appendChild(save);
+    box.appendChild(title);
+    box.appendChild(desc);
+    box.appendChild(field);
+    box.appendChild(buttons);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    field.focus();
+    field.select();
+  }
+
+  // Extend a token: it expires N days from today; nothing else changes. Same
+  // shape as renameScopedToken (keys on the input alone, no inline handlers).
+  function extendScopedToken(tokenId) {
+    var t = SCOPED.tokens.filter(function (x) { return x.id === tokenId; })[0];
+    if (!t) { return; }
+    var overlay = document.createElement('div');
+    overlay.className = 'pf-modal-overlay';
+    overlay.setAttribute('role', 'presentation');
+    var box = document.createElement('div');
+    box.className = 'pf-modal';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Extend scoped token');
+    var title = document.createElement('div');
+    title.className = 'pf-modal-title';
+    title.textContent = 'Extend token';
+    var desc = document.createElement('div');
+    desc.className = 'pf-modal-desc';
+    var descText = 'The token expires this many days from today. Its secret, rules and tools stay the same.';
+    if (t.runtime_credential) {
+      descText += ' Its n8n credential \'' + t.runtime_credential.credential_name + '\' works again.';
+    }
+    desc.textContent = descText;
+    var field = document.createElement('input');
+    field.type = 'number';
+    field.className = 'field';
+    field.setAttribute('min', '1');
+    field.setAttribute('max', String(SCOPED.max_days));
+    field.setAttribute('step', '1');
+    field.setAttribute('aria-label', 'Days from today');
+    field.value = String(SCOPED.default_days);
+    var buttons = document.createElement('div');
+    buttons.className = 'pf-modal-buttons';
+    var cancel = document.createElement('div');
+    cancel.className = 'button';
+    cancel.setAttribute('role', 'button');
+    cancel.setAttribute('tabindex', '0');
+    cancel.setAttribute('aria-label', 'Cancel extend');
+    cancel.textContent = 'Cancel';
+    var confirmBtn = document.createElement('div');
+    confirmBtn.className = 'button primary';
+    confirmBtn.setAttribute('role', 'button');
+    confirmBtn.setAttribute('tabindex', '0');
+    confirmBtn.setAttribute('aria-label', 'Confirm extend');
+    confirmBtn.textContent = 'Extend';
+    function close() { overlay.remove(); }
+    function doExtend() {
+      var raw = String(field.value).trim();
+      var days = parseInt(raw, 10);
+      if (!/^\d+$/.test(raw) || !(days >= 1 && days <= SCOPED.max_days)) {
+        field.setAttribute('aria-invalid', 'true');
+        return;
+      }
+      close();
+      post('extend_scoped_token', { token_id: tokenId, days: days });
+    }
+    cancel.addEventListener('click', close);
+    confirmBtn.addEventListener('click', doExtend);
+    field.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); doExtend(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); close(); }
+    });
+    buttons.appendChild(cancel);
+    buttons.appendChild(confirmBtn);
     box.appendChild(title);
     box.appendChild(desc);
     box.appendChild(field);
@@ -2539,7 +2616,7 @@ _JS = r"""
     var t = sectionWithDefaults(state, 'scoped_tokens');
     var rows = [
       checkRow('Let people create scoped tokens for AI clients.', 'enabled', t.enabled, 'Turn on scoped tokens'),
-      numberFieldRow('Longest lifetime (days)', 'From 1 to 365.', 'max_days', t.max_days),
+      numberFieldRow('Longest lifetime or extension (days)', 'From 1 to 365. A person can also extend a token by up to this many days from today.', 'max_days', t.max_days),
       checkRow('Let AI clients propose a scoped token for a person to review and create.', 'allow_ai_proposals',
         t.allow_ai_proposals, 'Allow AI token proposals'),
     ];
@@ -3094,6 +3171,8 @@ _JS = r"""
     if (stDupEl) { duplicateScopedToken(stDupEl.getAttribute('data-st-duplicate')); return; }
     var stRenameEl = e.target.closest('[data-st-rename]');
     if (stRenameEl) { renameScopedToken(stRenameEl.getAttribute('data-st-rename')); return; }
+    var stExtendEl = e.target.closest('[data-st-extend]');
+    if (stExtendEl) { extendScopedToken(stExtendEl.getAttribute('data-st-extend')); return; }
     if (e.target.closest('[data-st-clear]')) { clearScopedForm(); return; }
     if (e.target.closest('[data-st-add-covered]')) { addCoveredScopedTools(); return; }
     if (e.target.closest('[data-st-create]')) { submitScopedToken(); return; }

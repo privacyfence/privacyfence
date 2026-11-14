@@ -204,6 +204,28 @@ def test_a_token_is_renamed_from_the_modal(page):
     assert page.locator(".pf-modal").count() == 0
 
 
+def test_extend_dialog_posts_the_days(page):
+    _capture_posts(page)
+    page.click('[aria-label="Extend Daily sync 2"]')
+    page.locator('.pf-modal input[aria-label="Days from today"]').fill("30")
+    page.click('.pf-modal [aria-label="Confirm extend"]')
+    assert page.evaluate("window.__posted") == [
+        {"action": "extend_scoped_token", "token_id": "st-2", "days": 30}
+    ]
+    assert page.locator(".pf-modal").count() == 0
+
+
+def test_extend_dialog_rejects_an_out_of_range_value(page):
+    _capture_posts(page)
+    page.click('[aria-label="Extend Daily sync 2"]')
+    field = page.locator('.pf-modal input[aria-label="Days from today"]')
+    field.fill("0")
+    page.click('.pf-modal [aria-label="Confirm extend"]')
+    assert page.evaluate("window.__posted") == []
+    assert page.locator(".pf-modal").count() == 1
+    assert field.get_attribute("aria-invalid") == "true"
+
+
 def test_cancel_escape_and_an_unchanged_name_post_nothing(page):
     _capture_posts(page)
     for close in (

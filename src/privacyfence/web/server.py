@@ -467,6 +467,10 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
     def _rename(token_id: str, label: str) -> tuple[str, ScopedToken] | None:
         return scoped_tokens.get_store().rename(LOCAL_PRINCIPAL, token_id, label)
 
+    def _extend(token_id: str, days: int) -> tuple[float, ScopedToken] | None:
+        with principal_scope(LOCAL_PRINCIPAL):
+            return scoped_tokens.get_store().extend(LOCAL_PRINCIPAL, token_id, days, policy=policy)
+
     def _revoke_all() -> int:
         return scoped_tokens.get_store().revoke_all(LOCAL_PRINCIPAL.id)
 
@@ -480,7 +484,8 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
         )
 
     return ScopedTokenWiring(
-        store_create=_create, store_revoke=_revoke, store_rename=_rename, store_revoke_all=_revoke_all,
+        store_create=_create, store_revoke=_revoke, store_rename=_rename, store_extend=_extend,
+        store_revoke_all=_revoke_all,
         send_secret=_send, page_data=_page_data,
     )
 

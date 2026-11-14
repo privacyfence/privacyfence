@@ -329,28 +329,40 @@ def deliver(
     return DeliveryOutcome(token, delivered, "", 200)
 
 
+EXPIRED_MESSAGE = (
+    "The token has expired, but its n8n credential is kept. Ask the person to open PrivacyFence Settings, "
+    "then Scoped tokens, and press Extend on this token; the same credential then works again. "
+    "Do not propose a new token."
+)
+
+
 def status_for(
     principal_id: str, proposal_id: str, *, token_store: ScopedTokenStore, registry: ProposalRegistry,
     now: float | None = None,
 ) -> dict[str, Any]:
     """The answer of ``privacyfence_runtime_credential_status`` (ADR 0280), looked up only by the
-    caller's own id and the proposal id. Never carries a token id, digest, secret or the runtime's host."""
+    caller's own id and the proposal id: ``delivered`` while the token is live, ``expired`` once it ran
+    out (its credential is kept and the person can extend the token), ``pending`` and ``not_delivered``.
+    Never carries a token id, digest, secret or the runtime's host."""
     now = time.time() if now is None else now
     not_delivered: dict[str, Any] = {"state": "not_delivered"}
     record = get_store().for_proposal(principal_id, proposal_id)
     if record is not None and record.state == DELIVERED:
         principal = Principal(id=principal_id)
-        if token_store.token_state(principal, record.token_id, now) != "live":
+        if token_store.token_state(principal, record.token_id, now) not in ("live", "expired"):
             return not_delivered
         token = next((t for t in token_store.tokens_for(principal) if t.id == record.token_id), None)
         if token is None:
             return not_delivered
-        return {
-            "state": "delivered", "runtime": record.runtime, "credential_id": record.credential_id,
+        answer: dict[str, Any] = {
+            "runtime": record.runtime, "credential_id": record.credential_id,
             "credential_name": record.credential_name, "credential_type": "httpBearerAuth",
             "node_authentication": "bearerAuth", "mcp_url": record.mcp_url,
-            "token_expires_at": datetime.fromtimestamp(token.expires_at, timezone.utc).isoformat(),
         }
+        when = datetime.fromtimestamp(token.expires_at, timezone.utc).isoformat()
+        if not token.expired(now):
+            return {"state": "delivered", **answer, "token_expires_at": when}
+        return {"state": "expired", **answer, "token_expired_at": when, "message": EXPIRED_MESSAGE}
     proposal = registry.get(principal_id, proposal_id, now)
     if record is not None and record.state == CREATING or (record is None and proposal is not None):
         pending: dict[str, Any] = {"state": "pending"}
