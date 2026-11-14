@@ -41,6 +41,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - worker: the connector caller argument is a zero-argument callable returning a CallerClaim (the plan left the signature open); p9 passes functools.partial(caller_for, upstream)
 - retry: worker stopped as blocked: tests/unit/test_website_connector_pages.py::test_every_connector_module_is_mapped requires a page, setup guide and README row for every connectors/ module; owner chose a documented exemption (ask a-3c3707bb21af5434) and the worker added NO_PAGE_MODULES for upstream_mcp
+- scope: tests/unit/test_website_connector_pages.py is outside touches; changed by the owner-approved exemption for upstream_mcp; accepted
 
 ## p9-org-wiring
 
