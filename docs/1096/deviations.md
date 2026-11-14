@@ -24,7 +24,12 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p03-settings-state
 
-- pending
+- worker: Repointed one patch target or import in tests/unit/policy/test_resource_registry.py and tests/unit/web/test_server.py (outside touches, not owned by another phase; the second collides with p07-server-local) because they referenced moved names.
+- worker: settings_controller.py imports only the moved names its class uses; ruff flags the others as unused. All importers and tests use settings_state.
+- worker: tests/unit/test_settings_state.py has extra direct tests beyond the moved ones so the moved code reaches 100% statement and branch coverage on its own; tests/unit/test_settings_controller.py also patches data_dir on settings_state.
+- scope: scope: tests/unit/policy/test_resource_registry.py
+- scope: scope: tests/unit/web/test_server.py
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p04-mode-flip
 
