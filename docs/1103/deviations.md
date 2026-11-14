@@ -15,7 +15,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-audit-fields
 
-- pending
+- review: Worker loosened two existing audit tests (schema version asserted >= 7 or CURRENT_SCHEMA_VERSION; Excel column slices bounded) because the schema bump and new columns broke their hard-coded values; inside touches.
 
 ## p4-client-id-context
 
