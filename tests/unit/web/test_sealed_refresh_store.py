@@ -221,6 +221,27 @@ class TestUnreadableStore:
         assert store.restored_count == 0
         assert "unreadable" in caplog.text
 
+    def test_email_verified_round_trips(self, tmp_path):
+        store = _store(tmp_path)
+        _put(store, email_verified=True)
+        assert _store(tmp_path).get(TOKEN).email_verified is True
+
+    def test_a_record_without_the_email_verified_key_decodes_false(self, tmp_path):
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+        store = _store(tmp_path)
+        _put(store, email_verified=True)
+        path = tmp_path / "oauth_refresh.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        [entry] = raw.values()
+        nonce = base64.b64decode(entry["nonce"])
+        key = srs._derive_key(TOKEN.encode("utf-8"))
+        data = json.loads(AESGCM(key).decrypt(nonce, base64.b64decode(entry["ciphertext"]), None))
+        del data["email_verified"]
+        entry["ciphertext"] = base64.b64encode(AESGCM(key).encrypt(nonce, json.dumps(data).encode(), None)).decode()
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        assert _store(tmp_path).get(TOKEN).email_verified is False
+
     def test_a_record_that_will_not_decrypt_is_discarded(self, tmp_path, caplog):
         store = _store(tmp_path)
         _put(store)

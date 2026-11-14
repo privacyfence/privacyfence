@@ -23,8 +23,15 @@ from .n8n_api import N8nApi
 logger = logging.getLogger(__name__)
 
 N8N_URL_ENV = "PRIVACYFENCE_N8N_URL"
+N8N_DELIVERY_ENV = "PRIVACYFENCE_N8N_DELIVERY"
+N8N_PROJECT_ID_ENV = "PRIVACYFENCE_N8N_PROJECT_ID"
+N8N_MCP_URL_ENV = "PRIVACYFENCE_N8N_MCP_URL"
 N8N_API_KEY_ENV = "PRIVACYFENCE_N8N_API_KEY"  # the variable's name, never a key; secret-scan:allow
 RUNTIMES = ("n8n",)
+CREDENTIAL_TYPES = ("httpBearerAuth", "privacyFenceApi")
+DEFAULT_CREDENTIAL_TYPE = "httpBearerAuth"
+N8N_NODE_PACKAGE = "n8n-nodes-privacyfence"
+N8N_NODE_TYPE = "n8n-nodes-privacyfence.privacyFence"
 
 DELIVERY_UNAVAILABLE = (
     "Delivery to n8n is not set up on this PrivacyFence server. "
@@ -38,6 +45,21 @@ DELIVERY_MESSAGE = (
     "tools and rules narrow. Calls that would need an approval are refused at once. Tools in "
     "uncovered_tools have no rule, so the token's calls to them will be denied."
 )
+DELIVERY_MESSAGE_PRIVACYFENCE_NODE = (
+    "Give the person this link. They review the token in PrivacyFence Settings, can narrow it, "
+    "and confirm it themselves. When they do, PrivacyFence creates an n8n credential of type "
+    "privacyFenceApi holding the token and this server's address; call "
+    "privacyfence_runtime_credential_status with this proposal_id to get the credential's id for "
+    "the PrivacyFence node (community node n8n-nodes-privacyfence, which must be installed in that n8n). "
+    "Anyone who can edit workflows in that n8n can use the credential, so keep its tools and rules narrow. "
+    "Calls that would need an approval are refused at once. Tools in uncovered_tools have no rule, "
+    "so the token's calls to them will be denied."
+)
+
+
+def delivery_message(credential_type: str) -> str:
+    return DELIVERY_MESSAGE if credential_type == "httpBearerAuth" else DELIVERY_MESSAGE_PRIVACYFENCE_NODE
+
 
 _PROJECT_ID_RE = re.compile(r"[A-Za-z0-9]{1,36}")
 _WORKFLOW_ID_RE = re.compile(r"[A-Za-z0-9]{1,36}")
@@ -51,6 +73,7 @@ class N8nRuntimeConfig:
     base_url: str
     project_id: str
     mcp_url: str
+    credential_type: str = DEFAULT_CREDENTIAL_TYPE
 
     @classmethod
     def from_org_config(
@@ -74,12 +97,23 @@ class N8nRuntimeConfig:
             raise org_mode.ConfigurationError(
                 "agent_runtimes.n8n.mcp_url must be empty, an https:// URL, or http:// on localhost."
             )
+        credential_type = n8n.get("credential_type", DEFAULT_CREDENTIAL_TYPE)
+        if credential_type not in CREDENTIAL_TYPES:
+            raise org_mode.ConfigurationError(
+                "agent_runtimes.n8n.credential_type must be httpBearerAuth or privacyFenceApi."
+            )
+        if credential_type == "privacyFenceApi" and not mcp_url:
+            raise org_mode.ConfigurationError(
+                "agent_runtimes.n8n.mcp_url is required for the privacyFenceApi credential type: "
+                "the credential keeps this server's address."
+            )
         raw_url = env.get(N8N_URL_ENV, "").strip()
         return cls(
             enabled=enabled,
             base_url=normalize_n8n_url(raw_url) if raw_url else "",
             project_id=project_id,
             mcp_url=mcp_url,
+            credential_type=credential_type,
         )
 
 
@@ -101,6 +135,9 @@ def _split(raw: str) -> SplitResult | None:
     return parts
 
 
+_NUMERIC_HOST = re.compile(r"(0[xX][0-9a-fA-F]*|[0-9]+)(\.(0[xX][0-9a-fA-F]*|[0-9]+))*\.?")
+
+
 def _valid_mcp_url(raw: str) -> bool:
     parts = _split(raw)
     if parts is None:
@@ -114,7 +151,7 @@ def normalize_n8n_url(raw: str) -> str:
     """The n8n base URL with a trailing ``/`` removed, or a ``ConfigurationError``."""
     bad = org_mode.ConfigurationError(
         f"{N8N_URL_ENV} must be an https:// address without credentials, query or fragment, "
-        "and not a link-local, unspecified or multicast address."
+        "and not a link-local, unspecified or multicast address or a host written only as numbers (such as 2852039166)."
     )
     raw = raw.strip()
     parts = _split(raw)
@@ -126,7 +163,11 @@ def normalize_n8n_url(raw: str) -> str:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        pass
+        # A host spelled as numbers but not as a dotted address (a bare integer such as
+        # 2852039166, octal or hex parts) is an IP address to most resolvers, and the checks
+        # above cannot tell which one, so it is refused.
+        if _NUMERIC_HOST.fullmatch(host):
+            raise bad from None
     else:
         if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
             raise bad
@@ -183,3 +224,84 @@ def api_for(config: N8nRuntimeConfig) -> N8nApi | None:
     if not config.base_url or not key:
         return None
     return N8nApi(config.base_url, key)
+
+
+@dataclass(frozen=True)
+class EnvLock:
+    """One admin field the server's environment sets: its value and the variable that sets it."""
+
+    value: bool | str
+    variable: str
+
+
+def environment_locks(environ: Mapping[str, str] | None = None) -> dict[str, dict[str, EnvLock]]:
+    """The admin fields the environment locks, by section: ``agent_runtimes`` (``enabled``,
+    ``project_id``, ``mcp_url``) and ``scoped_tokens`` (``enabled``, ``allow_ai_proposals``).
+
+    A section with no lock is ``{}``. Unset or empty variables lock nothing. A bad value raises
+    ``org_mode.ConfigurationError``. Read on every call.
+    """
+    env = os.environ if environ is None else environ
+    runtimes: dict[str, EnvLock] = {}
+    tokens: dict[str, EnvLock] = {}
+    delivery = env.get(N8N_DELIVERY_ENV, "").strip()
+    if delivery:
+        if delivery.lower() != "true":
+            raise org_mode.ConfigurationError(f"{N8N_DELIVERY_ENV} must be true, or unset.")
+        runtimes["enabled"] = EnvLock(True, N8N_DELIVERY_ENV)
+        tokens["enabled"] = EnvLock(True, N8N_DELIVERY_ENV)
+        tokens["allow_ai_proposals"] = EnvLock(True, N8N_DELIVERY_ENV)
+    project_id = env.get(N8N_PROJECT_ID_ENV, "").strip()
+    if project_id:
+        if not _PROJECT_ID_RE.fullmatch(project_id):
+            raise org_mode.ConfigurationError(f"{N8N_PROJECT_ID_ENV} must be 1 to 36 letters and digits.")
+        runtimes["project_id"] = EnvLock(project_id, N8N_PROJECT_ID_ENV)
+    mcp_url = env.get(N8N_MCP_URL_ENV, "").strip()
+    if mcp_url:
+        if not _valid_mcp_url(mcp_url):
+            raise org_mode.ConfigurationError(
+                f"{N8N_MCP_URL_ENV} must be an https:// URL, or http:// on localhost."
+            )
+        runtimes["mcp_url"] = EnvLock(mcp_url, N8N_MCP_URL_ENV)
+    return {"agent_runtimes": runtimes, "scoped_tokens": tokens}
+
+
+def apply_environment(config: dict[str, Any], environ: Mapping[str, str] | None = None) -> None:
+    """Write each lock's value into an effective org config. Mutates ``config`` only."""
+    locks = environment_locks(environ)
+    runtimes = locks["agent_runtimes"]
+    if runtimes:
+        section = config.get("agent_runtimes")
+        section = dict(section) if isinstance(section, dict) else {}
+        n8n = section.get("n8n")
+        n8n = dict(n8n) if isinstance(n8n, dict) else {}
+        for field, lock in runtimes.items():
+            n8n[field] = lock.value
+        section["n8n"] = n8n
+        config["agent_runtimes"] = section
+    tokens = locks["scoped_tokens"]
+    if tokens:
+        section = config.get("scoped_tokens")
+        section = dict(section) if isinstance(section, dict) else {}
+        for field, lock in tokens.items():
+            section[field] = lock.value
+        config["scoped_tokens"] = section
+
+
+def set_environment_variables(environ: Mapping[str, str] | None = None) -> list[str]:
+    """Sorted names of the three variables that are set to anything (never raises)."""
+    env = os.environ if environ is None else environ
+    names = (N8N_DELIVERY_ENV, N8N_PROJECT_ID_ENV, N8N_MCP_URL_ENV)
+    return sorted(name for name in names if env.get(name, "").strip())
+
+
+def check_environment(
+    config: N8nRuntimeConfig, key: str | None, environ: Mapping[str, str] | None = None
+) -> None:
+    """The start-up check: a bad value refuses the start, and so does ``DELIVERY=true`` without
+    the n8n address and API key."""
+    locks = environment_locks(environ)
+    if "enabled" in locks["agent_runtimes"] and (not config.base_url or not key):
+        raise org_mode.ConfigurationError(
+            f"{N8N_DELIVERY_ENV}=true needs {N8N_URL_ENV} and {N8N_API_KEY_ENV} or {N8N_API_KEY_ENV}_FILE."
+        )

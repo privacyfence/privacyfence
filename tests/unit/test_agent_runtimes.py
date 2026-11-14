@@ -72,6 +72,43 @@ class TestFromOrgConfig:
         assert ar.N8nRuntimeConfig.from_org_config(org, environ={}).mcp_url == mcp
 
 
+class TestCredentialType:
+    def test_default_is_bearer(self):
+        cfg = ar.N8nRuntimeConfig.from_org_config({}, environ={})
+        assert cfg.credential_type == "httpBearerAuth" == ar.DEFAULT_CREDENTIAL_TYPE
+        assert ar.CREDENTIAL_TYPES == ("httpBearerAuth", "privacyFenceApi")
+
+    def test_privacyfence_api_with_mcp_url(self):
+        org = {"agent_runtimes": {"n8n": {"credential_type": "privacyFenceApi", "mcp_url": "https://pf.example/mcp"}}}
+        assert ar.N8nRuntimeConfig.from_org_config(org, environ={}).credential_type == "privacyFenceApi"
+
+    @pytest.mark.parametrize("value", ["", "other", 5, None])
+    def test_other_value_is_refused(self, value):
+        org = {"agent_runtimes": {"n8n": {"credential_type": value}}}
+        with pytest.raises(ConfigurationError) as err:
+            ar.N8nRuntimeConfig.from_org_config(org, environ={})
+        assert str(err.value) == "agent_runtimes.n8n.credential_type must be httpBearerAuth or privacyFenceApi."
+
+    def test_privacyfence_api_needs_an_mcp_url(self):
+        org = {"agent_runtimes": {"n8n": {"credential_type": "privacyFenceApi"}}}
+        with pytest.raises(ConfigurationError) as err:
+            ar.N8nRuntimeConfig.from_org_config(org, environ={})
+        assert str(err.value) == (
+            "agent_runtimes.n8n.mcp_url is required for the privacyFenceApi credential type: "
+            "the credential keeps this server's address."
+        )
+
+    def test_delivery_message_follows_the_type(self):
+        assert ar.delivery_message("httpBearerAuth") == ar.DELIVERY_MESSAGE
+        text = ar.delivery_message("privacyFenceApi")
+        assert text == ar.DELIVERY_MESSAGE_PRIVACYFENCE_NODE
+        assert "n8n-nodes-privacyfence" in text and "privacyFenceApi" in text
+
+    def test_constants(self):
+        assert ar.N8N_NODE_PACKAGE == "n8n-nodes-privacyfence"
+        assert ar.N8N_NODE_TYPE == "n8n-nodes-privacyfence.privacyFence"
+
+
 class TestNormalizeUrl:
     @pytest.mark.parametrize(
         ("raw", "expected"),
@@ -81,6 +118,9 @@ class TestNormalizeUrl:
             (" https://n8n.example.com/sub/ ", "https://n8n.example.com/sub"),
             ("https://10.0.0.5:5678", "https://10.0.0.5:5678"),
             ("https://192.168.1.2", "https://192.168.1.2"),
+            ("https://203.0.113.5:5678", "https://203.0.113.5:5678"),
+            ("https://n8n1.example.com", "https://n8n1.example.com"),
+            ("https://1.example.com", "https://1.example.com"),
             ("https://127.0.0.1:5678", "https://127.0.0.1:5678"),
             ("https://[::1]:5678", "https://[::1]:5678"),
         ],
@@ -100,6 +140,12 @@ class TestNormalizeUrl:
             "https://[ff02::1]",
             "https://metadata.google.internal",
             "https://Metadata.Google.Internal./x",
+            "https://2852039166",
+            "https://0",
+            "https://0x7f.1",
+            "https://0177.0.0.1",
+            "https://1.2.3",
+            "https://2852039166./x",
             "https://user:pw@n8n.example.com",
             "https://user@n8n.example.com",
             "https://n8n.example.com?x=1",
@@ -222,3 +268,113 @@ class TestApiFor:
     def test_broken_key_config_is_none(self, monkeypatch, tmp_path):
         monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY_FILE", str(tmp_path / "missing"))
         assert ar.api_for(config()) is None
+
+
+class TestEnvironmentLocks:
+    def test_unset_and_empty_lock_nothing(self):
+        assert ar.environment_locks({}) == {"agent_runtimes": {}, "scoped_tokens": {}}
+        env = {"PRIVACYFENCE_N8N_DELIVERY": " ", "PRIVACYFENCE_N8N_PROJECT_ID": "", "PRIVACYFENCE_N8N_MCP_URL": "  "}
+        assert ar.environment_locks(env) == {"agent_runtimes": {}, "scoped_tokens": {}}
+
+    def test_delivery_gives_three_locks(self):
+        locks = ar.environment_locks({"PRIVACYFENCE_N8N_DELIVERY": "true"})
+        var = "PRIVACYFENCE_N8N_DELIVERY"
+        assert locks["agent_runtimes"] == {"enabled": ar.EnvLock(True, var)}
+        assert locks["scoped_tokens"] == {
+            "enabled": ar.EnvLock(True, var), "allow_ai_proposals": ar.EnvLock(True, var),
+        }
+
+    def test_project_id_alone_locks_only_the_project_id(self):
+        locks = ar.environment_locks({"PRIVACYFENCE_N8N_PROJECT_ID": "  abc123 "})
+        assert locks == {
+            "agent_runtimes": {"project_id": ar.EnvLock("abc123", "PRIVACYFENCE_N8N_PROJECT_ID")},
+            "scoped_tokens": {},
+        }
+
+    def test_mcp_url_alone_locks_only_the_mcp_url(self):
+        locks = ar.environment_locks({"PRIVACYFENCE_N8N_MCP_URL": " https://pf.example.com/mcp "})
+        assert locks["agent_runtimes"] == {"mcp_url": ar.EnvLock("https://pf.example.com/mcp", "PRIVACYFENCE_N8N_MCP_URL")}
+        assert locks["scoped_tokens"] == {}
+
+    @pytest.mark.parametrize("value", ["false", "1", "yes"])
+    def test_delivery_other_than_true_is_refused(self, value):
+        with pytest.raises(ConfigurationError, match="PRIVACYFENCE_N8N_DELIVERY must be true, or unset."):
+            ar.environment_locks({"PRIVACYFENCE_N8N_DELIVERY": value})
+
+    @pytest.mark.parametrize("value", ["has space", "a" * 37, "x/y"])
+    def test_a_bad_project_id_is_refused(self, value):
+        with pytest.raises(ConfigurationError, match="PRIVACYFENCE_N8N_PROJECT_ID must be 1 to 36 letters and digits."):
+            ar.environment_locks({"PRIVACYFENCE_N8N_PROJECT_ID": value})
+
+    @pytest.mark.parametrize("value", ["http://pf.example.com/mcp", "ftp://x", "nonsense"])
+    def test_a_bad_mcp_url_is_refused(self, value):
+        with pytest.raises(ConfigurationError, match="PRIVACYFENCE_N8N_MCP_URL must be an https:// URL"):
+            ar.environment_locks({"PRIVACYFENCE_N8N_MCP_URL": value})
+
+    def test_it_reads_the_process_environment_by_default(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        assert "enabled" in ar.environment_locks()["agent_runtimes"]
+
+
+class TestApplyEnvironment:
+    def test_locks_overwrite_stored_values(self):
+        config_ = {
+            "agent_runtimes": {"n8n": {"enabled": False, "project_id": "old", "credential_type": "httpBearerAuth"}},
+            "scoped_tokens": {"enabled": False, "max_days": 7, "allow_ai_proposals": False},
+        }
+        env = {"PRIVACYFENCE_N8N_DELIVERY": "true", "PRIVACYFENCE_N8N_PROJECT_ID": "new"}
+        ar.apply_environment(config_, env)
+        assert config_["agent_runtimes"]["n8n"] == {
+            "enabled": True, "project_id": "new", "credential_type": "httpBearerAuth",
+        }
+        assert config_["scoped_tokens"] == {"enabled": True, "max_days": 7, "allow_ai_proposals": True}
+
+    def test_missing_sections_are_created(self):
+        config_: dict = {"agent_runtimes": "not a dict"}
+        ar.apply_environment(config_, {"PRIVACYFENCE_N8N_DELIVERY": "true"})
+        assert config_ == {
+            "agent_runtimes": {"n8n": {"enabled": True}},
+            "scoped_tokens": {"enabled": True, "allow_ai_proposals": True},
+        }
+
+    def test_no_locks_leaves_the_config_unchanged(self):
+        config_ = {"agent_runtimes": {"n8n": {"enabled": False}}}
+        ar.apply_environment(config_, {})
+        assert config_ == {"agent_runtimes": {"n8n": {"enabled": False}}}
+
+    def test_the_environment_mapping_is_never_mutated(self):
+        env = {"PRIVACYFENCE_N8N_DELIVERY": "true"}
+        ar.apply_environment({}, env)
+        assert env == {"PRIVACYFENCE_N8N_DELIVERY": "true"}
+
+
+class TestCheckEnvironment:
+    DELIVERY = {"PRIVACYFENCE_N8N_DELIVERY": "true"}
+
+    def test_it_refuses_without_the_address(self):
+        with pytest.raises(ConfigurationError, match="PRIVACYFENCE_N8N_DELIVERY=true needs PRIVACYFENCE_N8N_URL"):
+            ar.check_environment(config(base_url=""), "key", self.DELIVERY)
+
+    def test_it_refuses_without_the_key(self):
+        with pytest.raises(ConfigurationError, match="PRIVACYFENCE_N8N_API_KEY_FILE"):
+            ar.check_environment(config(), None, self.DELIVERY)
+
+    def test_it_passes_with_both(self):
+        ar.check_environment(config(), "key", self.DELIVERY)
+
+    def test_it_passes_when_delivery_is_unset(self):
+        ar.check_environment(config(base_url=""), None, {})
+
+    def test_a_bad_value_is_let_through(self):
+        with pytest.raises(ConfigurationError, match="must be true, or unset"):
+            ar.check_environment(config(), "key", {"PRIVACYFENCE_N8N_DELIVERY": "false"})
+
+
+class TestSetEnvironmentVariables:
+    def test_it_lists_the_set_ones_sorted(self):
+        env = {"PRIVACYFENCE_N8N_PROJECT_ID": "x", "PRIVACYFENCE_N8N_DELIVERY": "false", "PRIVACYFENCE_N8N_MCP_URL": " "}
+        assert ar.set_environment_variables(env) == ["PRIVACYFENCE_N8N_DELIVERY", "PRIVACYFENCE_N8N_PROJECT_ID"]
+
+    def test_it_never_raises_on_a_bad_value(self):
+        assert ar.set_environment_variables({"PRIVACYFENCE_N8N_MCP_URL": "junk"}) == ["PRIVACYFENCE_N8N_MCP_URL"]
+        assert ar.set_environment_variables({}) == []

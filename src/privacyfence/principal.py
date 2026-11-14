@@ -57,12 +57,17 @@ class Principal:
     per-request, so a change to a user's group membership takes effect on
     their next login, not mid-session. Always ``False`` for the local
     principal and for ``ANONYMOUS_PRINCIPAL`` below; there is exactly one
-    user in local mode, so "admin" has never meant anything there."""
+    user in local mode, so "admin" has never meant anything there.
+
+    ``email_verified`` is whether PrivacyFence treats the email as verified
+    (org_identity.session_email_verified, set at sign-in); upstream domain
+    grants key on email only when it is true (ADR 0287)."""
 
     id: str
     email: str = ""
     display_name: str = ""
     is_admin: bool = False
+    email_verified: bool = False
 
 
 LOCAL_PRINCIPAL = Principal(id=LOCAL_PRINCIPAL_ID)

@@ -668,7 +668,7 @@ def _dispatch_scoped_meta_tool(
             "tools": len(scope.tools),
         }
         if expiring_soon:
-            result["message"] += f" This token expires in {days_left} day(s); ask its owner for a new one."
+            result["message"] += f" This token expires in {days_left} day(s); ask its owner to extend it in PrivacyFence Settings, Scoped tokens."
         return result
     return None
 

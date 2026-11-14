@@ -2429,6 +2429,166 @@ class TestMaybeStartWebServerOrgMode:
         assert (tmp_path / "oidc_signing_key.pem").exists()
         assert "OIDC provider for 1 app(s) at http://localhost:8765/oidc" in caplog.text
 
+    @staticmethod
+    def _upstream_file(tmp_path, **overrides):
+        document = {
+            "version": 1,
+            "upstreams": [{
+                "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+                "tools": {"search": {"gate": "auto", "verb": "search"}},
+            }],
+        }
+        document.update(overrides)
+        path = tmp_path / "upstream_mcp.json"
+        path.write_text(json.dumps(document), encoding="utf-8")
+        return path
+
+    def test_upstream_mcp_is_configured_in_organization_mode(self, monkeypatch, tmp_path, caplog):
+        from privacyfence import upstream_mcp_runtime
+
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr("privacyfence.paths.org_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", str(self._upstream_file(tmp_path)))
+        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert upstream_mcp_runtime.configured()
+        assert upstream_mcp_runtime.upstream_ids() == {"kh"}
+        assert (tmp_path / "upstream_claim_signing_key.pem").exists()
+        assert "Upstream MCP server(s): kh" in caplog.text
+
+    def test_no_upstream_file_leaves_the_runtime_unconfigured(self, monkeypatch, tmp_path):
+        from privacyfence import upstream_mcp_runtime
+
+        self._no_bind(monkeypatch, tmp_path)
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+        assert not upstream_mcp_runtime.configured()
+
+    def test_a_bad_upstream_file_refuses_the_start(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", str(self._upstream_file(tmp_path, version=2)))
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_UPSTREAM_MCP_FILE"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+
+    def test_upstream_file_outside_organization_mode_refuses_the_start(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", str(self._upstream_file(tmp_path)))
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match="PRIVACYFENCE_UPSTREAM_MCP_FILE is set, but this is not an organization server.",
+        ):
+            daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
+
+    def test_a_blank_upstream_variable_outside_organization_mode_is_ignored(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", "  ")
+        assert daemon_main._maybe_start_web_server(
+            {}, self._connector_host(), unattended_sessions_enabled=False,
+        ) is not None
+
+    def _start_org(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr("privacyfence.paths.org_dir", lambda: tmp_path)
+        return daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+
+    @staticmethod
+    def _inline(grants=None, tool="search"):
+        server = {
+            "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+            "tools": {tool: {"gate": "auto", "verb": "search"}},
+        }
+        if grants is not None:
+            server["grants"] = grants
+        return json.dumps({"version": 1, "upstreams": [server]})
+
+    def test_upstream_mcp_inline_variable_is_configured_in_organization_mode(self, monkeypatch, tmp_path):
+        from privacyfence import upstream_mcp_runtime
+
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        self._start_org(monkeypatch, tmp_path)
+        assert upstream_mcp_runtime.upstream_ids() == {"kh"}
+
+    def test_upstream_mcp_both_variables_refuse_the_start(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", str(self._upstream_file(tmp_path)))
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match="Set PRIVACYFENCE_UPSTREAM_MCP_FILE or PRIVACYFENCE_UPSTREAM_MCP, not both.",
+        ):
+            self._start_org(monkeypatch, tmp_path)
+
+    def test_upstream_mcp_inline_variable_outside_organization_mode_refuses_the_start(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match="PRIVACYFENCE_UPSTREAM_MCP is set, but this is not an organization server.",
+        ):
+            daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
+
+    def test_upstream_mcp_grants_seed_once_and_the_first_ones_stay(self, monkeypatch, tmp_path, caplog):
+        from privacyfence import admin_config, upstream_mcp_registry, upstream_mcp_runtime
+
+        first = [{"match": "*", "domains": ["general"]}]
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(first))
+        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
+            self._start_org(monkeypatch, tmp_path)
+        assert "Seeded the domain grants of upstream(s) kh" in caplog.text
+        assert admin_config.load()["upstream_mcp"] == {"kh": {"grants": first}}
+
+        upstream_mcp_registry.unregister_all()
+        upstream_mcp_runtime.reset()
+        monkeypatch.setenv(
+            "PRIVACYFENCE_UPSTREAM_MCP", self._inline([{"match": "@x.com", "domains": ["hr"]}]),
+        )
+        self._start_org(monkeypatch, tmp_path)
+        assert admin_config.load()["upstream_mcp"] == {"kh": {"grants": first}}
+
+    def test_upstream_mcp_collision_leaves_admin_config_unseeded(self, monkeypatch, tmp_path):
+        from privacyfence import admin_config
+
+        grants = [{"match": "*", "domains": ["general"]}]
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(grants))
+        monkeypatch.setattr(
+            daemon_main.upstream_mcp_registry, "register",
+            lambda upstreams: (_ for _ in ()).throw(org_mode.ConfigurationError("collides")),
+        )
+        with pytest.raises(org_mode.ConfigurationError, match="collides"):
+            self._start_org(monkeypatch, tmp_path)
+        assert admin_config.load() is None or admin_config.load()["upstream_mcp"] == {}
+
+    def test_build_connectors_appends_the_upstream_connectors_when_configured(self, tmp_path):
+        from privacyfence import oidc_provider, upstream_mcp_runtime
+        from privacyfence.upstream_claims import ClaimSigner
+        from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+
+        upstreams = parse_upstreams(json.loads(self._upstream_file(tmp_path).read_text()), source="test")
+        assert daemon_main.build_connectors({}, {})[0] == []
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams,
+            signer=ClaimSigner(
+                issuer="https://pf.example/upstream-mcp",
+                key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"),
+            ),
+            grants=GrantStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+        )
+        connectors, failures = daemon_main.build_connectors({}, {})
+        assert [c.name for c in connectors] == ["kh"]
+        assert "kh" not in failures
+
     def test_no_oidc_provider_without_clients(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
@@ -2886,6 +3046,24 @@ class TestOrgModeConnectorRegistry:
             "is ignored outside organization mode."
         ]
 
+    def test_local_mode_warns_that_the_n8n_variables_are_ignored(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "yes")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "proj1")
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
+
+        with caplog.at_level(logging.WARNING, logger="privacyfence.daemon"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": False}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config={"mode": "local"},
+            )
+
+        warnings = [r.getMessage() for r in caplog.records if "ignored outside organization mode" in r.getMessage()]
+        assert warnings == [
+            "PRIVACYFENCE_N8N_DELIVERY, PRIVACYFENCE_N8N_PROJECT_ID, PRIVACYFENCE_PEEK_AUTO_PROVISION "
+            "is ignored outside organization mode."
+        ]
+
     def test_org_server_starts_the_relay_registration_loop_on_the_shared_config(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         events: list = []
@@ -3094,6 +3272,20 @@ class TestOrgModeConnectorRegistry:
             self._start_with_runtime(monkeypatch, tmp_path, {"n8n": {"enabled": "yes"}})
         with pytest.raises(org_mode.ConfigurationError, match="agent_runtimes"):
             self._start_with_runtime(monkeypatch, tmp_path, {"n8n": {"mcp_url": "ftp://x"}})
+
+    def test_delivery_without_the_key_refuses_start(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        with pytest.raises(org_mode.ConfigurationError) as raised:
+            self._start_with_runtime(monkeypatch, tmp_path, {}, key=None)
+        assert str(raised.value) == (
+            "PRIVACYFENCE_N8N_DELIVERY=true needs PRIVACYFENCE_N8N_URL and "
+            "PRIVACYFENCE_N8N_API_KEY or PRIVACYFENCE_N8N_API_KEY_FILE."
+        )
+
+    def test_a_bad_delivery_value_refuses_start(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "yes")
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_N8N_DELIVERY must be true, or unset."):
+            self._start_with_runtime(monkeypatch, tmp_path, {}, key="k")
 
     def test_org_server_refuses_an_n8n_key_set_inline_and_as_a_file(self, monkeypatch, tmp_path):
         key_file = tmp_path / "n8n.key"

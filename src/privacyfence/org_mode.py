@@ -947,7 +947,14 @@ CONNECTOR_ORG_SECTION: dict[str, str] = {
 
 
 def connector_enabled_by_org(org_config: dict[str, Any], connector: str) -> bool:
-    """True when ``org_config`` carries a non-empty section for ``connector``."""
+    """True when ``org_config`` carries a non-empty section for ``connector``.
+
+    An upstream MCP server (ADR 0285) is declared in its own operator file, not in the organization
+    config, so it is never enabled here and never an unknown name."""
+    from . import upstream_mcp_runtime  # function-local: the runtime imports connector code
+
+    if connector in upstream_mcp_runtime.upstream_ids():
+        return False
     return bool(org_config.get(CONNECTOR_ORG_SECTION[connector]))
 
 

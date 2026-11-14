@@ -155,7 +155,9 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
     ),
     "tighten_step_up": (("enabled", bool, True), ("require_passkey", bool, True), ("scope", str, True)),
     "set_scoped_tokens": (("enabled", bool, True), ("max_days", int, True), ("allow_ai_proposals", bool, True)),
-    "set_agent_runtimes": (("enabled", bool, True), ("project_id", str, True), ("mcp_url", str, True)),
+    "set_agent_runtimes": (
+        ("enabled", bool, True), ("project_id", str, True), ("mcp_url", str, True), ("credential_type", str, True),
+    ),
     "set_audit_forwarding": (
         ("enabled", bool, True), ("kind", str, True), ("syslog_host", str, True), ("syslog_port", int, True),
         ("syslog_protocol", str, True), ("http_url", str, True),
@@ -282,8 +284,22 @@ def _agent_runtimes_status() -> dict[str, Any]:
     try:
         n8n["key_set"] = bool(agent_runtimes.api_key())
     except org_mode.ConfigurationError:
+        # The message names the variable, never the key; the page shows the key as not set.
+        logger.warning("The n8n API key cannot be read (ADR 0279); the Admin page shows it as not set.")
         n8n["key_set"] = False
     return {"n8n": n8n}
+
+
+def _environment_locks_state() -> dict[str, dict[str, dict[str, Any]]]:
+    """The Admin fields the server's environment locks, with the variable that sets each."""
+    try:
+        locks = agent_runtimes.environment_locks()
+    except org_mode.ConfigurationError:
+        return {}
+    return {
+        section: {field: {"value": lock.value, "variable": lock.variable} for field, lock in fields.items()}
+        for section, fields in locks.items()
+    }
 
 
 def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[str, Any]:
@@ -326,6 +342,7 @@ def _admin_state(
         for key in _ORG_STATE_KEYS:
             state[key] = admin.get(key, {})
         state["agent_runtimes_status"] = _agent_runtimes_status()
+        state["environment_locks"] = _environment_locks_state()
         state["relay_status"] = relay_client.status()
         if paths.org_bundle_path().exists():
             state["legacy_bundle_warning"] = connector_configs.LEGACY_BUNDLE_WARNING

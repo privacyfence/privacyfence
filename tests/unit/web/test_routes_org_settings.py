@@ -1358,6 +1358,59 @@ class TestScopedTokenRoutes:
         assert token.allow_personal_data_reads is True
         assert token.allow_personal_data is False
 
+    def _hold(self, monkeypatch, held):
+        from privacyfence import upstream_mcp_runtime
+
+        monkeypatch.setattr(upstream_mcp_runtime, "configured", lambda: True)
+        seen: list = []
+
+        def fake_held(principal, email_verified):
+            seen.append((principal.id, email_verified))
+            return held
+
+        monkeypatch.setattr(upstream_mcp_runtime, "held_domains", fake_held)
+        return seen
+
+    def test_a_token_gets_the_domains_ticked_and_the_sessions_verified_bit(self, tmp_path, monkeypatch):
+        client, _csrf, store = self._setup(tmp_path, monkeypatch)
+        seen = self._hold(monkeypatch, {"kh": frozenset({"general", "hr"})})
+        app, sessions = _app(scoped_token_policy=self.ENABLED, scoped_token_store=store)
+        client = _client(app)
+        session_id = sessions.create(ALICE, email_verified=True)
+        client.cookies.set(org_session.SESSION_COOKIE, session_id)
+
+        r = self._post(
+            client, "create", {**self.BODY, "upstream_domains": {"kh": ["hr"]}, "confirmed": True}, session_id,
+        )
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.upstream_domains == {"kh": frozenset({"hr"})}
+        assert token.principal_email_verified is True
+        assert seen == [("alice", True)]
+
+    def test_a_domain_the_person_does_not_hold_is_a_400_and_creates_nothing(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        self._hold(monkeypatch, {"kh": frozenset({"general"})})
+
+        r = self._post(
+            client, "create", {**self.BODY, "upstream_domains": {"kh": ["finance"]}, "confirmed": True}, csrf,
+        )
+
+        assert r.status_code == 400
+        assert r.json() == {"error": "You can only give a token domains you have: finance"}
+        assert store.tokens_for(ALICE) == []
+
+    def test_an_unverified_session_holds_what_the_runtime_gives_it(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        seen = self._hold(monkeypatch, {})
+
+        r = self._post(client, "create", {**self.BODY, "upstream_domains": {"kh": ["hr"]}, "confirmed": True}, csrf)
+
+        assert r.status_code == 400
+        assert seen == [("alice", False)]
+        assert store.tokens_for(ALICE) == []
+
     def test_org_audit_summary_names_the_reads_flag(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
 
@@ -1554,6 +1607,62 @@ class TestScopedTokenRoutes:
         )
         r = self._post(client, "rename", {"token_id": "st-x", "label": "y", "confirmed": True}, csrf)
         assert r.status_code == 403
+
+    def _extend_audits(self):
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            return [e.summary for e in get_audit_logger().recent_entries(20) if "Extended scoped token" in e.summary]
+
+    def test_extend(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        created = self._post(client, "create", {**self.BODY, "days": 5, "confirmed": True}, csrf)
+        assert created.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        bob_token, _secret = store.create(
+            BOB, label="bobs", days=5, rules=[], tools=["gmail_get_message"], policy=self.ENABLED,
+        )
+
+        done = self._post(client, "extend", {"token_id": token.id, "days": 30, "confirmed": True}, csrf)
+        assert done.status_code == 200
+        extended = store.get("alice", token.id)
+        assert done.json() == {"extended": {"id": token.id, "label": token.label, "expires_at": extended.expires_at}}
+        assert extended.expires_at > token.expires_at
+        assert extended.digest == token.digest
+        miss = self._post(client, "extend", {"token_id": bob_token.id, "days": 30, "confirmed": True}, csrf)
+        assert (miss.status_code, miss.json()) == (404, {"error": "No such token."})
+        assert store.get("bob", bob_token.id).expires_at == bob_token.expires_at
+        shorter = self._post(client, "extend", {"token_id": token.id, "days": 1, "confirmed": True}, csrf)
+        assert (shorter.status_code, shorter.json()) == (400, {"error": scoped_tokens.EXTEND_NOT_LONGER})
+        too_long = self._post(client, "extend", {"token_id": token.id, "days": 31, "confirmed": True}, csrf)
+        assert (too_long.status_code, too_long.json()) == (400, {"error": "A token lasts 1 to 30 days."})
+        date = datetime.fromtimestamp(extended.expires_at, timezone.utc).strftime("%Y-%m-%d")
+        assert self._extend_audits() == [
+            f"Extended scoped token '{token.label}' ({token.id}) to {date}, 30 days (principal=alice)",
+        ]
+
+    def test_extend_is_refused_when_scoped_tokens_are_disabled(self, tmp_path, monkeypatch):
+        client, csrf, _store = self._setup(
+            tmp_path, monkeypatch, policy=scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=90),
+        )
+        r = self._post(client, "extend", {"token_id": "st-x", "days": 5, "confirmed": True}, csrf)
+        assert r.status_code == 403
+
+    def test_extend_audits_the_n8n_credential_of_a_delivered_token(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        runtime_credentials.set_store(runtime_credentials.RuntimeCredentialStore(tmp_path / "records.json"))
+        assert self._post(client, "create", {**self.BODY, "days": 5, "confirmed": True}, csrf).status_code == 200
+        [token] = store.tokens_for(ALICE)
+        runtime_credentials.get_store().add(runtime_credentials.RuntimeCredential(
+            principal_id="alice", token_id=token.id, proposal_id="stp-1", runtime="n8n",
+            endpoint=("https", "n8n.example.com", 443), project_id="", credential_id="0123456789abcdef",
+            credential_name="PrivacyFence sales-sync", workflow_id="wf1", mcp_url="",
+            state=runtime_credentials.DELIVERED, created_at=1.0, boot_id="b",
+        ))
+        done = self._post(client, "extend", {"token_id": token.id, "days": 30, "confirmed": True}, csrf)
+        assert done.status_code == 200
+        [entry] = self._extend_audits()
+        assert entry.endswith(", delivered to n8n as 'PrivacyFence sales-sync' (principal=alice)")
 
     def test_the_page_offers_the_section_only_once_enabled(self, tmp_path, monkeypatch):
         data = {"delivery": "once", "max_days": 30, "default_days": 30, "warn_days": 14,
@@ -1884,15 +1993,23 @@ class TestScopedTokenProposalRoutes:
 
 
 class _FakeN8n:
-    def __init__(self, create_error=None):
+    def __init__(self, create_error=None, check_error=None):
         self.create_error = create_error
+        self.check_error = check_error
         self.created: list[dict] = []
         self.deleted: list[str] = []
 
-    def create_bearer_credential(self, *, credential_id, name, token, project_id):
+    def check_type(self, credential_type):
+        if self.check_error is not None:
+            raise self.check_error
+
+    def create_credential(self, *, credential_id, name, credential_type, data, project_id):
         if self.create_error is not None:
             raise self.create_error
-        self.created.append({"credential_id": credential_id, "name": name, "token": token, "project_id": project_id})
+        self.created.append({
+            "credential_id": credential_id, "name": name, "credential_type": credential_type, "data": data,
+            "token": data["token"], "project_id": project_id,
+        })
 
     def delete_credential(self, credential_id):
         self.deleted.append(credential_id)
@@ -1907,7 +2024,7 @@ class TestDeliveryFromProposal:
         enabled=True, base_url="https://n8n.example.com", project_id="proj1", mcp_url="",
     )
 
-    def _setup(self, tmp_path, monkeypatch, *, api="fake", store_cls=None):
+    def _setup(self, tmp_path, monkeypatch, *, api="fake", store_cls=None, config=None):
         _seed(tmp_path, monkeypatch, "alice")
         _seed(tmp_path, monkeypatch, "bob")
         runtime_credentials.set_store(runtime_credentials.RuntimeCredentialStore(tmp_path / "records.json"))
@@ -1915,7 +2032,7 @@ class TestDeliveryFromProposal:
         monkeypatch.setattr(agent_runtimes, "api_for", lambda config: fake)
         store = scoped_tokens.ScopedTokenStore(lambda: [ALICE, BOB])
         app, sessions = _app(
-            scoped_token_policy=self.T.ON, scoped_token_store=store, agent_runtime=self.CONFIG,
+            scoped_token_policy=self.T.ON, scoped_token_store=store, agent_runtime=config or self.CONFIG,
             scoped_token_page_data=lambda principal: {"tokens": [], "proposals": [], "proposals_enabled": True},
         )
         client = _client(app)
@@ -1969,6 +2086,23 @@ class TestDeliveryFromProposal:
         assert self.T._live(proposal)
         assert [t for t in store.tokens_for(ALICE)] == []
         assert "scoped_token_proposal_accepted" not in [d for d, _ in self.T._decisions()]
+
+    def test_privacyfence_api_without_the_node_gives_503_and_restores_the_proposal(self, tmp_path, monkeypatch):
+        config = agent_runtimes.N8nRuntimeConfig(
+            enabled=True, base_url="https://n8n.example.com", project_id="proj1",
+            mcp_url="https://pf.example.com/mcp", credential_type="privacyFenceApi",
+        )
+        client, csrf, store, fake = self._setup(tmp_path, monkeypatch, config=config)
+        fake.check_error = N8nApiClientError("n8n at n8n.example.com answered HTTP 404.", status=404)
+        proposal = self._propose()
+
+        r = client.post(self.T.CREATE, json=self.T._body(proposal, csrf))
+
+        assert r.status_code == 503
+        assert r.json() == {"error": runtime_credentials.NODE_NOT_INSTALLED}
+        assert self.T._live(proposal)
+        assert store.tokens_for(ALICE) == [] and fake.created == []
+        assert runtime_credentials.get_store().all() == []
 
     def test_revoke_failure_gives_500_and_does_not_restore(self, tmp_path, monkeypatch):
         client, csrf, store, fake = self._setup(tmp_path, monkeypatch)

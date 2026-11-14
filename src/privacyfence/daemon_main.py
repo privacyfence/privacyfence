@@ -113,6 +113,10 @@ from . import (
     runtime_credential_sweeper,
     scoped_tokens,
     step_up_config,
+    upstream_claims,
+    upstream_mcp_config,
+    upstream_mcp_registry,
+    upstream_mcp_runtime,
 )
 from .policy import store as policy_store
 
@@ -978,7 +982,15 @@ def _maybe_start_web_server(
             raise org_mode.ConfigurationError(
                 "PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server."
             )
-        ignored = oauth_apps.set_auto_provision_variables()
+        if os.environ.get(upstream_mcp_config.ENV_VAR, "").strip():
+            raise org_mode.ConfigurationError(
+                f"{upstream_mcp_config.ENV_VAR} is set, but this is not an organization server."
+            )
+        if os.environ.get(upstream_mcp_config.ENV_VAR_INLINE, "").strip():
+            raise org_mode.ConfigurationError(
+                f"{upstream_mcp_config.ENV_VAR_INLINE} is set, but this is not an organization server."
+            )
+        ignored = sorted({*oauth_apps.set_auto_provision_variables(), *agent_runtimes.set_environment_variables()})
         if ignored:
             logger.warning("%s is ignored outside organization mode.", ", ".join(ignored))
     mcp_enabled = bool(mcp_config.get("enabled", False))
@@ -1396,6 +1408,7 @@ def _start_org_web_server(
     # _FILE, or an unreadable key file, refuses startup too.
     agent_runtime = agent_runtimes.N8nRuntimeConfig.from_org_config(org_config)
     agent_runtime_key = agent_runtimes.api_key()
+    agent_runtimes.check_environment(agent_runtime, agent_runtime_key)
     if agent_runtime.enabled and not (agent_runtime.base_url and agent_runtime_key):
         logger.warning(
             "agent_runtimes.n8n is enabled but its URL or API key is missing; "
@@ -1511,6 +1524,8 @@ def _start_org_web_server(
     push_notifier, push_store = _start_web_push(org_config, approval_registry, issuer_url=server_config.issuer_url)
 
     _flush_deferred_warnings()
+
+    _configure_upstream_mcp(server_config.issuer_url)
 
     oidc_clients = oidc_provider.clients_from_env()
     oidc = None
@@ -1659,6 +1674,32 @@ def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
         )
         return DEFAULT_REPORT_MAX_PAGES
     return value
+
+
+def _configure_upstream_mcp(issuer_url: str) -> None:
+    """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` or ``PRIVACYFENCE_UPSTREAM_MCP`` set
+    (ADR 0285, 0288): load the declaration, seed its grants, register the declared tools into the policy tables, and configure the runtime. Raises
+    ``org_mode.ConfigurationError`` (the start is refused) on any problem."""
+    upstreams = upstream_mcp_config.load_declared()
+    if upstreams is None:
+        return
+    upstream_mcp_registry.register(upstreams)
+    try:
+        seeded = admin_config.seed_upstream_grants(upstream_mcp_config.seed_payload(upstreams))
+    except admin_config.AdminConfigError as error:
+        raise org_mode.ConfigurationError(str(error)) from None
+    if seeded:
+        logger.info(
+            "Seeded the domain grants of upstream(s) %s from the declaration; edit them in admin_config.json from now on.",
+            ", ".join(seeded),
+        )
+    grants = upstream_mcp_config.GrantStore(
+        admin_config.admin_config_path(), frozenset(upstream.id for upstream in upstreams),
+    )
+    upstream_mcp_runtime.configure(
+        upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url), grants=grants,
+    )
+    logger.info("Upstream MCP server(s): %s", ", ".join(upstream.id for upstream in upstreams))
 
 
 def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tuple[list, dict[str, str]]:
@@ -2051,6 +2092,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         except MiroClientError as exc:
             logger.warning("Miro connector disabled: %s", exc)
             failures["miro"] = _classify_connector_failure(exc)
+
+    if upstream_mcp_runtime.configured():
+        connectors.extend(upstream_mcp_runtime.connectors_for_principal())
 
     return connectors, failures
 

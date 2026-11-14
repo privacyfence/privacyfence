@@ -63,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 SINGLE_USER_PRINCIPAL = Principal(
     id="single-user", email="admin@privacyfence.localhost", display_name="Administrator", is_admin=True,
+    email_verified=True,
 )
 
 SETUP_BINDING_COOKIE = "pf_setup_binding"

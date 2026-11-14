@@ -61,6 +61,25 @@ def test_compose_file_matches_the_doc() -> None:
     assert fenced_block(DOC, "Compose file", "yaml") == COMPOSE.read_text(encoding="utf-8")
 
 
+def test_the_upstream_mcp_example_in_the_doc_is_a_valid_declaration() -> None:
+    from privacyfence import upstream_mcp_config
+
+    block = fenced_block(DOC, "Upstream MCP file", "yaml")
+    (server,) = upstream_mcp_config.parse_upstreams(yaml.safe_load(block), source="x")
+    assert server.id == "kh"
+    assert len(server.grants) == 1
+
+
+def test_compose_names_the_upstream_mcp_settings_only_in_comments() -> None:
+    lines = [
+        line
+        for line in COMPOSE.read_text(encoding="utf-8").splitlines()
+        if "PRIVACYFENCE_UPSTREAM_MCP" in line or "/etc/privacyfence/upstream_mcp.yaml:ro" in line
+    ]
+    assert lines
+    assert all(line.lstrip().startswith("#") for line in lines)
+
+
 def test_caddyfile_matches_the_doc() -> None:
     assert fenced_block(DOC, "Caddyfile", "") == CADDYFILE.read_text(encoding="utf-8")
 

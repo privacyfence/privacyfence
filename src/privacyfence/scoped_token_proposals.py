@@ -31,6 +31,7 @@ REVIEW_PATH = "/settings/scoped_tokens/proposals/{proposal_id}"
 ID_PREFIX = "stp-"
 GONE_MESSAGE = "This token proposal has expired or was already used."
 WIDENED_MESSAGE = "A proposed token can only be narrowed here. To add rules or tools, use New token."
+UPSTREAM_REFUSED_MESSAGE = "Upstream tools cannot be proposed; create the token in Settings."
 _TOO_MANY_MESSAGE = "Too many token proposals are waiting. Review or decline them in Settings → Scoped tokens."
 _REASON_LIMIT = 500
 _TOOL_NAME = "privacyfence_propose_scoped_token"
@@ -152,6 +153,12 @@ def new_proposal(
     uncovered_tools: Sequence[str] = (), now: float | None = None,
     delivery: DeliveryTarget | None = None, mcp_url: str = "",
 ) -> TokenProposal:
+    from . import upstream_mcp_runtime  # function-local: the runtime reaches the connectors
+
+    for tool in request.get("tools", ()):
+        # An upstream tool is named "<id>_<tool>" (upstream_mcp_registry).
+        if any(str(tool).startswith(f"{upstream_id}_") for upstream_id in upstream_mcp_runtime.upstream_ids()):
+            raise ProposalError(UPSTREAM_REFUSED_MESSAGE)
     now = time.time() if now is None else now
     return TokenProposal(
         id=ID_PREFIX + secrets.token_hex(16),
@@ -184,6 +191,10 @@ def narrowing_error(proposed: dict[str, Any], final: dict[str, Any]) -> str | No
             return WIDENED_MESSAGE
     if not set(final["tools"]) <= set(proposed["tools"]) or final["days"] > proposed["days"]:
         return WIDENED_MESSAGE
+    proposed_domains = proposed.get("upstream_domains") or {}
+    for upstream_id, domains in (final.get("upstream_domains") or {}).items():
+        if not set(domains) <= set(proposed_domains.get(upstream_id, ())):
+            return WIDENED_MESSAGE
     for flag in ("allow_personal_data", "allow_personal_data_reads"):
         if final.get(flag) and not proposed.get(flag):
             return WIDENED_MESSAGE

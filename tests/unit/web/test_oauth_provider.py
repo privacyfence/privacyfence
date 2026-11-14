@@ -28,6 +28,7 @@ from privacyfence import paths, scoped_tokens
 from privacyfence.org_mode import AuthzPolicyConfig
 from privacyfence.principal import Principal
 from privacyfence.web import oauth_provider as op
+from privacyfence.web.mcp_auth import principal_from_access_token
 
 IDP_CALLBACK_URL = "https://pf.example.com/oauth/idp/callback"
 
@@ -786,6 +787,43 @@ class TestRefreshToken:
         verified = await provider.verify_token(new_tokens.access_token)
         assert verified.subject == "alice"
         assert verified.claims["email"] == "alice@example.com"
+
+    async def test_refresh_keeps_email_verified(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(
+            provider, monkeypatch, client,
+            claims={"sub": "alice", "email": "alice@example.com", "email_verified": True},
+        )
+        loaded = await provider.load_refresh_token(client, tokens.refresh_token)
+        assert loaded.email_verified is True
+        new_tokens = await provider.exchange_refresh_token(client, loaded, [])
+        verified = await provider.verify_token(new_tokens.access_token)
+        assert verified.claims["email_verified"] is True
+        assert principal_from_access_token(verified).email_verified is True
+        reloaded = await provider.load_refresh_token(client, new_tokens.refresh_token)
+        assert reloaded.email_verified is True
+
+    async def test_idp_callback_with_unverified_email_mints_unverified_principal(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(
+            provider, monkeypatch, client,
+            claims={"sub": "alice", "email": "alice@example.com", "email_verified": False},
+        )
+        verified = await provider.verify_token(tokens.access_token)
+        assert verified.claims["email_verified"] is False
+        assert principal_from_access_token(verified).email_verified is False
+
+    async def test_idp_callback_with_verified_email_mints_verified_principal(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(
+            provider, monkeypatch, client,
+            claims={"sub": "alice", "email": "alice@example.com", "email_verified": True},
+        )
+        verified = await provider.verify_token(tokens.access_token)
+        assert principal_from_access_token(verified).email_verified is True
 
     async def test_old_refresh_token_is_invalidated_after_rotation(self, tmp_path, monkeypatch):
         provider = _provider(tmp_path, monkeypatch)

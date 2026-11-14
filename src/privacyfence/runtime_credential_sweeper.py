@@ -2,8 +2,9 @@
 
 A delivered token is an ordinary scoped token, revoked and expired by the paths that already exist.
 This sweeper reconciles the delivery records against the token store, so every revoke path is
-covered without a hook: when a token is gone or expired it deletes the credential in the runtime,
-and it finishes deliveries a crash left half done. It never holds a secret and never deletes on a
+covered without a hook: when a token is revoked it deletes the credential in the runtime, and it
+finishes deliveries a crash left half done. An expired token's credential is kept until the token
+is revoked or extended (ADR 0284). It never holds a secret and never deletes on a
 host other than the configured one.
 """
 
@@ -104,8 +105,8 @@ def _sweep_record(
 ) -> None:
     if record.state == DELIVERED:
         state = token_store.token_state(_principal(record), record.token_id, now)
-        if state in ("absent", "expired"):
-            _delete_and_remove(records, record, api, "revoked" if state == "absent" else "expired", now)
+        if state == "absent":
+            _delete_and_remove(records, record, api, "revoked", now)
         return
     if record.state == CREATING:
         if records.is_in_flight(record.credential_id):
@@ -133,6 +134,8 @@ def sweep_once(
                 _sweep_record(record, records=records, token_store=token_store, api=api, now=now)
         except RuntimeCredentialStoreError as exc:
             logger.warning("Credential cleanup skipped %s: %s", record.credential_id, exc)
+        except Exception as exc:  # one bad record must not stop the others
+            logger.warning("Credential cleanup skipped a record: %s", type(exc).__name__)
 
 
 class _Sweeper:
@@ -150,7 +153,7 @@ def _run(
     token_store: ScopedTokenStore, config: agent_runtimes.N8nRuntimeConfig, api: N8nApi,
 ) -> None:
     try:
-        api.check()
+        api.check_type(config.credential_type)
     except N8nApiClientError as exc:
         logger.warning("The n8n API check failed: %s", exc)
 

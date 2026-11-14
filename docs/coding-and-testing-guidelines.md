@@ -22,7 +22,7 @@ exercised independently.
 
 ### 1.1 Language baseline
 
-- Python 3.11+. Every module starts with `from __future__ import annotations` (right after the
+- Python 3.11.5+. Every module starts with `from __future__ import annotations` (right after the
   module docstring, before other imports).
 - Prefer the standard library over new dependencies (stated in `CONTRIBUTING.md`).
 - Use modern union syntax, `X | None`, not `Optional[X]`. `src/privacyfence/` has no
@@ -402,6 +402,9 @@ checklist for the PR description.
       `bandit -r sync/src` pass (CI's `sync` job, a required check, runs the same three). If
       `sync/README.md` changed, copy it to
       `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
+- [ ] `n8n/**`: in `n8n/`, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test`
+      pass (CI's `n8n-node` job, a required check, runs the same), then
+      `pytest tests/integration/test_n8n_node_contract.py -v` passes.
 - [ ] `cloudflare/downloads/`: `npm test`, `npm run typecheck` and `npm run dry-run` there pass
       ([§1.9](#19-formatting-and-static-analysis)).
 

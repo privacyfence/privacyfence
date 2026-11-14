@@ -919,7 +919,7 @@ class TestScopedTokens:
 
         content = result.structured_content
         assert (content["token"]["days_left"], content["token"]["expiring_soon"]) == (5, True)
-        assert content["message"].endswith(" This token expires in 5 day(s); ask its owner for a new one.")
+        assert content["message"].endswith(" This token expires in 5 day(s); ask its owner to extend it in PrivacyFence Settings, Scoped tokens.")
 
     async def test_begin_unattended_needs_no_admin_opt_in(self):
         dispatcher = _dispatcher({})  # unattended_sessions_enabled defaults False

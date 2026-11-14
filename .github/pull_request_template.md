@@ -56,6 +56,8 @@ reason rather than leaving it blank.
 - [ ] **`sync/**`** — `pip install -e "./sync[test]"`, then `pytest sync/tests -q --cov=privacyfence_sync --cov-branch --cov-report=term-missing --cov-fail-under=100`,
       `mypy sync/src` and `bandit -r sync/src` pass; if `sync/README.md` changed, it is copied to
       `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
+- [ ] **`n8n/**`** — in `n8n/`, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test` pass,
+      then `pytest tests/integration/test_n8n_node_contract.py -v` passes.
 - [ ] **`cloudflare/downloads/`** — `npm test`, `npm run typecheck` and `npm run dry-run` pass
       there.
 

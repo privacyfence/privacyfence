@@ -22,6 +22,7 @@ OK_BODY = {"id": CRED_ID, "name": "PrivacyFence x", "type": "httpBearerAuth"}
 class FakeResponse:
     def __init__(self, status: int = 200, body: Any = None, *, raw: bytes | None = None) -> None:
         self.status_code = status
+        self.closed = False
         if raw is not None:
             self._raw = raw
         elif body is None:
@@ -30,6 +31,9 @@ class FakeResponse:
             import json
 
             self._raw = json.dumps(body).encode()
+
+    def close(self) -> None:
+        self.closed = True
 
     def iter_content(self, chunk_size: int = 1) -> Any:
         for i in range(0, len(self._raw), chunk_size):
@@ -55,8 +59,13 @@ def api() -> N8nApi:
     return N8nApi(BASE + "/", KEY)
 
 
-def create(api: N8nApi, project_id: str = "") -> None:
-    api.create_bearer_credential(credential_id=CRED_ID, name="PrivacyFence x", token=TOKEN, project_id=project_id)
+def create(
+    api: N8nApi, project_id: str = "", credential_type: str = "httpBearerAuth", data: dict[str, Any] | None = None
+) -> None:
+    api.create_credential(
+        credential_id=CRED_ID, name="PrivacyFence x", credential_type=credential_type,
+        data={"token": TOKEN} if data is None else data, project_id=project_id,
+    )
 
 
 def error_of(call: Any, *args: Any, **kwargs: Any) -> N8nApiClientError:
@@ -84,6 +93,17 @@ class TestCreate:
         assert call["headers"]["Accept"] == "application/json"
         assert call["timeout"] == 30
         assert call["allow_redirects"] is False
+
+    def test_posts_the_given_type_and_data(self, monkeypatch, api):
+        rec = Recorder(monkeypatch, FakeResponse(200, {**OK_BODY, "type": "privacyFenceApi"}))
+        data = {"mcpUrl": "https://pf.example/mcp", "token": TOKEN}
+        create(api, credential_type="privacyFenceApi", data=data)
+        assert rec.calls[0]["json"]["type"] == "privacyFenceApi"
+        assert rec.calls[0]["json"]["data"] == data
+
+    def test_an_answered_type_other_than_the_given_one_is_refused(self, monkeypatch, api):
+        Recorder(monkeypatch, FakeResponse(200, OK_BODY), FakeResponse(200, {}))
+        assert "did not create" in str(error_of(create, api, credential_type="privacyFenceApi"))
 
     def test_project_id_only_when_set(self, monkeypatch, api):
         rec = Recorder(monkeypatch, FakeResponse(200, OK_BODY))
@@ -153,16 +173,40 @@ class TestDelete:
 class TestCheck:
     def test_gets_the_schema(self, monkeypatch, api):
         rec = Recorder(monkeypatch, FakeResponse(200, {"type": "object"}))
-        api.check()
+        api.check_type("httpBearerAuth")
         assert rec.calls[0]["method"] == "GET"
         assert rec.calls[0]["url"] == BASE + "/api/v1/credentials/schema/httpBearerAuth"
 
+    def test_uses_the_given_type(self, monkeypatch, api):
+        rec = Recorder(monkeypatch, FakeResponse(200, {"type": "object"}))
+        api.check_type("privacyFenceApi")
+        assert rec.calls[0]["url"] == BASE + "/api/v1/credentials/schema/privacyFenceApi"
+
+    @pytest.mark.parametrize("bad", ["", "../x", "a/b", "1abc", "a-b", "a" * 65])
+    def test_a_bad_type_string_raises_before_any_request(self, monkeypatch, api, bad):
+        rec = Recorder(monkeypatch, FakeResponse(200, {}))
+        with pytest.raises(ValueError):
+            api.check_type(bad)
+        assert rec.calls == []
+
     def test_401_raises(self, monkeypatch, api):
         Recorder(monkeypatch, FakeResponse(401))
-        assert str(error_of(api.check)) == f"n8n at {HOST} answered HTTP 401."
+        assert str(error_of(api.check_type, "httpBearerAuth")) == f"n8n at {HOST} answered HTTP 401."
 
 
 class TestErrors:
+    @pytest.mark.parametrize("response", [FakeResponse(503, {"message": "boom"}), FakeResponse(302)])
+    def test_a_refused_response_is_closed(self, monkeypatch, api, response):
+        Recorder(monkeypatch, response)
+        error_of(create, api)
+        assert response.closed
+
+    def test_a_successful_response_is_closed(self, monkeypatch, api):
+        response = FakeResponse(200, OK_BODY)
+        Recorder(monkeypatch, response)
+        create(api)
+        assert response.closed
+
     def test_status(self, monkeypatch, api):
         Recorder(monkeypatch, FakeResponse(503, {"message": "boom"}))
         err = error_of(create, api)
@@ -216,6 +260,15 @@ class TestNoSecretLeaks:
             if deleted is not None:
                 assert secret not in str(deleted)
                 assert deleted.__context__ is None
+
+    def test_data_is_never_logged_or_put_in_an_error(self, monkeypatch, caplog, api):
+        Recorder(monkeypatch, FakeResponse(500, {"message": TOKEN}))
+        data = {"mcpUrl": "https://secret-host.example/mcp", "token": TOKEN}
+        with caplog.at_level(logging.DEBUG):
+            err = error_of(create, api, credential_type="privacyFenceApi", data=data)
+        for secret in (TOKEN, "secret-host.example"):
+            assert secret not in str(err)
+            assert secret not in caplog.text
 
     def test_repr_shows_the_host_only(self, api):
         assert repr(api) == f"N8nApi({HOST})"

@@ -62,7 +62,9 @@ def _markdown_files() -> list[Path]:
 def _is_plan_doc(path: Path) -> bool:
     """A `docs/*-plan.md` quotes drafts of files that do not exist yet, so its links are not checked."""
     rel = path.relative_to(REPO_ROOT).parts
-    return len(rel) == 2 and rel[0] == "docs" and rel[1].endswith("-plan.md")
+    if len(rel) == 2 and rel[0] == "docs" and rel[1].endswith("-plan.md"):
+        return True
+    return len(rel) == 3 and rel[0] == "docs" and rel[1].isdigit() and rel[2] == "plan.md"
 
 
 def _slug(heading: str) -> str:
@@ -190,3 +192,6 @@ def test_only_top_level_plan_docs_are_skipped():
     assert not _is_plan_doc(REPO_ROOT / "docs" / "guide.md")
     assert not _is_plan_doc(REPO_ROOT / "docs" / "adr" / "x-plan.md")
     assert not _is_plan_doc(REPO_ROOT / "x-plan.md")
+    assert _is_plan_doc(REPO_ROOT / "docs" / "1095" / "plan.md")
+    assert not _is_plan_doc(REPO_ROOT / "docs" / "1095" / "other.md")
+    assert not _is_plan_doc(REPO_ROOT / "docs" / "adr" / "plan.md")

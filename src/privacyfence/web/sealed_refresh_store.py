@@ -130,6 +130,7 @@ class SealedRefreshRecord:
     display_name: str
     is_admin: bool
     issued_at: float
+    email_verified: bool = False
 
 
 @dataclass
@@ -222,6 +223,7 @@ class SealedRefreshStore:
             "client_id": record.client_id, "scopes": record.scopes, "subject": record.subject,
             "email": record.email, "display_name": record.display_name,
             "is_admin": record.is_admin, "issued_at": record.issued_at,
+            "email_verified": record.email_verified,
         }).encode("utf-8")
         nonce = secrets.token_bytes(_NONCE_LEN)
         key = _derive_key(token.encode("utf-8"))
@@ -313,6 +315,7 @@ class SealedRefreshStore:
             client_id=data["client_id"], scopes=list(data["scopes"]), subject=data["subject"],
             email=data["email"], display_name=data["display_name"],
             is_admin=bool(data["is_admin"]), issued_at=float(data["issued_at"]),
+            email_verified=data.get("email_verified") is True,
         )
 
     # ------------------------------------------------------------------ #

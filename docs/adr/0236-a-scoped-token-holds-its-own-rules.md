@@ -5,6 +5,7 @@
 Accepted — 2026-10-26. Implemented.
 Amends [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md), [ADR 0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md), [ADR 0172](0172-one-stored-auto-accept-rule-per-scope.md), [ADR 0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md), [ADR 0220](0220-a-routines-rule-profile-is-a-scoped-token.md) and [ADR 0228](0228-an-extra-scope-can-give-each-verb-its-own-predicate.md).
 Supersedes [ADR 0198](0198-deleting-an-auto-accept-rule-removes-it-from-scoped-tokens.md).
+Amended by [ADR 0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md): a token's per-upstream data domains are intersected with its owner's current grants and only narrow them.
 
 ## Context
 

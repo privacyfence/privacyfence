@@ -55,6 +55,14 @@ class TestPrincipal:
         assert p.email == ""
         assert p.display_name == ""
 
+    def test_email_verified_defaults_to_false(self):
+        assert Principal(id="alice").email_verified is False
+
+    def test_single_user_principal_is_verified(self):
+        from privacyfence.web.single_user_auth import SINGLE_USER_PRINCIPAL
+
+        assert SINGLE_USER_PRINCIPAL.email_verified is True
+
     def test_frozen(self):
         p = Principal(id="alice")
         with pytest.raises(dataclasses.FrozenInstanceError):

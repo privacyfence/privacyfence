@@ -3,6 +3,7 @@ audited, and what the page state carries."""
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -51,7 +52,7 @@ ACTION_BODIES = {
     "set_authz": {"allowed_domains": "example.com", "groups_claim": "", "required_groups": ""},
     "tighten_step_up": {"enabled": True, "require_passkey": True, "scope": "writes"},
     "set_scoped_tokens": SCOPED_TOKENS,
-    "set_agent_runtimes": {"enabled": True, "project_id": "proj1", "mcp_url": ""},
+    "set_agent_runtimes": {"enabled": True, "project_id": "proj1", "mcp_url": "", "credential_type": "httpBearerAuth"},
     "set_audit_forwarding": {
         "enabled": False, "kind": "syslog", "syslog_host": "logs.example.com", "syslog_port": 514,
         "syslog_protocol": "udp", "http_url": "",
@@ -344,7 +345,46 @@ class TestAudit:
 
 
 class TestAgentRuntimes:
-    BODY = {"enabled": True, "project_id": "proj1", "mcp_url": ""}
+    BODY = {"enabled": True, "project_id": "proj1", "mcp_url": "", "credential_type": "httpBearerAuth"}
+
+    def test_the_credential_type_is_required_and_reaches_the_config(self):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        _enrol(ADMIN)
+        body = {k: v for k, v in self.BODY.items() if k != "credential_type"}
+        assert world.post("set_agent_runtimes", body, csrf).status_code == 400
+        body = {**self.BODY, "mcp_url": "https://pf.example.com/mcp", "credential_type": "privacyFenceApi"}
+        r = _passkey_post(world, "set_agent_runtimes", body, csrf)
+        assert r.status_code == 200, r.text
+        assert admin_config.load()["agent_runtimes"]["n8n"]["credential_type"] == "privacyFenceApi"
+        state = world.client.get("/api/admin/state").json()
+        assert state["agent_runtimes"]["n8n"]["credential_type"] == "privacyFenceApi"
+
+    def test_state_carries_environment_locks(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "proj9")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "sekret-value")
+        world = World()
+        world.sign_in(ADMIN)
+        response = world.client.get("/api/admin/state")
+        assert response.json()["environment_locks"] == {
+            "agent_runtimes": {
+                "enabled": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+                "project_id": {"value": "proj9", "variable": "PRIVACYFENCE_N8N_PROJECT_ID"},
+            },
+            "scoped_tokens": {
+                "enabled": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+                "allow_ai_proposals": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+            },
+        }
+        assert "sekret-value" not in response.text
+
+    def test_state_has_no_locks_without_variables(self):
+        world = World()
+        world.sign_in(ADMIN)
+        assert world.client.get("/api/admin/state").json()["environment_locks"] == {
+            "agent_runtimes": {}, "scoped_tokens": {},
+        }
 
     def test_the_action_is_org_only_sensitive_and_restarts(self):
         spec = routes_admin.ADMIN_ACTIONS["set_agent_runtimes"]
@@ -400,6 +440,18 @@ class TestAgentRuntimes:
         monkeypatch.setenv("PRIVACYFENCE_N8N_URL", "http://insecure.example")
         n8n = world.client.get("/api/admin/state").json()["agent_runtimes_status"]["n8n"]
         assert n8n["url"] == "" and "https://" in n8n["url_error"]
+
+
+    def test_an_unreadable_key_shows_as_not_set_and_warns_without_the_key(self, monkeypatch, caplog):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", ENV_SECRET)
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY_FILE", "/nonexistent/key")
+        world = World()
+        world.sign_in(ADMIN)
+        with caplog.at_level(logging.WARNING):
+            r = world.client.get("/api/admin/state")
+        assert r.json()["agent_runtimes_status"]["n8n"]["key_set"] is False
+        assert any("n8n API key cannot be read" in m for m in caplog.messages)
+        assert ENV_SECRET not in caplog.text and ENV_SECRET not in r.text
 
 
 class TestState:

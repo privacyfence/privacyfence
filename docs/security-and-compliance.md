@@ -419,6 +419,11 @@ one case where a token's secret leaves PrivacyFence.
   Anyone who can edit workflows there can attach it to a node, including an HTTP Request node that points at an
   echo endpoint, and read it from the execution data. That includes the AI client that proposed it. Narrow rules
   and a short lifetime are the protection, and the review page says so before the person confirms.
+- **The PrivacyFence credential holds the address.** With **Credential type in n8n** set to the PrivacyFence
+  node, the credential holds the token and the PrivacyFence MCP address it is sent to. Whoever can edit that
+  credential in n8n can point the token at a host of their own, which is the same reach as above: whoever can
+  edit workflows. The node has no address override and never follows a redirect. The exposure is documented,
+  not removed ([the node](n8n-node.md#what-the-credential-exposes)).
 - **The workflow id is advisory.** `deliver_to.workflow_id` is what the client reports. It is shown on the review
   page and written to the audit log, and n8n does not tie the credential to it.
 - **The n8n key never leaves the environment.** `PRIVACYFENCE_N8N_URL` and `PRIVACYFENCE_N8N_API_KEY` come only
@@ -426,14 +431,18 @@ one case where a token's secret leaves PrivacyFence.
   never logged, audited, stored by PrivacyFence or returned
   ([ADR 0279](adr/0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md)). On n8n Enterprise
   give it only `credential:create` and `credential:delete`; other editions cannot limit a key.
-- **The status tool.** `privacyfence_runtime_credential_status` tells the proposing client whether the person
-  accepted, the credential's id, name and the MCP address, and when the token expires; a later revoke or expiry
-  turns the answer into `not_delivered`. It never returns the token, a token id or the n8n host, and answers only
-  for the client's own proposals ([ADR 0280](adr/0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md)).
+- **The environment can switch delivery on.** `PRIVACYFENCE_N8N_DELIVERY=true` also turns on scoped tokens and AI
+  token proposals, and locks them (with the n8n switch) on Admin, so an administrator session cannot turn them off
+  while it is set. Whoever controls the server's environment already controls the n8n key. Unsetting the variable
+  hands both back to Admin ([ADR 0294](adr/0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md)).
+- **The status tool.** `privacyfence_runtime_credential_status` tells an AI client whether the person
+  accepted, the credential's id, name and the MCP address, and when the token expires; a later revoke
+  turns the answer into `not_delivered`, and an expiry into `expired`, carrying `token_expired_at` and a message asking the person to extend. It never returns the token, a token id or the n8n host, and answers only
+  for the signed-in person's own proposals, so any AI client signed in as that person can read it ([ADR 0280](adr/0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md)).
 - **Workflow data stays in n8n.** What a workflow reads through PrivacyFence is kept in n8n's execution history,
   under n8n's retention settings.
 - **Fail fast.** A call no token rule covers is denied at once, so a workflow never waits for an approval.
-- **Offboarding.** Revoking the token, or letting it expire, deletes the n8n credential within 5 minutes; a
+- **Offboarding.** Revoking the token deletes the n8n credential within 5 minutes; an expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it; a
   sweeper reconciles the records against the token store, so `privacyfence-app --revoke-scoped-tokens` is
   covered too ([ADR 0281](adr/0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md)).
   If the n8n address is changed, the old credentials are not deleted: their tokens are revoked and the audit log

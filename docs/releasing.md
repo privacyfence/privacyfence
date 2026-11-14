@@ -136,13 +136,14 @@ it, switch `privacyfence-org` to public once (the organization's Packages settin
 public packages allowed), then pull it signed out and run
 `gh attestation verify oci://ghcr.io/privacyfence/privacyfence-org:X.Y.Z --owner privacyfence`.
 
-That tag push is what `.github/workflows/build.yml` **and** `.github/workflows/publish-pypi.yml`
-both trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG (which carries the
+That tag push is what `.github/workflows/build.yml`, `.github/workflows/publish-pypi.yml` **and**
+`.github/workflows/publish-n8n-node.yml` all trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG (which carries the
 macOS `.pkg` installer and the `.mcpb`; `scripts/build_dmg.sh` builds all three), the Windows
 installer and the `.deb` (running each one's own packaged-artifact smoke test, see "Packaged-artifact
-release gating" below) and generates the SBOMs, the latter builds the sdist/wheel from the same tag. The two
-workflows trigger independently but no longer publish independently: `publish-pypi.yml`'s
-`wait_for_build` job blocks every one of its own publish steps on `build.yml`'s run for that same
+release gating" below) and generates the SBOMs, the second builds the sdist/wheel from the same tag, and the third publishes the n8n node to npm
+(stable tags only, see "Publishing the n8n node to npm"). The
+workflows trigger independently but no longer publish independently: `publish-pypi.yml`'s and `publish-n8n-node.yml`'s
+`wait_for_build` jobs block every one of their own publish steps on `build.yml`'s run for that same
 commit actually succeeding — see "Packaged-artifact release gating" below. Every one of those
 artifacts always uploads to the private Cloudflare R2 release archive (see "Cloudflare R2 release
 archive" below);
@@ -298,6 +299,34 @@ segment (`+g<sha>`), which both indexes reject as an upload.
 which depends on it) is gated on `needs.build.outputs.channel == 'stable'` — a pre-release tag
 (`a`/`b`/`rc` suffix) still builds the sdist/wheel, but the `build` job's `publish-r2` sibling is
 the only place it's published; see below.
+
+## Publishing the n8n node to npm
+
+`publish-n8n-node.yml` publishes the `n8n/` package (`n8n-nodes-privacyfence`) to npm with a
+provenance statement. It starts on the same `v*` tag push as `build.yml` and `publish-pypi.yml`,
+and its `wait_for_build` job blocks the publish on `build.yml`'s run for that commit succeeding.
+Only a **stable** tag publishes: the `publish` job runs `scripts/r2_release.py channel` on the
+version and stops unless it prints `stable`, so `a`/`b`/`rc` tags publish nothing. Every stable
+tag publishes a new package version, also when `n8n/` did not change.
+
+The job runs in the GitHub environment `npm` (with `id-token: write`). It installs npm 11.21.2,
+runs `npm ci`, sets the package version from the tag, runs `npm run lint` and `npm run build`,
+and then runs `npm publish --provenance --access public`. A rerun skips the publish when
+`npm view n8n-nodes-privacyfence@<version> version` already prints that version, so the workflow
+can be run again after a partial failure. `workflow_dispatch` takes one input, `dry_run`
+(default `true`), which adds `--dry-run` to the publish; dispatch it on a tag ref. The workflow
+never uses `n8n-node release`: that command bumps the version, commits and tags.
+
+**Authentication.** A package must exist on npm before a trusted publisher can be added to it, so
+the first publish uses a token: an automation token from npm, saved as the secret `NPM_TOKEN` of
+the `npm` environment. When `NPM_TOKEN` is set, the workflow writes it to the npm config; when it
+is unset, npm authenticates with GitHub's OIDC token (trusted publishing).
+
+**First release of the n8n node.** After the first stable tag that publishes it, open
+https://www.npmjs.com/package/n8n-nodes-privacyfence and check the version and the Provenance
+badge. Then, on the package's Settings page, add the trusted publisher (owner `privacyfence`,
+repository `privacyfence`, workflow `publish-n8n-node.yml`, environment `npm`), and delete the
+`NPM_TOKEN` environment secret and the token on npm.
 
 ## Cloudflare R2 release archive
 

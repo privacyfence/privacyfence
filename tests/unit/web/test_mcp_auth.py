@@ -35,10 +35,10 @@ def scoped_store(tmp_path, monkeypatch):
     return store
 
 
-def _create(store, principal=LOCAL_PRINCIPAL, *, days=90, now=None):
+def _create(store, principal=LOCAL_PRINCIPAL, *, days=90, now=None, **extra):
     return store.create(
         principal, label="sales-sync", days=days, rules=[], tools=[_TOOL],
-        policy=ScopedTokenPolicy(enabled=True, max_days=365), now=now,
+        policy=ScopedTokenPolicy(enabled=True, max_days=365), now=now, **extra,
     )
 
 
@@ -67,6 +67,18 @@ class TestPrincipalFromAccessToken:
         # path itself.
         token = AccessToken(token="t", client_id="some-oauth-client-id", scopes=[])
         assert principal_from_access_token(token) == Principal(id="some-oauth-client-id")
+
+    def test_email_verified_is_true_only_for_the_boolean_true(self):
+        def principal(value):
+            return principal_from_access_token(AccessToken(
+                token="t", client_id="c", scopes=[], subject="u", claims={"email_verified": value},
+            ))
+        assert principal(True).email_verified is True
+        assert principal("true").email_verified is False
+        assert principal(None).email_verified is False
+        assert principal_from_access_token(
+            AccessToken(token="t", client_id="c", scopes=[], subject="u", claims={}),
+        ).email_verified is False
 
     def test_subject_is_preferred_over_client_id(self):
         # client_id identifies *which Claude installation* registered via
@@ -135,8 +147,18 @@ class TestScopedTokenVerifier:
         assert access.scopes == ["scoped"]
         assert access.claims == {
             "email": "alice@example.com", "display_name": "Alice A.", "is_admin": False,
-            "scoped_token_id": token.id,
+            "email_verified": False, "scoped_token_id": token.id,
         }
+
+    def test_the_claims_carry_the_owners_verified_bit_the_token_was_made_with(self, scoped_store):
+        alice = Principal(id="alice", email="alice@example.com", display_name="Alice A.")
+        _token, secret = _create(scoped_store, alice, principal_email_verified=True)
+
+        access = asyncio.run(ScopedTokenVerifier().verify_token(secret))
+
+        assert access is not None
+        assert access.claims["email_verified"] is True
+        assert principal_from_access_token(access).email_verified is True
 
     def test_an_unknown_or_revoked_token_does_not_verify(self, scoped_store):
         token, secret = _create(scoped_store)

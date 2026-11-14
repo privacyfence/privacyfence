@@ -771,6 +771,19 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
+    def test_the_form_offers_a_domain_fieldset_for_an_upstream_with_a_ticked_tool(self):
+        html = build_html(_make_state(), mode="org", scoped_tokens={
+            **self.DATA, "delivery": "once",
+            "upstreams": [{"id": "kh", "label": "Knowledge </script><b>hub", "tools": ["kh_search"], "domains": ["general", "hr"]}],
+        })
+        assert "Data domains for ' + esc(u.label)" in html
+        assert "The token sees only the domains you tick, and never more than you can see yourself." in html
+        assert "data-st-domain=" in html and "data-st-domain-upstream=" in html
+        assert "upstream_domains: scopedChosenDomains()" in html
+        assert "scopedUpstreamsWithTools()" in html
+        # The label rides in the JSON data, which cannot close the script element.
+        assert "</script><b>hub" not in html
+
     def test_the_form_offers_the_personal_data_checkbox_and_the_list_shows_its_badge(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "Let exports, downloads and page uploads carry personal data" in html
@@ -881,6 +894,15 @@ class TestScopedTokensSection:
         assert 'data-st-rename="' in html
         assert "aria-label=\"Rename ' + esc(t.label)" in html
         assert "rename_scoped_token" in html
+
+    def test_a_token_can_be_extended(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert 'data-st-extend="' in html
+        assert "aria-label=\"Extend ' + esc(t.label)" in html
+        assert "extend_scoped_token" in html
+        assert "Days from today" in html
+        assert "Extend token" in html
+        assert "kept until you extend or revoke the token" in html
 
     def test_tools_follow_the_chosen_rules(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
@@ -1788,7 +1810,7 @@ class TestOrgAdminSections:
         page = _render_org("tokens")
         assert "Let AI clients propose a scoped token for a person to review and create." in page
         assert 'data-f="allow_ai_proposals" data-t="bool" checked' in page
-        assert 'data-f="max_days" data-t="int" aria-label="Longest lifetime (days)" value="30"' in page
+        assert 'data-f="max_days" data-t="int" aria-label="Longest lifetime or extension (days)" value="30"' in page
         assert "Needs scoped tokens turned on." not in page
         off = _render_org("tokens", _org_state(scoped_tokens={"enabled": False, "max_days": 30, "allow_ai_proposals": False}))
         assert "Needs scoped tokens turned on." in off
@@ -1805,7 +1827,9 @@ class TestOrgAdminSections:
         assert 'data-f="enabled" data-t="bool" checked' in page
         assert 'data-f="project_id"' in page and 'value="proj1"' in page
         assert 'data-f="mcp_url"' in page and 'value="https://pf.example.com/mcp"' in page
-        assert sorted(re.findall(r'data-f="(\w+)"', page)) == ["enabled", "mcp_url", "project_id"]
+        assert sorted(re.findall(r'data-f="(\w+)"', page)) == ["credential_type", "enabled", "mcp_url", "project_id"]
+        assert "Credential type in n8n" in page
+        assert '<option value="httpBearerAuth" selected>' in page and '<option value="privacyFenceApi"' in page
         assert "n8n.internal.example\" " not in page and re.search(r'value="https://n8n', page) is None
 
     def test_unset_address_and_key_say_which_variable_to_set(self):
@@ -1903,6 +1927,45 @@ class TestAdminFormSave:
         }
         for form, action in actions.items():
             assert self._save(form, [])[0]["action"] == action
+
+
+@needs_node
+class TestAdminEnvironmentLocks:
+    LOCKS = {
+        "agent_runtimes": {
+            "enabled": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+            "project_id": {"value": "envproj", "variable": "PRIVACYFENCE_N8N_PROJECT_ID"},
+        },
+        "scoped_tokens": {
+            "enabled": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+            "allow_ai_proposals": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+        },
+    }
+
+    def test_locked_fields_render_disabled_with_the_variable_name(self):
+        state = _org_state(
+            environment_locks=self.LOCKS,
+            scoped_tokens={"enabled": False, "max_days": 30, "allow_ai_proposals": False},
+            agent_runtimes={"n8n": {"enabled": False, "project_id": "stored", "mcp_url": ""}},
+        )
+        html = build_html(state, surface="admin", mode="org", is_admin=True)
+        assert "Set by ' + lock.variable + ' on the server." in html
+        assert "(locked ? ' disabled' : '')" in html
+        runtimes = _render_org("runtimes", state)
+        assert "Set by PRIVACYFENCE_N8N_PROJECT_ID on the server." in runtimes
+        assert 'value="envproj"' in runtimes and 'value="stored"' not in runtimes
+        assert 'data-f="project_id" data-t="text" disabled' in runtimes
+        assert 'data-f="enabled" data-t="bool" checked disabled' in runtimes
+        assert 'data-f="mcp_url" data-t="text" aria-label' in runtimes  # not locked
+        tokens = _render_org("tokens", state)
+        assert tokens.count("Set by PRIVACYFENCE_N8N_DELIVERY on the server.") == 2
+        assert 'data-f="enabled" data-t="bool" checked disabled' in tokens
+        assert "Needs scoped tokens turned on." not in tokens
+        assert 'data-f="max_days"' in tokens and 'data-f="max_days" data-t="int" disabled' not in tokens
+
+    def test_without_locks_nothing_is_disabled_or_annotated(self):
+        tokens = _render_org("tokens", _org_state())
+        assert "Set by " not in tokens and "disabled" not in tokens
 
 
 @needs_node

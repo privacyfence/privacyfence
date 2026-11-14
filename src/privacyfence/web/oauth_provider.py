@@ -66,7 +66,7 @@ import logging
 import secrets
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -183,6 +183,7 @@ class _OrgRefreshToken(RefreshToken):
     email: str = ""
     display_name: str = ""
     is_admin: bool = False
+    email_verified: bool = False
     issued_at: float = 0.0
 
 
@@ -523,6 +524,9 @@ class OrgOAuthProvider:
         # web/routes_mcp.py's idp_callback route already wraps this whole
         # call in a catch-all that logs and returns a generic failure.
         org_identity.check_authz_policy(principal, claims, self._policy)
+        principal = replace(
+            principal, email_verified=org_identity.session_email_verified(claims, principal, self._policy),
+        )
         peek_provisioning.notify_sign_in(principal, email_verified=peek_provisioning.email_verified_claim(claims))
         await asyncio.to_thread(
             grist_provisioning.notify_sign_in, principal,
@@ -683,6 +687,7 @@ class OrgOAuthProvider:
         principal = Principal(
             id=refresh_token.subject or "", email=refresh_token.email,
             display_name=refresh_token.display_name, is_admin=refresh_token.is_admin,
+            email_verified=refresh_token.email_verified,
         )
         with self._lock:
             self._revoke_pair_locked(access_token=None, refresh_token_str=refresh_token.token)
@@ -794,7 +799,7 @@ class OrgOAuthProvider:
             token=refresh_token, client_id=record.client_id, scopes=record.scopes,
             expires_at=None, subject=record.subject, email=record.email,
             display_name=record.display_name, is_admin=record.is_admin,
-            issued_at=record.issued_at,
+            email_verified=record.email_verified, issued_at=record.issued_at,
         )
         self._refresh_tokens[refresh_token] = rt
         return rt
@@ -811,7 +816,10 @@ class OrgOAuthProvider:
         # original issuance through unchanged -- see _OrgRefreshToken's
         # own docstring for why that's what the absolute lifetime cap needs.
         issued_at = time.time() if refresh_issued_at is None else refresh_issued_at
-        claims = {"email": principal.email, "display_name": principal.display_name, "is_admin": principal.is_admin}
+        claims = {
+            "email": principal.email, "display_name": principal.display_name, "is_admin": principal.is_admin,
+            "email_verified": principal.email_verified,
+        }
         with self._lock:
             self._access_tokens[access_token_str] = AccessToken(
                 token=access_token_str, client_id=client_id, scopes=scopes, expires_at=expires_at,
@@ -820,7 +828,7 @@ class OrgOAuthProvider:
             self._refresh_tokens[refresh_token_str] = _OrgRefreshToken(
                 token=refresh_token_str, client_id=client_id, scopes=scopes, expires_at=None,
                 subject=principal.id, email=principal.email, display_name=principal.display_name,
-                is_admin=principal.is_admin, issued_at=issued_at,
+                is_admin=principal.is_admin, email_verified=principal.email_verified, issued_at=issued_at,
             )
             self._refresh_for_access[access_token_str] = refresh_token_str
             self._access_for_refresh[refresh_token_str] = access_token_str
@@ -833,7 +841,7 @@ class OrgOAuthProvider:
             record=SealedRefreshRecord(
                 client_id=client_id, scopes=scopes, subject=principal.id, email=principal.email,
                 display_name=principal.display_name, is_admin=principal.is_admin,
-                issued_at=issued_at,
+                email_verified=principal.email_verified, issued_at=issued_at,
             ),
         )
         return OAuthToken(

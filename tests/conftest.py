@@ -180,6 +180,17 @@ def _reset_singletons():
 
 
 @pytest.fixture(autouse=True)
+def _restore_upstream_tool_tables():
+    # upstream_mcp_registry.register writes the process-wide policy tables; a test that registers
+    # upstream tools must not leak them into the next one.
+    yield
+    from privacyfence import upstream_mcp_registry, upstream_mcp_runtime
+
+    upstream_mcp_registry.unregister_all()
+    upstream_mcp_runtime.reset()
+
+
+@pytest.fixture(autouse=True)
 def _clear_server_environment(monkeypatch):
     # These variables choose the mode and the listener; a developer's shell must never change what
     # a test sees. The identity-provider variables are cleared by prefix so a new one is covered
@@ -189,6 +200,7 @@ def _clear_server_environment(monkeypatch):
         "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES", "PRIVACYFENCE_ADMIN_EMAILS",
         "PRIVACYFENCE_IDP", "PRIVACYFENCE_ALLOWED_DOMAINS", "PRIVACYFENCE_PREVIEW_SERVICES",
         "PRIVACYFENCE_PEEK_AUTO_PROVISION", "PRIVACYFENCE_GRIST_AUTO_PROVISION",
+        "PRIVACYFENCE_N8N_DELIVERY", "PRIVACYFENCE_N8N_PROJECT_ID", "PRIVACYFENCE_N8N_MCP_URL",
         *(name for name in os.environ if name.startswith(("PRIVACYFENCE_IDP_", "PRIVACYFENCE_OIDC_"))),
     ):
         monkeypatch.delenv(name, raising=False)

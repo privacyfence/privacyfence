@@ -29,10 +29,12 @@ class FakeApi:
         self.delete_error, self.check_error = delete_error, check_error
         self.deleted: list[str] = []
         self.checks = 0
+        self.checked_types: list[str] = []
         self.deleted_event = threading.Event()
 
-    def check(self):
+    def check_type(self, credential_type):
         self.checks += 1
+        self.checked_types.append(credential_type)
         if self.check_error is not None:
             raise self.check_error
 
@@ -160,12 +162,32 @@ class TestRules:
         assert entries[0]["decision"] == "runtime_credential_deleted"
         assert entries[0]["summary"].endswith("token revoked")
 
-    def test_delivered_and_expired_is_deleted_as_expired(self, tmp_path, records, tokens, api):
+    def test_delivered_and_expired_is_kept_for_extend(self, tmp_path, records, tokens, api):
         _token(tokens)
         _record(records)
         _sweep(records, tokens, api, now=LATER)
+        assert len(records.all()) == 1
+        assert api.deleted == []
+        assert _decisions(tmp_path) == []
+
+    def test_extend_after_expiry_keeps_the_credential_usable(self, records, tokens, api):
+        _token(tokens)
+        _record(records)
+        _sweep(records, tokens, api, now=LATER)
+        assert tokens.extend(ALICE, "st-aaaaaaaaaaaa", 30, policy=ENABLED, now=LATER) is not None
+        _sweep(records, tokens, api, now=LATER + 86400)
+        assert len(records.all()) == 1
+        assert api.deleted == []
+
+    def test_a_revoked_expired_token_deletes_its_credential_as_revoked_for_extend(self, tmp_path, records, tokens, api):
+        _token(tokens)
+        _record(records)
+        _sweep(records, tokens, api, now=LATER)
+        assert tokens.revoke(ALICE, "st-aaaaaaaaaaaa")
+        _sweep(records, tokens, api, now=LATER)
         assert records.all() == []
-        assert _entries(tmp_path)[0]["summary"].endswith("token expired")
+        assert api.deleted == ["0123456789abcdef"]
+        assert _entries(tmp_path)[0]["summary"].endswith("token revoked")
 
     def test_delivered_with_an_unknown_token_state_is_skipped(self, records, tokens, api, monkeypatch):
         _record(records)
@@ -229,6 +251,26 @@ class TestRules:
         assert any("skipped" in m for m in caplog.messages)
 
 
+class TestOneBadRecord:
+    def test_a_malformed_credential_id_does_not_stop_the_other_records(self, records, tokens, api, caplog):
+        real_delete = api.delete_credential
+
+        def delete_like_the_client(credential_id):
+            if credential_id != "fedcba9876543210":
+                raise ValueError("Not a PrivacyFence credential id.")
+            return real_delete(credential_id)
+
+        api.delete_credential = delete_like_the_client
+        _record(records, credential_id="not a credential id", proposal_id="stp-1")
+        _record(records, credential_id="fedcba9876543210", proposal_id="stp-2", token_id="st-bbbbbbbbbbbb")
+        with caplog.at_level(logging.WARNING):
+            _sweep(records, tokens, api)
+        assert api.deleted == ["fedcba9876543210"]
+        assert [r.credential_id for r in records.all()] == ["not a credential id"]
+        assert any("skipped a record: ValueError" in m for m in caplog.messages)
+        assert "not a credential id" not in caplog.text
+
+
 class TestDeleteFailures:
     def test_record_kept_and_audited_once_within_a_day(self, tmp_path, records, tokens):
         failing = FakeApi(delete_error=N8nApiClientError("n8n said no"))
@@ -288,6 +330,22 @@ class TestThread:
         sw.wake()
         assert _wait(api.deleted_event.is_set)
         assert api.deleted == ["0123456789abcdef", "fedcba9876543210"]
+
+    def test_the_start_up_check_uses_the_configured_type(self, records, api, thread_env):
+        config = agent_runtimes.N8nRuntimeConfig(
+            enabled=True, base_url="https://n8n.example.com", project_id="", mcp_url="https://pf/mcp",
+            credential_type="privacyFenceApi",
+        )
+        _record(records)
+        sw.start(config=config, stop_event=thread_env)
+        assert _wait(api.deleted_event.is_set)
+        assert api.checked_types == ["privacyFenceApi"]
+
+    def test_the_default_start_up_check_is_the_bearer_type(self, records, api, thread_env):
+        _record(records)
+        sw.start(config=CONFIG, stop_event=thread_env)
+        assert _wait(api.deleted_event.is_set)
+        assert api.checked_types == ["httpBearerAuth"]
 
     def test_a_failed_check_warns_and_the_thread_goes_on(self, records, tokens, thread_env, monkeypatch, caplog):
         failing = FakeApi(check_error=N8nApiClientError("down"))

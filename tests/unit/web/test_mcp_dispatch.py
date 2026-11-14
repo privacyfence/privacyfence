@@ -979,6 +979,39 @@ class TestStatus:
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
         assert dispatcher.status("checking")["deprecation"] is None
 
+    def test_status_has_no_upstreams_key_when_none_are_configured(self):
+        dispatcher = _dispatcher({}, mode="org")
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=True)])
+        assert "upstreams" not in dispatcher.status("checking")
+
+    @pytest.mark.parametrize("authenticated", [False, True])
+    def test_status_lists_the_upstreams_when_configured(self, tmp_path, authenticated):
+        from privacyfence import oidc_provider, upstream_mcp_runtime
+        from privacyfence.upstream_claims import ClaimSigner
+        from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+
+        upstreams = parse_upstreams({
+            "version": 1,
+            "upstreams": [{
+                "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+                "tools": {"search": {"gate": "auto", "verb": "search"}},
+            }],
+        }, source="test")
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams,
+            signer=ClaimSigner(
+                issuer="https://pf.example/upstream-mcp",
+                key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"),
+            ),
+            grants=GrantStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+        )
+        dispatcher = _dispatcher({}, mode="org")
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
+        assert dispatcher.status("checking")["upstreams"] == [{
+            "id": "kh", "label": "Knowledge hub", "tools_exposed": 0, "state": "waiting_for_tool_list",
+            "missing_tools": [],
+        }]
+
     def test_audits_status_checked_when_un_onboarded(self):
         dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
@@ -1591,6 +1624,15 @@ class TestProposeWithDelivery(_DeliveryBase):
         }
         assert result["message"] == agent_runtimes.DELIVERY_MESSAGE
 
+    async def test_the_message_follows_the_configured_type(self):
+        runtime = dataclasses.replace(
+            _N8N_CONFIG, mcp_url="https://public.example.com/mcp", credential_type="privacyFenceApi",
+        )
+        result = await self._propose(self._dispatcher(runtime=runtime))
+        assert result["message"] == agent_runtimes.DELIVERY_MESSAGE_PRIVACYFENCE_NODE
+        assert result["message"] == agent_runtimes.delivery_message("privacyFenceApi")
+        assert result["message"] != agent_runtimes.DELIVERY_MESSAGE
+
     async def test_the_proposal_carries_the_delivery_and_the_mcp_url(self):
         result = await self._propose(self._dispatcher())
 
@@ -1668,7 +1710,7 @@ class TestRuntimeCredentialStatus(_DeliveryBase):
         proposal = self.registry.take("local", proposed["proposal_id"])
 
         class Api:
-            def create_bearer_credential(self, **kwargs):
+            def create_credential(self, **kwargs):
                 pass
 
         bound = {

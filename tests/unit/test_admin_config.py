@@ -89,6 +89,7 @@ class TestLoadAndSave:
         assert loaded["unattended_sessions"] == {"enabled": False}
         assert loaded["imported_from_bundle_sha256"] == ""
         assert loaded["rooms"] == [] and loaded["authz"] == {}
+        assert loaded["upstream_mcp"] == {}
         assert loaded["org_server"] is True
 
     def test_normalization_fills_nested_keys(self, tmp_path):
@@ -197,7 +198,7 @@ class TestImportCopies:
             "authz": {"allowed_domains": ["example.com"]},
             "step_up": {"enabled": True, "scope": "writes"},
             "scoped_tokens": {"max_ttl": 5},
-            "agent_runtimes": {"n8n": {"enabled": True, "project_id": "", "mcp_url": ""}},
+            "agent_runtimes": {"n8n": {"enabled": True, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"}},
             "audit_forwarding": {"http": {"bearer_token_env": "TOKEN_VAR"}},
         }
         config = _import(copy.deepcopy(bundle))
@@ -1000,13 +1001,99 @@ class TestPlainSections:
         assert _change("set_scoped_tokens", {"enabled": True, "max_days": days, "allow_ai_proposals": False})[0]
 
 
+class TestScopedTokensLocked:
+    PARAMS = {"enabled": True, "max_days": 30, "allow_ai_proposals": True}
+
+    @pytest.fixture(autouse=True)
+    def _delivery(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+
+    @pytest.mark.parametrize("field", ["enabled", "allow_ai_proposals"])
+    def test_a_changed_locked_field_is_refused(self, field):
+        with pytest.raises(admin_config.AdminConfigError, match="This is set by PRIVACYFENCE_N8N_DELIVERY on the server."):
+            _change("set_scoped_tokens", {**self.PARAMS, field: False})
+        assert admin_config.load() is None
+
+    def test_the_locked_value_saves_nothing_new(self):
+        _change("set_scoped_tokens", self.PARAMS)
+        stored = _stored()["scoped_tokens"]
+        assert "enabled" not in stored and "allow_ai_proposals" not in stored
+        assert _change("set_scoped_tokens", self.PARAMS) == ("", [])
+        assert _stored()["scoped_tokens"] == stored
+
+    def test_max_days_still_saves(self):
+        _change("set_scoped_tokens", self.PARAMS)
+        assert _change("set_scoped_tokens", {**self.PARAMS, "max_days": 7}) == ("Changed scoped tokens", ["scoped_tokens"])
+        assert _stored()["scoped_tokens"]["max_days"] == 7
+
+
 class TestAgentRuntimes:
-    PARAMS = {"enabled": True, "project_id": "proj1", "mcp_url": "https://pf.example.com/mcp"}
+    PARAMS = {
+        "enabled": True, "project_id": "proj1", "mcp_url": "https://pf.example.com/mcp",
+        "credential_type": "httpBearerAuth",
+    }
 
     def test_the_default_is_present(self, clean_env):
-        assert admin_config._default_config()["agent_runtimes"] == {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}}
+        assert admin_config._default_config()["agent_runtimes"] == {
+            "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
+        }
 
-    def test_a_change_saves_the_three_fields(self, clean_env):
+    @pytest.mark.parametrize("credential_type", ["httpBearerAuth", "privacyFenceApi"])
+    def test_both_credential_types_are_accepted(self, clean_env, credential_type):
+        params = {**self.PARAMS, "credential_type": credential_type}
+        assert _change("set_agent_runtimes", params) == ("Changed agent runtimes", ["agent_runtimes"])
+        assert _stored()["agent_runtimes"]["n8n"] == params
+
+    def test_another_credential_type_is_refused_with_the_exact_text(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError) as exc:
+            _change("set_agent_runtimes", {**self.PARAMS, "credential_type": "oauth2"})
+        assert "agent_runtimes.n8n.credential_type must be httpBearerAuth or privacyFenceApi." in str(exc.value)
+        assert admin_config.load() is None
+
+    def test_privacyfenceapi_with_an_empty_mcp_url_is_refused(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError) as exc:
+            _change("set_agent_runtimes", {**self.PARAMS, "credential_type": "privacyFenceApi", "mcp_url": ""})
+        assert (
+            "agent_runtimes.n8n.mcp_url is required for the privacyFenceApi credential type: "
+            "the credential keeps this server's address."
+        ) in str(exc.value)
+        assert admin_config.load() is None
+
+    def test_a_changed_locked_field_is_refused(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "locked1")
+        with pytest.raises(admin_config.AdminConfigError, match="This is set by PRIVACYFENCE_N8N_PROJECT_ID on the server."):
+            _change("set_agent_runtimes", {**self.PARAMS, "project_id": "other"})
+        assert admin_config.load() is None
+
+    def test_the_locked_value_saves_nothing_new(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "locked1")
+        params = {**self.PARAMS, "project_id": "locked1", "enabled": True}
+        # The first save writes the unlocked fields; the locked ones keep the stored defaults.
+        assert _change("set_agent_runtimes", params)[1] == ["agent_runtimes"]
+        stored = _stored()["agent_runtimes"]["n8n"]
+        assert stored["project_id"] == "" and stored["enabled"] is False
+        assert _change("set_agent_runtimes", params) == ("", [])
+        assert _stored()["agent_runtimes"]["n8n"] == stored
+
+    def test_the_locked_value_keeps_the_stored_one(self, clean_env, monkeypatch):
+        _change("set_agent_runtimes", {**self.PARAMS, "project_id": "stored1", "enabled": False})
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "locked1")
+        assert _change("set_agent_runtimes", {**self.PARAMS, "project_id": "locked1", "enabled": False}) == ("", [])
+        assert _stored()["agent_runtimes"]["n8n"]["project_id"] == "stored1"
+
+    def test_an_unlocked_field_still_saves(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "locked1")
+        params = {**self.PARAMS, "project_id": "locked1", "mcp_url": "https://other.example.com/mcp"}
+        assert _change("set_agent_runtimes", params) == ("Changed agent runtimes", ["agent_runtimes"])
+        assert _stored()["agent_runtimes"]["n8n"]["mcp_url"] == "https://other.example.com/mcp"
+
+    def test_a_bad_variable_is_an_admin_error(self, clean_env, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "false")
+        with pytest.raises(admin_config.AdminConfigError, match="must be true, or unset"):
+            _change("set_agent_runtimes", self.PARAMS)
+
+    def test_a_change_saves_the_four_fields(self, clean_env):
         assert _change("set_agent_runtimes", self.PARAMS) == ("Changed agent runtimes", ["agent_runtimes"])
         assert _stored()["agent_runtimes"] == {"n8n": self.PARAMS}
         assert _change("set_agent_runtimes", self.PARAMS) == ("", [])
@@ -1745,3 +1832,39 @@ class TestLockedByEnvironment:
         monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "maybe")
         assert admin_config._env_auto_provision() == frozenset()
         assert admin_config._locked_variable("peek", mode="org") == ""
+
+
+class TestSeedUpstreamGrants:
+    ENTRY = {"grants": [{"match": "*", "domains": ["general"]}]}
+
+    def _stored(self, tmp_path):
+        return json.loads((tmp_path / "org" / "admin_config.json").read_text(encoding="utf-8"))
+
+    def test_seeding_into_a_missing_file_creates_it(self, tmp_path):
+        assert admin_config.seed_upstream_grants({"kh": self.ENTRY}) == ["kh"]
+        assert self._stored(tmp_path)["upstream_mcp"] == {"kh": self.ENTRY}
+
+    def test_only_absent_ids_are_added(self, tmp_path):
+        admin_config.seed_upstream_grants({"kh": self.ENTRY})
+        other = {"grants": [{"match": "a@b.c", "domains": ["x"]}]}
+        changed = {"grants": [{"match": "*", "domains": ["other"]}]}
+        assert admin_config.seed_upstream_grants({"kh": changed, "wiki": other}) == ["wiki"]
+        assert self._stored(tmp_path)["upstream_mcp"] == {"kh": self.ENTRY, "wiki": other}
+
+    def test_an_existing_id_with_empty_grants_is_not_changed(self, tmp_path):
+        admin_config.seed_upstream_grants({"kh": {"grants": []}})
+        assert admin_config.seed_upstream_grants({"kh": self.ENTRY}) == []
+        assert self._stored(tmp_path)["upstream_mcp"] == {"kh": {"grants": []}}
+
+    def test_nothing_seeded_leaves_the_file_untouched(self, tmp_path):
+        admin_config.seed_upstream_grants({"kh": self.ENTRY})
+        path = tmp_path / "org" / "admin_config.json"
+        before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+        assert admin_config.seed_upstream_grants({"kh": self.ENTRY}) == []
+        assert admin_config.seed_upstream_grants({}) == []
+        assert (path.read_bytes(), path.stat().st_mtime_ns) == (before, mtime)
+
+    def test_a_malformed_file_raises(self, tmp_path):
+        _write(tmp_path, "{not json")
+        with pytest.raises(admin_config.AdminConfigError):
+            admin_config.seed_upstream_grants({"kh": self.ENTRY})

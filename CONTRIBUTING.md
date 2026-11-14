@@ -88,11 +88,13 @@ Do not report a security vulnerability in a public issue — follow [`SECURITY.m
 
 ## Code Style
 
-- `src/privacyfence/` (the daemon): Python 3.11+, standard library preferred over new dependencies
+- `src/privacyfence/` (the daemon): Python 3.11.5+, standard library preferred over new dependencies
 - `mcpb/shim/` (the `.mcpb`'s stdio-to-Streamable-HTTP transport proxy, which is how Claude
   Desktop reaches the daemon): TypeScript/Node, so the `.mcpb` extension ships without a bundled
   Python runtime. It carries no tool-schema knowledge and stays small on purpose — read its
   `src/index.ts` module docstring before adding anything to it
+- `n8n/` (the n8n community node `n8n-nodes-privacyfence`): TypeScript, an npm package published from CI
+  on each stable release tag, held to n8n's strict community-node lint. [`docs/n8n-node.md`](docs/n8n-node.md)
 - No comments unless the *why* is non-obvious
 - Match the surrounding code's style
 

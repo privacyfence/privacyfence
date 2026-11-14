@@ -1,0 +1,235 @@
+name: Publish n8n node to npm
+
+# Publishes n8n/ (n8n-nodes-privacyfence) to npm with provenance on every stable tag, on the same
+# `v*` tag push as the other release workflows. Pre-release tags publish nothing.
+# The first publish needs the environment secret NPM_TOKEN in the `npm` environment, because a
+# package must exist on npm before a trusted publisher can be added to it. After that, add the
+# trusted publisher (repository privacyfence/privacyfence, this workflow, environment npm) and
+# delete the token: unset, npm authenticates with GitHub's OIDC token. See docs/releasing.md,
+# "Publishing the n8n node to npm". It publishes with plain `npm publish`, never the node CLI's
+# release command (release-it would bump, commit and tag).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # rerun by hand on a tag ref; dry_run publishes nothing
+    inputs:
+      dry_run:
+        description: Run `npm publish --dry-run` instead of publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # GitHub occasionally starts a workflow twice for one tag push, and two runs for one tag cannot
+  # both succeed (ADR 0111). Every other job waits on this one; a duplicate cancels its own run.
+  # If the API can't be read, the run goes ahead: the guard is an addition, not a gate.
+  dedupe:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write   # only to cancel this run when it is the duplicate
+    outputs:
+      duplicate: ${{ steps.check.outputs.duplicate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Cancel this run if another run is already handling the same push
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if RUNS="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/publish-n8n-node.yml/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=30")"; then
+            DUPLICATE="$(python3 scripts/release_run_guard.py --run-id "$GITHUB_RUN_ID" \
+              --event "$GITHUB_EVENT_NAME" --ref-name "$GITHUB_REF_NAME" --head-sha "$GITHUB_SHA" <<<"$RUNS")"
+          else
+            echo "::warning::Could not list this workflow's runs; not checking for a duplicate run."
+            DUPLICATE=false
+          fi
+          echo "duplicate=$DUPLICATE" >> "$GITHUB_OUTPUT"
+          if [[ "$DUPLICATE" == "true" ]]; then
+            echo "::warning::Another run of publish-n8n-node.yml is already handling ${GITHUB_REF_NAME} at ${GITHUB_SHA}; cancelling this duplicate run."
+            gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
+          fi
+
+  # Every published DMG/installer/.deb is started and exercised, automatically, before it (or
+  # anything else from the same tag) actually ships -- see docs/releasing.md's "Packaged-artifact release
+  # gating" section. This job wires that guarantee into this workflow's own publish steps too: a
+  # failed packaged-artifact test on any platform blocks publication here as well.
+  #
+  # GitHub Actions has no native `needs:` across separate workflow files -- build.yml and this
+  # workflow are two independent listeners on the same `push: tags: ['v*']` event, so there's no
+  # job graph connecting them the way `needs:` connects jobs within one file. This job is the
+  # closest equivalent: it polls the REST API for build.yml's *own* run against this exact commit
+  # (not "the latest run of build.yml," which could be a different tag or a stray
+  # workflow_dispatch) and blocks every job below on that run actually succeeding, via an ordinary
+  # `needs:` edge inside this workflow: the `publish` job waits on this one.
+  #
+  # A `workflow_dispatch` rerun (e.g. after a transient publish failure) is gated the same way: if
+  # build.yml's original run for that tag's commit already succeeded, this job finds that same
+  # result immediately (the API query is keyed on commit SHA, not run recency) and the rerun
+  # proceeds; if build.yml never succeeded for that commit, the rerun blocks here until someone
+  # fixes and reruns "Build & Release" for that tag.
+  wait_for_build:
+    needs: dedupe
+    if: needs.dedupe.outputs.duplicate != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read   # only permission this job needs -- it never checks out the repo
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Wait for build.yml's run on this commit to succeed
+        run: |
+          set -euo pipefail
+          workflow_id="build.yml"
+          poll_interval_s=30
+          # build.yml's `build` job alone (DMG + notarization + packaged smoke test) has run well past ten
+          # minutes before; leave real headroom rather than risk a flaky timeout on release day.
+          max_wait_s=$((60 * 60))
+          start=$(date +%s)
+
+          echo "Waiting for ${workflow_id}'s own run against commit ${GITHUB_SHA}..."
+
+          while true; do
+            # --method GET is required here: gh api defaults to POST as soon as any -f/-F
+            # parameter is present (there's no POST route for listing workflow runs, so without
+            # this it 404s -- see `gh api --help`), and this endpoint takes head_sha/per_page as
+            # a GET query string, not a request body.
+            runs_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=10")"
+            # Most recent attempt for this exact commit, in case of a manual re-run.
+            # A cancelled run is left out: a duplicate run cancels itself (ADR 0111), and one cancelled
+            # by hand has nothing to say about this commit either way.
+            run="$(jq -c '[.workflow_runs[] | select(.conclusion != "cancelled")] | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
+
+            if [[ -n "$run" ]]; then
+              status="$(jq -r '.status' <<<"$run")"
+              conclusion="$(jq -r '.conclusion' <<<"$run")"
+              html_url="$(jq -r '.html_url' <<<"$run")"
+              echo "Found ${html_url} (status=${status}, conclusion=${conclusion})"
+
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "build.yml succeeded for this commit -- proceeding to publish."
+                  exit 0
+                fi
+                echo "::error::build.yml's own run for this commit did not succeed" \
+                  "(conclusion=${conclusion}): ${html_url}. Fix and re-run" \
+                  "\"Build & Release\" for this tag, then re-run \"Publish n8n node to npm\"."
+                exit 1
+              fi
+            fi
+
+            now=$(date +%s)
+            if (( now - start > max_wait_s )); then
+              echo "::error::Timed out after $((max_wait_s / 60)) minutes waiting for" \
+                "${workflow_id}'s run against ${GITHUB_SHA} to complete."
+              exit 1
+            fi
+            sleep "$poll_interval_s"
+          done
+
+  publish:
+    needs: [dedupe, wait_for_build]
+    if: needs.dedupe.outputs.duplicate != 'true'
+    runs-on: ubuntu-latest
+    environment: npm   # must match the Environment name on npm's trusted publisher entry
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}   # first publish only; empty once trusted publishing is set up
+    permissions:
+      id-token: write   # trusted publishing and the provenance statement
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Determine version and release channel
+        id: release
+        run: |
+          pip install --quiet --require-hashes -r requirements/release.lock.txt
+          VERSION="$(python3 -m setuptools_scm)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
+            CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
+          else
+            CHANNEL="n/a (not a tag push)"
+          fi
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$VERSION channel=$CHANNEL"
+
+      # Stable tags only: alpha/beta/rc tags and runs off a tag stop here.
+      - name: Stop unless the channel is stable
+        env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
+        run: |
+          if [[ "$CHANNEL" != "stable" ]]; then
+            echo "::notice::Channel is ${CHANNEL}, not stable; nothing is published to npm."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs a recent npm; the one bundled with Node 22 is older.
+      - name: Install npm 11.21.2
+        run: npm install -g npm@11.21.2
+
+      - name: Install dependencies
+        working-directory: n8n
+        run: npm ci
+
+      - name: Set the package version
+        working-directory: n8n
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: npm version "$VERSION" --no-git-tag-version
+
+      - name: Lint
+        working-directory: n8n
+        run: npm run lint
+
+      - name: Build
+        working-directory: n8n
+        run: npm run build
+
+      # First publish only: the token authenticates npm until a trusted publisher is added.
+      - name: Write the npm token
+        if: env.NPM_TOKEN != ''
+        run: npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+
+      # A rerun skips an already published version. `npm view` can exit 0 with empty output,
+      # so the output is compared, not the exit status.
+      - name: Check whether this version is already published
+        id: published
+        working-directory: n8n
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if [ "$(npm view n8n-nodes-privacyfence@"$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::n8n-nodes-privacyfence@${VERSION} is already on npm; skipping the publish."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.published.outputs.published != 'true'
+        working-directory: n8n
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          ARGS=(--provenance --access public)
+          if [[ "$DRY_RUN" == "true" ]]; then ARGS+=(--dry-run); fi
+          RELEASE_MODE=true npm publish "${ARGS[@]}"
