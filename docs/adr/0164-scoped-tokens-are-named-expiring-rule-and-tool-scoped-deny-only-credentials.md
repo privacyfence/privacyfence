@@ -9,6 +9,7 @@ Amended by [ADR 0198](0198-deleting-an-auto-accept-rule-removes-it-from-scoped-t
 Amended by [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md): a token holds its own copy of its rules.
 Amended by [ADR 0285](0285-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md): a token carries per-upstream data domains that only narrow what its owner holds.
 Related: [ADR 0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) — an AI client can propose a token for a person to create.
+Amended by [ADR 0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md).
 
 ## Context
 

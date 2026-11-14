@@ -53,6 +53,11 @@ _LABEL_MESSAGE = (
 )
 
 _SECONDS_PER_DAY = 86400
+_NOT_ENABLED_MESSAGE = (
+    "Scoped tokens are not enabled on this install. "
+    "Your administrator turns them on on the Admin page."
+)
+EXTEND_NOT_LONGER = "The token already lasts that long. Choose more days."
 
 # A token's limit records (predicate, operation) pairs as they compiled when the token was made.
 # A token made before a scope split one predicate per verb (ADR 0228) recorded the old pair for
@@ -739,10 +744,7 @@ class ScopedTokenStore:
         from .policy.value_format import RuleValueError
 
         if not policy.enabled:
-            raise ScopedTokenError(
-                "Scoped tokens are not enabled on this install. "
-                "Your administrator turns them on on the Admin page."
-            )
+            raise ScopedTokenError(_NOT_ENABLED_MESSAGE)
         if not LABEL_RE.match(label):
             raise ScopedTokenError(_LABEL_MESSAGE)
         if len(rules) > MAX_RULES_PER_TOKEN:
@@ -858,6 +860,30 @@ class ScopedTokenStore:
             tokens[position] = renamed
             self._write(principal)
             return token.label, renamed
+
+    def extend(
+        self, principal: Principal, token_id: str, days: int, *, policy: ScopedTokenPolicy, now: float | None = None,
+    ) -> tuple[float, ScopedToken] | None:
+        """Move only the token's expiry to ``days`` from now, reviving an expired token; it never
+        shortens a token, and the secret, digest, id, label and rules stay as they are."""
+        if not policy.enabled:
+            raise ScopedTokenError(_NOT_ENABLED_MESSAGE)
+        if not 1 <= days <= policy.max_days:
+            raise ScopedTokenError(f"A token lasts 1 to {policy.max_days} days.")
+        with self._lock:
+            self._refresh(principal)
+            tokens = self._tokens[principal.id]
+            position = next((i for i, t in enumerate(tokens) if t.id == token_id), None)
+            if position is None:
+                return None
+            token = tokens[position]
+            new = (time.time() if now is None else now) + days * _SECONDS_PER_DAY
+            if new <= token.expires_at:
+                raise ScopedTokenError(EXTEND_NOT_LONGER)
+            extended = replace(token, expires_at=new)
+            tokens[position] = extended
+            self._write(principal)
+            return token.expires_at, extended
 
     def revoke_all(self, principal_id: str) -> int:
         with self._lock:

@@ -448,3 +448,10 @@ class TestListAndProposePolicyOverRealTransport:
             })
         assert result.is_error is True
         assert "cannot govern" in result.content[0].text
+
+
+def test_the_status_tool_description_names_expired_for_extend():
+    from privacyfence.web.mcp_tools import RUNTIME_CREDENTIAL_STATUS_TOOL
+
+    assert "'expired'" in RUNTIME_CREDENTIAL_STATUS_TOOL.description
+    assert "Extend" in RUNTIME_CREDENTIAL_STATUS_TOOL.description
