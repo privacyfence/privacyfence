@@ -75,7 +75,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p17-retire
 
-- pending
+- gate: ADR numbers: main took 0288-0295 after the plan was written, so the three new ADRs are numbered 0296, 0297 and 0298 (the plan and its final check name 0288-0290). Orchestrator decision under the ADR README next-free rule; code and doc references and the pointer on main ADR 0288 (which seeded grants from the operator file) follow.
 
 ## Final review
 
