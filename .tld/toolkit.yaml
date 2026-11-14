@@ -141,10 +141,26 @@ hooks:
     enabled: true
   board_gate:
     enabled: true
-  protect_paths_allow:
-    - .github/workflows/build.yml
-    - .github/workflows/release.yml
-    - .tld/toolkit.yaml
+    protect_paths_allow:
+      - .github/workflows/build.yml
+      - .github/workflows/release.yml
+      - .tld/toolkit.yaml
+      - .github/workflows/tests.yml
+      - .github/workflows/publish-pypi.yml
+      - .github/workflows/publish-org-image.yml
+      - .github/workflows/publish-n8n-node.yml
+      - .github/workflows/publish-mcp-registry.yml
+      - .github/workflows/deploy-download-worker.yml
+      - .github/workflows/deploy-oauth-relay-worker.yml
+      - .github/workflows/ai-client-canary.yml
+      - .github/workflows/dependency-audit.yml
+      - .github/workflows/linux-graphical-session.yml
+      - .github/workflows/macos-graphical-session.yml
+      - .github/workflows/windows-graphical-session.yml
+      - .github/workflows/pages.yml
+      - .github/workflows/website-build.yml
+      - mcpb/shim/package-lock.json
+      - cloudflare/downloads/package-lock.json
 
 admin:
   policy: .tld/admin-policy.yaml
