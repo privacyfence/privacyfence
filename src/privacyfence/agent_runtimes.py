@@ -101,6 +101,9 @@ def _split(raw: str) -> SplitResult | None:
     return parts
 
 
+_NUMERIC_HOST = re.compile(r"(0[xX][0-9a-fA-F]*|[0-9]+)(\.(0[xX][0-9a-fA-F]*|[0-9]+))*\.?")
+
+
 def _valid_mcp_url(raw: str) -> bool:
     parts = _split(raw)
     if parts is None:
@@ -114,7 +117,7 @@ def normalize_n8n_url(raw: str) -> str:
     """The n8n base URL with a trailing ``/`` removed, or a ``ConfigurationError``."""
     bad = org_mode.ConfigurationError(
         f"{N8N_URL_ENV} must be an https:// address without credentials, query or fragment, "
-        "and not a link-local, unspecified or multicast address."
+        "and not a link-local, unspecified or multicast address or a host written only as numbers (such as 2852039166)."
     )
     raw = raw.strip()
     parts = _split(raw)
@@ -126,7 +129,11 @@ def normalize_n8n_url(raw: str) -> str:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
-        pass
+        # A host spelled as numbers but not as a dotted address (a bare integer such as
+        # 2852039166, octal or hex parts) is an IP address to most resolvers, and the checks
+        # above cannot tell which one, so it is refused.
+        if _NUMERIC_HOST.fullmatch(host):
+            raise bad from None
     else:
         if ip.is_link_local or ip.is_unspecified or ip.is_multicast:
             raise bad
