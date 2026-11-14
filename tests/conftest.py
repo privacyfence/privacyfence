@@ -50,7 +50,7 @@ from privacyfence import (
     runtime_credentials,
     scoped_token_proposals,
     scoped_tokens,
-    settings_controller,
+    settings_state,
     upload_staging,
     web_approval_ui,
     whats_new,
@@ -123,7 +123,7 @@ def _reset() -> None:
     whats_new.load_changelog.cache_clear()
     local_files.configure_file_bridge()
     local_files.force_bridge_for_tests(False)
-    settings_controller._main_dispatch = None
+    settings_state._main_dispatch = None
     daemon_main._bundle_adopted_this_start = False
     state_stream._loop = None
     control_channel._mint_nonces.clear()

@@ -33,13 +33,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from privacyfence import admin_config, app_credentials, auto_accept, daemon_main, org_mode, paths, resource_names, scoped_tokens, secure_files, settings_controller as sc, update_checker
+from privacyfence import admin_config, app_credentials, auto_accept, daemon_main, org_mode, paths, resource_names, scoped_tokens, secure_files, settings_controller as sc, settings_state as ss, update_checker
 from privacyfence import gate as gate_module
 from privacyfence.auto_accept import ReviewContext
 from privacyfence import peek_client, policy_upgrade
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import engine as policy_engine
-from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import scope_rows
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.registry import Verb
@@ -85,6 +84,7 @@ def controller(tmp_path, monkeypatch):
     data_dir_path = tmp_path / "data"
     data_dir_path.mkdir()
     monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
+    monkeypatch.setattr(ss, "data_dir", lambda: data_dir_path)
     # Deleting a rule also edits the principal's scoped-token file (ADR 0198).
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
@@ -99,61 +99,6 @@ def controller(tmp_path, monkeypatch):
     return ctrl
 
 
-class TestRunAsyncMarshaling:
-    """_run_async is the mechanism every threaded flow in this module funnels
-    through. If it ever regresses to invoking on_done directly on the worker
-    thread, the "on_done touches self/the page, so it must run on the main
-    thread" invariant every mutation depends on breaks silently."""
-
-    def test_success_result_never_delivered_directly_on_worker_thread(self, monkeypatch):
-        recorded = []
-        sc.set_main_dispatcher(lambda f, *a, **k: recorded.append((f, a, k)))
-
-        done_calls = []
-        work_thread = {}
-
-        def work():
-            work_thread["thread"] = threading.current_thread()
-            return "alice@example.com"
-
-        def done(ok, result):
-            done_calls.append((ok, result))
-
-        try:
-            sc._run_async(work, done)
-
-            assert wait_until(lambda: recorded)
-            assert work_thread["thread"] is not threading.current_thread()
-            assert done_calls == []
-
-            func, args, kwargs = recorded[0]
-            assert args == (True, "alice@example.com")
-            func(*args, **kwargs)
-            assert done_calls == [(True, "alice@example.com")]
-        finally:
-            sc.set_main_dispatcher(None)
-
-    def test_exception_in_work_is_also_marshaled_not_raised_on_worker_thread(self, monkeypatch):
-        recorded = []
-        sc.set_main_dispatcher(lambda f, *a, **k: recorded.append((f, a, k)))
-        boom = ValueError("auth failed")
-
-        def work():
-            raise boom
-
-        done_calls = []
-        try:
-            sc._run_async(work, lambda ok, result: done_calls.append((ok, result)))
-
-            assert wait_until(lambda: recorded)
-            func, args, kwargs = recorded[0]
-            assert args == (False, boom)
-            func(*args, **kwargs)
-            assert done_calls == [(False, boom)]
-        finally:
-            sc.set_main_dispatcher(None)
-
-
 class TestOnChangeMarshaling:
     """Rule changes from a background thread (e.g. the web server's own
     asyncio thread, for an "Always allow" confirmation reached over /mcp)
@@ -162,7 +107,7 @@ class TestOnChangeMarshaling:
 
     def test_reload_from_background_thread_schedules_but_does_not_push_inline(self, controller, monkeypatch):
         recorded = []
-        sc.set_main_dispatcher(
+        ss.set_main_dispatcher(
             lambda f, *a, **k: recorded.append((f, a, k, threading.current_thread()))
         )
         pushed = []
@@ -188,52 +133,7 @@ class TestOnChangeMarshaling:
             func(*args, **kwargs)
             assert pushed == [threading.current_thread()]
         finally:
-            sc.set_main_dispatcher(None)
-
-
-class TestCallOnMain:
-    """The dispatcher seam: call_on_main resolves to a registered
-    set_main_dispatcher(), else runs inline -- the inline case is what makes
-    _run_async's on_done actually observable when nothing has attached a
-    dispatcher yet (a standalone import, or a test with no web server
-    running), instead of dying with AttributeError inside the worker thread
-    where nothing surfaces it (the exact bug this seam fixes -- see this
-    module's git history)."""
-
-    def test_dispatcher_registered_is_used(self, monkeypatch):
-        recorded = []
-        sc.set_main_dispatcher(lambda f, *a: recorded.append((f, a)))
-        try:
-            calls = []
-            sc.call_on_main(lambda x: calls.append(x), "hi")
-            assert calls == []
-            func, args = recorded[0]
-            func(*args)
-            assert calls == ["hi"]
-        finally:
-            sc.set_main_dispatcher(None)
-
-    def test_no_dispatcher_runs_inline(self, monkeypatch):
-        # This is the case that used to raise AttributeError against a None
-        # AppHelper -- authenticate_connector's failure path (and every
-        # other _run_async caller) has to surface an error when nothing has
-        # attached a dispatcher, not silently die on the worker thread.
-        sc.set_main_dispatcher(None)
-        calls = []
-        sc.call_on_main(lambda x: calls.append(x), "hi")
-        assert calls == ["hi"]
-
-    def test_run_async_on_done_runs_with_no_dispatcher_registered(self, monkeypatch):
-        sc.set_main_dispatcher(None)
-        done_calls = []
-        boom = RuntimeError("auth failed")
-
-        def work():
-            raise boom
-
-        sc._run_async(work, lambda ok, result: done_calls.append((ok, result)))
-        assert wait_until(lambda: done_calls)
-        assert done_calls == [(False, boom)]
+            ss.set_main_dispatcher(None)
 
 
 class TestChangeListeners:
@@ -330,45 +230,6 @@ class TestConfigHelpers:
         )
 
         controller._save_config({"a": 1})  # must not raise
-
-
-class TestExtractDriveId:
-    def test_bare_id_is_accepted_as_is(self):
-        assert sc._extract_drive_id("FOLDER1") == "FOLDER1"
-
-    def test_folder_url_extracts_the_id(self):
-        url = "https://drive.google.com/drive/folders/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms?usp=sharing"
-        assert sc._extract_drive_id(url) == "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-
-    def test_file_url_extracts_the_id(self):
-        url = "https://docs.google.com/spreadsheets/d/1AbCdEf12345/edit#gid=0"
-        assert sc._extract_drive_id(url) == "1AbCdEf12345"
-
-    def test_unparseable_text_returns_empty_string(self):
-        assert sc._extract_drive_id("not a url or id, has spaces") == ""
-
-
-class TestShortId:
-    def test_short_id_passes_through_unchanged(self):
-        assert sc._short_id("F1") == "F1"
-
-    def test_long_id_is_truncated_with_ellipsis(self):
-        long_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-        result = sc._short_id(long_id)
-        assert result.startswith("1BxiMVs0")
-        assert result.endswith("E2upms")
-        assert "…" in result
-
-
-class TestParseValueList:
-    def test_splits_on_comma(self):
-        assert sc._parse_value_list("a.com, b.com") == ["a.com", "b.com"]
-
-    def test_empty_text_is_none(self):
-        assert sc._parse_value_list("   ") is None
-
-    def test_blank_entries_are_dropped(self):
-        assert sc._parse_value_list("a.com, , b.com,") == ["a.com", "b.com"]
 
 
 class TestPiiDetection:
@@ -729,7 +590,7 @@ class TestAdminConfigWiring:
 
     def test_refresh_connectors_builds_from_the_effective_config(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         built = []
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: built.append(org) or ([], {}))
         bundle = {"slack": {"client_id": "s"}, "authz": {"x": 1}}
@@ -749,7 +610,7 @@ class TestAdminConfigWiring:
         self, controller, monkeypatch, tmp_path
     ):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         built = []
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: built.append(org) or ([], {}))
         (tmp_path / "admin_config.json").write_text("{nope")
@@ -797,7 +658,7 @@ class TestOrgConfigInstall:
 
     def test_live_connectors_are_rebuilt_from_the_new_bundle(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         def _load_installed():
             path = sc.org_dir() / "org_bundle.json"
@@ -1043,7 +904,7 @@ class TestConnectorEnableDisable:
 class TestRefreshConnectors:
     def test_updates_connectors_and_pushes_to_connector_host_after_drain(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([SimpleNamespace(name="drive")], {}))
 
         controller.refresh_connectors()
@@ -1060,7 +921,7 @@ class TestRefreshConnectors:
         # production (daemon_main.py) -- fires after the connector set is
         # actually swapped, so a listener reading fresh state sees it.
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([SimpleNamespace(name="drive")], {}))
         events = []
         controller.set_connectors_changed_listener(lambda: events.append(1))
@@ -1075,7 +936,7 @@ class TestRefreshConnectors:
 
     def test_connectors_changed_listener_does_not_fire_on_a_failed_refresh(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         def _raise(cfg, org):
             raise RuntimeError("boom")
@@ -1094,7 +955,7 @@ class TestRefreshConnectors:
 
     def test_unwired_listener_is_a_no_op(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([SimpleNamespace(name="drive")], {}))
 
         controller.refresh_connectors()
@@ -1105,7 +966,7 @@ class TestRefreshConnectors:
 
     def test_survives_a_broken_org_config_and_builds_with_an_empty_one(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         seen_org_configs = []
 
         def _build_connectors(cfg, org):
@@ -1243,7 +1104,7 @@ class TestAuthenticateGoogle:
 
     def test_runs_authorize_and_check_connection_marks_busy_then_refreshes(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         calls = []
 
         class FakeGmailClient:
@@ -1257,7 +1118,7 @@ class TestAuthenticateGoogle:
                 calls.append(("check",))
                 return "me@example.com"
 
-        monkeypatch.setitem(sc._GOOGLE_CLIENTS, "gmail", FakeGmailClient)
+        monkeypatch.setitem(ss._GOOGLE_CLIENTS, "gmail", FakeGmailClient)
         refresh_calls = []
         # refresh_connectors() itself runs a second _run_async hop -- stubbed
         # out here (TestRefreshConnectors below covers that hop directly) so
@@ -1277,7 +1138,7 @@ class TestAuthenticateGoogle:
 
     def test_failed_auth_sets_error_and_clears_busy_without_refreshing(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         refresh_calls = []
         monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1))
 
@@ -1288,7 +1149,7 @@ class TestAuthenticateGoogle:
             def authorize_interactive(self):
                 raise RuntimeError("user closed browser")
 
-        monkeypatch.setitem(sc._GOOGLE_CLIENTS, "gmail", FailingGmailClient)
+        monkeypatch.setitem(ss._GOOGLE_CLIENTS, "gmail", FailingGmailClient)
 
         controller._authenticate_google("gmail", {"google": {"client_id": "i", "client_secret": "s"}})
 
@@ -1303,9 +1164,9 @@ class TestAuthenticateGoogle:
     def test_apps_script_uses_its_own_client_and_token_file(self, controller, monkeypatch):
         from privacyfence.apps_script_client import AppsScriptClient
 
-        assert sc._GOOGLE_CLIENTS["apps_script"] is AppsScriptClient
+        assert ss._GOOGLE_CLIENTS["apps_script"] is AppsScriptClient
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
         token_files = []
 
@@ -1319,7 +1180,7 @@ class TestAuthenticateGoogle:
             def check_connection(self):
                 return "me@example.com"
 
-        monkeypatch.setitem(sc._GOOGLE_CLIENTS, "apps_script", FakeAppsScriptClient)
+        monkeypatch.setitem(ss._GOOGLE_CLIENTS, "apps_script", FakeAppsScriptClient)
 
         controller._authenticate_google("apps_script", {"google": {"client_id": "i", "client_secret": "s"}})
 
@@ -1330,7 +1191,7 @@ class TestAuthenticateGoogle:
 
     def test_failed_apps_script_auth_names_it_by_its_display_label(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         class FailingAppsScriptClient:
             def __init__(self, client_config, token_file):
@@ -1339,7 +1200,7 @@ class TestAuthenticateGoogle:
             def authorize_interactive(self):
                 raise RuntimeError("user closed browser")
 
-        monkeypatch.setitem(sc._GOOGLE_CLIENTS, "apps_script", FailingAppsScriptClient)
+        monkeypatch.setitem(ss._GOOGLE_CLIENTS, "apps_script", FailingAppsScriptClient)
 
         controller._authenticate_google("apps_script", {"google": {"client_id": "i", "client_secret": "s"}})
 
@@ -1360,7 +1221,7 @@ class TestAuthenticateSlack:
 
     def test_success_refreshes(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(sc, "slack_authorize_interactive", lambda **kw: {"team_name": "Acme"})
         refresh_calls = []
         monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1))
@@ -1386,7 +1247,7 @@ class TestAuthenticateSalesforce:
 
     def test_success_refreshes(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(sc, "salesforce_authorize_interactive", lambda **kw: {"instance_url": "https://x.salesforce.com"})
         refresh_calls = []
         monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1))
@@ -1418,7 +1279,7 @@ class TestAuthenticateGrist:
 
     def test_success_signs_in_and_refreshes(self, controller, monkeypatch, tmp_path):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         seen = {}
 
         def fake(config, token_file):
@@ -1441,7 +1302,7 @@ class TestAuthenticateGrist:
 
     def test_failure_sets_error(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         def boom(config, token_file):
             raise sc.grist_auth.GristClientError("consent denied")
@@ -1482,7 +1343,7 @@ class TestAuthenticateMiro:
 
     def test_success_signs_in_and_refreshes(self, controller, monkeypatch, tmp_path):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         seen = {}
 
         def fake(config, token_file):
@@ -1505,7 +1366,7 @@ class TestAuthenticateMiro:
 
     def test_failure_sets_error(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         def boom(config, token_file):
             raise sc.miro_auth.MiroClientError("consent denied")
@@ -1560,7 +1421,7 @@ class TestAuthenticateAtlassian:
         config_path.write_text(yaml_text)
         controller._config_path = str(config_path)
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
         captured = {}
 
@@ -1579,7 +1440,7 @@ class TestAuthenticateAtlassian:
 
     def test_success_marks_busy_for_jira_confluence_and_assets(self, controller, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(sc, "atlassian_authorize_interactive", lambda **kw: {"site_url": "https://acme.atlassian.net"})
         refresh_calls = []
         monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1))
@@ -1604,7 +1465,7 @@ class TestAuthenticateAtlassian:
         # TestPickResourceIndexWebMode below covers the web-registry
         # equivalent (an explicit "cancel" answer).
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
 
         captured = {}
@@ -1639,7 +1500,7 @@ class TestPickResourceIndexWebMode:
 
         web_ui = web_approval_ui.WebApprovalUI()
         approval_ui.init_approval_ui(web_ui)
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: f(*a, **k))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: f(*a, **k))
         monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
 
         # Assert on the options actually handed to the picker, not by
@@ -1656,7 +1517,7 @@ class TestPickResourceIndexWebMode:
             choice_calls.append(kwargs)
             return "<div>fake choice dialog</div>"
 
-        monkeypatch.setattr(sc.dialog_window_html, "build_choice_html", fake_build_choice_html)
+        monkeypatch.setattr(ss.dialog_window_html, "build_choice_html", fake_build_choice_html)
 
         captured = {}
 
@@ -1687,7 +1548,7 @@ class TestPickResourceIndexWebMode:
 
         web_ui = web_approval_ui.WebApprovalUI()
         approval_ui.init_approval_ui(web_ui)
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: f(*a, **k))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: f(*a, **k))
         monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
 
         captured = {}
@@ -1738,7 +1599,7 @@ class TestTelegramStartAuth:
     def test_happy_path_stores_phone_code_hash_and_advances_to_code_step(self, controller, monkeypatch):
         monkeypatch.setattr(sc, "telegram_app_credentials", lambda: (123, "hash"))
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         fake_client = MagicMock()
         fake_client.connect = AsyncMock()
@@ -1764,7 +1625,7 @@ class TestTelegramStartAuth:
     def test_connect_failure_keeps_phone_step_with_error(self, controller, monkeypatch):
         monkeypatch.setattr(sc, "telegram_app_credentials", lambda: (123, "hash"))
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         fake_client = MagicMock()
         fake_client.connect = AsyncMock(side_effect=RuntimeError("network down"))
@@ -1811,7 +1672,7 @@ class TestTelegramSubmitCode:
             "step": "code", "phone": "+123456789", "phone_code_hash": "hash-123", "error": "",
         }
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         refresh_calls = []
         monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1))
 
@@ -1836,7 +1697,7 @@ class TestTelegramSubmitCode:
         monkeypatch.setattr(sc, "telegram_app_credentials", lambda: (123, "hash"))
         controller._telegram_auth = {"step": "code", "phone": "+1", "phone_code_hash": "h", "error": ""}
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         from telethon.errors import SessionPasswordNeededError
 
@@ -1858,7 +1719,7 @@ class TestTelegramSubmitCode:
         monkeypatch.setattr(sc, "telegram_app_credentials", lambda: (123, "hash"))
         controller._telegram_auth = {"step": "code", "phone": "+1", "phone_code_hash": "h", "error": ""}
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         fake_client = MagicMock()
         fake_client.connect = AsyncMock()
@@ -1896,7 +1757,7 @@ class TestTelegramSubmit2FA:
         monkeypatch.setattr(sc, "telegram_app_credentials", lambda: (123, "hash"))
         controller._telegram_auth = {"step": "password", "error": ""}
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         refresh_calls = []
         monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1))
 
@@ -1920,7 +1781,7 @@ class TestTelegramSubmit2FA:
         monkeypatch.setattr(sc, "telegram_app_credentials", lambda: (123, "hash"))
         controller._telegram_auth = {"step": "password", "error": ""}
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
 
         fake_client = MagicMock()
         fake_client.connect = AsyncMock()
@@ -1954,7 +1815,7 @@ class TestPeekLogin:
     @pytest.fixture
     def recorded(self, monkeypatch):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         return recorded
 
     @pytest.fixture
@@ -2145,37 +2006,6 @@ class TestTelegramAuthSnapshotState:
             serialized = json.dumps(state)
             assert "+15551234567" not in serialized
             assert "secret-hash" not in serialized
-
-
-class TestPolicyScopeCatalogue:
-    """The Auto-accept page's "add a rule" scope picker -- one entry
-    per policy.propose.SCOPES_BY_GROUP widening group, plus sc._POLICY_EXTRA_SCOPES."""
-
-    def test_covers_every_propose_group_and_every_extra(self):
-        ids = {entry["id"] for entry in sc._policy_scope_catalogue()}
-        assert set(policy_propose.SCOPES_BY_GROUP) <= ids
-        assert set(sc._POLICY_EXTRA_SCOPES) <= ids
-
-    def test_apps_script_entry_needs_a_value_and_offers_read_and_update(self):
-        entry = next(e for e in sc._policy_scope_catalogue() if e["id"] == "apps_script.project")
-        assert entry["needs_value"] is True
-        assert set(entry["verbs"]) == {"read", "update"}
-        assert entry["connector"] == "apps_script"
-
-    def test_gmail_and_slack_unconditional_extras_need_no_value(self):
-        by_id = {e["id"]: e for e in sc._policy_scope_catalogue()}
-        assert by_id["gmail.filters"]["needs_value"] is False
-        assert by_id["gmail.filters"]["verbs"] == ["restructure"]
-        assert by_id["slack.group_chats"]["needs_value"] is False
-        assert by_id["slack.group_chats"]["verbs"] == ["send"]
-
-    def test_drive_folder_entry_unions_verbs_across_every_predicate_in_the_group(self):
-        entry = next(e for e in sc._policy_scope_catalogue() if e["id"] == "drive.folder")
-        # approved_folder (read/download) + approved_sandbox_folder (update/restructure/delete)
-        # + parent_folder_allowlist (add) + move_within_approved_folders (move).
-        assert set(entry["verbs"]) == {
-            "read", "download", "update", "restructure", "delete", "add", "move",
-        }
 
 
 class TestImportPolicyRules:
@@ -2800,18 +2630,6 @@ class TestAutoAcceptRuleUsage:
         assert row["never_matched"] is True
 
 
-class _DriveFailing:
-    """A Drive client whose every metadata lookup fails with the given HTTP status."""
-
-    def __init__(self, status: int) -> None:
-        self.status = status
-
-    def get_file_metadata(self, file_id: str):
-        error = RuntimeError(f"HTTP {self.status}")
-        error.resp = SimpleNamespace(status=self.status)
-        raise error
-
-
 class TestScopeRowState:
     """The Auto-accept page reads scope rows (ADR 0172), not one entry per stored predicate."""
 
@@ -2834,65 +2652,21 @@ class TestScopeRowState:
         assert "read" in row["scope_verbs"] and "download" in row["scope_verbs"]
         assert row["sentence"].endswith("allow read, download")
 
-    def test_usage_sums_former_ids(self, controller):
-        usage = {
-            "r-narrow": {"count": 2, "last_matched": "2026-07-06T12:00:00+00:00"},
-            "r-flagged": {"count": 3, "last_matched": "2026-07-08T12:00:00+00:00"},
-            "r-unrelated": {"count": 9, "last_matched": "2026-07-09T12:00:00+00:00"},
-        }
-        rows = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
-        state = sc._auto_accept_state_from_rows(
-            rows, usage, resolve_value=lambda row: "v", resolver=sc.get_resolver(),
-        )
-        (row,) = state["rules"]
-        assert row["match_count"] == 5
-        assert row["never_matched"] is False
-        assert row["last_matched"] == sc._relative_time("2026-07-08T12:00:00+00:00")
-
     def test_row_carries_its_values_and_the_sentence_around_them(self, controller):
         (row,) = controller._auto_accept_state(self._v2_cfg())["rules"]
         assert row["value_items"] == [
-            {"id": i, "short_id": sc._short_id(i), "name": None, "status": "pending"} for i in row["value_ids"]
+            {"id": i, "short_id": ss._short_id(i), "name": None, "status": "pending"} for i in row["value_ids"]
         ]
         before, after = row["sentence_parts"]
         assert before + ", ".join(row["value_ids"]) + after != ""
         assert before + row["value"] + after == row["sentence"]
-
-    def test_an_id_a_live_lookup_could_not_find_is_invalid(self, controller):
-        (scope_row,) = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
-        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_folder"]
-        resolver = sc.get_resolver()
-        gone = scope_row.value[0]
-        resolver.resolve(rt, gone, _DriveFailing(status=404))
-        (item, *_) = sc.row_value_items(scope_row, resolver)
-        assert item["id"] == gone and item["status"] == "invalid"
-
-    def test_an_id_whose_lookup_failed_is_not_invalid(self, controller):
-        (scope_row,) = sc.policy_scope_rows.rows_from_config(self._v2_cfg())
-        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_folder"]
-        resolver = sc.get_resolver()
-        resolver.resolve(rt, scope_row.value[0], _DriveFailing(status=429))
-        (item, *_) = sc.row_value_items(scope_row, resolver)
-        assert item["status"] == "pending"
-
-    def test_a_row_that_compiles_to_nothing_lists_its_values_as_plain(self):
-        row = sc.policy_scope_rows.ScopeRow(
-            id="r-empty", scope="drive.folder", value=["a", "b"], verbs=frozenset(), operations=frozenset(),
-        )
-        assert [(i["id"], i["status"]) for i in sc.row_value_items(row, sc.get_resolver())] == [
-            ("a", "plain"), ("b", "plain"),
-        ]
-        assert sc.sentence_parts(sc.policy_scope_rows.ScopeRow(
-            id="r-none", scope="drive.folder", value=None, verbs=frozenset(), operations=frozenset(),
-        )) is None
-
 
 class TestResolvedRuleValue:
     """Rule values resolve through the shared cached-name machinery, reusing
     RULE_NAME_TO_RESOURCE_TYPE for a predicate whose value is an opaque resource id."""
 
     def test_resolves_a_cached_name(self, controller):
-        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_sandbox_folder"]
+        rt = ss.RULE_NAME_TO_RESOURCE_TYPE["approved_sandbox_folder"]
         controller._resolver._disk[resource_names._cache_key(rt, "F1")] = "Scratch"
         state = controller.add_policy_rule("drive.folder", "F1", ["update"])
         assert "Scratch" in state["auto_accept"]["rules"][0]["value"]
@@ -2900,7 +2674,7 @@ class TestResolvedRuleValue:
     def test_falls_back_to_a_short_id_when_uncached(self, controller):
         long_id = "1" * 40
         state = controller.add_policy_rule("drive.folder", long_id, ["update"])
-        assert state["auto_accept"]["rules"][0]["value"] == sc._short_id(long_id)
+        assert state["auto_accept"]["rules"][0]["value"] == ss._short_id(long_id)
 
     def test_predicate_with_no_resource_type_shows_the_raw_value(self, controller):
         state = controller.add_policy_rule("gmail.sender_domain", "acme.com", ["read"])
@@ -2909,7 +2683,7 @@ class TestResolvedRuleValue:
     def test_sentence_uses_the_resolved_value_not_the_raw_id(self, controller):
         """The sentence rendered for the Auto-accept page must agree with the resolved ``value``
         field -- ``rule_sentence`` spells out the resolved display name, not the raw id."""
-        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_sandbox_folder"]
+        rt = ss.RULE_NAME_TO_RESOURCE_TYPE["approved_sandbox_folder"]
         controller._resolver._disk[resource_names._cache_key(rt, "F1")] = "Groceries"
         state = controller.add_policy_rule("drive.folder", "F1", ["update"])
         row = state["auto_accept"]["rules"][0]
@@ -3058,7 +2832,7 @@ class TestSnapshotStructure:
 
     def test_connectors_cover_all_connectors(self, controller):
         state = controller.snapshot()
-        assert {c["key"] for c in state["connectors"]} == set(sc.ALL_CONNECTORS)
+        assert {c["key"] for c in state["connectors"]} == set(ss.ALL_CONNECTORS)
 
     def test_apps_script_row_is_a_google_connector_with_its_display_label(self, controller, monkeypatch):
         monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"google": {"client_id": "i"}})
@@ -3089,7 +2863,7 @@ class TestSnapshotStructure:
         monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {})
         controller._connector_failures = {"telegram": "no_org_config"}
         rows = {r["name"]: r for r in controller.status_connectors()}
-        assert set(rows) == set(sc.ALL_CONNECTORS)
+        assert set(rows) == set(ss.ALL_CONNECTORS)
         assert rows["telegram"]["blocked_by"] == "no_org_config"
 
     @pytest.mark.parametrize("name", ["telegram", "peek", "grist", "miro", "gmail", "slack"])
@@ -3119,7 +2893,7 @@ class TestSnapshotStructure:
     def test_privacy_groups_include_calendar_and_the_six_category_groups(self, controller):
         state = controller.snapshot()
         keys = {g["key"] for g in state["privacy"]["groups"]}
-        assert keys == set(sc.PRIVACY_GROUP_LABELS) | {"calendar"}
+        assert keys == set(ss.PRIVACY_GROUP_LABELS) | {"calendar"}
 
 
 class TestConnectorsStateBlockedBy:
@@ -3189,7 +2963,7 @@ class TestConnectorsStateBlockedBy:
 
     def test_refresh_connectors_replaces_the_failure_map(self, monkeypatch, controller):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(
             daemon_main, "build_connectors",
             lambda cfg, org: ([], {"gmail": "no_org_config"}),
@@ -3238,7 +3012,7 @@ class TestStatusConnectors:
 
     def test_reflects_a_live_refresh(self, monkeypatch, controller):
         recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(ss, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([], {"slack": "not_authenticated"}))
 
         controller.refresh_connectors()

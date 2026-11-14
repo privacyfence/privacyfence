@@ -1563,7 +1563,7 @@ class TestWebServerWiresTheStateStream:
         assert pushed and pushed[0][0] == "settings"
 
     def test_main_dispatcher_is_registered_for_headless_call_on_main(self, tmp_path, monkeypatch):
-        from privacyfence import settings_controller as sc
+        from privacyfence import settings_state
         from privacyfence.web import state_stream as ss
 
         controller = _controller(tmp_path, monkeypatch)
@@ -1571,7 +1571,7 @@ class TestWebServerWiresTheStateStream:
 
         recorded = []
         monkeypatch.setattr(ss, "_loop", None)  # no real loop running in this test
-        sc.call_on_main(lambda x: recorded.append(x), "hi")
+        settings_state.call_on_main(lambda x: recorded.append(x), "hi")
         assert recorded == ["hi"]  # falls back to running inline with no loop captured yet
 
 
