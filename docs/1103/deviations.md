@@ -49,7 +49,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p11-forward-audit
 
-- pending
+- worker: For an auto-gated call the upstream_forwarded entry is written before the auto_accepted entry; claim_jti and claim_req stay empty on error outcomes because the client returns no jti on failure; the token-leak test uses a sentinel token in a faked client call, not a real signed header.
 
 ## p12-reference-server-final
 
