@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "groups": {
+    "everyone@company": ["alice@example.org", "bob@example.org"],
+    "mgmt@company": ["alice@example.org", "carol@example.org"],
+    "hr@company": ["dave@example.org", "erin@example.org"],
+    "contracts@company": ["frank@example.org", "grace@example.org"]
+  }
+}
