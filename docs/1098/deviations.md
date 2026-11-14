@@ -16,7 +16,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-extend-routes
 
-- pending
+- None.
+- review: The 5 docs-link tests stay red until p5 (as p1, p2). Worker had no tld CLI; no roles required.
 
 ## p4-extend-ui
 
