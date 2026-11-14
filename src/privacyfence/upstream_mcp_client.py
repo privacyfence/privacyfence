@@ -94,7 +94,7 @@ class UpstreamMcpClient:
                         await session.initialize()
                         return await action(session), auth
         except Exception:
-            if recorder is not None and recorder.failed:
+            if (recorder is not None and recorder.failed) or (auth is not None and auth.request_unhashable):
                 logger.warning("Upstream %s call was not sent: the claim could not be signed", upstream.id)
                 raise UpstreamMcpClientError("claim_failed") from None  # noqa: BLE001 -- the cause may quote the upstream; the caller gets a fixed message
             logger.warning("Upstream %s could not be reached", self._upstream.id, exc_info=True)

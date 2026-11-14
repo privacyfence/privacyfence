@@ -133,6 +133,7 @@ class IdentityClaimAuth(httpx2.Auth):
         self.last_call_jti: str | None = None
         self.last_call_req: str | None = None
         self.minted_count = 0
+        self.request_unhashable = False
 
     @staticmethod
     def _call_of(content: bytes) -> tuple[str, dict[str, Any]] | None:
@@ -155,7 +156,11 @@ class IdentityClaimAuth(httpx2.Auth):
     def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
         call = self._call_of(request.content)
         if call is not None:
-            req: str | None = request_hash(call[0], call[1])
+            try:
+                req: str | None = request_hash(call[0], call[1])
+            except ValueError as exc:  # arguments that cannot be canonicalised (NaN, ...) fail closed as a claim failure
+                self.request_unhashable = True
+                raise ClaimSigningError("The caller claim could not be signed.") from exc
             caller = self._caller
         else:
             req = None

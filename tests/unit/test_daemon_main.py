@@ -5650,6 +5650,43 @@ class TestRotateUpstreamClaimKey:
         assert out.startswith(f"Rotated: new key {newest} starts signing at 20")
         assert out.endswith("Z; the previous key stays published for the configured overlap.\n")
 
+    @pytest.mark.parametrize("command", ["rotate", "revoke"])
+    def test_the_commands_use_the_operator_files_overlap(self, org, monkeypatch, tmp_path, command):
+        from privacyfence import upstream_claim_keys, upstream_mcp_config
+
+        operator = tmp_path / "operator.yaml"
+        operator.write_text("version: 1\nupstreams: []\nclaim:\n  key_overlap_hours: 72\n")
+        monkeypatch.setenv(upstream_mcp_config.ENV_VAR, str(operator))
+        seen: list[int] = []
+        real = upstream_claim_keys.KeySet.__init__
+
+        def spy(self, path, *, overlap_seconds=86400, **kw):
+            seen.append(overlap_seconds)
+            real(self, path, overlap_seconds=overlap_seconds, **kw)
+
+        monkeypatch.setattr(upstream_claim_keys.KeySet, "__init__", spy)
+        if command == "rotate":
+            daemon_main.run_rotate_upstream_claim_key()
+        else:
+            daemon_main.run_revoke_upstream_claim_key("nope")
+        assert seen == [72 * 3600]
+
+    def test_the_commands_default_to_24_hours_without_an_operator_file(self, org, monkeypatch):
+        from privacyfence import upstream_claim_keys, upstream_mcp_config
+
+        monkeypatch.delenv(upstream_mcp_config.ENV_VAR, raising=False)
+        monkeypatch.delenv(upstream_mcp_config.ENV_VAR_INLINE, raising=False)
+        seen: list[int] = []
+        real = upstream_claim_keys.KeySet.__init__
+
+        def spy(self, path, *, overlap_seconds=86400, **kw):
+            seen.append(overlap_seconds)
+            real(self, path, overlap_seconds=overlap_seconds, **kw)
+
+        monkeypatch.setattr(upstream_claim_keys.KeySet, "__init__", spy)
+        daemon_main.run_rotate_upstream_claim_key()
+        assert seen == [86400]
+
     def test_revoke_removes_a_key_and_reports_it(self, org, capsys):
         daemon_main.run_rotate_upstream_claim_key()
         capsys.readouterr()
