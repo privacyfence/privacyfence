@@ -24,6 +24,10 @@ AGENT = agent_identity.AgentIdentity(
 CONFIG = agent_runtimes.N8nRuntimeConfig(
     enabled=True, base_url="https://n8n.example.com", project_id="proj1", mcp_url="",
 )
+NODE_CONFIG = agent_runtimes.N8nRuntimeConfig(
+    enabled=True, base_url="https://n8n.example.com", project_id="proj1", mcp_url="https://pf/mcp",
+    credential_type="privacyFenceApi",
+)
 BOUND = {
     "label": "Sales sync", "days": 30,
     "rules": [{"kind": "new", "group": "drive.folder", "value": "F1", "verbs": ["read"]}],
@@ -64,15 +68,23 @@ def _proposal(workflow_id="wf1"):
 
 
 class FakeApi:
-    def __init__(self, create_error=None, delete_error=None, on_create=None):
+    def __init__(self, create_error=None, delete_error=None, on_create=None, check_error=None):
         self.create_error, self.delete_error, self.on_create = create_error, delete_error, on_create
+        self.check_error = check_error
         self.created: list[dict] = []
         self.deleted: list[str] = []
+        self.checked: list[str] = []
 
-    def create_bearer_credential(self, *, credential_id, name, token, project_id):
-        self.created.append(
-            {"credential_id": credential_id, "name": name, "token": token, "project_id": project_id},
-        )
+    def check_type(self, credential_type):
+        self.checked.append(credential_type)
+        if self.check_error is not None:
+            raise self.check_error
+
+    def create_credential(self, *, credential_id, name, credential_type, data, project_id):
+        self.created.append({
+            "credential_id": credential_id, "name": name, "credential_type": credential_type,
+            "data": data, "token": data["token"], "project_id": project_id,
+        })
         if self.on_create is not None:
             self.on_create()
         if self.create_error is not None:
@@ -90,9 +102,9 @@ def tokens():
     return ScopedTokenStore(lambda: [ALICE])
 
 
-def _deliver(tokens, api, proposal=None, on_abandoned=None):
+def _deliver(tokens, api, proposal=None, on_abandoned=None, config=CONFIG):
     return rc.deliver(
-        principal=ALICE, bound=BOUND, proposal=proposal or _proposal(), config=CONFIG, api=api,
+        principal=ALICE, bound=BOUND, proposal=proposal or _proposal(), config=config, api=api,
         token_store=tokens, policy=ENABLED, on_abandoned=on_abandoned,
     )
 
@@ -258,6 +270,31 @@ class TestDeliverHappyPath:
         assert secret not in json.dumps(_entries(tmp_path))
         assert secret not in caplog.text
 
+    def test_bearer_data_and_type(self, tokens):
+        api = FakeApi()
+        outcome = _deliver(tokens, api)
+        (call,) = api.created
+        assert call["credential_type"] == "httpBearerAuth"
+        assert list(call["data"]) == ["token"]
+        assert outcome.record.credential_type == "httpBearerAuth"
+        assert api.checked == []
+
+    def test_privacyfence_api_data_type_and_check(self, tokens):
+        api = FakeApi()
+        outcome = _deliver(tokens, api, config=NODE_CONFIG)
+        assert outcome.status == 200
+        (call,) = api.created
+        assert call["credential_type"] == "privacyFenceApi"
+        assert call["data"] == {"mcpUrl": "https://pf/mcp", "token": call["token"]}
+        assert call["token"].startswith(SECRET_MARK)
+        assert outcome.record.credential_type == "privacyFenceApi"
+        assert rc.get_store().all() == [outcome.record]
+        assert api.checked == ["privacyFenceApi"]
+
+    def test_credential_data(self):
+        assert rc.credential_data("httpBearerAuth", "https://x/mcp", "s") == {"token": "s"}
+        assert rc.credential_data("privacyFenceApi", "https://x/mcp", "s") == {"mcpUrl": "https://x/mcp", "token": "s"}
+
     def test_no_workflow_leaves_the_clause_out(self, tmp_path, tokens):
         outcome = _deliver(tokens, FakeApi(), _proposal(workflow_id=""))
         (entry,) = _entries(tmp_path)
@@ -281,6 +318,48 @@ class TestDeliverHappyPath:
         (entry,) = _entries(tmp_path)
         assert "\n" not in entry["summary"] and "\x00" not in entry["summary"]
         assert "workflow wf1 as" in entry["summary"]
+
+
+class TestDeliverNodeCheck:
+    def test_a_404_answers_503_without_token_or_record(self, tmp_path, tokens):
+        api = FakeApi(check_error=N8nApiClientError("n8n at h answered HTTP 404.", status=404))
+        outcome = _deliver(tokens, api, config=NODE_CONFIG)
+        assert (outcome.token, outcome.record, outcome.error, outcome.status) == (
+            None, None, rc.NODE_NOT_INSTALLED, 503,
+        )
+        assert rc.NODE_NOT_INSTALLED == (
+            "n8n does not know the PrivacyFence credential type. "
+            "Ask the n8n administrator to install the community node n8n-nodes-privacyfence, then try again."
+        )
+        assert tokens.tokens_for(ALICE) == [] and rc.get_store().all() == [] and api.created == []
+        (entry,) = _entries(tmp_path)
+        assert entry["decision"] == "runtime_credential_delivery_failed"
+        assert "answered HTTP 404" in entry["summary"]
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            N8nApiClientError("n8n at h could not be reached."),
+            N8nApiClientError("n8n at h answered HTTP 401.", status=401),
+            N8nApiClientError("n8n at h answered HTTP 500.", status=500),
+            N8nApiClientError("n8n at h redirected the request.", status=302),
+            RuntimeError("secret detail"),
+        ],
+    )
+    def test_every_other_error_answers_502(self, tmp_path, tokens, error):
+        api = FakeApi(check_error=error)
+        outcome = _deliver(tokens, api, config=NODE_CONFIG)
+        assert (outcome.token, outcome.record, outcome.error, outcome.status) == (
+            None, None, rc.DELIVERY_FAILED, 502,
+        )
+        assert tokens.tokens_for(ALICE) == [] and rc.get_store().all() == [] and api.created == []
+        (entry,) = _entries(tmp_path)
+        assert entry["decision"] == "runtime_credential_delivery_failed"
+        assert "secret detail" not in entry["summary"]
+
+    def test_the_bearer_type_is_never_checked(self, tokens):
+        api = FakeApi(check_error=N8nApiClientError("x", status=404))
+        assert _deliver(tokens, api).status == 200
 
 
 class TestDeliverFailures:
@@ -417,6 +496,21 @@ class TestCrashPoints:
         self._assert_no_unrecorded_live_token(tokens)
 
 
+class TestOldRecords:
+    def test_a_record_without_credential_type_reads_as_bearer(self, tmp_path):
+        path = tmp_path / "old.json"
+        raw = rc._to_json(_record())
+        del raw["credential_type"]
+        path.write_text(json.dumps({"version": 1, "records": [raw]}), encoding="utf-8")
+        (record,) = rc.RuntimeCredentialStore(path).all()
+        assert record.credential_type == "httpBearerAuth"
+
+    def test_the_type_round_trips(self, tmp_path):
+        store = rc.RuntimeCredentialStore(tmp_path / "r.json")
+        store.add(_record(credential_type="privacyFenceApi"))
+        assert store.all()[0].credential_type == "privacyFenceApi"
+
+
 class TestStatusFor:
     NOT_DELIVERED = {"state": "not_delivered"}
 
@@ -439,6 +533,26 @@ class TestStatusFor:
             "token_expires_at": datetime.fromtimestamp(outcome.token.expires_at, timezone.utc).isoformat(),
         }
         assert outcome.token.id not in json.dumps(answer)
+
+    def test_a_privacyfence_api_record_gives_the_node(self, tokens):
+        proposal = _proposal()
+        outcome = _deliver(tokens, FakeApi(), proposal, config=NODE_CONFIG)
+
+        answer = self._status(tokens, proposal.id)
+
+        assert answer == {
+            "state": "delivered", "runtime": "n8n", "credential_id": outcome.record.credential_id,
+            "credential_name": "PrivacyFence Sales sync", "credential_type": "privacyFenceApi",
+            "node": "n8n-nodes-privacyfence.privacyFence", "mcp_url": "https://pf/mcp",
+            "token_expires_at": datetime.fromtimestamp(outcome.token.expires_at, timezone.utc).isoformat(),
+        }
+
+    def test_an_old_record_answers_from_its_own_type_not_the_setting(self, tokens):
+        proposal = _proposal()
+        outcome = _deliver(tokens, FakeApi(), proposal, config=CONFIG)
+        answer = self._status(tokens, proposal.id)
+        assert answer["credential_type"] == "httpBearerAuth" and answer["node_authentication"] == "bearerAuth"
+        assert "node" not in answer and outcome.record.credential_type == "httpBearerAuth"
 
     def test_a_creating_record_is_pending(self, tokens):
         rc.get_store().add(_record(proposal_id="stp-1"))

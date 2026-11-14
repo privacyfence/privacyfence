@@ -2495,6 +2495,81 @@ class TestMaybeStartWebServerOrgMode:
             {}, self._connector_host(), unattended_sessions_enabled=False,
         ) is not None
 
+    def _start_org(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        monkeypatch.setattr("privacyfence.paths.org_dir", lambda: tmp_path)
+        return daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._single_user_config(),
+        )
+
+    @staticmethod
+    def _inline(grants=None, tool="search"):
+        server = {
+            "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+            "tools": {tool: {"gate": "auto", "verb": "search"}},
+        }
+        if grants is not None:
+            server["grants"] = grants
+        return json.dumps({"version": 1, "upstreams": [server]})
+
+    def test_upstream_mcp_inline_variable_is_configured_in_organization_mode(self, monkeypatch, tmp_path):
+        from privacyfence import upstream_mcp_runtime
+
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        self._start_org(monkeypatch, tmp_path)
+        assert upstream_mcp_runtime.upstream_ids() == {"kh"}
+
+    def test_upstream_mcp_both_variables_refuse_the_start(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", str(self._upstream_file(tmp_path)))
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match="Set PRIVACYFENCE_UPSTREAM_MCP_FILE or PRIVACYFENCE_UPSTREAM_MCP, not both.",
+        ):
+            self._start_org(monkeypatch, tmp_path)
+
+    def test_upstream_mcp_inline_variable_outside_organization_mode_refuses_the_start(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        with pytest.raises(
+            org_mode.ConfigurationError,
+            match="PRIVACYFENCE_UPSTREAM_MCP is set, but this is not an organization server.",
+        ):
+            daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
+
+    def test_upstream_mcp_grants_seed_once_and_the_first_ones_stay(self, monkeypatch, tmp_path, caplog):
+        from privacyfence import admin_config, upstream_mcp_registry, upstream_mcp_runtime
+
+        first = [{"match": "*", "domains": ["general"]}]
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(first))
+        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
+            self._start_org(monkeypatch, tmp_path)
+        assert "Seeded the domain grants of upstream(s) kh" in caplog.text
+        assert admin_config.load()["upstream_mcp"] == {"kh": {"grants": first}}
+
+        upstream_mcp_registry.unregister_all()
+        upstream_mcp_runtime.reset()
+        monkeypatch.setenv(
+            "PRIVACYFENCE_UPSTREAM_MCP", self._inline([{"match": "@x.com", "domains": ["hr"]}]),
+        )
+        self._start_org(monkeypatch, tmp_path)
+        assert admin_config.load()["upstream_mcp"] == {"kh": {"grants": first}}
+
+    def test_upstream_mcp_collision_leaves_admin_config_unseeded(self, monkeypatch, tmp_path):
+        from privacyfence import admin_config
+
+        grants = [{"match": "*", "domains": ["general"]}]
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(grants))
+        monkeypatch.setattr(
+            daemon_main.upstream_mcp_registry, "register",
+            lambda upstreams: (_ for _ in ()).throw(org_mode.ConfigurationError("collides")),
+        )
+        with pytest.raises(org_mode.ConfigurationError, match="collides"):
+            self._start_org(monkeypatch, tmp_path)
+        assert admin_config.load() is None or admin_config.load()["upstream_mcp"] == {}
+
     def test_build_connectors_appends_the_upstream_connectors_when_configured(self, tmp_path):
         from privacyfence import oidc_provider, upstream_mcp_runtime
         from privacyfence.upstream_claims import ClaimSigner

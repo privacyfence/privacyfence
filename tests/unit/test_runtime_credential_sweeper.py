@@ -29,10 +29,12 @@ class FakeApi:
         self.delete_error, self.check_error = delete_error, check_error
         self.deleted: list[str] = []
         self.checks = 0
+        self.checked_types: list[str] = []
         self.deleted_event = threading.Event()
 
-    def check(self):
+    def check_type(self, credential_type):
         self.checks += 1
+        self.checked_types.append(credential_type)
         if self.check_error is not None:
             raise self.check_error
 
@@ -328,6 +330,22 @@ class TestThread:
         sw.wake()
         assert _wait(api.deleted_event.is_set)
         assert api.deleted == ["0123456789abcdef", "fedcba9876543210"]
+
+    def test_the_start_up_check_uses_the_configured_type(self, records, api, thread_env):
+        config = agent_runtimes.N8nRuntimeConfig(
+            enabled=True, base_url="https://n8n.example.com", project_id="", mcp_url="https://pf/mcp",
+            credential_type="privacyFenceApi",
+        )
+        _record(records)
+        sw.start(config=config, stop_event=thread_env)
+        assert _wait(api.deleted_event.is_set)
+        assert api.checked_types == ["privacyFenceApi"]
+
+    def test_the_default_start_up_check_is_the_bearer_type(self, records, api, thread_env):
+        _record(records)
+        sw.start(config=CONFIG, stop_event=thread_env)
+        assert _wait(api.deleted_event.is_set)
+        assert api.checked_types == ["httpBearerAuth"]
 
     def test_a_failed_check_warns_and_the_thread_goes_on(self, records, tokens, thread_env, monkeypatch, caplog):
         failing = FakeApi(check_error=N8nApiClientError("down"))

@@ -379,3 +379,161 @@ class TestGrantStore:
             _write(path, {"zz": {"grants": []}}, 2_000_000_000)
             store.domains_for("kh", "a@b.com", True)
         assert caplog.text.count("undeclared upstream") == 1
+
+
+# ----- #
+# ----- YAML, inline text, size, repeated keys and grants (ADR 0288)
+# ----- #
+
+INLINE = "PRIVACYFENCE_UPSTREAM_MCP"
+YAML_DOC = """\
+version: 1
+upstreams:
+  - id: kh
+    label: Knowledge hub
+    url: https://kh.example.internal/mcp
+    audience: https://kh.example.internal
+    tools:
+      search: {gate: auto, verb: search}
+      get_doc: {gate: review, verb: read}
+      propose_change: {gate: popup, verb: add, effect: Adds a change proposal.}
+"""
+
+
+def _file(tmp_path, name, text):
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _refused_file(path):
+    with pytest.raises(ConfigurationError) as info:
+        cfg.load_upstreams(path)
+    return str(info.value)
+
+
+class TestYamlFile:
+    def test_yaml_yml_and_json_load_the_same_upstreams(self, tmp_path):
+        expected = _parse(_doc())
+        assert cfg.load_upstreams(_file(tmp_path, "u.yaml", YAML_DOC)) == expected
+        assert cfg.load_upstreams(_file(tmp_path, "u.YML", YAML_DOC)) == expected
+        assert cfg.load_upstreams(_file(tmp_path, "u.json", json.dumps(_doc()))) == expected
+
+    def test_json_text_in_a_yaml_file_loads(self, tmp_path):
+        assert cfg.load_upstreams(_file(tmp_path, "u.yaml", json.dumps(_doc())))[0].id == "kh"
+
+    def test_invalid_yaml_does_not_quote_the_file(self, tmp_path):
+        message = _refused_file(_file(tmp_path, "u.yaml", "a: [MARKER\n  b: }"))
+        assert message == PREFIX + "the file is not valid YAML."
+
+    def test_repeated_tool_name_is_refused_in_yaml_and_json(self, tmp_path):
+        yaml_text = YAML_DOC + "      search: {gate: review, verb: read}\n"
+        message = _refused_file(_file(tmp_path, "u.yaml", yaml_text))
+        assert message == PREFIX + "the file repeats a key."
+        json_text = '{"version": 1, "upstreams": [], "version": 1}'
+        assert _refused_file(_file(tmp_path, "u.json", json_text)) == PREFIX + "the file repeats a key."
+
+    def test_int_tool_key_is_refused_without_a_type_error(self, tmp_path):
+        text = YAML_DOC.replace("      search:", "      1:")
+        message = _refused_file(_file(tmp_path, "u.yaml", text))
+        assert "tool name must be 1-48 letters" in message
+
+    def test_unquoted_boolean_id_is_refused_at_the_id(self, tmp_path):
+        message = _refused_file(_file(tmp_path, "u.yaml", YAML_DOC.replace("id: kh", "id: no")))
+        assert "upstreams[0].id" in message
+
+    def test_deeply_nested_text_is_refused_without_recursion_error(self, tmp_path):
+        deep = "[" * 100_000
+        assert _refused_file(_file(tmp_path, "u.yaml", deep)) == PREFIX + "the file is not valid YAML."
+        assert _refused_file(_file(tmp_path, "u.json", deep)) == PREFIX + "the file is not valid JSON."
+
+    def test_merge_key_override_is_accepted(self, tmp_path):
+        text = YAML_DOC.replace(
+            "      search: {gate: auto, verb: search}\n",
+            "      search: {gate: auto, verb: search}\n"
+            "      base_read: &base {gate: auto, verb: read}\n"
+            "      other: {<<: *base, gate: review}\n",
+        )
+        tools = {t.name: t for t in cfg.load_upstreams(_file(tmp_path, "u.yaml", text))[0].tools}
+        assert (tools["base_read"].gate, tools["other"].gate) == ("auto", "review")
+
+    def test_unhashable_key_is_not_reported_as_repeated(self, tmp_path):
+        message = _refused_file(_file(tmp_path, "u.yaml", "? [a]\n: 1\n? [a]\n: 2\n"))
+        assert message == PREFIX + "the file is not valid YAML."
+
+    def test_size_limit(self, tmp_path):
+        base = json.dumps(_doc())
+        ok = base + " " * (262144 - len(base))
+        assert cfg.load_upstreams(_file(tmp_path, "ok.json", ok))[0].id == "kh"
+        too_big = _file(tmp_path, "big.json", ok + " ")
+        assert _refused_file(too_big) == PREFIX + "the file is larger than 256 KiB."
+
+
+class TestInline:
+    def test_yaml_and_one_line_json(self):
+        assert cfg.parse_inline(YAML_DOC) == _parse(_doc())
+        assert cfg.parse_inline(json.dumps(_doc())) == _parse(_doc())
+
+    def test_errors_carry_the_inline_prefix(self):
+        with pytest.raises(ConfigurationError) as info:
+            cfg.parse_inline("a: [MARKER")
+        assert str(info.value) == INLINE + ": the text is not valid YAML or JSON."
+        with pytest.raises(ConfigurationError) as info:
+            cfg.parse_inline("a: 1\na: 2\n")
+        assert str(info.value) == INLINE + ": the text repeats a key."
+        with pytest.raises(ConfigurationError) as info:
+            cfg.parse_inline("x" * 262145)
+        assert str(info.value) == INLINE + ": the text is larger than 256 KiB."
+        with pytest.raises(ConfigurationError) as info:
+            cfg.parse_inline("version: 2\nupstreams: []\n")
+        assert str(info.value).startswith(INLINE + ": version")
+
+
+class TestLoadDeclared:
+    def test_neither_and_blank_is_none(self, monkeypatch):
+        monkeypatch.delenv(cfg.ENV_VAR, raising=False)
+        monkeypatch.delenv(cfg.ENV_VAR_INLINE, raising=False)
+        assert cfg.load_declared() is None
+        monkeypatch.setenv(cfg.ENV_VAR, "  ")
+        monkeypatch.setenv(cfg.ENV_VAR_INLINE, "\n")
+        assert cfg.load_declared() is None
+
+    def test_file_or_inline(self, monkeypatch, tmp_path):
+        monkeypatch.delenv(cfg.ENV_VAR_INLINE, raising=False)
+        monkeypatch.setenv(cfg.ENV_VAR, str(_file(tmp_path, "u.yaml", YAML_DOC)))
+        assert cfg.load_declared() == _parse(_doc())
+        monkeypatch.delenv(cfg.ENV_VAR)
+        monkeypatch.setenv(cfg.ENV_VAR_INLINE, YAML_DOC)
+        assert cfg.load_declared() == _parse(_doc())
+
+    def test_both_are_refused(self, monkeypatch, tmp_path):
+        monkeypatch.setenv(cfg.ENV_VAR, str(_file(tmp_path, "u.yaml", YAML_DOC)))
+        monkeypatch.setenv(cfg.ENV_VAR_INLINE, YAML_DOC)
+        with pytest.raises(ConfigurationError) as info:
+            cfg.load_declared()
+        assert str(info.value) == "Set PRIVACYFENCE_UPSTREAM_MCP_FILE or PRIVACYFENCE_UPSTREAM_MCP, not both."
+
+
+class TestDeclaredGrants:
+    GRANT = {"match": "@Example.com", "domains": ["hr", "general"]}
+
+    def test_grants_parse(self):
+        (server,) = _parse(_doc(grants=[self.GRANT, {"match": "*", "domains": []}]))
+        assert server.grants == (cfg.Grant("@example.com", ("general", "hr")), cfg.Grant("*", ()))
+
+    def test_absent_grants_are_empty(self):
+        assert _parse(_doc())[0].grants == ()
+
+    def test_error_names_the_grant_key(self):
+        _refused(_doc(grants=[{"match": "no spaces ok?", "domains": []}]), "upstreams[0].grants[0].match")
+
+    def test_too_many_and_not_a_list(self):
+        _refused(_doc(grants=[{"match": "*", "domains": []}] * 201), "upstreams[0].grants: may list at most 200")
+        _refused(_doc(grants={"match": "*"}), "upstreams[0].grants: must be a list")
+
+    def test_seed_payload_leaves_out_upstreams_without_grants(self):
+        both = _parse(_doc(grants=[self.GRANT]))
+        other = cfg.UpstreamServer("zz", "Z", "https://z.example/mcp", "aud", ())
+        assert cfg.seed_payload(both + (other,)) == {
+            "kh": {"grants": [{"match": "@example.com", "domains": ["general", "hr"]}]}
+        }

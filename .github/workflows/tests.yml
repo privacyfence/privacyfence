@@ -59,6 +59,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             mcpb/shim/package-lock.json
+            n8n/package-lock.json
             tests/integration/ai_clients/package-lock.json
 
       - name: Install dependencies
@@ -96,6 +97,14 @@ jobs:
       - name: Build shim
         run: npm run build
         working-directory: mcpb/shim
+
+      # tests/integration/test_n8n_node_contract.py drives the n8n node's own
+      # sources against a real /mcp endpoint, so n8n/'s dependencies must be
+      # installed before pytest runs (the test's fixture would otherwise run
+      # `npm ci` itself, inside the timed test step).
+      - name: Install n8n node dependencies
+        run: npm ci
+        working-directory: n8n
 
       # The exact-pinned AI-client CLIs the T3 contract tests run
       # (tests/integration/test_claude_code_contract.py), integrity-checked
@@ -194,11 +203,13 @@ jobs:
   #
   # This is a reduced core suite for when CI cost
   # matters: the Python test suite only, no Node/npm setup and no shim
-  # build. tests/integration/test_shim_mcp_contract.py is explicitly
-  # excluded below rather than left to run -- its built_shim_entry fixture
+  # build. tests/integration/test_shim_mcp_contract.py and
+  # tests/integration/test_n8n_node_contract.py are explicitly
+  # excluded below rather than left to run -- the shim's built_shim_entry fixture
   # would otherwise build the shim from scratch on every matrix leg (GitHub's
   # ubuntu-latest runners ship npm preinstalled, so it wouldn't skip itself
-  # the way it does in an environment with no npm at all), which is exactly
+  # the way it does in an environment with no npm at all), and the n8n node's
+  # contract test needs n8n/'s dependencies installed, which is exactly
   # the redundant Node-toolchain cost this job exists to avoid -- that
   # coverage already comes from the `test` job's 3.13 run.
   test-python-compat:
@@ -235,7 +246,10 @@ jobs:
       # the coverage-floor ratchet's, to own -- duplicating it per Python
       # version here would just be redundant CI time).
       - name: Run test suite (100% pass rate required)
-        run: pytest -v --ignore=tests/integration/test_shim_mcp_contract.py
+        run: >-
+          pytest -v
+          --ignore=tests/integration/test_shim_mcp_contract.py
+          --ignore=tests/integration/test_n8n_node_contract.py
 
       # Same failure-diagnostics capture as the `test` job's identically-named step --
       # the matrix leg's own Python version is folded into the artifact name
@@ -504,6 +518,56 @@ jobs:
 
   # privacyfence-sync (sync/) installs and tests alone, with none of the daemon's dependencies.
   # No `paths:` filter, so it runs on every PR and both legs can be required checks.
+  # The n8n community node (n8n/, docs/n8n-node.md): its own lint, typecheck,
+  # build and unit tests, then the tarball `npm publish` would upload, kept as
+  # an artifact so a reviewer can inspect exactly what ships. The contract
+  # test against a real /mcp endpoint runs in the `test` job.
+  n8n-node:
+    name: n8n-node
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: n8n/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: n8n
+
+      - name: Lint
+        run: npm run lint
+        working-directory: n8n
+
+      - name: Type-check
+        run: npm run typecheck
+        working-directory: n8n
+
+      - name: Build
+        run: npm run build
+        working-directory: n8n
+
+      - name: Run tests
+        run: npm test
+        working-directory: n8n
+
+      - name: Pack
+        run: npm pack
+        working-directory: n8n
+
+      - name: Upload package tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: n8n-nodes-privacyfence-tgz
+          path: n8n/*.tgz
+          if-no-files-found: error
+          retention-days: 30
+
   sync:
     name: Sync client (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

@@ -41,6 +41,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   published image, a tested Compose file with Caddy, upgrades, backups and verifying the image.
 - [`upstream-mcp.md`](upstream-mcp.md) — put your own MCP server behind PrivacyFence: declare its tools
   and gates, grant people data domains, and what the upstream must verify in the signed caller claim.
+- [`n8n-node.md`](n8n-node.md) — the PrivacyFence node for n8n: install the community node, the
+  credential, calling a tool from a workflow or an AI Agent, and the delivery switch.
 - [`oidc-provider.md`](oidc-provider.md) — let Peek and Grist (or other apps you name) sign people in
   through PrivacyFence, with the identity PrivacyFence already has.
 - [`security-and-compliance.md`](security-and-compliance.md) — trust boundaries, step-up

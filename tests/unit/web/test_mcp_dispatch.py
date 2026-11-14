@@ -1624,6 +1624,15 @@ class TestProposeWithDelivery(_DeliveryBase):
         }
         assert result["message"] == agent_runtimes.DELIVERY_MESSAGE
 
+    async def test_the_message_follows_the_configured_type(self):
+        runtime = dataclasses.replace(
+            _N8N_CONFIG, mcp_url="https://public.example.com/mcp", credential_type="privacyFenceApi",
+        )
+        result = await self._propose(self._dispatcher(runtime=runtime))
+        assert result["message"] == agent_runtimes.DELIVERY_MESSAGE_PRIVACYFENCE_NODE
+        assert result["message"] == agent_runtimes.delivery_message("privacyFenceApi")
+        assert result["message"] != agent_runtimes.DELIVERY_MESSAGE
+
     async def test_the_proposal_carries_the_delivery_and_the_mcp_url(self):
         result = await self._propose(self._dispatcher())
 
@@ -1701,7 +1710,7 @@ class TestRuntimeCredentialStatus(_DeliveryBase):
         proposal = self.registry.take("local", proposed["proposal_id"])
 
         class Api:
-            def create_bearer_credential(self, **kwargs):
+            def create_credential(self, **kwargs):
                 pass
 
         bound = {

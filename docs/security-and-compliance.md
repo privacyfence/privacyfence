@@ -419,6 +419,11 @@ one case where a token's secret leaves PrivacyFence.
   Anyone who can edit workflows there can attach it to a node, including an HTTP Request node that points at an
   echo endpoint, and read it from the execution data. That includes the AI client that proposed it. Narrow rules
   and a short lifetime are the protection, and the review page says so before the person confirms.
+- **The PrivacyFence credential holds the address.** With **Credential type in n8n** set to the PrivacyFence
+  node, the credential holds the token and the PrivacyFence MCP address it is sent to. Whoever can edit that
+  credential in n8n can point the token at a host of their own, which is the same reach as above: whoever can
+  edit workflows. The node has no address override and never follows a redirect. The exposure is documented,
+  not removed ([the node](n8n-node.md#what-the-credential-exposes)).
 - **The workflow id is advisory.** `deliver_to.workflow_id` is what the client reports. It is shown on the review
   page and written to the audit log, and n8n does not tie the credential to it.
 - **The n8n key never leaves the environment.** `PRIVACYFENCE_N8N_URL` and `PRIVACYFENCE_N8N_API_KEY` come only
