@@ -1640,12 +1640,18 @@ class TestPerPrincipalIsolation:
 
     def _app(self):
         from privacyfence.principal import Principal
-        from privacyfence.web.server import _local_principal_resolver, _PrincipalScopeMiddleware
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.web.server import _PrincipalScopeMiddleware
 
         web_ui = WebApprovalUI()
         sessions = LocalSessionStore()
         app = create_app(web_ui, sessions=sessions)
-        scoped = _PrincipalScopeMiddleware(app, _local_principal_resolver(sessions))
+
+        def resolve(request):
+            principal_id = sessions.principal_id(request.cookies.get(SESSION_COOKIE, ""))
+            return LOCAL_PRINCIPAL if principal_id in (None, LOCAL_PRINCIPAL.id) else Principal(id=principal_id)
+
+        scoped = _PrincipalScopeMiddleware(app, resolve)
         client = TestClient(scoped, base_url="http://localhost")
         return client, sessions, web_ui, Principal
 

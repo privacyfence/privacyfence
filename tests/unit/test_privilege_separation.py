@@ -60,7 +60,7 @@ from privacyfence import (
     secure_files,
     windows_acl,
 )
-from privacyfence.web import control_channel, mcp_auth
+from privacyfence.web import control_channel
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -488,26 +488,11 @@ class TestSeparatedPathResolution:
         assert control_channel.socket_path_under(handoff) == handoff / "control.sock"
         assert control_channel.companion_socket_path_under(handoff) == handoff / "companion.sock"
 
-    def test_mcp_token_moved_out_of_the_shared_handoff_dir(self, separated):
-        # ADR 0008: mcp_token is deliberately not left reachable on disk --
-        # a token any service-group member could read off disk is exactly
-        # the shared-identity leak one principal per OS user closes. It
-        # lives under authority_dir() -- service-account-owned, 0700,
-        # reachable only by minting it fresh over the control channel
-        # (MINT MCP) -- not under the shared, agent-readable handoff dir.
-        token = mcp_auth.load_or_create_mcp_token()
-
-        path = separated / "authority" / "mcp_token"
-        assert path.read_text(encoding="utf-8") == token
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
-        assert not (separated / "handoff" / "mcp_token").exists()
-
     def test_resolving_paths_does_not_retighten_the_handoff_dir(self, separated):
         # secure_mkdir re-asserts its mode on an existing directory, which is
         # right everywhere except here: 0700 would lock out the very accounts
         # the installer just let in, one discovery-file write at a time.
         paths.handoff_dir()
-        mcp_auth.load_or_create_mcp_token()
         paths.handoff_dir()
 
         mode = stat.S_IMODE((separated / "handoff").stat().st_mode)

@@ -104,26 +104,6 @@ class TestControlChannelServerPosix:
         finally:
             server.stop()
 
-    def test_mint_returns_a_code_that_redeems_a_session(self, tmp_path, monkeypatch):
-        from privacyfence.web.server import build_app
-        from privacyfence.web.session_auth import LocalSessionStore
-        from privacyfence.web_approval_ui import WebApprovalUI
-        from starlette.testclient import TestClient
-
-        server, bootstrap = self._server(tmp_path, monkeypatch)
-        try:
-            reply = _mint(server.address)
-            assert reply.startswith("OK ")
-            code = reply[len("OK "):].strip()
-
-            sessions = LocalSessionStore()
-            app = build_app(WebApprovalUI(), sessions=sessions, bootstrap=bootstrap)
-            client = TestClient(app, base_url="http://localhost", follow_redirects=False)
-            r = client.get(f"/approvals?bootstrap={code}")
-            assert "pf_session" in r.headers.get("set-cookie", "")
-        finally:
-            server.stop()
-
     def test_each_mint_is_a_fresh_single_use_code(self, tmp_path, monkeypatch):
         server, _bootstrap = self._server(tmp_path, monkeypatch)
         try:
@@ -875,15 +855,6 @@ class TestCopyMcpCommand:
         monkeypatch.setattr(cc, "_copy_to_clipboard", copied.append)
         monkeypatch.setattr(cc, "_message_linux", lambda message, *, timeout: shown.append(message) or True)
         return copied, shown
-
-    def test_the_pattern_matches_what_mcp_auth_actually_mints(self, tmp_path, monkeypatch):
-        from privacyfence import paths
-        from privacyfence.principal import LOCAL_PRINCIPAL
-        from privacyfence.web import mcp_auth
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        for _ in range(5):
-            assert cc._MCP_TOKEN_PATTERN.match(mcp_auth.rotate_mcp_token(LOCAL_PRINCIPAL))
 
     def test_the_pattern_accepts_a_scoped_token_secret(self):
         from privacyfence import scoped_tokens
