@@ -380,6 +380,7 @@ lists; spaces around each item are ignored.
 | `PRIVACYFENCE_OIDC_CLIENTS` | none | The web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<issuer>/oidc`), comma-separated lower-case names. Organization mode and single-user mode only; local mode refuses the start. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` | none | The app's redirect addresses, comma-separated, matched exactly (`https://`, or `http://` for localhost). `<NAME>` is the app name in capitals with `-` as `_`. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET`, `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET_FILE` | none | The app's client secret (at least 32 characters), or the path of a file that holds it. Set one, never both. Never logged. See [Sign in to other apps with PrivacyFence](oidc-provider.md). |
+| `PRIVACYFENCE_UPSTREAM_MCP_FILE` | none | The path of a JSON file that declares other MCP servers PrivacyFence puts its tool policy in front of: their address, audience and each tool's gate and verb. Read once at startup; a change needs a restart. Organization mode only; any other mode refuses the start. Which people hold which data domains is the `upstream_mcp` key of `org/admin_config.json`. See [Upstream MCP servers](upstream-mcp.md). |
 | `PRIVACYFENCE_BUILTIN_APPS` | none | Development builds only: the path of a JSON file that stands in for the built-in apps a release carries. An object with the keys `google_web`, `slack`, `salesforce`, `atlassian_relay`, `miro` and `google_signin`, each `{"client_id": "…", "client_secret": "…"}`; `salesforce` may also carry `install_url`. A release build ignores the variable. |
 
 **Precedence.** A legacy bundle's `idp` section wins over `PRIVACYFENCE_IDP_*` and
@@ -419,6 +420,7 @@ object, or has an unknown `version` refuses the start.
 | `step_up.enabled`, `scope`, `require_passkey` | step-up for approvals; the page only offers stricter values | Step-up |
 | `step_up.rp_id`, `rp_name`, `batch` | the WebAuthn relying-party id and name, and `single_assertion` or `per_item` | none: edit the file, then restart |
 | `scoped_tokens.enabled`, `max_days`, `allow_ai_proposals` | scoped tokens; `allow_ai_proposals` lets an AI client propose one ([ADR 0253](adr/0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md)) | Scoped tokens |
+| `upstream_mcp.<id>.grants` | the data domains each person holds on an [upstream MCP server](upstream-mcp.md#domain-grants): a list of `match` (`*`, `@<domain>` or an email) and `domains`. Unlike the other keys it is re-read when the file changes, so a hand edit applies to the next call without a restart. | none: edit the file |
 | `audit_forwarding.enabled`, `kind`, `syslog.host`, `syslog.port`, `syslog.protocol`, `http.url`, `http.bearer_token_env` | audit forwarding; the token itself is read from the named environment variable and is never stored | Audit forwarding |
 
 Changes to services and the Salesforce login URL take effect at once. Every other section is saved
