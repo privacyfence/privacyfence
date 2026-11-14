@@ -18,6 +18,10 @@ Invariants this module is where the rest of the tree gets them from (ADR 0006, A
 - **Caller-supplied strings are data.** Every one goes through ``sanitize_client_string()``
   before it is stored; rendering still escapes it. ``clientInfo.icons`` and ``website_url`` are
   never read here at all.
+
+``current_client_id()`` is the raw OAuth client id of the call being dispatched. It is for the
+upstream identity claim only (``act.sub``); it is not an attested agent and nothing may key a
+decision on it.
 """
 
 from __future__ import annotations
@@ -279,3 +283,27 @@ class agent_scope:  # noqa: N801 (context-manager-style name, like principal_sco
     def __exit__(self, *exc_info: object) -> None:
         if self._token is not None:
             _agent_ctx.reset(self._token)
+
+
+_client_id_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("privacyfence_client_id", default="")
+
+
+def current_client_id() -> str:
+    return _client_id_ctx.get()
+
+
+class client_id_scope:  # noqa: N801 (context-manager-style name, like agent_scope)
+    """Run the wrapped code with ``client_id`` as the call's raw OAuth client id -- entered once
+    around a request's dispatch, beside ``agent_scope``. ``""`` means no OAuth client is known."""
+
+    def __init__(self, client_id: str) -> None:
+        self._client_id = client_id
+        self._token: contextvars.Token[str] | None = None
+
+    def __enter__(self) -> client_id_scope:
+        self._token = _client_id_ctx.set(self._client_id)
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        if self._token is not None:
+            _client_id_ctx.reset(self._token)
