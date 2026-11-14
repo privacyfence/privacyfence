@@ -27,7 +27,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-verifier
 
-- pending
+- review: Worker restricted the JWKS fetch to http(s) URLs (bandit); its unexamined bandit High note did not reproduce: bandit on src exits clean on the merged tree.
 
 ## p7-reference-server-both
 
