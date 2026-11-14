@@ -21,7 +21,7 @@ from pydantic import AnyUrl
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import agent_label, agent_overrides, org_identity, paths, privilege_separation
+from privacyfence import agent_overrides, org_identity, paths
 from privacyfence.agent_identity import (
     UNKNOWN_AGENT,
     AgentIdentity,
@@ -38,11 +38,6 @@ from privacyfence.web import oauth_provider as op
 from privacyfence.web import routes_settings as ros
 from privacyfence.web.routes_mcp import _resolve_agent
 
-
-@pytest.fixture(autouse=True)
-def _org_mode_labels(monkeypatch):
-    """The tiered labels here are org mode's; local mode's "Undetected" is ADR 0088."""
-    monkeypatch.setattr(agent_label, "_local_mode", False)
 
 BASE_URL = "https://pf.example.com"
 ALICE = Principal(id="alice", email="alice@example.com")
@@ -184,64 +179,11 @@ class TestRedirectAttestation:
 
 
 # --------------------------------------------------------------------------- #
-# Local override -> a relabel, recorded as client_info on every install (ADR 0037)
+# Override -> a relabel, recorded as client_info (ADR 0037)
 # --------------------------------------------------------------------------- #
 
-_OVERRIDE_CONFIG = {"agent_overrides": {"My-Wrapper": "claude-code", "python-mcp-client": "claude-code"}}
-
-
-def _started_overrides(tmp_path, monkeypatch, *, separated: bool, config_path: str):
-    """The ``AgentOverrides`` daemon_main's own startup hands the web server, for a daemon whose
-    settings came from ``config_path`` on a separated (or unseparated) install."""
-    from privacyfence import daemon_main
-    from privacyfence.connector_host import ConnectorHost
-    from privacyfence.web.server import WebServer
-
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: separated)
-    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(WebServer, "start", lambda self: None)
-    captured: dict[str, object] = {}
-    real_init = WebServer.__init__
-
-    def _init(self, *args, **kwargs):
-        captured["overrides"] = kwargs.get("agent_overrides")
-        real_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(WebServer, "__init__", _init)
-    daemon_main._maybe_start_web_server(
-        dict(_OVERRIDE_CONFIG), ConnectorHost([]), unattended_sessions_enabled=False, config_path=config_path,
-    )
-    return captured["overrides"]
-
-
-class TestLocalOverrideNeverAttests:
-    """The review finding this replaces: on a separated install an override was recorded as
-    ``override`` (attested), so any local AI system sending ``python-mcp-client`` was recorded as
-    attested Claude Code. The override now relabels only, wherever it was read from."""
-
-    @pytest.mark.parametrize("separated", [True, False], ids=["separated", "unseparated"])
-    @pytest.mark.parametrize("where", ["authority", "elsewhere", "none"])
-    def test_a_match_is_claimed_on_every_install(self, tmp_path, monkeypatch, separated, where):
-        config_path = {
-            "authority": str(paths.authority_root(tmp_path) / "config" / "settings.yaml"),
-            "elsewhere": str(tmp_path / "home" / "settings.yaml"),
-            "none": "",
-        }[where]
-        overrides = _started_overrides(tmp_path, monkeypatch, separated=separated, config_path=config_path)
-
-        agent = _resolve_agent(_ctx("my-wrapper", "3.1"), None, None, overrides=overrides)
-
-        assert agent == AgentIdentity(id="claude-code", name="Claude Code", version="3.1", source=AgentSource.CLIENT_INFO)
-        assert not agent.is_attested()
-
-    def test_a_spoofed_mapped_name_is_recorded_as_a_claim(self, tmp_path, monkeypatch):
-        # The finding's own scenario: any AI system holding the shared local token sends a mapped name.
-        overrides = _started_overrides(
-            tmp_path, monkeypatch, separated=True,
-            config_path=str(paths.authority_root(tmp_path) / "config" / "settings.yaml"),
-        )
-        agent = _resolve_agent(_ctx("python-mcp-client"), None, None, overrides=overrides)
-        assert (agent.id, agent.source) == ("claude-code", AgentSource.CLIENT_INFO)
+class TestOverrideResolution:
+    """An override relabels only: it never outranks an attestation and never attests itself."""
 
     def test_an_unmatched_name_falls_through_to_the_claim(self):
         overrides = agent_overrides.AgentOverrides(mapping={"my-wrapper": "claude-code"})

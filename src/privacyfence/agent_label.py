@@ -4,7 +4,7 @@
 decides only what the approval card and the approval list say about it. Both surfaces go through
 ``label_for()`` so they cannot drift apart on the wording or on which tier gets the brand mark.
 
-Three tiers, and they never look the same:
+Three tiers (plus the retired undetected one), and they never look the same:
 
 - **attested** -- a registry entry named by a signal the caller could not choose (``override``,
   ``oauth_client``). The only tier that gets the vendor's brand mark (``icon_id``) and the only one
@@ -15,14 +15,8 @@ Three tiers, and they never look the same:
 - **unknown** -- no usable signal, or a name no registry entry matches exactly.
   ``UNRECOGNISED_LABEL``, with the sanitized raw claim alongside when one was sent. Never blank
   and never "Claude".
-- **undetected** -- every request on a local install (ADR 0088). Local mode has one shared MCP
-  token (ADR 0006), so nothing it receives can tell one AI system from another, and no label there
-  can be more than a claim. Rather than show that claim, the card, the approval list and the audit
-  history all say ``UNDETECTED_LABEL`` -- no name, no claim, no "Not verified" badge. The audit log
-  still records the claim (``agent_id``/``agent_source``); only what a human is shown changes.
-
-Which of the two sets applies is install-wide: ``daemon_main`` calls ``set_local_mode()`` once at
-startup from ``org_mode.resolve_mode``. The default is local, like ``org_mode.DEFAULT_MODE``.
+- **undetected** -- no longer produced: it was the one label of a local install (ADR 0088),
+  which ADR 0296 removed. The renderers still know the tier until they are cleaned up.
 
 Everything here returns raw text. Every renderer escapes it, the same contract
 ``approval_window_html.fill_agent_placeholder`` documents -- escaping here too would show a name
@@ -57,19 +51,6 @@ _REGISTRY_IDS = frozenset(entry.agent_id for entry in REGISTRY)
 # identity named after the token. It is not a registry entry, but it is a credential the person
 # created, so it is shown by name, in either mode.
 SCOPED_TOKEN_ID_PREFIX = "scoped-token:"  # nosec B105  # an agent_id prefix, not a credential
-
-_local_mode = True
-
-
-def set_local_mode(local: bool) -> None:
-    """Whether this install is in local mode -- called once by ``daemon_main`` at startup."""
-    global _local_mode
-    _local_mode = local
-
-
-def is_local_mode() -> bool:
-    return _local_mode
-
 
 @dataclass(frozen=True)
 class AgentLabel:
@@ -111,13 +92,11 @@ class AgentLabel:
 def label_for(agent: AgentIdentity) -> AgentLabel:
     """The tiered label for ``agent``. A registry match is required for the attested and claimed
     tiers: an attested signal naming something the registry does not know still renders as
-    unknown, because there is no display name or mark to give it. On a local install every
-    identity is undetected, whatever it claims, except a scoped token's own calls: the person made
-    that credential, so it is named after the token (no brand mark, since it is no registry entry)."""
+    unknown, because there is no display name or mark to give it. A scoped token's own calls
+    are named after the token: the person made that credential (no brand mark, since it is no
+    registry entry)."""
     if agent.id.startswith(SCOPED_TOKEN_ID_PREFIX) and agent.name and agent.is_attested():
         return AgentLabel(tier=TIER_ATTESTED, name=agent.name, subject=agent.name, icon_id="")
-    if _local_mode:
-        return AgentLabel(tier=TIER_UNDETECTED, name="", subject=NEUTRAL_SUBJECT, icon_id="")
     if agent.id in _REGISTRY_IDS and agent.source.value:
         if agent.is_attested():
             return AgentLabel(tier=TIER_ATTESTED, name=agent.name, subject=agent.name, icon_id=agent.id)

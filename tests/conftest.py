@@ -26,7 +26,6 @@ import pytest
 
 from privacyfence import (
     admin_config,
-    agent_label,
     app_credentials,
     approval_ui,
     auto_accept,
@@ -149,10 +148,6 @@ def _reset() -> None:
     # configure_popup_executor() is a no-op once the size already matches,
     # so this costs nothing on every other test.
     gate.configure_popup_executor(gate.DEFAULT_MAX_PENDING)
-    # agent_label's install mode is set once by daemon_main at startup
-    # (ADR 0088); a test that starts the daemon in org mode must not leave
-    # every later test rendering org-mode labels.
-    agent_label.set_local_mode(True)
     # The request a gated call released (ADR 0093) is scoped per tool
     # call by the dispatcher; a test that calls gate._audit directly sets
     # it outside any such scope, so it must not carry into the next test.
@@ -204,6 +199,7 @@ def _clear_server_environment(monkeypatch):
         *(name for name in os.environ if name.startswith(("PRIVACYFENCE_IDP_", "PRIVACYFENCE_OIDC_"))),
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
 
 
 @pytest.fixture(autouse=True)

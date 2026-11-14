@@ -241,7 +241,6 @@ class TestLoadConfig:
         config_path = tmp_path / "settings.yaml"
         config_path.write_text(yaml.dump({"auto_accept_grants": {}}))
         monkeypatch.setattr(sys, "argv", ["privacyfence-app", "--config", str(config_path)])
-        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", lambda: None)
         assert daemon_main.main() == 1
         err = capsys.readouterr().err
         assert "Configuration error:" in err
@@ -253,7 +252,6 @@ class TestLoadConfig:
         marker = tmp_path / "data_format.json"
         marker.write_text(json.dumps({"format": 8, "written_by": "8.0.0", "completed_at": "2030-01-01T00:00:00+00:00"}))
         monkeypatch.setattr(data_format, "marker_path", lambda: marker)
-        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", lambda: None)
         monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
 
         assert daemon_main.main([]) == 1
@@ -261,15 +259,6 @@ class TestLoadConfig:
         err = capsys.readouterr().err
         assert "This data was last used by PrivacyFence 8.0.0 (data format 8)." in err
         assert "Install 8.0.0 or newer." in daemon_main.last_startup_error()
-
-    def test_main_keeps_a_runtime_identity_refusal_for_the_event_log(self, monkeypatch, capsys):
-        def refuse():
-            raise daemon_main.privilege_separation.PrivilegeSeparationError("wrong account")
-
-        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", refuse)
-        assert daemon_main.main([]) == 1
-        assert daemon_main.last_startup_error() == "Configuration error: wrong account"
-        assert "wrong account" in capsys.readouterr().err
 
     def test_v1_sections_an_earlier_release_converted_are_removed(self, tmp_path):
         # 4.1-4.4 converted auto_accept_rules into auto_accept: on startup, set the marker, and
@@ -333,10 +322,11 @@ class TestLoadOrgConfig:
         with pytest.raises(org_mode.ConfigurationError, match="not signed"):
             daemon_main.load_org_config()
 
-    def test_returns_parsed_dict_when_valid_with_no_mode_key(self, tmp_path, monkeypatch):
+    def test_a_bundle_with_no_mode_key_is_organization_mode_and_needs_a_signature(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
-        assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
+        with pytest.raises(org_mode.ConfigurationError, match="requires a signed bundle"):
+            daemon_main.load_org_config()
 
     def test_explicit_org_mode_unsigned_raises_configuration_error(self, tmp_path, monkeypatch):
         """Org mode requires a signed bundle (ADR 0016) -- see
@@ -406,11 +396,6 @@ class TestLoadOrgConfigSigning:
     wired into every load_org_config() call -- trust-on-first-use of the
     first signed bundle an install ever sees, then mandatory verification
     against that pinned key for everything after."""
-
-    def test_unsigned_bundle_in_local_mode_is_unaffected(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
-        assert daemon_main.load_org_config() == {"slack": {"client_id": "abc"}}
 
     def test_first_signed_bundle_is_accepted_and_pins_its_key(self, tmp_path, monkeypatch):
         from privacyfence import org_bundle_signing
@@ -699,48 +684,6 @@ class TestCheckStoragePermissions:
 
         assert caplog.text.count("Insecure storage permissions") == 1
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="POSIX permission bits only -- Windows' separated layout is NTFS ACLs, audited by windows_acl.py instead",
-    )
-    def test_separated_layout_is_not_audited_against_the_flat_0700_rule(self, tmp_path, monkeypatch, caplog):
-        # Privilege separation makes two of these directories deliberately looser than
-        # 0700 -- the system root 0711 so the logged-in user can traverse to
-        # the handoff directory, and the handoff directory 3770 so two
-        # accounts can hand each other a socket. Reporting the design as a
-        # defect on every startup would be noise; in org mode it would refuse
-        # to start over it.
-        handoff = tmp_path / "handoff"
-        handoff.mkdir()
-        tmp_path.chmod(0o711)
-        handoff.chmod(0o3770)
-        self._patch_dirs(monkeypatch, tmp_path)
-        monkeypatch.setattr(daemon_main, "handoff_dir", lambda: handoff)
-        monkeypatch.setattr(daemon_main.privilege_separation, "is_enabled", lambda: True)
-        monkeypatch.setattr(daemon_main.privilege_separation, "audit_layout", list)
-
-        with caplog.at_level(logging.WARNING):
-            daemon_main.check_storage_permissions(org_mode_active=True)  # must not raise
-
-        assert "Insecure storage permissions" not in caplog.text
-
-    def test_separated_layout_problems_are_reported_by_the_startup_check(self, tmp_path, monkeypatch, caplog):
-        # The separated layout gets its own audit instead -- including the one
-        # a mode check can't see: authority/ still owned by the human.
-        self._patch_dirs(monkeypatch, tmp_path)
-        tmp_path.chmod(0o700)
-        monkeypatch.setattr(daemon_main, "handoff_dir", lambda: tmp_path / "handoff")
-        monkeypatch.setattr(daemon_main.privilege_separation, "is_enabled", lambda: True)
-        monkeypatch.setattr(
-            daemon_main.privilege_separation, "audit_layout", lambda: ["authority is owned by 'alice'"],
-        )
-
-        with caplog.at_level(logging.WARNING):
-            daemon_main.check_storage_permissions(org_mode_active=False)
-
-        assert "Insecure storage permissions" in caplog.text
-        assert "owned by 'alice'" in caplog.text
-
-
 # ---------------------------------------------------------------------------- #
 # build_connectors: the Google-backed connectors (gmail, drive, calendar,
 # contacts, tasks, apps_script) all follow the same "needs installed google
@@ -956,27 +899,6 @@ class TestBuildConnectorsSlack:
 class TestBuildConnectorsSalesforce:
     def _org_config(self):
         return {"salesforce": {"consumer_key": "ck", "login_url": "https://login.salesforce.com"}}
-
-    def test_built_when_configured_and_reachable_merges_org_and_token(self, monkeypatch):
-        monkeypatch.setattr(
-            daemon_main, "load_salesforce_token",
-            lambda path: {"access_token": "sf-tok", "instance_url": "https://my.salesforce.com"},
-        )
-        fake = fake_client_class(result="https://my.salesforce.com")
-        monkeypatch.setattr(daemon_main, "SalesforceClient", fake)
-
-        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
-
-        assert len(connectors) == 1
-        assert connectors[0].name == "salesforce"
-        assert connectors[0].download_mode == "local"
-        # config= must carry both the org registration and the per-user token.
-        assert fake.captured_kwargs["config"] == {
-            "consumer_key": "ck",
-            "login_url": "https://login.salesforce.com",
-            "access_token": "sf-tok",
-            "instance_url": "https://my.salesforce.com",
-        }
 
     def test_skipped_when_org_config_absent(self, monkeypatch):
         fake = fake_client_class(result="ok")
@@ -1406,13 +1328,6 @@ class TestBuildConnectorsGrist:
         monkeypatch.setattr(daemon_main, "load_grist_token", load)
         monkeypatch.setattr(GristClient, "check_connection", check)
 
-    def test_api_key_file_builds_connector_with_only_the_bare_section(self, monkeypatch):
-        self._patch(monkeypatch, self.API_KEY)
-        connectors, failures = daemon_main.build_connectors({}, {"grist": {"enabled": True}})
-        assert [c.name for c in connectors] == ["grist"]
-        assert connectors[0].download_mode == "local"
-        assert "grist" not in failures
-
     def test_oauth_file_builds_through_token_provider(self, monkeypatch):
         from privacyfence.grist_auth import GristTokenProvider
 
@@ -1427,12 +1342,6 @@ class TestBuildConnectorsGrist:
         org = {"mode": "org", "server": {"issuer_url": "https://pf.example.com"}}
         _connectors, failures = daemon_main.build_connectors({}, org)
         assert failures["grist"] == "no_org_config"
-
-    def test_no_file_is_not_authenticated(self, monkeypatch):
-        self._patch(monkeypatch, None)
-        connectors, failures = daemon_main.build_connectors({}, {"grist": {"enabled": True}})
-        assert connectors == []
-        assert failures["grist"] == "not_authenticated"
 
     def test_api_key_file_while_bundle_has_oauth_app_is_not_authenticated(self, monkeypatch):
         self._patch(monkeypatch, self.API_KEY)
@@ -1480,13 +1389,6 @@ class TestBuildConnectorsPeek:
         monkeypatch.setattr(daemon_main, "load_peek_token", load)
         monkeypatch.setattr(PeekClient, "check_connection", check)
 
-    def test_token_file_builds_connector_with_only_the_bare_section(self, monkeypatch):
-        self._patch(monkeypatch, self.RECORD)
-        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
-        assert [c.name for c in connectors] == ["peek"]
-        assert connectors[0].download_mode == "local"
-        assert "peek" not in failures
-
     def test_pinned_url_equal_to_the_file_builds(self, monkeypatch):
         self._patch(monkeypatch, self.RECORD)
         org = {"peek": {"base_url": "https://peek.example.com/"}}
@@ -1506,25 +1408,6 @@ class TestBuildConnectorsPeek:
         org = {"mode": "org", "server": {"issuer_url": "https://pf.example.com"}}
         _connectors, failures = daemon_main.build_connectors({}, org)
         assert failures["peek"] == "no_org_config"
-
-    def test_no_file_is_not_authenticated(self, monkeypatch):
-        self._patch(monkeypatch, None)
-        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
-        assert connectors == []
-        assert failures["peek"] == "not_authenticated"
-
-    def test_check_connection_401_is_not_authenticated(self, monkeypatch):
-        from privacyfence.peek_client import PeekClientError
-
-        err = PeekClientError(
-            "Peek refused the saved sign-in (HTTP 401). Use Authenticate… in PrivacyFence Settings "
-            "to connect again.",
-            status=401,
-        )
-        self._patch(monkeypatch, self.RECORD, check_error=err)
-        connectors, failures = daemon_main.build_connectors({}, {"peek": {"enabled": True}})
-        assert connectors == []
-        assert failures["peek"] == "not_authenticated"
 
     def test_without_the_section_is_no_org_config_in_local_mode_too(self, monkeypatch):
         self._patch(monkeypatch, self.RECORD)
@@ -1742,43 +1625,6 @@ class TestMaybeStartWebServer:
         from privacyfence.connector_host import ConnectorHost
         return ConnectorHost([])
 
-    def test_bare_config_still_installs_the_web_approval_ui_and_starts_a_server(self, monkeypatch, tmp_path):
-        from privacyfence.web_approval_ui import WebApprovalUI, get_web_approval_ui
-        from privacyfence.approval_ui import get_approval_ui
-        started = self._no_bind(monkeypatch, tmp_path)
-
-        result = daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
-
-        assert result is not None
-        assert started.get("called") is True
-        assert get_approval_ui() is get_web_approval_ui()
-        assert isinstance(get_approval_ui(), WebApprovalUI)
-
-    def test_web_mode_installs_the_web_approval_ui_and_starts_a_server(self, monkeypatch, tmp_path):
-        from privacyfence.web_approval_ui import WebApprovalUI, get_web_approval_ui
-        from privacyfence.approval_ui import get_approval_ui
-        started = self._no_bind(monkeypatch, tmp_path)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"port": 18765}}, self._connector_host(),
-            unattended_sessions_enabled=False,
-        )
-
-        assert result is not None
-        assert result.port == 18765
-        assert started.get("called") is True
-        assert get_approval_ui() is get_web_approval_ui()
-        assert isinstance(get_approval_ui(), WebApprovalUI)
-        assert result.mcp_url is None  # web.mcp.enabled wasn't set
-
-    def test_web_mode_defaults_to_the_standard_port(self, monkeypatch, tmp_path):
-        from privacyfence.web.server import DEFAULT_PORT
-        self._no_bind(monkeypatch, tmp_path)
-        result = daemon_main._maybe_start_web_server(
-            {}, self._connector_host(), unattended_sessions_enabled=False,
-        )
-        assert result.port == DEFAULT_PORT
-
     def test_mcp_enabled_starts_a_server_with_mcp_mounted(self, monkeypatch, tmp_path):
         started = self._no_bind(monkeypatch, tmp_path)
 
@@ -1790,21 +1636,6 @@ class TestMaybeStartWebServer:
         assert started.get("called") is True
         assert result.mcp_url == f"{result.base_url}/mcp"
 
-    def test_web_mode_registry_gets_the_real_base_url_once_started(self, monkeypatch, tmp_path):
-        # gate.py's pending-result URL needs the registry to know the server's real
-        # base_url, not just exist -- set once the server actually starts,
-        # not at construction time.
-        from privacyfence.web_approval_ui import get_web_approval_ui
-        self._no_bind(monkeypatch, tmp_path)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"port": 18765}}, self._connector_host(),
-            unattended_sessions_enabled=False,
-        )
-
-        registry = get_web_approval_ui().deferred_registry
-        assert registry.approval_url("abc") == f"{result.base_url}/approvals/abc"
-
     def test_mcp_dispatcher_shares_the_same_registry_as_the_approval_ui(self, monkeypatch, tmp_path):
         from privacyfence.web_approval_ui import get_web_approval_ui
         self._no_bind(monkeypatch, tmp_path)
@@ -1815,51 +1646,6 @@ class TestMaybeStartWebServer:
         )
 
         assert result.mcp_dispatcher._registry is get_web_approval_ui().deferred_registry
-
-    def test_the_admin_api_gets_the_startup_admin_config_and_the_shared_org_config(self, monkeypatch, tmp_path):
-        from privacyfence.web import server as web_server
-        self._no_bind(monkeypatch, tmp_path)
-        seen = {}
-
-        def fake_build_app(web_ui, **kwargs):
-            seen.update(kwargs)
-            return lambda scope, receive, send: None
-
-        monkeypatch.setattr(web_server, "build_app", fake_build_app)
-        org_config = {"slack": {"client_id": "s"}}
-        startup_admin = {"services": {}}
-
-        daemon_main._maybe_start_web_server(
-            {}, self._connector_host(), unattended_sessions_enabled=False,
-            org_config=org_config, startup_admin=startup_admin,
-        )
-
-        assert seen["org_config"] is org_config
-        assert seen["startup_admin"] is startup_admin
-
-    def test_approvals_config_overrides_the_registrys_defaults(self, monkeypatch, tmp_path):
-        from privacyfence.web_approval_ui import get_web_approval_ui
-        self._no_bind(monkeypatch, tmp_path)
-
-        daemon_main._maybe_start_web_server(
-            {
-                "web": {
-                    "approvals": {
-                        "hold_window_seconds": 5, "pending_ttl_seconds": 60,
-                        "ledger_ttl_seconds": 30, "max_pending": 3,
-                        "max_pending_per_principal": 2,
-                    },
-                },
-            },
-            self._connector_host(), unattended_sessions_enabled=False,
-        )
-
-        registry = get_web_approval_ui().deferred_registry
-        assert registry.hold_window == 5
-        assert registry.pending_ttl == 60
-        assert registry.ledger_ttl == 30
-        assert registry.max_pending == 3
-        assert registry.max_pending_per_principal == 2
 
     def test_max_pending_per_principal_defaults_when_not_configured(self, monkeypatch, tmp_path):
         # An install that never sets this key still gets the lower per-
@@ -1888,108 +1674,6 @@ class TestMaybeStartWebServer:
         registry = get_web_approval_ui().deferred_registry
         assert registry.adaptive_hold is True
 
-    def test_adaptive_hold_can_be_configured_off(self, monkeypatch, tmp_path):
-        from privacyfence.web_approval_ui import get_web_approval_ui
-        self._no_bind(monkeypatch, tmp_path)
-
-        daemon_main._maybe_start_web_server(
-            {"web": {"approvals": {"adaptive_hold": False}}}, self._connector_host(),
-            unattended_sessions_enabled=False,
-        )
-
-        registry = get_web_approval_ui().deferred_registry
-        assert registry.adaptive_hold is False
-
-    def test_require_passkey_with_nothing_enrolled_logs_a_warning_but_still_starts(
-        self, monkeypatch, tmp_path, caplog,
-    ):
-        # With a passkey required and none enrolled, the daemon starts,
-        # releases nothing, and shows a loud persistent banner rather than
-        # refusing to boot. This is the "loud" half aimed at the daemon's own
-        # log; web_shell.py's TestBanner/
-        # test_routes_approvals.py's TestRequirePasskeyBanner cover the
-        # human-facing half.
-        #
-        # require_passkey also needs a separated install or the ADR 0003
-        # developer override (step_up_config.py's own gate) -- this test is
-        # about the enrollment banner, not that gate, so set the override.
-        monkeypatch.setenv(daemon_main.privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
-        self._no_bind(monkeypatch, tmp_path)
-        with caplog.at_level(logging.WARNING):
-            result = daemon_main._maybe_start_web_server(
-                {"step_up": {"enabled": True, "require_passkey": True}},
-                self._connector_host(), unattended_sessions_enabled=False,
-            )
-        assert result is not None  # never refuses to boot over this
-        assert "require_passkey" in caplog.text
-        assert "/security" in caplog.text
-
-    def test_require_passkey_with_a_credential_enrolled_logs_nothing(self, monkeypatch, tmp_path, caplog):
-        from privacyfence import webauthn_stepup as wa
-        from privacyfence.principal import LOCAL_PRINCIPAL
-        monkeypatch.setenv(daemon_main.privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
-        self._no_bind(monkeypatch, tmp_path)
-        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
-            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
-        ))
-        with caplog.at_level(logging.WARNING):
-            daemon_main._maybe_start_web_server(
-                {"step_up": {"enabled": True, "require_passkey": True}},
-                self._connector_host(), unattended_sessions_enabled=False,
-            )
-        assert "require_passkey" not in caplog.text
-
-    def test_require_passkey_off_logs_nothing(self, monkeypatch, tmp_path, caplog):
-        self._no_bind(monkeypatch, tmp_path)
-        with caplog.at_level(logging.WARNING):
-            daemon_main._maybe_start_web_server(
-                {"step_up": {"enabled": True, "require_passkey": False}},
-                self._connector_host(), unattended_sessions_enabled=False,
-            )
-        assert "require_passkey" not in caplog.text
-
-    def test_mcp_dispatcher_sees_the_connector_hosts_live_connector_set(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-        connector_host = self._connector_host()
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, connector_host, unattended_sessions_enabled=False,
-        )
-
-        assert result.mcp_dispatcher.connectors == {}
-        from privacyfence.connectors.gmail import GmailConnector  # any real Connector subclass
-        fake_connector = object.__new__(GmailConnector)
-        connector_host.set_connectors([fake_connector])
-        # No second push into the dispatcher -- it polls connector_host.connectors.
-        assert list(result.mcp_dispatcher.connectors) == [fake_connector.name]
-
-    def test_mcp_dispatcher_gives_a_different_principal_their_own_fresh_connector_set(
-        self, monkeypatch, tmp_path,
-    ):
-        # ADR 0008: a non-owner principal (an os-<uid>/os-<sid> OS user)
-        # never sees the owner's connector_host at all -- ConnectorRegistry
-        # builds them their own, empty set instead ("a new user starts with
-        # the packaged default policy and no connectors").
-        from privacyfence.principal import Principal, principal_scope
-
-        self._no_bind(monkeypatch, tmp_path)
-        connector_host = self._connector_host()
-        from privacyfence.connectors.gmail import GmailConnector
-
-        fake_connector = object.__new__(GmailConnector)
-        connector_host.set_connectors([fake_connector])
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, connector_host, unattended_sessions_enabled=False,
-        )
-
-        with principal_scope(Principal(id="os-1002")):
-            other_connectors = result.mcp_dispatcher.connectors
-        assert other_connectors == {}
-        # The owner's own connectors are unaffected by resolving another
-        # principal in between.
-        assert list(result.mcp_dispatcher.connectors) == [fake_connector.name]
-
     def test_the_dispatcher_has_no_way_to_mint_a_sign_in_link(self, monkeypatch, tmp_path):
         """No MCP tool may mint a sign-in credential (ADR 0013), so this
         call site hands the /mcp dispatcher no ``set_bootstrap_link_provider``
@@ -2005,154 +1689,7 @@ class TestMaybeStartWebServer:
         assert not hasattr(result.mcp_dispatcher, "get_sign_in_link")
         assert not hasattr(result.mcp_dispatcher, "set_bootstrap_link_provider")
 
-    def test_mcp_dispatcher_defaults_to_local_mode(self, monkeypatch, tmp_path):
-        # privacyfence_status's own mode field -- every call site in this
-        # class passes no org_config, so this must be "local", the default.
-        self._no_bind(monkeypatch, tmp_path)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
-        )
-
-        assert result.mcp_dispatcher.status("checking")["mode"] == "local"
-
-    def test_no_mcp_dispatcher_means_nothing_to_wire(self, monkeypatch, tmp_path):
-        # web.mcp.enabled defaults False -- must not raise reaching for
-        # mcp_dispatcher.set_bootstrap_link_provider on a None dispatcher.
-        self._no_bind(monkeypatch, tmp_path)
-
-        result = daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
-
-        assert result.mcp_dispatcher is None
-
-    # ------------------------------------------------------------------ #
-    # web.settings.enabled -- the settings UI's own off switch, independent
-    # of the approval surface (which is always on).
-    # ------------------------------------------------------------------ #
-
-    def _controller(self, tmp_path, monkeypatch):
-        from privacyfence import resource_names, settings_controller as sc, update_checker
-
-        monkeypatch.setattr(resource_names, "_cache_file", lambda: tmp_path / "rn.json")
-        monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "uc.json")
-        monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
-        org_dir_path = tmp_path / "org"
-        org_dir_path.mkdir()
-        monkeypatch.setattr(sc, "org_dir", lambda: org_dir_path)
-        settings_dir = tmp_path / "settings_data"
-        settings_dir.mkdir()
-        monkeypatch.setattr(sc, "data_dir", lambda: settings_dir)
-        config_path = tmp_path / "settings.yaml"
-        config_path.write_text("auto_accept: {}\nconnectors: {}\n", encoding="utf-8")
-        connector_host = self._connector_host()
-        return sc.SettingsController(str(config_path), connectors=[], connector_host=connector_host)
-
-    def test_settings_not_enabled_still_starts_the_server_but_leaves_it_unwired(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-        controller = self._controller(tmp_path, monkeypatch)
-
-        result = daemon_main._maybe_start_web_server(
-            {}, self._connector_host(), unattended_sessions_enabled=False, controller=controller,
-        )
-
-        assert result is not None
-        assert result.controller is None
-
-    def test_settings_enabled_without_a_controller_leaves_it_unwired(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"settings": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
-        )
-
-        assert result is not None
-        assert result.controller is None
-
-    def test_settings_enabled_wires_the_controller_into_the_server(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-        controller = self._controller(tmp_path, monkeypatch)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"settings": {"enabled": True}, "port": 18765}}, self._connector_host(),
-            unattended_sessions_enabled=False, controller=controller,
-        )
-
-        assert result is not None
-        assert result.controller is controller
-
-    def test_wires_a_live_step_up_config_into_the_controller(self, monkeypatch, tmp_path):
-        # SettingsController.enable_step_up is a no-op without this --
-        # _maybe_start_web_server must hand the controller the same
-        # LiveStepUpConfig it hands the server itself (see that method's
-        # own docstring on why it needs to be the *same* object).
-        from privacyfence.step_up_config import LiveStepUpConfig
-        monkeypatch.setenv(daemon_main.privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
-        self._no_bind(monkeypatch, tmp_path)
-        controller = self._controller(tmp_path, monkeypatch)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"settings": {"enabled": True}}, "step_up": {"require_passkey": True}},
-            self._connector_host(), unattended_sessions_enabled=False, controller=controller,
-        )
-
-        assert result is not None
-        assert isinstance(controller._step_up, LiveStepUpConfig)
-        # The config this daemon actually booted with, not a fresh default.
-        assert controller._step_up.require_passkey is True
-
-    def test_settings_not_enabled_still_wires_step_up_into_the_controller(self, monkeypatch, tmp_path):
-        # Unlike controller wiring into the server itself (result.controller
-        # above), this is unconditional on web.settings.enabled -- wiring an
-        # attribute costs nothing, and nothing about /settings being
-        # unmounted should make a later enable_step_up() call silently
-        # look wired but do nothing.
-        from privacyfence.step_up_config import LiveStepUpConfig
-        self._no_bind(monkeypatch, tmp_path)
-        controller = self._controller(tmp_path, monkeypatch)
-
-        daemon_main._maybe_start_web_server(
-            {}, self._connector_host(), unattended_sessions_enabled=False, controller=controller,
-        )
-
-        assert isinstance(controller._step_up, LiveStepUpConfig)
-
-    def test_mcp_dispatcher_gets_the_controllers_connector_status_provider(self, monkeypatch, tmp_path):
-        # privacyfence_status's own connector view --
-        # wired to SettingsController.status_connectors alongside the
-        # unattended-session listener above, so the tool reports the same
-        # enabled/authenticated/blocked_by state the settings page does
-        # rather than re-deriving it from the built connectors alone.
-        self._no_bind(monkeypatch, tmp_path)
-        controller = self._controller(tmp_path, monkeypatch)
-        controller._connectors = ["gmail"]
-        controller._connector_failures = {"slack": "not_authenticated"}
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
-            unattended_sessions_enabled=False, controller=controller,
-        )
-
-        status = result.mcp_dispatcher.status("checking")
-        assert status["setup_complete"] is True
-        assert status["connectors"] == controller.status_connectors()
-        rows = {row["name"]: row for row in status["connectors"]}
-        assert rows["slack"]["blocked_by"] == "not_authenticated"
-
-    def test_mcp_dispatcher_gets_wired_to_notify_the_controller_of_connector_changes(self, monkeypatch, tmp_path):
-        # SettingsController.refresh_connectors() needs a
-        # way to reach McpDispatcher.notify_tools_changed once both objects
-        # exist -- wired here alongside status_connectors above.
-        self._no_bind(monkeypatch, tmp_path)
-        controller = self._controller(tmp_path, monkeypatch)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
-            unattended_sessions_enabled=False, controller=controller,
-        )
-
-        assert controller._connectors_changed_listener == result.mcp_dispatcher.notify_tools_changed
-
-    def test_no_controller_means_status_falls_back_to_built_connectors_only(self, monkeypatch, tmp_path):
+    def test_status_lists_built_connectors_only(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
 
         result = daemon_main._maybe_start_web_server(
@@ -2161,36 +1698,8 @@ class TestMaybeStartWebServer:
 
         assert result.mcp_dispatcher.status("checking")["connectors"] == []
 
-    def test_allow_quit_defaults_true_and_is_configurable(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-        controller = self._controller(tmp_path, monkeypatch)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"settings": {"enabled": True, "allow_quit": False}}}, self._connector_host(),
-            unattended_sessions_enabled=False, controller=controller,
-        )
-
-        assert result.allow_quit is False
-
-    def test_notifications_enabled_defaults_true_and_is_configurable(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-
-        default_result = daemon_main._maybe_start_web_server(
-            {}, self._connector_host(), unattended_sessions_enabled=False,
-        )
-        assert default_result.notifications_enabled is True
-
-        off_result = daemon_main._maybe_start_web_server(
-            {"web": {"notifications": {"enabled": False}}}, self._connector_host(),
-            unattended_sessions_enabled=False,
-        )
-        assert off_result.notifications_enabled is False
-
-
 # ---------------------------------------------------------------------------- #
-# _maybe_start_web_server -- org mode. org_config.json's "mode" selects this branch; every
-# TestMaybeStartWebServer test above passes no org_config at all (or {}),
-# so mode always defaults to "local" there -- this class is additive.
+# _maybe_start_web_server -- organization mode with an explicit org_config.
 # ---------------------------------------------------------------------------- #
 
 class TestMaybeStartWebServerOrgMode:
@@ -2479,22 +1988,6 @@ class TestMaybeStartWebServerOrgMode:
                 unattended_sessions_enabled=False, org_config=self._single_user_config(),
             )
 
-    def test_upstream_file_outside_organization_mode_refuses_the_start(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", str(self._upstream_file(tmp_path)))
-        with pytest.raises(
-            org_mode.ConfigurationError,
-            match="PRIVACYFENCE_UPSTREAM_MCP_FILE is set, but this is not an organization server.",
-        ):
-            daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
-
-    def test_a_blank_upstream_variable_outside_organization_mode_is_ignored(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", "  ")
-        assert daemon_main._maybe_start_web_server(
-            {}, self._connector_host(), unattended_sessions_enabled=False,
-        ) is not None
-
     def _start_org(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
@@ -2529,15 +2022,6 @@ class TestMaybeStartWebServerOrgMode:
             match="Set PRIVACYFENCE_UPSTREAM_MCP_FILE or PRIVACYFENCE_UPSTREAM_MCP, not both.",
         ):
             self._start_org(monkeypatch, tmp_path)
-
-    def test_upstream_mcp_inline_variable_outside_organization_mode_refuses_the_start(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
-        with pytest.raises(
-            org_mode.ConfigurationError,
-            match="PRIVACYFENCE_UPSTREAM_MCP is set, but this is not an organization server.",
-        ):
-            daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
 
     def test_upstream_mcp_grants_seed_once_and_the_first_ones_stay(self, monkeypatch, tmp_path, caplog):
         from privacyfence import admin_config, upstream_mcp_registry, upstream_mcp_runtime
@@ -2599,15 +2083,6 @@ class TestMaybeStartWebServerOrgMode:
         assert result.org.oidc is None
         assert not (tmp_path / "oidc_signing_key.pem").exists()
 
-    def test_oidc_clients_in_local_mode_refuse_the_start(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-        self._oidc_env(monkeypatch, tmp_path)
-        with pytest.raises(
-            org_mode.ConfigurationError,
-            match="PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server.",
-        ):
-            daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
-
     def test_oidc_clients_with_the_web_server_off_log_a_warning(self, monkeypatch, tmp_path, caplog):
         self._no_bind(monkeypatch, tmp_path)
         self._oidc_env(monkeypatch, tmp_path)
@@ -2618,15 +2093,6 @@ class TestMaybeStartWebServerOrgMode:
             )
         assert result is None
         assert "PRIVACYFENCE_OIDC_CLIENTS is ignored: the web server is off." in caplog.text
-
-    def test_a_mistyped_oidc_variable_in_local_mode_still_gets_the_not_an_organization_server_message(
-        self, monkeypatch, tmp_path,
-    ):
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENTS", "Bad Name")
-        with pytest.raises(org_mode.ConfigurationError) as err:
-            daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
-        assert str(err.value) == "PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server."
 
     def test_a_mistyped_oidc_variable_with_the_web_server_off_only_logs_the_warning(
         self, monkeypatch, tmp_path, caplog,
@@ -2878,16 +2344,6 @@ class TestMaybeStartWebServerOrgMode:
         )
         assert started.get("called") is True
 
-    def test_local_mcp_dispatcher_gets_the_local_scoped_token_policy(self, monkeypatch, tmp_path):
-        self._no_bind(monkeypatch, tmp_path)
-
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
-        )
-
-        assert result.mcp_dispatcher._scoped_token_policy.allow_ai_proposals is True
-        assert result.mcp_dispatcher.scoped_token_proposals_enabled() is True
-
     def test_org_mode_without_server_section_raises(self, monkeypatch, tmp_path):
         # An org config with an incomplete IdP or server section.
         self._no_bind(monkeypatch, tmp_path)
@@ -2921,19 +2377,6 @@ class TestMaybeStartWebServerOrgMode:
 
         assert off.mcp_dispatcher.scoped_token_proposals_enabled() is False
         assert on.mcp_dispatcher.scoped_token_proposals_enabled() is True
-
-    def test_no_org_config_defaults_to_local_mode(self, monkeypatch, tmp_path):
-        # Omitting org_config entirely (every local-mode call site, and
-        # every install's real invocation until it opts into "mode": "org")
-        # must behave exactly like local mode.
-        started = self._no_bind(monkeypatch, tmp_path)
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"approval_ui": "web"}}, self._connector_host(), unattended_sessions_enabled=False,
-        )
-        assert result is not None
-        assert result.org is None
-        assert started.get("called") is True
-
 
 # ---------------------------------------------------------------------------- #
 # _start_org_web_server -- per-principal ConnectorRegistry wiring.
@@ -3015,54 +2458,6 @@ class TestOrgModeConnectorRegistry:
                 unattended_sessions_enabled=False, org_config=self._org_config(),
             )
         assert str(raised.value) == message
-
-    def test_local_mode_with_bad_auto_provision_value_still_starts(self, monkeypatch, tmp_path, caplog):
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "maybe")
-
-        with caplog.at_level(logging.WARNING, logger="privacyfence.daemon"):
-            daemon_main._maybe_start_web_server(
-                {"web": {"mcp": {"enabled": False}}}, self._connector_host(),
-                unattended_sessions_enabled=False, org_config={"mode": "local"},
-            )
-
-        assert any("PRIVACYFENCE_PEEK_AUTO_PROVISION is ignored outside organization mode." in r.getMessage()
-                   for r in caplog.records)
-
-    def test_local_mode_warns_auto_provision(self, monkeypatch, tmp_path, caplog):
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
-        monkeypatch.setenv("PRIVACYFENCE_GRIST_AUTO_PROVISION", "true")
-
-        with caplog.at_level(logging.WARNING, logger="privacyfence.daemon"):
-            daemon_main._maybe_start_web_server(
-                {"web": {"mcp": {"enabled": False}}}, self._connector_host(),
-                unattended_sessions_enabled=False, org_config={"mode": "local"},
-            )
-
-        warnings = [r.getMessage() for r in caplog.records if "ignored outside organization mode" in r.getMessage()]
-        assert warnings == [
-            "PRIVACYFENCE_GRIST_AUTO_PROVISION, PRIVACYFENCE_PEEK_AUTO_PROVISION "
-            "is ignored outside organization mode."
-        ]
-
-    def test_local_mode_warns_that_the_n8n_variables_are_ignored(self, monkeypatch, tmp_path, caplog):
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "yes")
-        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "proj1")
-        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
-
-        with caplog.at_level(logging.WARNING, logger="privacyfence.daemon"):
-            daemon_main._maybe_start_web_server(
-                {"web": {"mcp": {"enabled": False}}}, self._connector_host(),
-                unattended_sessions_enabled=False, org_config={"mode": "local"},
-            )
-
-        warnings = [r.getMessage() for r in caplog.records if "ignored outside organization mode" in r.getMessage()]
-        assert warnings == [
-            "PRIVACYFENCE_N8N_DELIVERY, PRIVACYFENCE_N8N_PROJECT_ID, PRIVACYFENCE_PEEK_AUTO_PROVISION "
-            "is ignored outside organization mode."
-        ]
 
     def test_org_server_starts_the_relay_registration_loop_on_the_shared_config(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
@@ -3449,18 +2844,6 @@ class TestPeekRelease:
         assert env.fake.instances[0].released == ["alice"]
         assert env.released == ["alice"]
 
-    def test_runs_after_the_runtime_identity_check(self, monkeypatch):
-        from privacyfence import privilege_separation
-
-        calls: list[str] = []
-        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
-        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
-        monkeypatch.setattr(daemon_main, "run_peek_release", lambda principal_id: calls.append(principal_id) or 0)
-
-        assert daemon_main.main(["--peek-release", "alice"]) == 0
-        assert calls == ["identity", "alice"]
-
-
 class TestRelayDnsRecords:
     _BUILTIN = {"server": {"issuer_url": "https://pf.acme.example.com"}, "idp": {
         "issuer": "https://accounts.google.com", "client_id": "builtin-signin", "builtin": True, "relay": True,
@@ -3518,17 +2901,6 @@ class TestRelayDnsRecords:
         assert new != old
         assert out.count(new) == 2
         assert old not in out
-
-    def test_runs_after_the_runtime_identity_check_without_starting_the_daemon(self, monkeypatch):
-        from privacyfence import privilege_separation
-
-        calls: list[str] = []
-        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
-        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
-        monkeypatch.setattr(daemon_main, "run_relay_dns_records", lambda: calls.append("dns") or 0)
-        assert daemon_main.main(["--relay-dns-records"]) == 0
-        assert calls == ["identity", "dns"]
-
 
 class TestScopeRowsUpgrade:
     """The v2 -> v3 ``auto_accept:`` upgrade at load and at org startup (ADR 0172)."""
@@ -4393,7 +3765,6 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "check_storage_permissions", lambda org_mode_active: None)
         monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: (connectors, {}))
         monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
-        monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
         monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: None)
         # run_app tests must never walk the source checkout's own data.
         monkeypatch.setattr(data_format, "migrate_everything", lambda *, log: [])
@@ -4456,22 +3827,6 @@ class TestRunApp:
         assert daemon_main.run_app({}, "config.yaml") == 0
         assert order == ["migrate", "server"]
 
-    def test_local_start_logs_the_deprecation_and_org_start_does_not(self, monkeypatch, caplog):
-        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
-        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
-        self._patch_common(monkeypatch)
-
-        with caplog.at_level(logging.WARNING):
-            daemon_main.run_app({}, "config.yaml")
-        deprecation = [r for r in caplog.records if r.getMessage() == org_mode.LOCAL_MODE_DEPRECATION]
-        assert [r.levelno for r in deprecation] == [logging.WARNING]
-
-        caplog.clear()
-        monkeypatch.setattr(org_mode, "resolve_mode", lambda bundle: "org")
-        with caplog.at_level(logging.WARNING):
-            daemon_main.run_app({}, "config.yaml")
-        assert org_mode.LOCAL_MODE_DEPRECATION not in caplog.text
-
     def test_successful_startup_waits_for_shutdown_and_releases_lock(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         release_calls = []
@@ -4491,20 +3846,6 @@ class TestRunApp:
         # ConnectorHost (see connector_host.py), not a stub.
         host = self._web_server_calls[0]["connector_host"]
         assert host.connectors == {"gmail": connector}
-
-    def test_update_check_timer_thread_started_with_the_real_controller(self, monkeypatch):
-        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
-        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
-        self._patch_common(monkeypatch)
-
-        timer_calls = []
-        monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: timer_calls.append(controller))
-
-        daemon_main.run_app({}, "config.yaml")
-
-        assert wait_until(lambda: timer_calls)
-        from privacyfence.settings_controller import SettingsController
-        assert isinstance(timer_calls[0], SettingsController)
 
     def test_personal_data_sweep_thread_started(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
@@ -4697,17 +4038,6 @@ class TestRunApp:
         from privacyfence.privacy_filter import category_policy
         assert category_policy("privacy", "body") == "block"
 
-    def test_local_mode_privacy_filter_still_defaults_to_allow(self, monkeypatch):
-        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
-        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
-        self._patch_common(monkeypatch)
-
-        result = daemon_main.run_app({}, "config.yaml")
-
-        assert result == 0
-        from privacyfence.privacy_filter import category_policy
-        assert category_policy("privacy", "body") == "allow"
-
     def test_keyboard_interrupt_is_caught_lock_released_returns_0(self, monkeypatch, caplog):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         release_calls = []
@@ -4876,26 +4206,6 @@ class TestAuditForwardingWiring:
 
         assert captured["forwarder"] is None
 
-    def test_enabled_but_local_mode_no_forwarder_built(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
-        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
-        monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
-        self._patch_common(monkeypatch)
-        monkeypatch.setattr(daemon_main, "load_org_config", lambda: {
-            "audit_forwarding": {"enabled": True, "kind": "syslog", "syslog": {"host": "siem.example.com"}},
-        })
-        stub = daemon_main.init_audit_logger
-        captured = {}
-
-        def wrapped(path, **kwargs):
-            captured.update(kwargs)
-            return stub(path, **kwargs)
-        monkeypatch.setattr(daemon_main, "init_audit_logger", wrapped)
-
-        daemon_main.run_app({}, "config.yaml")
-
-        assert captured["forwarder"] is None
-
     @pytest.mark.skipif(
         sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py, just surfacing through the org-mode startup check instead of a direct stat() assertion",
     )
@@ -5027,115 +4337,6 @@ class TestMain:
         assert result == 0
         assert len(calls) == 1
 
-    def test_no_oauth_flag_triggers_the_separation_gate(self, monkeypatch):
-        # ADR 0003 decision 6: fired only on the path that actually starts
-        # the persistent daemon -- see the next test for why the one-shot
-        # CLI flags below must not trigger it.
-        self._patch_config(monkeypatch)
-        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
-        calls = []
-        monkeypatch.setattr(
-            daemon_main.privilege_separation, "enforce_separation", lambda: calls.append(1)
-        )
-
-        result = daemon_main.main([])
-
-        assert result == 0
-        assert calls == [1]
-
-    @pytest.mark.parametrize("flag", ["--gmail-oauth", "--telegram-setup", "--peek-login"])
-    def test_oauth_and_telegram_flags_do_not_trigger_the_separation_gate(self, monkeypatch, flag):
-        # A password-prompting admin/UAC/polkit dialog popping up during a
-        # scripted, headless `--gmail-oauth` invocation would be a surprising
-        # side effect of an unrelated flag, and there is nothing to refuse
-        # yet on a one-shot command.
-        self._patch_config(monkeypatch)
-        monkeypatch.setattr(daemon_main, "run_gmail_oauth", lambda org_config: 0)
-        monkeypatch.setattr(daemon_main, "run_telegram_setup", lambda: 0)
-        monkeypatch.setattr(daemon_main, "run_peek_login", lambda org_config: 0)
-        calls = []
-        monkeypatch.setattr(
-            daemon_main.privilege_separation, "enforce_separation", lambda: calls.append(1)
-        )
-
-        result = daemon_main.main([flag])
-
-        assert result == 0
-        assert calls == []
-
-    def test_refuses_to_start_when_the_separation_gate_refuses(self, monkeypatch, capsys):
-        # ADR 0003 decision 6: a packaged, unseparated install must not reach
-        # run_app() at all -- see privilege_separation.enforce_separation()
-        # for what triggers this in practice.
-        self._patch_config(monkeypatch)
-        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
-
-        def refuse() -> None:
-            raise daemon_main.privilege_separation.PrivilegeSeparationError("not privilege-separated")
-
-        monkeypatch.setattr(daemon_main.privilege_separation, "enforce_separation", refuse)
-
-        result = daemon_main.main([])
-
-        assert result == 1
-        assert "not privilege-separated" in capsys.readouterr().err
-
-    def test_hands_over_without_serving_when_the_gate_separates_the_install(self, monkeypatch, capsys):
-        # The other way out of enforce_separation(), and the one that is not
-        # a failure: decision 6's automatic `enable` took, so a service now
-        # runs the daemon under an account this process is not. It must not
-        # reach run_app() -- that is the silent policy reset
-        # check_runtime_identity() exists to prevent, arriving after that
-        # check has already run and passed -- and it must not exit non-zero
-        # either, or Task Scheduler/launchd/systemd report a failed start for
-        # the one outcome decision 6 is trying to reach.
-        self._patch_config(monkeypatch)
-        served = []
-        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: served.append(1) or 0)
-
-        def hand_over() -> None:
-            raise daemon_main.privilege_separation.SeparationHandover(
-                "PrivacyFence has just separated this install"
-            )
-
-        monkeypatch.setattr(daemon_main.privilege_separation, "enforce_separation", hand_over)
-
-        result = daemon_main.main([])
-
-        assert result == 0
-        assert served == []
-        captured = capsys.readouterr()
-        assert "has just separated this install" in captured.out
-        assert "Configuration error" not in captured.err
-
-    def test_logs_the_dev_unseparated_notice_when_present(self, monkeypatch, caplog):
-        # ADR 0003 decision 7's startup-log half -- see privilege_separation.
-        # dev_unseparated_notice()'s own docstring for when this is non-None.
-        self._patch_config(monkeypatch)
-        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
-        monkeypatch.setattr(daemon_main.privilege_separation, "enforce_separation", lambda: None)
-        monkeypatch.setattr(
-            daemon_main.privilege_separation, "dev_unseparated_notice",
-            lambda: "PRIVACYFENCE_DEV_ALLOW_UNSEPARATED is set -- not protected",
-        )
-
-        with caplog.at_level(logging.WARNING):
-            result = daemon_main.main([])
-
-        assert result == 0
-        assert "not protected" in caplog.text
-
-    def test_no_log_line_when_the_dev_notice_is_none(self, monkeypatch, caplog):
-        self._patch_config(monkeypatch)
-        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
-        monkeypatch.setattr(daemon_main.privilege_separation, "enforce_separation", lambda: None)
-        monkeypatch.setattr(daemon_main.privilege_separation, "dev_unseparated_notice", lambda: None)
-
-        with caplog.at_level(logging.WARNING):
-            daemon_main.main([])
-
-        assert "not protected" not in caplog.text
-
     def test_fatal_exception_is_caught_prints_error_and_returns_1(self, monkeypatch, capsys):
         self._patch_config(monkeypatch)
         def raiser(config, path):
@@ -5146,29 +4347,6 @@ class TestMain:
 
         assert result == 1
         assert "Fatal error" in capsys.readouterr().err
-
-    def test_refuses_to_start_as_the_wrong_account_on_a_separated_install(self, monkeypatch, capsys):
-        # This runs before load_config(), and has to: on a
-        # separated install started as the logged-in user, settings.yaml is
-        # unreadable under the service-owned authority directory and
-        # load_config()'s own first-run path would seed a fresh default over
-        # it -- a silent policy reset rather than a visible failure.
-        self._patch_config(monkeypatch)
-        loaded = []
-        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: loaded.append(path) or {})
-        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
-
-        def refuse() -> None:
-            raise daemon_main.privilege_separation.PrivilegeSeparationError("wrong account")
-
-        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", refuse)
-
-        result = daemon_main.main([])
-
-        assert result == 1
-        assert "wrong account" in capsys.readouterr().err
-        assert loaded == []
-
 
 # ---------------------------------------------------------------------------- #
 # _load_principal_settings
@@ -5456,23 +4634,6 @@ class TestPrintSignInLink:
         assert captured.out == ""
         assert "Could not mint a sign-in link at all" in captured.err
 
-    def test_main_dispatches_before_the_runtime_identity_check(self, monkeypatch):
-        """On a separated install ``check_runtime_identity()`` refuses the
-        very account this command is meant to be run from -- it exists to
-        stop the *daemon* starting as the wrong user. So the flag is handled
-        ahead of it, and ahead of reading any config."""
-        from privacyfence import privilege_separation
-
-        def _refuse():
-            raise privilege_separation.PrivilegeSeparationError("wrong account")
-
-        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
-        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
-        monkeypatch.setattr(daemon_main, "run_print_sign_in_link", lambda: 0)
-
-        assert daemon_main.main(["--print-sign-in-link"]) == 0
-
-
 class TestPrintMcpToken:
     """ADR 0008's own break-glass-style path for ``/mcp``: a direct HTTP
     client with no shim mints its own token the same way the ``.mcpb``
@@ -5526,20 +4687,6 @@ class TestPrintMcpToken:
         assert captured.out == ""
         assert "Could not mint an MCP token" in captured.err
 
-    def test_main_dispatches_before_the_runtime_identity_check(self, monkeypatch):
-        from privacyfence import privilege_separation
-
-        def _refuse():
-            raise privilege_separation.PrivilegeSeparationError("wrong account")
-
-        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
-        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
-        monkeypatch.setattr(daemon_main, "run_print_mcp_token", lambda: 0)
-
-        assert daemon_main.main(["--print-mcp-token"]) == 0
-
-
-
 class TestRevokeScopedTokens:
     """``privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`` (ADR 0165): the administrator takes
     back everything one person holds, from the server's command line."""
@@ -5592,32 +4739,6 @@ class TestRevokeScopedTokens:
         assert "No such account." in captured.err
         assert captured.out == ""
         assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*")) == before
-
-    def test_revoke_scoped_tokens_runs_after_the_runtime_identity_check(self, monkeypatch):
-        from privacyfence import privilege_separation
-
-        calls: list[str] = []
-
-        def _check():
-            calls.append("identity")
-
-        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _check)
-        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
-        monkeypatch.setattr(
-            daemon_main, "run_revoke_scoped_tokens", lambda principal_id: calls.append(principal_id) or 0,
-        )
-
-        assert daemon_main.main(["--revoke-scoped-tokens", "alice"]) == 0
-        assert calls == ["identity", "alice"]
-
-        # On a separated install the check refuses the wrong account first, and nothing is revoked.
-        def _refuse():
-            raise privilege_separation.PrivilegeSeparationError("wrong account")
-
-        calls.clear()
-        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
-        assert daemon_main.main(["--revoke-scoped-tokens", "alice"]) != 0
-        assert calls == []
 
     def test_local_is_always_a_known_account(self, tmp_path, monkeypatch, capsys):
         from privacyfence import paths
@@ -5777,18 +4898,6 @@ class TestGristRelease:
         assert daemon_main.run_grist_release("alice") == 0
         assert order == ["release alice", "provisioner"]
 
-    def test_runs_after_the_runtime_identity_check(self, monkeypatch):
-        from privacyfence import privilege_separation
-
-        calls: list[str] = []
-        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
-        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
-        monkeypatch.setattr(daemon_main, "run_grist_release", lambda pid: calls.append(pid) or 0)
-
-        assert daemon_main.main(["--grist-release", "alice"]) == 0
-        assert calls == ["identity", "alice"]
-
-
 class TestLoadOrgConfigSerial:
     """SEC-A7: the serial pin is wired into every load_org_config() call."""
 
@@ -5860,6 +4969,12 @@ class TestPersonalDataSweep:
 class TestLoadOrgConfigAdoption:
     """7.x reads org/org_bundle.json and adopts a 6.x org_config.json by copying it,
     leaving every 6.x file untouched so a downgrade keeps working."""
+
+    @pytest.fixture(autouse=True)
+    def _signing_requirement_is_tested_elsewhere(self, monkeypatch):
+        # Adoption copies and reads files; whether the bundle must be signed is
+        # TestLoadOrgConfigSigning's subject, so these unsigned fixtures skip it.
+        monkeypatch.setattr(org_mode, "resolve_mode", lambda data: "unsigned-fixture")
 
     @staticmethod
     def _legacy_files(tmp_path):
@@ -5971,7 +5086,6 @@ def _patch_run_app(monkeypatch, bundle, *, audit=None):
 
     monkeypatch.setattr(daemon_main, "build_connectors", fake_build_connectors)
     monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
-    monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
     monkeypatch.setattr(daemon_main, "_run_personal_data_sweep", lambda: None)
     monkeypatch.setattr(
         daemon_main, "_maybe_start_web_server", lambda config, host, **kwargs: seen.update(web=kwargs)
@@ -6154,32 +5268,6 @@ class TestEffectiveOrgConfigWiring:
         connectors, _failures = daemon_main.build_connectors({}, org_config)
 
         assert [c.name for c in connectors] == ["slack"]
-
-    def test_local_mode_does_not_use_a_builtin_app(self, monkeypatch):
-        self._builtin_slack(monkeypatch)
-        fake = fake_client_class(result="my-workspace")
-        monkeypatch.setattr(daemon_main, "SlackClient", fake)
-        monkeypatch.setattr(daemon_main, "load_slack_token", lambda path: {"access_token": "xoxp-1"})
-        org_config = daemon_main.effective_org_config({}, self._offering_slack({}, "local"))
-        assert "slack" not in org_config
-
-        connectors, _failures = daemon_main.build_connectors({}, org_config)
-
-        assert connectors == []
-        assert fake.instantiated is False
-
-    def test_the_cli_form_never_uses_a_builtin_app_even_in_an_org_bundle(self, monkeypatch):
-        self._builtin_slack(monkeypatch)
-        monkeypatch.setattr(daemon_main, "load_org_config", lambda: self.ORG_BUNDLE)
-        admin_config.save(self._offering_slack(self.ORG_BUNDLE, "org"))
-        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: {})
-        monkeypatch.setattr(daemon_main, "setup_logging", lambda cfg: None)
-        seen: list = []
-        monkeypatch.setattr(daemon_main, "run_slack_oauth", lambda org_config: seen.append(org_config) or 0)
-
-        assert daemon_main.main(["--slack-oauth"]) == 0
-
-        assert "slack" not in seen[0]
 
     def test_a_malformed_admin_config_makes_the_cli_exit_non_zero(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
@@ -6425,16 +5513,6 @@ class TestConnectorConfigStartup:
             self.run(monkeypatch, {"mode": "org"})
         assert self.LEGACY_WARNING not in caplog.text
 
-    def test_local_mode_is_untouched(self, legacy_org, monkeypatch, caplog):
-        (legacy_org / "org_bundle.json").write_text("{}")
-        bundle = {"slack": {"client_id": "own", "client_secret": SENTINEL}}
-        seen = _patch_run_app(monkeypatch, bundle)
-        with caplog.at_level(logging.WARNING):
-            assert daemon_main.run_app({}, "config.yaml") == 0
-        assert self.LEGACY_WARNING not in caplog.text
-        assert seen["org_config"]["slack"] == bundle["slack"]
-        assert not (legacy_org / "connector_configs").exists()
-
     def test_effective_org_config_reads_the_stored_configs_of_this_servers_directory(self, legacy_org):
         install_legacy_bundle(legacy_org)
         daemon_main.prepare_connector_configs(LEGACY_ORG_BUNDLE)
@@ -6598,7 +5676,7 @@ class TestRetireBundle:
         assert not (legacy_org / "connector_configs").exists()
 
     @pytest.mark.parametrize("variable", [
-        "PRIVACYFENCE_MODE", "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_IDP_ISSUER", "PRIVACYFENCE_IDP_CLIENT_ID",
+        "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_IDP_ISSUER", "PRIVACYFENCE_IDP_CLIENT_ID",
     ])
     def test_refuses_while_the_environment_lacks_a_value(self, legacy_org, matching_environment, monkeypatch, capsys, variable):
         install_legacy_bundle(legacy_org)

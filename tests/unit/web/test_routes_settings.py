@@ -25,7 +25,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from privacyfence import (
-    auto_accept, daemon_main, org_bundle_signing, paths, privilege_separation, resource_names, scoped_token_proposals, scoped_tokens,
+    auto_accept, daemon_main, org_bundle_signing, org_mode, paths, privilege_separation, resource_names, scoped_token_proposals, scoped_tokens,
     update_checker,
 )
 from privacyfence.agent_identity import AgentIdentity, AgentSource
@@ -65,6 +65,14 @@ def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
             return True
         time.sleep(interval)
     return predicate()
+
+
+@pytest.fixture(autouse=True)
+def _desktop_controller_mode(monkeypatch):
+    # The controller under test is the desktop one, whose connector rebuilds ask for the local
+    # mode; the mode itself is always "org" now, so this keeps the controller's own tests as they
+    # were until the controller is removed.
+    monkeypatch.setattr(org_mode, "resolve_mode", lambda org_config: "local")
 
 
 @pytest.fixture
