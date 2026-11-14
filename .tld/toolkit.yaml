@@ -141,6 +141,8 @@ hooks:
     enabled: true
   board_gate:
     enabled: true
+  protect_paths_allow:
+    - n8n/package-lock.json
 
 admin:
   policy: .tld/admin-policy.yaml
