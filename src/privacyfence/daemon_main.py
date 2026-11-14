@@ -990,7 +990,7 @@ def _maybe_start_web_server(
             raise org_mode.ConfigurationError(
                 f"{upstream_mcp_config.ENV_VAR_INLINE} is set, but this is not an organization server."
             )
-        ignored = oauth_apps.set_auto_provision_variables()
+        ignored = sorted({*oauth_apps.set_auto_provision_variables(), *agent_runtimes.set_environment_variables()})
         if ignored:
             logger.warning("%s is ignored outside organization mode.", ", ".join(ignored))
     mcp_enabled = bool(mcp_config.get("enabled", False))
@@ -1408,6 +1408,7 @@ def _start_org_web_server(
     # _FILE, or an unreadable key file, refuses startup too.
     agent_runtime = agent_runtimes.N8nRuntimeConfig.from_org_config(org_config)
     agent_runtime_key = agent_runtimes.api_key()
+    agent_runtimes.check_environment(agent_runtime, agent_runtime_key)
     if agent_runtime.enabled and not (agent_runtime.base_url and agent_runtime_key):
         logger.warning(
             "agent_runtimes.n8n is enabled but its URL or API key is missing; "

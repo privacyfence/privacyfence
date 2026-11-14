@@ -34,7 +34,7 @@ fi
 # declared floor removes the ambient-interpreter dependence entirely and is also the *correct*
 # choice on its own merits: it's the oldest Python this package claims to support, so it's the one
 # resolution guaranteed to need everything every supported version needs.
-PYTHON_FLOOR="3.11"
+PYTHON_FLOOR="3.11.5"
 
 # --universal: resolve one lock file that's installable on every OS/architecture this project
 # ships for (macOS, Linux, Windows), instead of only the platform this script happens to run on.

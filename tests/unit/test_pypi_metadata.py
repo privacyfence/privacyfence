@@ -83,7 +83,9 @@ def test_python_version_classifiers_match_requires_python():
     claimed = {c.rsplit(" :: ", 1)[1] for c in PROJECT["classifiers"] if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)}
     assert claimed, "no `Programming Language :: Python :: 3.N` classifiers"
     for version in sorted(claimed):
-        assert spec.contains(version), f"classifier claims Python {version}, which requires-python ({spec}) excludes"
+        # A classifier names a minor series ("3.11"); a floor like ">=3.11.5" still supports it, so
+        # ask whether a late patch release of that series is allowed, not the bare "3.11".
+        assert spec.contains(f"{version}.99"), f"classifier claims Python {version}, which requires-python ({spec}) excludes"
 
 
 def test_readme_is_the_long_description():

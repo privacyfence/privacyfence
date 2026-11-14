@@ -128,7 +128,7 @@ This also deletes `/var/lib/privacyfence` (connector sign-ins, policy, passkeys,
 ## Other Linux systems and arm64
 
 There is no `.deb` for arm64 and no package for other distributions. On those systems you can
-install the Python package from PyPI (Python 3.11 or later):
+install the Python package from PyPI (Python 3.11.5 or later):
 
 ```bash
 pipx install privacyfence
