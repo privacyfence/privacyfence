@@ -30,7 +30,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-reference-upstream
 
-- pending
+- worker: the brief left open how claims reach tool handlers across sessions; the worker built the server with a stateless StreamableHTTPSessionManager so every request is verified and handled with its own claim; --jwks-url and --public-key-file are not exercised end to end by the tests
 
 ## p7-client-catalog
 
