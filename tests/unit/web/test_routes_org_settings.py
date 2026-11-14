@@ -1555,6 +1555,62 @@ class TestScopedTokenRoutes:
         r = self._post(client, "rename", {"token_id": "st-x", "label": "y", "confirmed": True}, csrf)
         assert r.status_code == 403
 
+    def _extend_audits(self):
+        with principal_scope(ALICE):
+            from privacyfence.audit_log import get_audit_logger
+
+            return [e.summary for e in get_audit_logger().recent_entries(20) if "Extended scoped token" in e.summary]
+
+    def test_extend(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        created = self._post(client, "create", {**self.BODY, "days": 5, "confirmed": True}, csrf)
+        assert created.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        bob_token, _secret = store.create(
+            BOB, label="bobs", days=5, rules=[], tools=["gmail_get_message"], policy=self.ENABLED,
+        )
+
+        done = self._post(client, "extend", {"token_id": token.id, "days": 30, "confirmed": True}, csrf)
+        assert done.status_code == 200
+        extended = store.get("alice", token.id)
+        assert done.json() == {"extended": {"id": token.id, "label": token.label, "expires_at": extended.expires_at}}
+        assert extended.expires_at > token.expires_at
+        assert extended.digest == token.digest
+        miss = self._post(client, "extend", {"token_id": bob_token.id, "days": 30, "confirmed": True}, csrf)
+        assert (miss.status_code, miss.json()) == (404, {"error": "No such token."})
+        assert store.get("bob", bob_token.id).expires_at == bob_token.expires_at
+        shorter = self._post(client, "extend", {"token_id": token.id, "days": 1, "confirmed": True}, csrf)
+        assert (shorter.status_code, shorter.json()) == (400, {"error": scoped_tokens.EXTEND_NOT_LONGER})
+        too_long = self._post(client, "extend", {"token_id": token.id, "days": 31, "confirmed": True}, csrf)
+        assert (too_long.status_code, too_long.json()) == (400, {"error": "A token lasts 1 to 30 days."})
+        date = datetime.fromtimestamp(extended.expires_at, timezone.utc).strftime("%Y-%m-%d")
+        assert self._extend_audits() == [
+            f"Extended scoped token '{token.label}' ({token.id}) to {date}, 30 days (principal=alice)",
+        ]
+
+    def test_extend_is_refused_when_scoped_tokens_are_disabled(self, tmp_path, monkeypatch):
+        client, csrf, _store = self._setup(
+            tmp_path, monkeypatch, policy=scoped_tokens.ScopedTokenPolicy(enabled=False, max_days=90),
+        )
+        r = self._post(client, "extend", {"token_id": "st-x", "days": 5, "confirmed": True}, csrf)
+        assert r.status_code == 403
+
+    def test_extend_audits_the_n8n_credential_of_a_delivered_token(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        runtime_credentials.set_store(runtime_credentials.RuntimeCredentialStore(tmp_path / "records.json"))
+        assert self._post(client, "create", {**self.BODY, "days": 5, "confirmed": True}, csrf).status_code == 200
+        [token] = store.tokens_for(ALICE)
+        runtime_credentials.get_store().add(runtime_credentials.RuntimeCredential(
+            principal_id="alice", token_id=token.id, proposal_id="stp-1", runtime="n8n",
+            endpoint=("https", "n8n.example.com", 443), project_id="", credential_id="0123456789abcdef",
+            credential_name="PrivacyFence sales-sync", workflow_id="wf1", mcp_url="",
+            state=runtime_credentials.DELIVERED, created_at=1.0, boot_id="b",
+        ))
+        done = self._post(client, "extend", {"token_id": token.id, "days": 30, "confirmed": True}, csrf)
+        assert done.status_code == 200
+        [entry] = self._extend_audits()
+        assert entry.endswith(", delivered to n8n as 'PrivacyFence sales-sync' (principal=alice)")
+
     def test_the_page_offers_the_section_only_once_enabled(self, tmp_path, monkeypatch):
         data = {"delivery": "once", "max_days": 30, "default_days": 30, "warn_days": 14,
                 "tokens": [], "rules": [], "tools": []}
