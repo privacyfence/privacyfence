@@ -85,7 +85,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- final: Blocking: p15 approve/decline of group membership is audited only as a generic settings_change entry, but ADR 0299, design 3.7 and the AuditEntry comment name group_membership_approved and group_membership_declined; fix-2 writes those entries.
 
 ## Finishing
 
