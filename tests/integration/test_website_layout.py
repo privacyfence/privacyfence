@@ -20,14 +20,12 @@ test-results/website-layout/, which tests.yml uploads for review. The screenshot
 artifact, not an assertion: when Chromium refuses the capture it is retried once, then taken of the
 viewport only, then skipped with a warning -- it never fails the layout test (see _save_screenshot).
 
-External requests are stubbed: the download Worker answers with a fixed manifest (so
-/download/'s cards render), and nothing else leaves the machine. Same skip posture as
-test_download_page.py: skipped when playwright or its Chromium build is missing.
+External requests are stubbed: nothing leaves the machine. Same skip posture as
+test_install_page.py: skipped when playwright or its Chromium build is missing.
 """
 
 from __future__ import annotations
 
-import json
 import warnings
 from pathlib import Path
 
@@ -36,9 +34,7 @@ import pytest
 from tests.website_site import (
     build_site,
     docs_built,
-    API_ORIGIN,
     REPO,
-    STABLE_MANIFEST,
     chromium_launch_kwargs,
     page_paths,
     serve,
@@ -85,20 +81,6 @@ def _stub_network(page, site_url):
         url = route.request.url
         if url.startswith(site_url):
             route.continue_()
-        elif url == f"{API_ORIGIN}/api/releases/stable":
-            route.fulfill(status=200, content_type="application/json", body=json.dumps(STABLE_MANIFEST))
-        elif url == f"{API_ORIGIN}/api/releases/history":
-            # /releases/'s full history: a dozen rows, so the longer table is what gets measured.
-            releases = [
-                {**STABLE_MANIFEST, "version": f"4.{minor}.{patch}"} for minor in range(6, 2, -1) for patch in (2, 1, 0)
-            ]
-            route.fulfill(status=200, content_type="application/json", body=json.dumps({"releases": releases}))
-        elif url == f"{API_ORIGIN}/api/releases":
-            # /releases/'s table, filled so its scroll container is what gets measured.
-            body = {"channels": {"stable": STABLE_MANIFEST, "alpha": None, "beta": None, "rc": None}}
-            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
-        elif url.startswith(f"{API_ORIGIN}/api/"):
-            route.fulfill(status=404, content_type="application/json", body='{"error":"not found"}')
         else:
             route.abort()
 

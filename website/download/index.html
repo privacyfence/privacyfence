@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Download PrivacyFence for macOS, Windows and Linux</title>
-  <meta name="description" content="Download PrivacyFence, the open-source MCP gateway with human approval, for macOS, Windows and Linux. Each installer has a SHA-256 checksum to verify.">
+  <title>Download PrivacyFence</title>
+  <meta name="description" content="PrivacyFence runs as the Docker image or an organization server. The installers of PrivacyFence 7 remain on GitHub Releases.">
   <meta name="pf-content-group" content="download">
   <meta name="theme-color" content="#f6f8fb">
   <link rel="canonical" href="https://privacyfence.eu/download/">
@@ -17,14 +17,14 @@
   <meta property="og:site_name" content="PrivacyFence">
   <meta property="og:url" content="https://privacyfence.eu/download/">
   <meta property="og:title" content="Download PrivacyFence">
-  <meta property="og:description" content="PrivacyFence for macOS, Windows and Linux: free, open source, with a SHA-256 checksum for every installer.">
+  <meta property="og:description" content="PrivacyFence runs as the Docker image or an organization server. The installers of PrivacyFence 7 remain on GitHub Releases.">
   <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="PrivacyFence: AI access without giving AI the keys. Approve the sensitive. Automate the routine.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Download PrivacyFence">
-  <meta name="twitter:description" content="PrivacyFence for macOS, Windows and Linux: free, open source, with a SHA-256 checksum for every installer.">
+  <meta name="twitter:description" content="PrivacyFence runs as the Docker image or an organization server. The installers of PrivacyFence 7 remain on GitHub Releases.">
   <meta name="twitter:image" content="https://privacyfence.eu/assets/og.png">
   <script type="application/ld+json">
   {
@@ -34,16 +34,13 @@
     "name": "PrivacyFence",
     "description": "An open-source privacy and approval gateway between AI assistants and your business systems.",
     "url": "https://privacyfence.eu/",
-    "downloadUrl": "https://privacyfence.eu/download/",
     "applicationCategory": "SecurityApplication",
-    "operatingSystem": ["macOS", "Windows", "Linux"],
     "license": "https://www.apache.org/licenses/LICENSE-2.0",
     "isAccessibleForFree": true,
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
     "image": "https://privacyfence.eu/assets/og.png",
     "sameAs": [
       "https://github.com/privacyfence/privacyfence",
-      "https://pypi.org/project/privacyfence/",
       "https://glama.ai/mcp/servers/privacyfence/privacyfence"
     ],
     "publisher": {
@@ -57,144 +54,20 @@
   </script>
 </head>
 <body>
-  <!-- include: header cta_href="/releases/" cta_label="All releases" -->
+  <!-- include: header -->
 
-  <main id="top" class="shell download-page">
-    <section class="download-intro">
-      <span class="kicker">Download</span>
-      <h1>Download PrivacyFence for macOS, Windows and Linux</h1>
-      <p class="lede">
-        Free and open source, under Apache 2.0. PrivacyFence runs on your own machine. Your connector
-        sign-ins, rules and audit log stay on it, and only what you approve reaches your AI assistant. For one person, the recommended way is now
-        <a href="#docker-heading">PrivacyFence's Docker image</a>; the installers below set up the deprecated
-        desktop mode.
-      </p>
-      <div class="release-meta cluster" id="release-meta" aria-live="polite"></div>
-    </section>
-
-    <section class="page-section" aria-labelledby="docker-heading">
-      <h2 id="docker-heading">Recommended: the Docker image on your computer</h2>
-      <p>For one person, the Docker image runs on your own computer in single-user mode: published only on localhost, and set up with a one-time code from the container's log, then a passkey.</p>
-      <pre class="verify-commands"><code>docker run --rm -p 127.0.0.1:8765:8765 \
-  -v pf-data:/var/lib/privacyfence-org/.privacyfence \
-  ghcr.io/privacyfence/privacyfence-org:latest</code></pre>
-      <p>The log prints <code>Setup code: XXXX-XXXX. Open http://localhost:8765/login to set up your passkey.</code> Open <code>http://localhost:8765</code>, not <code>http://127.0.0.1:8765</code>: the passkey belongs to <code>localhost</code>. <a class="text-link" href="/docs/org-mode-docker/#run-it-on-this-computer">The Docker guide</a> has the details.</p>
-      <p>Single-user mode is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server.</p>
-      <p><a class="text-link" href="/install/">Other ways to install, including the suite with Peek and Grist</a></p>
-    </section>
-
-    <!-- Populated entirely from the release manifest: filenames, sizes and checksums are never
-         hardcoded here, so a new build needs no website change. scripts/build_site.py replaces
-         the loading row with the cards of the release current at deploy time, so the page works
-         without JavaScript; download.js then renders the live manifest over them. -->
-    <section aria-labelledby="stable-heading">
-      <h2 id="stable-heading">Desktop installers (deprecated)</h2>
-      <div class="download-grid grid-auto" id="download-grid">
-        <p class="download-loading" id="download-loading">Loading the latest release…</p>
-      </div>
-
-      <!-- Shown only if the release metadata cannot be loaded. The page must never become a dead
-           end: GitHub Releases stays a working secondary source. -->
-      <div class="download-fallback" id="download-fallback" hidden>
-        <p>
-          We couldn't load the release list just now. You can still download PrivacyFence from
-          <a class="text-link" href="https://github.com/privacyfence/privacyfence/releases/latest">GitHub Releases</a>.
-        </p>
-      </div>
-    </section>
-
-    <section class="verify-block" aria-labelledby="verify-heading">
-      <h2 id="verify-heading">Verify what you downloaded</h2>
+  <main id="top" class="shell prose-page">
+    <article class="prose">
+      <p class="kicker">Install</p>
+      <h1>Download</h1>
       <p>
-        Every installer above lists the SHA-256 its build produced. Compare it against the file you
-        received before running it — if the two differ, do not run the file.
+        PrivacyFence runs as the Docker image or an organization server: see
+        <a href="/install/">how to install it</a>. The installers of PrivacyFence 7 remain on
+        <a href="https://github.com/privacyfence/privacyfence/releases">GitHub Releases</a>.
       </p>
-      <pre class="verify-commands"><code>shasum -a 256 &lt;file&gt;            <span class="verify-os">macOS</span>
-sha256sum &lt;file&gt;                <span class="verify-os">Linux</span>
-Get-FileHash &lt;file&gt; -Algorithm SHA256   <span class="verify-os">Windows</span></code></pre>
-    </section>
-
-    <p class="page-copy"><strong>PrivacyFence 7 deprecates desktop mode, and PrivacyFence 8 removes it.</strong> Desktop installs keep working through 7.x, without the built-in apps. Move to the Docker image on your computer or to an organization server: see <a href="/docs/moving-to-organization-mode/">moving to organization mode</a>, and <a href="/install/">how to install</a>.</p>
-
-    <section class="page-section" aria-labelledby="requirements-heading">
-      <div class="section-heading compact">
-        <p class="kicker">Before you install</p>
-        <h2 id="requirements-heading">System requirements</h2>
-      </div>
-      <div class="card-grid grid-auto">
-        <article class="card stack">
-          <h3>macOS</h3>
-          <p>macOS 13 or later on an Apple silicon Mac, and an administrator password. The installer refuses an older macOS and Intel Macs.</p>
-        </article>
-        <article class="card stack">
-          <h3>Windows</h3>
-          <p>Windows 10 or later, or Windows Server 2016 or later, on an x64 PC, with administrator rights. Set up Windows Hello (a PIN, fingerprint or face) before you add your first passkey.</p>
-        </article>
-        <article class="card stack">
-          <h3>Linux</h3>
-          <p>Ubuntu 24.04 or Debian 13 or newer, on amd64 (glibc 2.38 and systemd 242), with <code>sudo</code>, and <code>zenity</code> or <code>kdialog</code> for the companion's dialogs. <a href="/docs/install-linux/#other-linux-systems-and-arm64">Other Linux systems and arm64</a> can use <code>pipx install privacyfence</code>, which runs as you and is not privilege-separated.</p>
-        </article>
-      </div>
-      <p class="page-copy"><a href="/docs/platform-support/">Platform support</a> has every supported version, where PrivacyFence keeps its data, and its logs.</p>
-    </section>
-
-    <section class="page-section" aria-labelledby="installs-heading">
-      <div class="section-heading compact">
-        <p class="kicker">What the installer does</p>
-        <h2 id="installs-heading">What ends up on your computer</h2>
-      </div>
-      <div class="card-grid grid-auto">
-        <article class="card stack">
-          <h3>macOS</h3>
-          <p>The DMG holds <code>PrivacyFence.pkg</code> and the Claude Desktop extension, <code>PrivacyFence.mcpb</code>. The package installs <code>/Applications/PrivacyFenceApp.app</code>, creates the <code>_privacyfence</code> service account, runs PrivacyFence under it, and starts the menu-bar icon at each login.</p>
-        </article>
-        <article class="card stack">
-          <h3>Windows</h3>
-          <p>The installer puts PrivacyFence in <code>%ProgramFiles%\PrivacyFence\</code>, runs it as the <code>PrivacyFence</code> Windows service under its own account, keeps your data in <code>%ProgramData%\PrivacyFence\</code>, and starts the tray icon at each sign-in. Its last page offers the Claude Desktop extension.</p>
-        </article>
-        <article class="card stack">
-          <h3>Linux</h3>
-          <p>The <code>.deb</code> puts a self-contained PrivacyFence in <code>/opt/privacyfence</code>, runs it as the <code>privacyfence-daemon</code> system service under the <code>privacyfence</code> account, keeps your data in <code>/var/lib/privacyfence</code>, and adds a PrivacyFence entry to your Applications menu.</p>
-        </article>
-      </div>
-      <p class="page-copy">Every installer runs PrivacyFence under its own service account, so an AI client running as you cannot read or change its policy, passkeys, audit log or connector credentials. Log out (on Windows, sign out) and back in once after installing, so your account can reach it.</p>
-    </section>
-
-    <section class="page-section" aria-labelledby="next-heading">
-      <div class="section-heading compact">
-        <p class="kicker">After you install</p>
-        <h2 id="next-heading">Next steps</h2>
-      </div>
-      <div class="page-copy">
-        <ol class="steps">
-          <li>Follow the install guide for your platform: <a href="/docs/install-macos/">macOS</a>, <a href="/docs/install-windows/">Windows</a> or <a href="/docs/install-linux/">Linux</a>. Each one covers the first start, troubleshooting and uninstalling.</li>
-          <li>Connect Gmail, Slack or another service from PrivacyFence's Settings: <a href="/docs/connecting-a-service/">Connecting a service</a>.</li>
-          <li>Connect your AI client. <a href="/ai-agents/">AI agents</a> has a page for each tested client, with its setup steps.</li>
-        </ol>
-        <p>Not sure whether it is free, whether your data leaves your computer, or how to check a download? The <a href="/faq/">FAQ</a> answers those, including <a href="/faq/#verify">how to verify a download</a>.</p>
-      </div>
-    </section>
-
-    <!-- Hidden until some pre-release channel actually has a release. download.js tries rc, then
-         beta, then alpha: a channel with nothing published should show nothing at all rather
-         than an empty invitation. -->
-    <section class="prerelease-block" id="prerelease-block" aria-labelledby="prerelease-heading" hidden>
-      <h2 id="prerelease-heading">Want to test the next version?</h2>
-      <p id="prerelease-summary"></p>
-      <div class="download-grid grid-auto compact" id="prerelease-grid"></div>
-      <p class="prerelease-note">
-        Pre-release builds get the same checks as stable, but they are newer and less proven.
-        Install them alongside nothing you rely on. The newest release on every channel is in the
-        <a href="/releases/">release history</a>.
-      </p>
-    </section>
-
-    <p class="download-stats" id="download-stats" hidden></p>
+    </article>
   </main>
 
   <!-- include: footer -->
-
   <script src="/site.js" defer></script>
-  <script src="/download/download.js" defer></script>
 </body>
-</html>

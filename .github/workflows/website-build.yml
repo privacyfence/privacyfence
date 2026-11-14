@@ -52,33 +52,9 @@ jobs:
       - name: Build as deployed now (newest stable tag)
         run: python scripts/build_site.py --out _site --report site-report.json
 
-      - name: The pre-rendered /download/ names a version without JavaScript
-        run: |
-          version="$(python -c 'import json; print(json.load(open("site-report.json"))["download_version"] or "")')"
-          if [ -z "$version" ]; then
-            echo "::warning::the download Worker could not be read, so /download/ was built without pre-rendered cards"
-          else
-            grep -q "<span>Version ${version}</span>" _site/download/index.html
-            echo "/download/ shows Version ${version} in its HTML"
-          fi
-
-      - name: The pre-rendered /releases/ lists its versions without JavaScript
-        run: |
-          python - <<'PY'
-          import json, pathlib
-          versions = json.load(open("site-report.json"))["releases"]
-          if not versions:
-              print("::warning::the release list could not be read, so /releases/ was built without pre-rendered rows")
-          else:
-              page = pathlib.Path("_site/releases/index.html").read_text(encoding="utf-8")
-              missing = [v for v in versions if f'<th scope="row">{v}' not in page]
-              assert not missing, f"/releases/ lacks rows for {missing}"
-              print(f"/releases/ lists {', '.join(versions)} in its HTML")
-          PY
-
       - name: Build with the stale-tag guard (v4.5.0 predates the published doc set)
         run: |
-          python scripts/build_site.py --out _site-stale --docs-ref v4.5.0 --offline --report stale-report.json
+          python scripts/build_site.py --out _site-stale --docs-ref v4.5.0 --report stale-report.json
           python - <<'PY'
           import json, pathlib
           report = json.load(open("stale-report.json"))
@@ -91,7 +67,7 @@ jobs:
       - name: Build as the next stable release (a local tag on this commit)
         run: |
           git tag v999.0.0
-          python scripts/build_site.py --out _site-next --offline --report next-report.json
+          python scripts/build_site.py --out _site-next --report next-report.json
           git tag -d v999.0.0
           python - <<'PY'
           import json
@@ -113,9 +89,7 @@ jobs:
             tests/integration/test_website_layout.py \
             tests/integration/test_website_consent.py \
             tests/integration/test_website_csp.py \
-            tests/integration/test_download_page.py \
-            tests/integration/test_install_page.py \
-            tests/integration/test_releases_page.py
+            tests/integration/test_install_page.py
 
       - name: Upload the built sites
         if: always()

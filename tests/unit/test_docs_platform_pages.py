@@ -94,16 +94,3 @@ def test_getting_started_links_every_install_page():
     links = set(_LINK.findall((DOCS / "getting-started.md").read_text(encoding="utf-8")))
     missing = [f"install-{p}.md" for p in PLATFORM_KEYWORDS if f"install-{p}.md" not in links]
     assert not missing, f"getting-started.md does not link {missing}"
-
-
-def test_the_download_page_offers_every_installer_platform():
-    # The cards are rendered by download.js from its PLATFORMS table (the page itself holds only
-    # the grid they go into), so both halves have to be there.
-    page = DOWNLOAD_PAGE.read_text(encoding="utf-8")
-    assert 'id="download-grid"' in page
-    assert re.search(r'<script src="(?:/download/)?download\.js"', page), "the page does not load download.js"
-    script = DOWNLOAD_SCRIPT.read_text(encoding="utf-8")
-    table = script.split("const PLATFORMS = {", 1)[1].split("};", 1)[0]
-    offered = set(re.findall(r"^\s*'([a-z0-9-]+)':\s*\{", table, flags=re.MULTILINE))
-    missing = [aid for aid in DOWNLOAD_ARTIFACT_IDS.values() if aid not in offered]
-    assert not missing, f"download.js renders no card for {missing}; it offers {sorted(offered)}"

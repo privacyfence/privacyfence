@@ -129,11 +129,11 @@ def test_json_ld_describes_the_software(path):
     nodes = _json_ld(PAGES[path])
     app = next(n for n in nodes if n.get("@type") == "SoftwareApplication")
     assert app["applicationCategory"] == "SecurityApplication"
-    assert set(app["operatingSystem"]) == {"macOS", "Windows", "Linux"}
+    assert "downloadUrl" not in app and "operatingSystem" not in app
     assert app["offers"]["price"] == "0"
     assert "apache.org/licenses/LICENSE-2.0" in app["license"]
     assert "https://github.com/privacyfence/privacyfence" in app["sameAs"]
-    assert "https://pypi.org/project/privacyfence/" in app["sameAs"]
+    assert "https://pypi.org/project/privacyfence/" not in app["sameAs"]
     publisher = app["publisher"]
     if set(publisher) == {"@id"}:
         publisher = next(n for n in nodes if n.get("@id") == publisher["@id"])
@@ -240,11 +240,11 @@ def test_a_connector_page_links_the_other_connectors_from_its_content(path):
 
 
 def test_content_links_into_the_weakly_linked_pages():
-    """Header and footer excluded: every connector page and the FAQ get at least three links from
-    the content of other pages."""
-    for target in [*CONNECTOR_PAGES, "/faq/"]:
+    """Header and footer excluded: every connector page gets at least three links from the content
+    of other pages, and the FAQ at least two (the /download/ stub carries only its two links)."""
+    for target, minimum in [*((page, 3) for page in CONNECTOR_PAGES), ("/faq/", 2)]:
         linking = [p for p, page in PAGES.items() if p != target and target in _main_links(page)]
-        assert len(linking) >= 3, f"{target} is linked from the content of only {linking}"
+        assert len(linking) >= minimum, f"{target} is linked from the content of only {linking}"
 
 
 # ---- Unlisted pages -----------------------------------------------------------------------------
@@ -297,6 +297,6 @@ def test_no_page_claims_there_is_no_privacyfence_server(path):
     assert "no PrivacyFence-operated server is involved" not in text
 
 
-@pytest.mark.parametrize("path", ["/download/", "/faq/"])
+@pytest.mark.parametrize("path", ["/faq/"])
 def test_desktop_mode_deprecation_notice(path):
     assert "PrivacyFence 8 removes it" in _text(PAGES[path])

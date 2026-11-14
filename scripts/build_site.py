@@ -20,15 +20,9 @@ What it does, in order:
    repository, and `BUILD_INPUTS` are read by this script and never copied.
    tests/unit/test_website_download_cta.py holds every file under `website/` to exactly one of
    those four lists (guardrail 7).
-2. **`/download/` pre-rendered.** The current stable release manifest is fetched from the
-   download Worker and written into the page as static cards, so the page shows a version and
-   working download links without JavaScript; `download.js` still refreshes it in the browser.
-   If the Worker cannot be reached the build warns and the page keeps its loading row, exactly as
-   before. The version also goes into the JSON-LD `softwareVersion` of `/` and `/download/`.
-   **`/releases/`** is pre-rendered the same way from `/api/releases/history` (every published
-   version on every channel), falling back to `/api/releases` (the newest release per channel)
-   when that route is missing or failing: one table row per published release, installers only,
-   and `releases.js` refreshes it in the browser. Without the Worker it keeps its loading row.
+2. **`/download/` is a stub.** The installers are gone with desktop mode (ADR 0296), so the page
+   only links to `/install/` and to the GitHub Releases page that keeps the installers of
+   PrivacyFence 7, and old links to it do not return 404 (ADR 0300).
 3. **`/docs/` from the latest stable release.** The docs are the ones at the newest stable tag
    (`vX.Y.Z`, the same channel rule as `scripts/r2_release.py`), not `main`: the site documents
    the version people can download. The published set, its order and its sections come from
@@ -48,9 +42,8 @@ What it does, in order:
    (guardrail 6). A broken one fails the build.
 
 Options for previews and tests: `--docs-ref REF` renders the docs from another git ref, and
-`--docs-ref worktree` from the checkout as it is; `--no-docs` skips `/docs/`; `--offline` skips
-the Worker fetches; `--release-manifest FILE` pre-renders `/download/` from a saved manifest.
-`--report FILE` writes a JSON summary of what was built.
+`--docs-ref worktree` from the checkout as it is; `--no-docs` skips `/docs/`. `--report FILE` writes a
+JSON summary of what was built.
 
 Requires the `docs` extra (`pip install --require-hashes -r requirements/docs.lock.txt`) only when
 `/docs/` is rendered. Imports nothing from the `privacyfence` package.
@@ -70,8 +63,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -86,10 +77,6 @@ WEBSITE = REPO / "website"
 
 SITE_URL = "https://privacyfence.eu"
 GITHUB_URL = "https://github.com/privacyfence/privacyfence"
-RELEASES_API = "https://downloads.privacyfence.eu/api/releases/stable"
-ALL_RELEASES_API = "https://downloads.privacyfence.eu/api/releases"
-HISTORY_API = "https://downloads.privacyfence.eu/api/releases/history"
-DOWNLOAD_ORIGIN = "https://downloads.privacyfence.eu"
 
 # ---- The build manifest ----------------------------------------------------------------------
 
@@ -121,7 +108,6 @@ PAGES: dict[str, str] = {
     "/faq/": "faq/index.html",
     "/install/": "install/index.html",
     "/download/": "download/index.html",
-    "/releases/": "releases/index.html",
     "/privacy/": "privacy/index.html",
     "/imprint/": "imprint/index.html",
     "/relay-terms/": "relay-terms/index.html",
@@ -143,10 +129,7 @@ STATIC: dict[str, str] = {
     "styles.css": "website/styles.css",
     "docs-theme.css": "website/_docs/docs-theme.css",
     "site.js": "website/site.js",
-    "stats.js": "website/stats.js",
-    "download/download.js": "website/download/download.js",
     "install/install.js": "website/install/install.js",
-    "releases/releases.js": "website/releases/releases.js",
     "assets/og.png": "website/assets/og.png",
     "assets/architecture.svg": "website/assets/architecture.svg",
     "assets/architecture-narrow.svg": "website/assets/architecture-narrow.svg",
@@ -215,15 +198,6 @@ PUBLISHED_SET_MARKER = "docs/how-it-works.md"
 CONNECTOR_GUIDES = frozenset(
     {"google-cloud-setup", "slack-setup", "salesforce-setup", "atlassian-setup", "telegram-setup", "grist-setup", "peek-setup", "miro-setup"}
 )
-
-# Display names per release-manifest artifact id. Mirrors the PLATFORMS maps in
-# website/download/download.js and website/releases/releases.js, which render the same names in
-# the browser; tests/unit/test_build_site.py keeps the three in step.
-PLATFORMS: dict[str, tuple[str, str]] = {
-    "macos-arm64": ("macOS", "Apple silicon · installer + Claude extension"),
-    "windows-x64": ("Windows", "64-bit"),
-    "linux-x64": ("Linux", "Debian / Ubuntu, 64-bit"),
-}
 
 ROBOTS_TXT = f"""\
 # privacyfence.eu welcomes every crawler: search engines, AI search and AI training alike.
@@ -443,228 +417,6 @@ def assemble_page(source: str) -> str:
     return page
 
 
-# ---- /download/ pre-render --------------------------------------------------------------------
-
-
-def fetch_stable_manifest(url: str = RELEASES_API, timeout: float = 15) -> dict | None:
-    """The stable release manifest from the download Worker, or None (with a warning) if it
-    cannot be read. The site still builds without it: the page then loads it in the browser."""
-    request = urllib.request.Request(url, headers={"User-Agent": "privacyfence-site-build"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 -- fixed https URL
-            manifest = json.load(response)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-        warn(f"could not read the stable release manifest ({exc}); /download/ is built without pre-rendered cards")
-        return None
-    if not isinstance(manifest, dict) or not manifest.get("version") or not manifest.get("artifacts"):
-        warn("the stable release manifest has no version or artifacts; /download/ is built without pre-rendered cards")
-        return None
-    return manifest
-
-
-def _format_size(size: object) -> str:
-    if not isinstance(size, (int, float)) or size <= 0:
-        return ""
-    mb = size / (1024 * 1024)
-    return f"{mb:.1f} MB" if mb >= 1 else f"{round(size / 1024)} KB"
-
-
-def render_download_cards(manifest: dict) -> str:
-    """The same cards download.js builds, as static HTML (no platform highlight: that needs the
-    visitor's browser)."""
-    channel = manifest.get("channel", "stable")
-    cards = []
-    for artifact in manifest.get("artifacts", []):
-        artifact_id = str(artifact.get("id", ""))
-        name, detail = PLATFORMS.get(artifact_id, (artifact_id, ""))
-        filename = str(artifact.get("filename", ""))
-        size = _format_size(artifact.get("size"))
-        e = html.escape
-        parts = [
-            f'<article class="download-card" data-artifact-id="{e(artifact_id)}">',
-            f"<h3>{e(name)}</h3>",
-        ]
-        if detail:
-            parts.append(f'<p class="download-detail">{e(detail)}</p>')
-        parts.append(
-            # nofollow on every installer link: a crawler that followed it would be counted as a
-            # download (docs/downloads-and-release-kpi.md). The Worker's robots.txt says the same.
-            f'<a class="button primary download-button" rel="nofollow"'
-            f' href="{DOWNLOAD_ORIGIN}/download/{e(channel)}/{e(artifact_id)}"'
-            f' aria-label="Download {e(name)}: {e(filename)}">Download</a>'
-        )
-        parts.append(f'<p class="download-meta">{e(f"{filename} · {size}" if size else filename)}</p>')
-        if artifact.get("sha256"):
-            parts.append(
-                '<details class="download-checksum"><summary>SHA-256</summary>'
-                f"<code>{e(str(artifact['sha256']))}</code></details>"
-            )
-        parts.append("</article>")
-        cards.append("".join(parts))
-    return "\n        ".join(cards)
-
-
-LOADING_ROW = '<p class="download-loading" id="download-loading">Loading the latest release…</p>'
-RELEASE_META = '<div class="release-meta cluster" id="release-meta" aria-live="polite"></div>'
-
-
-def prerender_download(page: str, manifest: dict) -> str:
-    version = html.escape(str(manifest["version"]))
-    if LOADING_ROW not in page or RELEASE_META not in page:
-        raise BuildError(
-            "website/download/index.html no longer has the loading row and release-meta the pre-render fills"
-        )
-    page = page.replace(LOADING_ROW, render_download_cards(manifest))
-    meta = (
-        '<div class="release-meta cluster" id="release-meta" aria-live="polite">'
-        f"<span>Version {version}</span>"
-        f'<span><a class="text-link" href="{GITHUB_URL}/releases/tag/v{version}">Release notes</a></span></div>'
-    )
-    return page.replace(RELEASE_META, meta)
-
-
-# ---- /releases/ pre-render ---------------------------------------------------------------------
-
-# Display name per channel. Mirrors CHANNEL_NAMES in website/releases/releases.js.
-CHANNEL_NAMES: dict[str, str] = {"stable": "Stable", "rc": "Release candidate", "beta": "Beta", "alpha": "Alpha"}
-
-_RELEASE_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?$")
-_STAGE_RANK = {"a": 0, "b": 1, "rc": 2}
-
-
-def release_version_key(version: str) -> tuple[int, int, int, int, int] | None:
-    """A sort key for a manifest version (newer sorts higher): major.minor.patch, then stage
-    (a stable version above its own rc, beta and alpha), then stage number. None for anything that
-    is not a tagged release version. The same order as releases.js's and download.js's
-    isNewerVersion."""
-    match = _RELEASE_VERSION_RE.match(str(version).strip())
-    if not match:
-        return None
-    major, minor, patch, stage, number = match.groups()
-    return int(major), int(minor), int(patch), _STAGE_RANK[stage] if stage else 3, int(number or 0)
-
-
-def _read_json(url: str, timeout: float) -> object:
-    request = urllib.request.Request(url, headers={"User-Agent": "privacyfence-site-build"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 -- fixed https URL
-        return json.load(response)
-
-
-def fetch_all_releases(
-    url: str = HISTORY_API, fallback_url: str = ALL_RELEASES_API, timeout: float = 15
-) -> dict | None:
-    """The release list from the download Worker: `/api/releases/history`
-    (`{"releases": [manifest, ...]}`, every published version), or, when that route is missing or
-    failing, `/api/releases` (`{"channels": {channel: manifest or null}}`, the newest per channel).
-    The Worker deploys independently of the site, so neither may assume the other has landed.
-    None (with a warning) if neither can be read; /releases/ then loads it in the browser."""
-    try:
-        data = _read_json(url, timeout)
-        if isinstance(data, dict) and isinstance(data.get("releases"), list):
-            return data
-        warn("the release history has no release list; /releases/ falls back to the newest release per channel")
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-        warn(f"could not read the release history ({exc}); /releases/ falls back to the newest release per channel")
-    try:
-        data = _read_json(fallback_url, timeout)
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-        warn(f"could not read the release list ({exc}); /releases/ is built without pre-rendered rows")
-        return None
-    if not isinstance(data, dict) or not isinstance(data.get("channels"), dict):
-        warn("the release list has no channels; /releases/ is built without pre-rendered rows")
-        return None
-    return data
-
-
-def _listed_manifests(data: dict) -> list[tuple[str, object]]:
-    """(channel, manifest) pairs from either response shape `fetch_all_releases` returns."""
-    if isinstance(data.get("releases"), list):
-        return [(m.get("channel", ""), m) for m in data["releases"] if isinstance(m, dict)]
-    channels = data.get("channels") or {}
-    return [(channel, channels.get(channel)) for channel in CHANNEL_NAMES]
-
-
-def published_releases(data: dict) -> list[dict]:
-    """The manifests /releases/ lists, newest version first: every version in the history, or one
-    per channel from `/api/releases`, that has a published release with at least one installer.
-    Only installers are kept (the manifest lists nothing else, and the page must never present
-    anything else as a download); a manifest whose version does not parse, or whose channel the
-    page does not know, is left out, as download.js does."""
-    releases = []
-    for channel, manifest in _listed_manifests(data):
-        if not isinstance(manifest, dict) or release_version_key(manifest.get("version", "")) is None:
-            continue
-        channel = manifest.get("channel") or channel
-        if channel not in CHANNEL_NAMES:
-            continue
-        installers = [
-            a for a in manifest.get("artifacts") or [] if isinstance(a, dict) and a.get("kind") == "installer"
-        ]
-        if installers:
-            releases.append({**manifest, "channel": channel, "artifacts": installers})
-    return sorted(releases, key=lambda m: release_version_key(m["version"]), reverse=True)
-
-
-def render_release_rows(releases: list[dict]) -> str:
-    """The table rows releases.js builds, as static HTML."""
-    e = html.escape
-    stable = next((m for m in releases if m["channel"] == "stable"), None)
-    rows = []
-    for manifest in releases:
-        version, channel = str(manifest["version"]), str(manifest["channel"])
-        parts = [f'<tr data-channel="{e(channel)}" data-version="{e(version)}">', f'<th scope="row">{e(version)}']
-        if manifest is stable:
-            parts.append(' <span class="download-badge">Current</span>')
-        parts.append("</th>")
-        parts.append(f"<td>{e(CHANNEL_NAMES.get(channel, channel))}")
-        if (
-            stable is not None
-            and channel != "stable"
-            and release_version_key(version) < release_version_key(stable["version"])
-        ):
-            parts.append(f'<span class="release-superseded">Superseded by {e(str(stable["version"]))}</span>')
-        parts.append("</td>")
-        published = str(manifest.get("published_at") or "")[:10]
-        parts.append(f'<td><time datetime="{e(published)}">{e(published)}</time></td>' if published else "<td></td>")
-        parts.append('<td><ul class="release-installers">')
-        for artifact in manifest["artifacts"]:
-            artifact_id = str(artifact.get("id", ""))
-            name = PLATFORMS.get(artifact_id, (artifact_id, ""))[0]
-            filename = str(artifact.get("filename", ""))
-            size = _format_size(artifact.get("size"))
-            parts.append(
-                "<li>"
-                f'<a class="release-download" rel="nofollow"'
-                f' href="{DOWNLOAD_ORIGIN}/download/version/{e(version)}/{e(artifact_id)}"'
-                f' aria-label="Download {e(name)} {e(version)}: {e(filename)}">{e(name)}</a>'
-            )
-            if size:
-                parts.append(f' <span class="release-size">{e(size)}</span>')
-            if artifact.get("sha256"):
-                parts.append(
-                    '<details class="download-checksum"><summary>SHA-256</summary>'
-                    f"<code>{e(str(artifact['sha256']))}</code></details>"
-                )
-            parts.append("</li>")
-        parts.append("</ul></td>")
-        parts.append(f'<td><a href="{GITHUB_URL}/releases/tag/v{e(version)}">Release notes</a></td>')
-        parts.append("</tr>")
-        rows.append("".join(parts))
-    return "\n            ".join(rows)
-
-
-RELEASES_LOADING_ROW = '<tr id="releases-loading"><td colspan="5">Loading the release list…</td></tr>'
-
-
-def prerender_releases(page: str, data: dict) -> str:
-    """/releases/ with its loading row replaced by the published releases. A list with nothing
-    published keeps the loading row: releases.js then shows the fallback."""
-    if RELEASES_LOADING_ROW not in page:
-        raise BuildError("website/releases/index.html no longer has the loading row the pre-render fills")
-    releases = published_releases(data)
-    return page.replace(RELEASES_LOADING_ROW, render_release_rows(releases)) if releases else page
-
-
 # The section index pages the second-level pages sit under, for their BreadcrumbList.
 SECTIONS: dict[str, str] = {"ai-agents": "AI agents", "compare": "Compare", "connectors": "Connectors"}
 KICKER_RE = re.compile(r'<p class="kicker">([^<]*?) · ([^<]+)</p>')
@@ -709,11 +461,6 @@ def add_breadcrumb(page: str, url_path: str) -> str:
 
 
 JSON_LD_RE = re.compile(r'(<script type="application/ld\+json">)(.*?)(</script>)', re.S)
-
-
-def set_software_version(page: str, version: str) -> str:
-    """Adds `softwareVersion` to the page's JSON-LD SoftwareApplication node."""
-    return _update_software_node(page, softwareVersion=version)
 
 
 def _update_software_node(page: str, **fields: str) -> str:
@@ -1158,8 +905,7 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         f"- [PrivacyFence vs MCP gateways]({SITE_URL}/compare/mcp-gateways/): routing tool traffic for platform teams, or a person deciding on each sensitive request",
         f"- [FAQ]({SITE_URL}/faq/): whether it is an MCP gateway, where your data goes, which AI clients work, what the AI sees before approval, certification, cost and verifying a download",
         f"- [Install]({SITE_URL}/install/): choose single-user Docker or an organization server, with or without the built-in presentation tool and data lake, and get the commands",
-        f"- [Download]({SITE_URL}/download/): the Docker image recommended for one person, and the deprecated desktop installers for macOS, Windows and Linux, each with its SHA-256 checksum",
-        f"- [Releases]({SITE_URL}/releases/): the newest release on every channel, stable and pre-release, with its installers and release notes",
+        f"- [Download]({SITE_URL}/download/): where the installers of PrivacyFence 7 remain, and the way to the Docker image and the organization server",
         f"- [Privacy policy]({SITE_URL}/privacy/): what this website and the download service do with visitor data",
         f"- [Imprint]({SITE_URL}/imprint/): who publishes privacyfence.eu",
         f"- [Relay terms]({SITE_URL}/relay-terms/): the terms for the sign-in relay at oauth.privacyfence.eu",
@@ -1167,7 +913,6 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         "## Source",
         "",
         f"- [GitHub repository]({GITHUB_URL}): source code, issues and releases, Apache License 2.0",
-        "- [PyPI package](https://pypi.org/project/privacyfence/): `pip install privacyfence`",
         f"- [Security policy]({GITHUB_URL}/blob/main/SECURITY.md): how to report a vulnerability",
     ]
     if export is not None:
@@ -1260,9 +1005,7 @@ def fingerprint_assets(site: Path) -> None:
 
     GitHub Pages and the Cloudflare proxy cache these files for a while under a fixed URL, so a
     deploy that changes a page and its script together could otherwise serve the new HTML with
-    the old script: /download/ once showed every card twice, because a cached pre-Wave-3
-    download.js appended the live cards to the build's pre-rendered ones instead of replacing
-    them. A content hash changes the URL exactly when the file changes."""
+    the old script. A content hash changes the URL exactly when the file changes."""
     hashes: dict[str, str] = {}
 
     def versioned(match: re.Match[str]) -> str:
@@ -1311,8 +1054,6 @@ class BuildReport:
     docs: str  # "published", "skipped: stale tag", "skipped: --no-docs", "skipped: no stable tag"
     docs_ref: str | None
     docs_pages: list[str]
-    download_version: str | None
-    releases: list[str]  # the versions /releases/ was pre-rendered with, newest first
     layout_sample: list[str]
 
 
@@ -1329,14 +1070,9 @@ def build(
     *,
     docs_ref: str | None = "latest",
     render: bool = True,
-    manifest: dict | None = None,
-    fetch_manifest: bool = True,
-    releases: dict | None = None,
 ) -> BuildReport:
     """Builds the whole site into `out` (replacing it). `docs_ref` is a git ref, "latest" (the
-    newest stable tag), "worktree", or None for no docs. `manifest` and `releases` are the Worker's
-    `/api/releases/stable` response and its release list (`fetch_all_releases`); when not given
-    they are fetched, unless `fetch_manifest` is false."""
+    newest stable tag), "worktree", or None for no docs."""
     check_manifest()
     if out.exists():
         shutil.rmtree(out)
@@ -1348,12 +1084,6 @@ def build(
         shutil.copyfile(REPO / source, target)
     (out / ".nojekyll").touch()
 
-    if manifest is None and fetch_manifest:
-        manifest = fetch_stable_manifest()
-    version = str(manifest["version"]) if manifest else None
-    if releases is None and fetch_manifest:
-        releases = fetch_all_releases()
-
     for source in UNLISTED_PAGES.values():
         target = out / source
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1361,12 +1091,6 @@ def build(
 
     for url_path, source in PAGES.items():
         page = set_clients(assemble_page((WEBSITE / source).read_text(encoding="utf-8")))
-        if manifest:
-            if url_path == "/download/":
-                page = prerender_download(page, manifest)
-            page = set_software_version(page, str(manifest["version"]))
-        if releases and url_path == "/releases/":
-            page = prerender_releases(page, releases)
         page = add_breadcrumb(page, url_path)
         target = out / source
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1424,7 +1148,7 @@ def build(
     lastmods = sitemap_lastmods(docs_pages, source)
     (out / "sitemap.xml").write_text(sitemap_xml(pages + docs_pages, lastmods), encoding="utf-8")
     (out / "robots.txt").write_text(ROBOTS_TXT, encoding="utf-8")
-    (out / "llms.txt").write_text(llms_txt(export, version or docs_version), encoding="utf-8")
+    (out / "llms.txt").write_text(llms_txt(export, docs_version), encoding="utf-8")
 
     broken = check_links(out)
     if broken:
@@ -1436,8 +1160,6 @@ def build(
         docs=docs_state,
         docs_ref=source.blob_ref if source else None,
         docs_pages=docs_pages,
-        download_version=version,
-        releases=[str(m["version"]) for m in published_releases(releases)] if releases else [],
         layout_sample=pages + [p for p in DOCS_LAYOUT_SAMPLE if p in docs_pages],
     )
 
@@ -1452,19 +1174,13 @@ def main(argv: list[str] | None = None) -> int:
         help='git ref to publish the docs from, or "worktree" for the checkout as it is (default: the newest stable tag)',
     )
     docs.add_argument("--no-docs", action="store_true", help="do not build /docs/")
-    release = parser.add_mutually_exclusive_group()
-    release.add_argument("--offline", action="store_true", help="do not fetch the release manifest")
-    release.add_argument("--release-manifest", type=Path, help="pre-render /download/ from this manifest file")
     parser.add_argument("--report", type=Path, help="write a JSON summary of the build here")
     args = parser.parse_args(argv)
 
-    manifest = json.loads(args.release_manifest.read_text(encoding="utf-8")) if args.release_manifest else None
     try:
         report = build(
             args.out.resolve(),
             docs_ref=None if args.no_docs else args.docs_ref,
-            manifest=manifest,
-            fetch_manifest=not args.offline,
         )
     except BuildError as exc:
         print(f"error: {exc}", file=sys.stderr)

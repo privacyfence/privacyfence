@@ -9,14 +9,11 @@ script. Same skip posture as test_website_consent.py.
 
 from __future__ import annotations
 
-import json
 
 import pytest
 
 from tests.website_site import (
-    API_ORIGIN,
     GA_ORIGIN,
-    STABLE_MANIFEST,
     chromium_launch_kwargs,
     page_paths,
     serve,
@@ -78,12 +75,6 @@ class Visit:
         url = route.request.url
         if url.startswith(self.site_url):
             route.continue_()
-        elif url == f"{API_ORIGIN}/api/releases/stable":
-            route.fulfill(status=200, content_type="application/json", body=json.dumps(STABLE_MANIFEST))
-        elif url.startswith(f"{API_ORIGIN}/download/"):
-            route.fulfill(status=204, body="")
-        elif url.startswith(API_ORIGIN):
-            route.fulfill(status=404, content_type="application/json", body='{"error":"not found"}')
         elif url.startswith(GA_ORIGIN):
             route.fulfill(status=200, content_type="application/javascript", body="")
         else:

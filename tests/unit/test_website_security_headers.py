@@ -43,7 +43,7 @@ def test_the_csp_has_the_agreed_directives():
             "style-src 'self'",
             "img-src 'self' data: https://*.google-analytics.com https://www.googletagmanager.com",
             (
-                "connect-src 'self' https://downloads.privacyfence.eu https://*.google-analytics.com"
+                "connect-src 'self' https://*.google-analytics.com"
                 + " https://*.analytics.google.com https://www.googletagmanager.com"
             ),
             "font-src 'self'",
