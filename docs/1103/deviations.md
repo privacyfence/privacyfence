@@ -35,7 +35,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p8-audience-rename
 
-- pending
+- worker: none from the brief; the browser selector test was edited but could not run here (no Chromium). Doorbell failed again, found by timer (no doorbell).
 
 ## p9-groups-config
 
