@@ -6,7 +6,7 @@
 
 **Use it:** PrivacyFence 8 starts only as an organization server or as the Docker image, single-user mode on localhost included. The macOS, Windows and Linux installers, the companion app, the Claude Desktop extension and the download page are gone (`/download/` becomes a short page that points to `/install/`). A person on a desktop install keeps running 7.x or follows "Moving to organization mode". Starting 8 on a desktop data directory, on one that 7.x never prepared, or with `PRIVACYFENCE_MODE=local`, stops with a message that names that guide.
 
-**Scope:** Removes every local-mode code path (privilege separation, control channel, companion, loopback sign-in, file bridge, local web routes, local settings controller), the desktop command-line flags, the packaging and installer files, `mcpb/`, `cloudflare/downloads/`, the download and releases website pages, the Windows and macOS test legs, and the docs for all of it. Visible to agents: tools no longer take `destination_dir` or a plain `local_path` (attachments and uploads take `upload:` references), and `privacyfence_status` loses its `deprecation` and `next_step` fields. Keeps organization mode, single-user mode, the Docker image, the PyPI package, the sync plugin, the relay and the R2 archive of what is still built. It adds eight ADRs (0283-0290). It does not delete the pre-7 data converters, does not cut a release and does not touch the live GitHub ruleset or Cloudflare account.
+**Scope:** Removes every local-mode code path (privilege separation, control channel, companion, loopback sign-in, file bridge, local web routes, local settings controller), the desktop command-line flags, the packaging and installer files, `mcpb/`, `cloudflare/downloads/`, the download and releases website pages, the Windows and macOS test legs, and the docs for all of it. Visible to agents: tools no longer take `destination_dir` or a plain `local_path` (attachments and uploads take `upload:` references), and `privacyfence_status` loses its `deprecation` and `next_step` fields. Keeps organization mode, single-user mode, the Docker image, the PyPI package, the sync plugin, the relay and the R2 archive of what is still built. It adds eight ADRs (0296-0303). It does not delete the pre-7 data converters, does not cut a release and does not touch the live GitHub ruleset or Cloudflare account.
 
 **Security:** The start-up check (§3.3) refuses data it cannot trust instead of reading it. Files reach connectors only through upload slots, inline bytes and one-time links (§3.5); the path parameters are removed from every tool. Deleting privilege separation removes no organization-mode protection: org behaviour that was gated on it is pinned to its current org value.
 
@@ -56,7 +56,7 @@ Org behaviour that is gated on privilege separation (`step_up_config.py:211,412`
 
 Tests that start a real local `WebServer` (`test_mcp_daemon_contract`, `ai_client_harness`, `test_deferred_approval_round_trip`, `test_pending_approval_releases_nothing`, `test_claude_code_contract`, `test_browser_smoke`) are invisible to `verify.fast`. Phase `p01` ports them to a single-user org server first.
 
-### 3.3 The start-up data check (ADR 0284, amends ADR 0262)
+### 3.3 The start-up data check (ADR 0297, amends ADR 0262)
 
 New module-level names in `src/privacyfence/data_format.py`:
 
@@ -92,7 +92,7 @@ Checkpoint text, exactly:
 
 No URL anchor (the docs site serves the 7.x copy of the page until `v8.0.0` is tagged, §3.7). A unit test asserts `docs/moving-to-organization-mode.md` exists. Tests pass `tmp_path` as `root`; tests that call `main()` must patch `paths.data_dir` so a developer's checkout with an old `authority/` cannot flake them. `migrate_everything` and the "Not ready for PrivacyFence 8" logging stay unchanged.
 
-### 3.4 What `mode` means in 8.0 (ADR 0285)
+### 3.4 What `mode` means in 8.0 (ADR 0298)
 
 - No mode set: organization mode (`DEFAULT_MODE = "org"`).
 - `PRIVACYFENCE_MODE=org` and a bundle `"mode": "org"` are accepted silently (the Dockerfile and existing compose files set it).
@@ -102,7 +102,7 @@ No URL anchor (the docs site serves the 7.x copy of the page until `v8.0.0` is t
 - `refuse_local_mode` ships in the mode-flip phase inside `resolve_mode`. Phase `p14b` replaces `resolve_mode` by `validate_mode(org_config: dict) -> None` (same checks, no return value, called once when the bundle is loaded and once in `run_app`), deletes `Mode`, `DEFAULT_MODE` and `LOCAL_MODE_DEPRECATION`, and makes `is_single_user` return `not _idp_present(org_config)`; phase `p14c` removes the `mode=` parameters.
 - `personal_settings.py` keeps importing documents whose `source.mode` is `"local"` (`:228-234`): that is the documented desktop-to-org move.
 
-### 3.5 Files and tools (ADR 0286)
+### 3.5 Files and tools (ADR 0299)
 
 Files reach the server only through the upload slot (`privacyfence_create_upload_slot`, `PUT /mcp-files/slots/{slot}`), inline bytes and the one-time link of ADR 0160. Remove:
 
@@ -117,7 +117,7 @@ Files reach the server only through the upload slot (`privacyfence_create_upload
 - **`staged_download`.** Nothing sets the dedupe-replay flag `staged_download` (`mcp_dispatch.py:340`) once the bridge is gone, and org staged links never set it. Keep the guard; the phase that removes the bridge makes the org staging paths set it, with a test that a repeated call does not mint a second link.
 - `privacyfence_status`: remove the `deprecation` field and `next_step: open_privacyfence_companion` (`mcp_dispatch.py:704,729-739`, `mcp_tools.py:264-267`). `SERVER_INSTRUCTIONS` (`routes_mcp.py:96`) stops telling the model to open the companion app and says: `If PrivacyFence needs the person to sign in or connect a service, tell them to open the PrivacyFence server's Connect page, or to ask their administrator.` Both are breaking changes for clients that read them; the changelog says so.
 
-### 3.6 Release pipeline and CI (ADR 0288, 0289)
+### 3.6 Release pipeline and CI (ADR 0301, 0302)
 
 - `build.yml` keeps `dedupe`, `build-org-image`, `sbom`, `finalize-release`. It deletes `build`, `build-windows`, `build-deb`. The step "Run org-mode Ubuntu release smoke test" (`build.yml:650`, in `build-deb`) moves into `build-org-image`. The step "Publish release artifacts to Cloudflare R2" of `build` also uploads `scripts/build_org_bundle.py`, `scripts/sync_room_directory.py`, `scripts/sign_connector_config.py` and the connector-config page; of these only `build_org_bundle.py` (desktop-only, refuses `--mode org`) is deleted, the others move to `finalize-release`.
 - `finalize-release`: `needs: [sbom, build-org-image]`; drop `actions: read`; delete the graphical-coverage step, the installer globs of "Attach release assets" (`PrivacyFence-*.dmg`, `PrivacyFence.mcpb`, `PrivacyFence-*-setup.exe`, `privacyfence_*.deb`, `sbom-shim-npm.cdx.json`), "Publish release manifest and promote to latest", and "Smoke-test the published download routes (HEAD)". Keep the sync plugin zip, the connector-config page, the pre-release notes step and, last, "Point the `stable` branch" (ADR 0169).
@@ -137,26 +137,26 @@ Files reach the server only through the upload slot (`privacyfence_create_upload
 - `downloads-and-release-kpi.md` also owns the "Release archive (R2)", "Cloudflare resources" and credentials sections that `oauth-relay.md:33,42` and `releasing.md:307-316` link to. It is renamed `release-archive.md`, keeps those sections, loses the download-count, KPI and Worker sections, and every link, `build_site.CONTRIBUTOR_DOCS` and `cloudflare/oauth-relay/worker-configuration.d.ts:2` follow.
 - `docs/moving-to-organization-mode.md` stays and becomes "removed in 8.0; how to move"; it is the target of both refusal texts.
 - Tests that parse docs must stay green in the docs phases: `test_docs_links`, `test_docs_references_exist` (source comments cite deleted docs, `platform-support.md` and `downloads-and-release-kpi.md` among them), `test_docs_no_history` (bans "no longer", "formerly", "used to", "now"; hard-codes doc names), `test_docs_configuration_reference`, `test_readme_site_links`, `test_website_docs_allowlist`, `test_website_docs_pages`, `test_website_agent_pages`, `test_website_links`.
-- Website: `website/download/`, `website/releases/` and the download counter of `website/stats.js` go. `website/download/` is replaced by a stub page that links to `/install/` and to the GitHub Releases page (so old links do not 404). ADR 0277's call to action already points at `/install/`; `/download/` redirect text is amended by ADR 0287. `scripts/site_security_headers.py:34` drops `https://downloads.privacyfence.eu` from `connect-src`. `src/privacyfence/catalog_server.py:26,33` point at `/install/`. `tests/website_site.py` and `tests/unit/test_build_site.py` are edited, not deleted (about 30 test modules import `website_site`).
+- Website: `website/download/`, `website/releases/` and the download counter of `website/stats.js` go. `website/download/` is replaced by a stub page that links to `/install/` and to the GitHub Releases page (so old links do not 404). ADR 0277's call to action already points at `/install/`; `/download/` redirect text is amended by ADR 0300. `scripts/site_security_headers.py:34` drops `https://downloads.privacyfence.eu` from `connect-src`. `src/privacyfence/catalog_server.py:26,33` point at `/install/`. `tests/website_site.py` and `tests/unit/test_build_site.py` are edited, not deleted (about 30 test modules import `website_site`).
 - Agent pages: `website/ai-agents/claude-desktop` and `chatgpt` describe the extension and desktop mode; they are rewritten to the custom-connector and Docker path. Every `_data/clients.json` entry keeps a page.
 - Sync: `sync/README.md` and its byte-identical copy `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md` lose the "Local mode" section and companion mentions and are changed together. `DEFAULT_SERVER = "http://127.0.0.1:8765/mcp"` stays: the single-user host allowlist accepts `127.0.0.1` (`web/server.py:1084`).
 
 ### 3.8 ADRs
 
-Next free number is 0283. Written first (phase `p00`) so code comments can cite them; the retirement phase adds the Status lines to the old ADRs and the changelog.
+Next free number is 0296. Written first (phase `p00`) so code comments can cite them; the retirement phase adds the Status lines to the old ADRs and the changelog.
 
 | ADR | Decision | Relations |
 |---|---|---|
-| 0283 | Desktop mode, its installers, the companion and the `.mcpb` extension are removed; organization mode, including single-user, is the only mode, shipped as the Docker image and the PyPI package. Rejected: keeping pip local mode; shipping a `.deb` that runs org mode. | Supersedes 0002, 0003, 0261. |
-| 0284 | 8.x refuses a data directory without the 7.x marker or with desktop traces, and marks a fresh directory at first start. | Amends 0262. |
-| 0285 | `mode` `local` refuses to start, `org` is accepted, no mode means org. | Relates to 0260. |
-| 0286 | Files move only by upload slot, inline bytes and one-time link; the path parameters are removed from every tool. | Supersedes 0007, 0012; amends 0028, 0160. |
-| 0287 | The download page and the Worker are retired; old installers stay on GitHub Releases; `/download/` points to `/install/`. | Supersedes 0024; amends 0277. |
-| 0288 | Releases build the org image, the Python package and the SBOM; R2 keeps uploads without a manifest or `latest`. | Supersedes 0057; amends 0087. |
-| 0289 | Linux is the only CI platform; the Windows and macOS legs and floors are dropped. | Relates to 0057. |
-| 0290 | The MCP registry listing of the `.mcpb` extension is no longer published and its workflow is removed; the published entry is left as it is. | Supersedes 0112. |
+| 0296 | Desktop mode, its installers, the companion and the `.mcpb` extension are removed; organization mode, including single-user, is the only mode, shipped as the Docker image and the PyPI package. Rejected: keeping pip local mode; shipping a `.deb` that runs org mode. | Supersedes 0002, 0003, 0261. |
+| 0297 | 8.x refuses a data directory without the 7.x marker or with desktop traces, and marks a fresh directory at first start. | Amends 0262. |
+| 0298 | `mode` `local` refuses to start, `org` is accepted, no mode means org. | Relates to 0260. |
+| 0299 | Files move only by upload slot, inline bytes and one-time link; the path parameters are removed from every tool. | Supersedes 0007, 0012; amends 0028, 0160. |
+| 0300 | The download page and the Worker are retired; old installers stay on GitHub Releases; `/download/` points to `/install/`. | Supersedes 0024; amends 0277. |
+| 0301 | Releases build the org image, the Python package and the SBOM; R2 keeps uploads without a manifest or `latest`. | Supersedes 0057; amends 0087. |
+| 0302 | Linux is the only CI platform; the Windows and macOS legs and floors are dropped. | Relates to 0057. |
+| 0303 | The MCP registry listing of the `.mcpb` extension is no longer published and its workflow is removed; the published entry is left as it is. | Supersedes 0112. |
 
-Old ADRs that get a Status line (body frozen): `Superseded by [ADR 0283]` for 0002, 0003, 0261; `Superseded by [ADR 0286]` for 0007; `Deprecated: ADR 0283 removed desktop mode` for 0012, 0018, 0026, 0027, 0029, 0031, 0039, 0041, 0042, 0043, 0044, 0045, 0046, 0054, 0058, 0059, 0060, 0062, 0088, 0104, 0183, 0184, 0187, 0203; `Superseded by [ADR 0287]` for 0024; `Superseded by [ADR 0288]` for 0057; `Superseded by [ADR 0290]` for 0112; `Amended by [ADR 0284]` for 0262; `Amended by [ADR 0286]` for 0028 and 0160; `Amended by [ADR 0287]` for 0277; `Amended by [ADR 0288]` for 0087. The retirement phase greps `docs/adr` for `companion`, `mcpb`, `privilege`, `installer` and `DMG` for any ADR this list missed.
+Old ADRs that get a Status line (body frozen): `Superseded by [ADR 0296]` for 0002, 0003, 0261; `Superseded by [ADR 0299]` for 0007; `Deprecated: ADR 0296 removed desktop mode` for 0012, 0018, 0026, 0027, 0029, 0031, 0039, 0041, 0042, 0043, 0044, 0045, 0046, 0054, 0058, 0059, 0060, 0062, 0088, 0104, 0183, 0184, 0187, 0203; `Superseded by [ADR 0300]` for 0024; `Superseded by [ADR 0301]` for 0057; `Superseded by [ADR 0303]` for 0112; `Amended by [ADR 0297]` for 0262; `Amended by [ADR 0299]` for 0028 and 0160; `Amended by [ADR 0300]` for 0277; `Amended by [ADR 0301]` for 0087. The retirement phase greps `docs/adr` for `companion`, `mcpb`, `privilege`, `installer` and `DMG` for any ADR this list missed.
 
 ### 3.9 Rejected alternatives
 
@@ -168,14 +168,14 @@ Old ADRs that get a Status line (body frozen): `Superseded by [ADR 0283]` for 00
 
 ## 4. ADRs
 
-- 0283 desktop mode, installers, companion and extension removed (§3.8).
-- 0284 8.x start-up data check (§3.3).
-- 0285 `mode` accepts only `org` (§3.4).
-- 0286 files only by upload slot, inline bytes or one-time link (§3.5).
-- 0287 download page and Worker retired.
-- 0288 release pipeline builds the org image, package and SBOM only (§3.6).
-- 0289 Linux is the only CI platform (§3.6).
-- 0290 the MCP registry listing of the extension is no longer published (§3.6).
+- 0296 desktop mode, installers, companion and extension removed (§3.8).
+- 0297 8.x start-up data check (§3.3).
+- 0298 `mode` accepts only `org` (§3.4).
+- 0299 files only by upload slot, inline bytes or one-time link (§3.5).
+- 0300 download page and Worker retired.
+- 0301 release pipeline builds the org image, package and SBOM only (§3.6).
+- 0302 Linux is the only CI platform (§3.6).
+- 0303 the MCP registry listing of the extension is no longer published (§3.6).
 
 ## 5. Manual steps
 
@@ -229,7 +229,7 @@ The live QA report of the touched connectors is not manual: phase `p12d` dispatc
 - **Coverage floor.** Stripped modules that keep a 100% floor (`session_auth`, `secure_files`, `principal`) must keep it; the shrunken modules' floors are re-measured last (`p22`).
 - **7.x clients.** The 7.x desktop update checker (GitHub releases/latest) will offer 8.0, which has no installer. Not fixed here; the last 7.x release (`mb1`) is the place.
 - **Lockfile regeneration needs `uv` and the package index.** If the phase `p17` worker cannot reach it, it stops with `status=blocked`; the owner then runs `scripts/update_dependency_locks.sh`.
-- **A phase brief names a symbol or line that does not exist.** Line numbers are from commit `9eb7b4c1`. Where a brief says `file:line`, grep for the symbol first; if the symbol is absent or the surrounding code is clearly different from what the brief describes, stop with `status=blocked`.
+- **A phase brief names a symbol or line that does not exist.** Line numbers in the briefs come from commit `9eb7b4c1` and have drifted by up to about 40 lines on the current `main`; search by symbol first. Where a brief says `file:line`, grep for the symbol; if the symbol is absent or the surrounding code is clearly different from what the brief describes, stop with `status=blocked`.
 
 ## Implementation manifest
 
@@ -243,6 +243,14 @@ manual_before:
     title: Ship what 7.x still needs before main becomes 8.x
     why: Merging this work makes main an 8.x branch; 7.x fixes waiting on main would have to ship from a branch.
     done_when: Every 7.x change you want is released or on a releases/7.x branch, and you know where later 7.x patches go.
+  - id: mb2-protect-paths
+    title: Let the phase workers edit the workflow files this plan changes
+    why: The protect-paths hook blocks edits to .github/workflows/** and package-lock.json except for files listed in hooks.protect_paths_allow of .tld/toolkit.yaml; phases p02, p15a, p15c, p16, p18a and the pip-release phase edit or delete workflows the list does not name.
+    done_when: .tld/toolkit.yaml on main lists every file named in the steps of mb2 under hooks.protect_paths_allow.
+  - id: mb3-release-retirement-order
+    title: Decide the order against the release.yml retirement (issue 1093)
+    why: Both changes edit docs/releasing.md, scripts/pre_release_check.py (or its replacement), CLAUDE.md, CONTRIBUTING.md and build.yml; the briefs name release.yml and pre_release_check.py and tell a worker to use the replacement when it exists.
+    done_when: Either the 1093 work is merged, or you accept that the workers merge main into the feature branch before each phase that edits those files.
 manual_after:
   - id: ma1-branch-protection
     title: Remove platform-windows and platform-macos from the required checks of main
@@ -261,44 +269,44 @@ verify_after_merge:
   - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q
 final_checks:
   - "`tld plan deviations check` on the deviations file implement keeps next to this plan, with `--plan docs/1096/plan.md --all`, exits 0"
-  - "ADRs 0283, 0284, 0285, 0286, 0287, 0288, 0289 and 0290 exist in docs/adr, are Accepted, and are listed in docs/adr/README.md"
+  - "ADRs 0296, 0297, 0298, 0299, 0300, 0301, 0302 and 0303 exist in docs/adr, are Accepted, and are listed in docs/adr/README.md"
   - "CHANGELOG.md has the new entries under ## [Unreleased] and no new version heading"
   - "`grep -rnE '^\\s*(from|import)\\s.*(companion|privilege_separation|control_channel|oauth_loopback|settings_controller|std_streams|windows_acl|windows_service|update_checker)' src tests scripts --include=*.py` prints nothing"
   - "`grep -rn 'resolve_mode\\|LOCAL_MODE_DEPRECATION\\|download_mode' src` prints nothing"
 phases:
   - id: p00-adrs-new
-    title: Write ADRs 0283-0290 and their index rows
+    title: Write ADRs 0296-0303 and their index rows
     depends_on: []
     complexity: M
     touches:
-      - docs/adr/0283-*.md
-      - docs/adr/0284-*.md
-      - docs/adr/0285-*.md
-      - docs/adr/0286-*.md
-      - docs/adr/0287-*.md
-      - docs/adr/0288-*.md
-      - docs/adr/0289-*.md
-      - docs/adr/0290-*.md
+      - docs/adr/0296-*.md
+      - docs/adr/0297-*.md
+      - docs/adr/0298-*.md
+      - docs/adr/0299-*.md
+      - docs/adr/0300-*.md
+      - docs/adr/0301-*.md
+      - docs/adr/0302-*.md
+      - docs/adr/0303-*.md
       - docs/adr/README.md
     brief: |
       Read first: docs/1096/plan.md sections 3.1 to 3.9; docs/adr/README.md (template and the index row format); docs/adr/0261-local-mode-is-deprecated-in-7-and-removed-in-8.md as the shape to copy.
       1. Create these files in docs/adr/, each in the shape of ADR 0261 (Status, Context, Decision, Alternatives considered, Consequences, Verification, Related), Status `Accepted — <today's date from date +%F>.` plus the relation in the table of plan section 3.8:
-         adr/0283-desktop-mode-and-its-installers-are-removed-in-8.md
-         adr/0284-8x-refuses-a-data-directory-that-is-not-ready-for-it.md
-         adr/0285-the-mode-setting-accepts-only-org.md
-         adr/0286-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md
-         adr/0287-the-download-page-and-worker-are-retired.md
-         adr/0288-releases-build-the-org-image-the-package-and-the-sbom-only.md
-         adr/0289-linux-is-the-only-ci-platform.md
-         adr/0290-the-mcp-registry-listing-of-the-extension-is-no-longer-published.md
-      2. Content comes only from plan sections 3.1 to 3.9: the one-line decision from the table in 3.8, the alternatives from 3.9 and from the text of the matching section (3.3 for 0284, 3.4 for 0285, 3.5 for 0286, 3.6 for 0288, 0289 and 0290, 3.7 for 0287), the exact refusal texts verbatim in 0284 and 0285. Do not cite the plan, a phase id or issue number in an ADR. Verification sections name the tests the phases add: 0284 `tests/unit/test_data_format.py`, 0285 `tests/unit/test_org_mode.py`, 0286 `tests/unit/test_local_files.py` and `tests/unit/web/test_routes_file_bridge.py`, 0287 `tests/unit/test_build_site.py`, 0288 `tests/unit/test_release_assets.py` and `tests/unit/test_r2_release.py`, 0289 `tests/unit/test_update_branch_protection.py`, 0290 no test (its subject is a deleted workflow file; say so in one sentence). These Verification sections are final: later phases never edit an accepted ADR's body.
-      3. Add one index row per ADR to docs/adr/README.md in the same format as the rows of 0278-0282, with the Status column text `Accepted; supersedes 0002, 0003, 0261` (and the matching text for each ADR from the table in 3.8).
+         adr/0296-desktop-mode-and-its-installers-are-removed-in-8.md
+         adr/0297-8x-refuses-a-data-directory-that-is-not-ready-for-it.md
+         adr/0298-the-mode-setting-accepts-only-org.md
+         adr/0299-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md
+         adr/0300-the-download-page-and-worker-are-retired.md
+         adr/0301-releases-build-the-org-image-the-package-and-the-sbom-only.md
+         adr/0302-linux-is-the-only-ci-platform.md
+         adr/0303-the-mcp-registry-listing-of-the-extension-is-no-longer-published.md
+      2. Content comes only from plan sections 3.1 to 3.9: the one-line decision from the table in 3.8, the alternatives from 3.9 and from the text of the matching section (3.3 for 0297, 3.4 for 0298, 3.5 for 0299, 3.6 for 0301, 0302 and 0303, 3.7 for 0300), the exact refusal texts verbatim in 0297 and 0298. Do not cite the plan, a phase id or issue number in an ADR. Verification sections name the tests the phases add: 0297 `tests/unit/test_data_format.py`, 0298 `tests/unit/test_org_mode.py`, 0299 `tests/unit/test_local_files.py` and `tests/unit/web/test_routes_file_bridge.py`, 0300 `tests/unit/test_build_site.py`, 0301 `tests/unit/test_release_assets.py` and `tests/unit/test_r2_release.py`, 0302 `tests/unit/test_update_branch_protection.py`, 0303 no test (its subject is a deleted workflow file; say so in one sentence). These Verification sections are final: later phases never edit an accepted ADR's body.
+      3. Add one index row per ADR to docs/adr/README.md in the same format as the rows of 0278-0294 (three columns; do not copy the 0295 row, which has no Status cell), with the Status column text `Accepted; supersedes 0002, 0003, 0261` (and the matching text for each ADR from the table in 3.8).
       4. Do not edit any old ADR (the retirement phase does).
       5. Run: python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q.
-      Stop with status=blocked if a docs/adr file numbered 0283 to 0290 already exists.
+      Stop with status=blocked if a docs/adr file numbered 0296 to 0303 already exists.
     acceptance:
-      - ls docs/adr/0283-*.md docs/adr/0284-*.md docs/adr/0285-*.md docs/adr/0286-*.md docs/adr/0287-*.md docs/adr/0288-*.md docs/adr/0289-*.md docs/adr/0290-*.md lists eight files
-      - grep -cE "^\| \[(028[3-9]|0290)\]" docs/adr/README.md prints 8
+      - ls docs/adr/0296-*.md docs/adr/0297-*.md docs/adr/0298-*.md docs/adr/0299-*.md docs/adr/0300-*.md docs/adr/0301-*.md docs/adr/0302-*.md docs/adr/0303-*.md lists eight files
+      - grep -cE "^\| \[(029[6-9]|030[0-3])\]" docs/adr/README.md prints 8
       - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
 
   - id: p01-org-test-harness
@@ -312,12 +320,13 @@ phases:
       - tests/integration/test_deferred_approval_round_trip.py
       - tests/integration/test_pending_approval_releases_nothing.py
       - tests/integration/test_claude_code_contract.py
+      - tests/integration/test_n8n_node_contract.py
       - tests/integration/test_browser_smoke.py
     brief: |
       Read first: docs/1096/plan.md sections 3.2 and 6; docs/testing-policy.md (layers 3 to 5); tests/integration/test_mcp_daemon_contract.py; tests/integration/ai_client_harness.py; tests/integration/test_org_mode_smoke.py (how a single-user org WebServer is started); src/privacyfence/web/server.py (the org branch of WebServer).
       Goal: after this phase none of the files in `touches` builds a local-mode WebServer (one created with `mcp_token=` and no `org=`), so the later phases can delete local mode without breaking them. Tests only; no source file changes.
       1. Create tests/integration/org_server_harness.py: a context manager `single_user_org_server(tmp_path)` that starts an org-mode WebServer as single-user (no identity provider, host localhost, data directory under tmp_path) on a free port, and returns an object with `.base_url`, `.mcp_url` and `.bearer(scope="full")`. `bearer` mints an access token in-process through the org OAuth provider (`OrgOAuthProvider`, defined in src/privacyfence/web/oauth_provider.py) with every tool visible, not a scoped token. Copy the startup code from the org tests named above; do not start a daemon process.
-      2. Port each of the six test files to the harness: replace the local WebServer fixture and the `mcp_token` bearer with `single_user_org_server` and `.bearer()`. Keep every assertion about tool behaviour; delete only assertions about the local-only handshake (`X-PrivacyFence-File-Bridge`, `_meta` need_uploads, `mcp_url` file discovery from the local data directory) and say which in a one-line comment-free commit message.
+      2. Port each of the seven test files (the six above and tests/integration/test_n8n_node_contract.py, which builds `WebServer(...)` without `org=` and `policy_from_org_config({}, org_mode=False)` at about lines 108-119; use tests/integration/test_upstream_mcp_org.py about line 137 as the template for `WebServer(..., org=org, mcp_dispatcher=dispatcher)`) to the harness: replace the local WebServer fixture and the `mcp_token` bearer with `single_user_org_server` and `.bearer()`. Keep every assertion about tool behaviour; delete only assertions about the local-only handshake (`X-PrivacyFence-File-Bridge`, `_meta` need_uploads, `mcp_url` file discovery from the local data directory) and say which in a one-line comment-free commit message.
       3. In tests/integration/test_browser_smoke.py replace the two local WebServer fixtures (around the lines that build `WebServer(... mcp_token=...)`) by the harness; tests that exercise local-only pages (companion strip, desktop bootstrap) are deleted in the later phase that deletes the page, so here skip nothing and delete nothing else.
       4. Run: python3 -m pytest tests/integration/test_mcp_daemon_contract.py tests/integration/test_deferred_approval_round_trip.py tests/integration/test_pending_approval_releases_nothing.py tests/integration/test_claude_code_contract.py -q and python3 -m pytest tests/integration/test_browser_smoke.py -q (browser tests may report SKIPPED here when Chromium cannot launch; say so in your report and do not count it as a pass).
       Stop with status=blocked if the org provider cannot mint a token that lists every tool (the tool count of a full token differs from the old local-token count): report both counts.
@@ -366,7 +375,7 @@ phases:
       - tests/unit/test_check_coverage_floor.py
     brief: |
       Read first: docs/1096/plan.md sections 3.2 and 3.6; docs/testing-policy.md (the platform layer).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Delete the modules in `touches` under src/privacyfence (companion.py, daemon_status.py, service_control.py) and src/_companion_entry.py and src/_launcher_entry.py. First run `grep -rn "companion\|daemon_status\|service_control" src tests scripts --include=*.py -l`; every hit outside the deleted files and the tests listed in `touches` must be a comment or docstring only. If any hit is code that stays, stop with status=blocked and list it.
       2. Delete the listed tests, helpers (tests/windows_task_contract.py, tests/packaged_policy_probe.py, tests/packaged_step_up.py) and the three *_graphical_session workflows, scripts/check_graphical_session_coverage.py and its test.
       3. tests/platform/: move test_atomic_write_concurrency.py and test_single_instance_lock_cross_process.py to tests/integration/ (git mv, same names; fix their imports and any path they compute from __file__), then delete everything else under tests/platform/. In both moved files change `pytestmark = pytest.mark.platform` to `pytestmark = pytest.mark.integration` (pyproject uses --strict-markers and step 4 deletes the `platform` marker).
@@ -402,7 +411,7 @@ phases:
       - tests/conftest.py
     brief: |
       Read first: docs/1096/plan.md sections 2 and 3.2; src/privacyfence/settings_controller.py lines 1-640 (the module-level helpers) and its class from line 638 on.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Create src/privacyfence/settings_state.py holding every module-level name of settings_controller.py that sits above `class SettingsController` (the helpers at lines 99-636, plus `set_main_dispatcher` and `call_on_main` with the `_main_dispatch` module variable, `REPO_URL`, `PRIVACY_*_LABELS`, `_pii_general_fields`, `_privacy_state_from_config`, `_about_state_dict`, `_auto_accept_state_from_rows`, `cached_row_value`, `row_value_items`, `sentence_parts`). Move them unchanged; the module docstring says what the module is for in one sentence.
       2. In settings_controller.py replace the moved definitions by `from .settings_state import ...` of the same names so the class and its tests keep working.
       3. Repoint the moved names in the four importers to settings_state: web/server.py (the import at about line 113), web/routes_admin.py (about line 67), web/routes_settings.py (about line 167), web/org_install_policy.py (about line 72). Where one of them also imports the `SettingsController` class, it keeps importing only that name from settings_controller; the later phase that deletes the class removes those imports with the code that uses them. Also repoint tests/unit/web/test_routes_org_settings.py (it imports `_privacy_state_from_config` and `_short_id` from settings_controller at about line 67).
@@ -431,12 +440,12 @@ phases:
       - tests/unit/web/test_agent_attestation.py
     brief: |
       Read first: docs/1096/plan.md sections 3.2, 3.4 and 6; src/privacyfence/daemon_main.py around _maybe_start_web_server (about line 917), _local_effective_org_config (about 686), run_app (about 2400-2530) and main (about 3100-3235); docs/adr/0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. org_mode.py: set `DEFAULT_MODE = "org"`. Add `refuse_local_mode(source_label: str, value: str) -> None` raising `ConfigurationError` with exactly the texts of plan section 3.4 (the `local` text and, for any other value that is not `org`, `{source} must be "org".`) and call it from `resolve_mode` for both sources (variable and bundle). `resolve_mode` returns "org" or raises; it is deleted in a later phase, so keep its signature. Keep `LOCAL_MODE_DEPRECATION` for now.
-      2. daemon_main.py: delete the local branch of `_maybe_start_web_server` (lines about 1010-1210: PendingApprovalRegistry, McpDispatcher with `org_mode=False`, LiveStepUpConfig, WebServer with `controller=`), `_local_effective_org_config`, the `SettingsController` construction in `run_app` (about line 2475), the update timer (`_run_update_check_timer`, about line 319, and its start at about 2519), the LOCAL_MODE_DEPRECATION warning log (about 2421-2422), the `agent_label.set_local_mode` call (about 2424; call `agent_label.set_local_mode(False)` nowhere: step 4 removes the function's use), and in `main()` the privilege_separation calls (`check_runtime_identity`, `enforce_separation`, `SeparationHandover`, `dev_unseparated_notice`, about lines 3132-3235) and `privilege_separation.is_enabled` / `audit_layout` uses (about 850-862). Keep `configure_file_bridge()` (about line 993): organization exports use it.
+      2. daemon_main.py: delete the local branch of `_maybe_start_web_server` (lines about 1010-1210: PendingApprovalRegistry, McpDispatcher with `org_mode=False`, LiveStepUpConfig, WebServer with `controller=`), `_local_effective_org_config`, the `SettingsController` construction in `run_app` (about line 2475), the update timer (`_run_update_check_timer`, about line 319, and its start at about 2519), the LOCAL_MODE_DEPRECATION warning log (about 2421-2422), the `agent_label.set_local_mode` call (about 2424; call `agent_label.set_local_mode(False)` nowhere: step 4 removes the function's use), and in `main()` the privilege_separation calls (`check_runtime_identity`, `enforce_separation`, `SeparationHandover`, `dev_unseparated_notice`, about lines 3132-3235) and `privilege_separation.is_enabled` / `audit_layout` uses (about 850-862). Also delete the `if mode != "org":` block at the top of `_maybe_start_web_server` (about lines 981-996) that refuses `PRIVACYFENCE_OIDC_CLIENTS`, `PRIVACYFENCE_UPSTREAM_MCP_FILE` and `PRIVACYFENCE_UPSTREAM_MCP` and warns that other variables are ignored outside organization mode: after this phase it cannot run. Keep `configure_file_bridge()` (about line 993): organization exports use it.
       3. agent_label.py: delete `set_local_mode`, `is_local_mode`, `_local_mode` and the "Undetected" branch of `label_for` (about lines 61 and 119) so the default is the organization label. Delete the `agent_label.set_local_mode(True)` reset in tests/conftest.py (about line 155).
       4. tests/conftest.py: add an autouse fixture default `monkeypatch.setenv("PRIVACYFENCE_MODE", "org")` only if the existing environment-clearing block (about lines 188-192) removes it; keep that block.
-      5. Tests: in tests/unit/test_daemon_main.py delete the local `run_app` tests (`TestRunApp*` that build a local app, the LOCAL_MODE_DEPRECATION log test at about lines 4262-4281) and set the organization mode in every remaining `run_app`/`main` test through the fixture of step 4; in tests/unit/test_org_mode.py replace `resolve_mode({}) == "local"` (about line 22) by `== "org"` and add TestRefuseLocalMode (both sources, the exact texts, `org` accepted, other value refused, disagreeing bundle and variable still refused); in tests/unit/test_agent_label.py delete TestLocalMode (about line 93); in tests/unit/web/test_agent_attestation.py delete `TestLocalOverrideNeverAttests` (it calls `daemon_main._maybe_start_web_server` with a local configuration, about line 211) and the `privilege_separation.is_enabled` patches (about lines 24 and 200).
+      5. Tests: in tests/unit/test_daemon_main.py delete the tests of the removed block (tests/unit/test_daemon_main.py about lines 2487, 2538, 2607, 2629 and 3029-3064: every test that starts the daemon with a non-org mode and expects the refusal or the warning) and the local `run_app` tests (`TestRunApp*` that build a local app, the LOCAL_MODE_DEPRECATION log test at about lines 4262-4281) and set the organization mode in every remaining `run_app`/`main` test through the fixture of step 4; in tests/unit/test_org_mode.py replace `resolve_mode({}) == "local"` (about line 22) by `== "org"` and add TestRefuseLocalMode (both sources, the exact texts, `org` accepted, other value refused, disagreeing bundle and variable still refused); in tests/unit/test_agent_label.py delete TestLocalMode (about line 93); in tests/unit/web/test_agent_attestation.py delete `TestLocalOverrideNeverAttests` (it calls `daemon_main._maybe_start_web_server` with a local configuration, about line 211) and the `privilege_separation.is_enabled` patches (about lines 24 and 200).
       6. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m mypy src/privacyfence.
       Stop with status=blocked if a local-branch line you must delete is also reached by the organization branch (a shared helper): list it and leave it in place.
     acceptance:
@@ -456,8 +465,8 @@ phases:
       - tests/unit/test_data_format.py
       - tests/unit/test_daemon_main.py
     brief: |
-      Read first: docs/1096/plan.md section 3.3 and section 6; docs/adr/0262-7x-is-the-migration-checkpoint-for-8x.md; src/privacyfence/data_format.py (check_not_newer, read_marker, migrate_everything, the marker writer); adr/0284-8x-refuses-a-data-directory-that-is-not-ready-for-it.md.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0284 by number.
+      Read first: docs/1096/plan.md section 3.3 and section 6; docs/adr/0262-7x-is-the-migration-checkpoint-for-8x.md; src/privacyfence/data_format.py (check_not_newer, read_marker, migrate_everything, the marker writer); adr/0297-8x-refuses-a-data-directory-that-is-not-ready-for-it.md.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0297 by number.
       1. In data_format.py add `MINIMUM_FORMAT = 7`, `DESKTOP_TRACES = ("web_base_url", "mcp_token")`, `PERSON_DATA = ("users", "org", "credentials", "authority")` and `check_upgrade_source(root: Path) -> None` implementing the three ordered checks of plan section 3.3 with the two texts verbatim (the desktop text and the checkpoint text, `{root}` formatted with the path). The "mode is org" test reads `root / "org" / "org_bundle.json"` and treats an unreadable or non-object file as "does not say org". The fresh-directory case writes the marker with the module's existing atomic JSON writer and the same keys the marker has today.
       2. In daemon_main.main() replace the existing `data_format.check_not_newer(...)` call by the try/except of plan section 3.3 using `paths.data_dir()` and `_refuse_to_start`, at the same position (before every one-shot command and before load_config).
       3. Before writing the code, confirm that organization mode never writes `mcp_token` or `web_base_url`: `grep -rn "mcp_token\|web_base_url" src/privacyfence --include=*.py` and read each write site. Only web/control_channel.py and web/mcp_auth.py (PerUserTokenVerifier, load_or_create_mcp_token) may write them. If any other write site is reachable in organization mode, stop with status=blocked.
@@ -486,7 +495,7 @@ phases:
       - tests/conftest.py
     brief: |
       Read first: docs/1096/plan.md sections 2 and 3.2; src/privacyfence/daemon_main.py parse_args (about line 2952) and main (about line 3100); src/privacyfence/std_streams.py.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. In daemon_main.py remove the arguments `--windows-service`, `--print-sign-in-link`, `--print-mcp-token`, the loopback sign-in flags (`--gmail-oauth`, `--drive-oauth`, `--contacts-oauth`, `--calendar-oauth`, `--tasks-oauth`, `--apps-script-oauth`, `--slack-oauth`, `--salesforce-oauth`, `--atlassian-oauth`, `--grist-oauth`, `--miro-oauth`; parse_args lines about 2961-2971), `--peek-login` and `--telegram-setup`, together with their `run_*` functions (`run_print_mcp_token`, `run_peek_login` about line 2330, the `run_*_oauth` functions, `run_telegram_setup`) and their branches in main(). Remove `_last_startup_error` and its reset in tests/conftest.py only if nothing else reads it (grep first); otherwise leave both. Remove an argument named here only if it exists in parse_args; ignore a name that does not.
       2. Delete the `ensure_std_streams` import and calls in daemon_main.py (about lines 132 and 3101), then delete src/privacyfence/std_streams.py, src/privacyfence/windows_service.py, src/_daemon_entry.py and src/_launcher_entry.py if still present, and tests/unit/test_daemon_std_streams.py.
       3. tests/unit/test_privilege_separation.py: delete only the tests of the windows_service module (grep "windows_service" in that file); the rest of the file is deleted in a later phase.
@@ -508,12 +517,15 @@ phases:
       - src/privacyfence/web/mcp_auth.py
       - tests/unit/web/test_server.py
       - tests/unit/web/test_mcp_auth.py
+      - tests/unit/web/test_routes_push.py
+      - tests/unit/web/test_routes_whats_new.py
+      - tests/unit/web/test_server_org_mode.py
     brief: |
       Read first: docs/1096/plan.md sections 2 and 3.2; src/privacyfence/web/server.py (the local build_app and the WebServer local path; `_build_org_app` at about line 1347 stays); src/privacyfence/web/mcp_auth.py.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
-      1. web/server.py: delete the local `build_app` path, the local-only parts of WebServer (the `controller=` and `mcp_token=` parameters, ControlChannelServer wiring, LocalSessionStore and BootstrapStore use, `_BootstrapMiddleware`, `_owner_only_*`, `build_scoped_token_wiring`, `copy_local_mcp_token`, `reissue_local_recovery_code`, `local_enrollment_state`, `local_status_payload`, `_local_principal_resolver`, `web_base_url` writing and the `mcp_url` writing that only the local server did). Keep everything `_build_org_app` and the org WebServer path use, including `_write_mcp_url_file` and `_clear_mcp_url_file` (organization mode writes `mcp_url`; a later phase changes where). Remove the `mount_file_bridge` import and its call (about lines 122 and 1219) and the `from .session_auth import unauthorized_html` import (about line 159); routes_file_bridge.py keeps defining `mount_file_bridge` until phase p11. After the edit WebServer takes an `org` argument as required.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
+      1. web/server.py: delete the local `build_app` path, the local-only parts of WebServer (the `controller=` and `mcp_token=` parameters, ControlChannelServer wiring, LocalSessionStore and BootstrapStore use, `_BootstrapMiddleware`, `_owner_only_*`, `build_scoped_token_wiring`, `copy_local_mcp_token`, `reissue_local_recovery_code`, `local_enrollment_state`, `local_status_payload`, `_local_principal_resolver`, `web_base_url` writing and the `mcp_url` writing that only the local server did). Also delete the local scoped-token extension wiring that main added: `_extend` (it uses `LOCAL_PRINCIPAL`) and the `store_extend=` argument of `build_scoped_token_wiring`; the organization counterparts stay. Keep everything `_build_org_app` and the org WebServer path use, including `_write_mcp_url_file` and `_clear_mcp_url_file` (organization mode writes `mcp_url`; a later phase changes where). Remove the `mount_file_bridge` import and its call (about lines 122 and 1219) and the `from .session_auth import unauthorized_html` import (about line 159); routes_file_bridge.py keeps defining `mount_file_bridge` until phase p11. After the edit WebServer takes an `org` argument as required.
       2. web/mcp_auth.py: delete `load_or_create_mcp_token`, `rotate_mcp_token`, `_mcp_token_path`, `PerUserTokenVerifier`, `preload_verifier` and the handoff-file helpers. Keep `single_token_verifier` and `MCP_TOKEN_FILE_NAME` (web/routes_mcp.py:60 and :942 and web/routes_file_bridge.py:54 still import them; phase p11 deletes them). Keep `ScopedTokenVerifier`, `CompositeTokenVerifier`, `principal_from_access_token` and anything the org branch of server.py imports (grep the imports of web/mcp_auth across src before deleting).
-      3. Tests: in tests/unit/web/test_server.py delete the classes `TestWebServerControlChannel`, `TestBootstrapFlow`, `TestNoBootstrapUrlFiles`, `TestMcpUrlFile` (local part only), `TestHumanSessionWiring`, `TestSettingsIsOwnerOnly`, `TestSettingsFoldedIntoTheCombinedApp`, `TestLocalModeWiresTheFirstEnrollmentGate`, `TestLocalEnrollmentState`, `TestLocalStatusPayload`, `TestRecoveryCodeDelivery`, `TestAiClientTokenDelivery`, `TestLocalPrincipalResolver`; any other test that builds a WebServer without `org=` is converted to an org server (copy the fixture the org tests in the same file use) or deleted if it asserts a local-only behaviour. In tests/unit/web/test_mcp_auth.py delete `TestPerUserTokenVerifier`, `TestPerPrincipalTokenStorage`, `TestPreloadVerifier`.
+      3. Tests: tests/unit/web/test_routes_push.py and test_routes_whats_new.py build servers with `mcp_token=`: convert them to the organization server fixture of tests/unit/web/test_server_org_mode.py; in test_server_org_mode.py delete the assertions that `server.mcp_token` and `server.control_channel` are None (about lines 513-517). in tests/unit/web/test_server.py delete the classes `TestWebServerControlChannel`, `TestBootstrapFlow`, `TestNoBootstrapUrlFiles`, `TestMcpUrlFile` (local part only), `TestHumanSessionWiring`, `TestSettingsIsOwnerOnly`, `TestSettingsFoldedIntoTheCombinedApp`, `TestLocalModeWiresTheFirstEnrollmentGate`, `TestLocalEnrollmentState`, `TestLocalStatusPayload`, `TestRecoveryCodeDelivery`, `TestAiClientTokenDelivery`, `TestLocalPrincipalResolver`; any other test that builds a WebServer without `org=` is converted to an org server (copy the fixture the org tests in the same file use) or deleted if it asserts a local-only behaviour. In tests/unit/web/test_mcp_auth.py delete `TestPerUserTokenVerifier`, `TestPerPrincipalTokenStorage`, `TestPreloadVerifier`.
       4. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q, python3 -m mypy src/privacyfence, and the coverage of the two modules: python3 -m pytest tests/unit/web/test_server.py tests/unit/web/test_mcp_auth.py -q --cov=privacyfence.web.server --cov=privacyfence.web.mcp_auth --cov-branch --cov-report=term-missing; compare with the floors in scripts/check_coverage_floor.py for those two modules and add a test for any branch that dropped below its floor.
       Stop with status=blocked if a symbol you must delete is imported by a route module that stays (grep before deleting) and the import is not in a local-only function.
     acceptance:
@@ -537,9 +549,9 @@ phases:
       - tests/unit/web/test_personal_settings_routes.py
     brief: |
       Read first: docs/1096/plan.md sections 2, 3.2 and 6; src/privacyfence/web/routes_settings.py (local `build_routes` about lines 931-1560, `create_app` about 1578, `build_org_routes` from about 1615); src/privacyfence/web/routes_admin.py (local `build_routes` about 754, `_local_bundle`, org `build_org_routes` about 591).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. First move tests, do not delete them: `_gate_upload`, `read_bounded_form` and `handle_org_config_upload` stay in routes_settings.py because routes_admin.py imports them (about lines 77-82, 465, 553, 869). Move the test classes that cover them (the TestOrgConfigUpload* classes of tests/unit/web/test_routes_settings.py, about lines 1087-1335 and 1931) into the new file tests/unit/web/test_routes_org_config_upload.py with their fixtures, and run that file green before the next step.
-      2. routes_settings.py: delete the local `build_routes`, `create_app`, `_local_personal_hooks` (about line 1474), the local deprecation strip (about line 1056) and every helper only they use; keep `build_org_routes`, the `_ORG_ALLOWED_ACTIONS` handlers and the three shared functions above. routes_admin.py: delete the local `build_routes` and `_local_bundle`. org_settings_scope.py: replace each `LOCAL_MODE` constant use by its organization value and delete the local branches.
+      2. routes_settings.py: delete the local `scoped_token_extend` route, the `extend_scoped_token` entry of the JS bridge shim and its entry in `_BESPOKE_SENSITIVE_ROUTE_PATHS` (the organization route in `build_org_routes` stays), the local `build_routes`, `create_app`, `_local_personal_hooks` (about line 1474), the local deprecation strip (about line 1056) and every helper only they use; keep `build_org_routes`, the `_ORG_ALLOWED_ACTIONS` handlers and the three shared functions above. routes_admin.py: delete the local `build_routes` and `_local_bundle`. org_settings_scope.py: replace each `LOCAL_MODE` constant use by its organization value and delete the local branches.
       3. Delete tests/unit/web/test_routes_settings.py entirely after step 1 (its organization coverage is in tests/unit/web/test_routes_org_settings.py and test_org_settings_scope.py; run both and add a test to those for any organization behaviour that only the deleted file covered, naming it for the behaviour). In tests/unit/web/test_routes_admin.py delete the `LocalWorld` fixture and the `TestLocal*` classes (about lines 1238-1515). In tests/unit/web/test_org_settings_scope.py delete the local-mode cases. tests/unit/web/test_personal_settings_routes.py builds `routes_settings.create_app`, `LocalSessionStore`, `SettingsController` and `update_checker` (about lines 16 and 46-75): keep each test whose route `build_org_routes` also serves (rebuild its fixture on the organization app the tests in tests/unit/web/test_routes_org_settings.py use) and delete the rest. Remove the `from .session_auth import unauthorized_html` imports from routes_settings.py (about line 189) and routes_admin.py (about line 91).
       4. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m mypy src/privacyfence, and the coverage of routes_settings, routes_admin and org_settings_scope: python3 -m pytest tests/unit/web -q --cov=privacyfence.web.routes_settings --cov=privacyfence.web.routes_admin --cov=privacyfence.web.org_settings_scope --cov-branch --cov-report=term-missing; compare with scripts/check_coverage_floor.py floors and add tests for any shortfall.
       Stop with status=blocked if a function you must delete is imported by a module outside the local factories that stays (grep before deleting).
@@ -563,7 +575,7 @@ phases:
       - tests/unit/web/test_state_stream.py
     brief: |
       Read first: docs/1096/plan.md sections 2, 3.2 and 6; src/privacyfence/web/routes_approvals.py (local `create_app` about line 856, `build_routes` about 1010, `_bridge_shim`, `_local_step_up_response`); src/privacyfence/web/routes_security.py (the local parameters `deliver_recovery_code`, `confirm_enrollment`, `is_human_session`, `dev_unseparated_notice`, `_recent_mints` about line 1033, the `SIGN_IN_MINT_DECISION` import in a try/except about line 1049).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. routes_approvals.py: remove the `from .session_auth import unauthorized_html` import (about line 128), delete the local `create_app`, the local `build_routes` path, `_bridge_shim`, `_local_step_up_response` and the LocalSessionStore use (about lines 121-127). Keep what `_render_org_list_page` and the organization routes use.
       2. routes_security.py: delete the four local parameters and every branch they guard, `_recent_mints` and the whole "recent sign-ins" section that reads `control_channel.SIGN_IN_MINT_DECISION` (the swallowed ImportError would otherwise log a warning on every /security load).
       3. state_stream.py: delete the local snapshot path (functions that build the snapshot from the SettingsController); keep the organization stream.
@@ -607,7 +619,7 @@ phases:
       - tests/conftest.py
     brief: |
       Read first: docs/1096/plan.md sections 2 and 3.2; src/privacyfence/update_checker.py; src/privacyfence/whats_new.py (imports `STABLE_RANK`, `is_newer`, `parse_version` from update_checker); src/privacyfence/web/session_auth.py.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Before deleting, run `grep -rnE "^\s*(from|import)\s.*(settings_controller|control_channel)|LocalSessionStore|BootstrapStore" src tests scripts --include=*.py`. Fix every hit in a file of `touches` (tests/unit/web/test_org_settings_scope.py about lines 20 and 64, tests/unit/web/test_personal_settings_routes.py about lines 16 and 61, tests/unit/web/test_routes_org_settings.py about line 67, tests/integration/test_settings_personal_transfer_browser.py about lines 24 and 94, scripts/qa_web_smoke.py about lines 90-101, scripts/qa_readme_screenshots.py about lines 73-84: delete the code or test that needs the deleted class; repoint what only needs a helper to settings_state). If a hit is in a file outside `touches`, stop with status=blocked and list it. Comments and docstrings that name the deleted modules may stay.
       2. Delete src/privacyfence/settings_controller.py, src/privacyfence/web/control_channel.py, tests/control_channel_client.py, tests/unit/test_settings_controller.py (the helper tests were moved in an earlier phase; run `grep -c "def test" tests/unit/test_settings_controller.py` first and confirm every remaining test exercises SettingsController or control_channel code), tests/unit/web/test_control_channel.py.
       3. web/session_auth.py: delete `LocalSessionStore`, `BootstrapStore`, `_companion_availability_sentence`, `unauthorized_html` (about line 365, with its entry in `__all__`; its importers were removed in the route phases; it reads `handoff_dir` and `privilege_separation`) and their helpers; keep `check_csrf`, `check_origin`, `human_session_required_json` and whatever the organization session code imports from it. The module keeps its strict-mypy override and its 100% coverage floor: delete the tests of the removed classes in tests/unit/web/test_session_auth.py and confirm 100% coverage of what is left (python3 -m pytest tests/unit/web/test_session_auth.py -q --cov=privacyfence.web.session_auth --cov-branch --cov-report=term-missing).
@@ -646,7 +658,7 @@ phases:
       - tests/unit/test_apps_script_client.py
     brief: |
       Read first: docs/1096/plan.md section 3.2; src/privacyfence/google_oauth.py (`authorize_local` about line 172, the `oauth_loopback` import about line 47); src/privacyfence/web/routes_connect.py lines 362-430 (what the organization flow uses; it stays).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Run `grep -rn "authorize_local\|authorize_interactive\|oauth_loopback" src/privacyfence --include=*.py` and list every Google module hit. In google_oauth.py delete `authorize_local`, the `oauth_loopback` import and anything only they use; in each Google `*_client.py` of `touches` delete the `authorize_interactive` method (gmail_client.py about line 456, drive_client.py 1257, calendar_client.py 310, contacts_client.py 150, tasks_client.py 95, apps_script_client.py 123) and any wrapper that calls `google_oauth.authorize_local`, with their tests.
       2. Keep `web_client_config`, `authorize_url`, `exchange_code`, `save_credentials` of google_oauth.py (routes_connect.py uses them) and every function the organization routes import.
       3. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m mypy src/privacyfence, and python3 -m pytest tests/unit/test_google_oauth.py -q --cov=privacyfence.google_oauth --cov-branch --cov-report=term-missing (compare with its floor in scripts/check_coverage_floor.py; add tests for any shortfall).
@@ -676,7 +688,7 @@ phases:
       - docs/adr/0230-*.md
     brief: |
       Read first: docs/1096/plan.md section 3.2; the `authorize_interactive` functions at slack_client.py (about 257), salesforce_client.py (about 647), atlassian_oauth.py (about 206), miro_auth.py (about 290), grist_auth.py (about 505).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Delete `authorize_interactive` (and a loopback-only helper next to it) from the five modules and their tests, and the `oauth_loopback` imports. Keep every function web/routes_connect.py and grist_provisioning.py import (the authorize-URL builders, `save_token_record`, the token exchange).
       2. Telegram's `authorize_interactive` and Peek's device login are session logins, not loopback flows: do not touch telegram_client.py or peek_client.py.
       3. After the five modules no longer import it, delete src/privacyfence/oauth_loopback.py and tests/unit/test_oauth_loopback.py; `grep -rn oauth_loopback src tests scripts` must print nothing.
@@ -706,19 +718,20 @@ phases:
       - tests/unit/web/test_routes_mcp.py
       - tests/unit/web/test_mcp_dispatch.py
       - tests/unit/web/test_mcp_auth.py
+      - tests/unit/web/test_mcp_tools.py
       - tests/unit/connectors/test_drive_connector.py
       - tests/unit/connectors/test_gmail_connector.py
       - tests/unit/connectors/test_confluence_connector.py
       - tests/integration/test_shim_mcp_contract.py
       - tests/conftest.py
     brief: |
-      Read first: docs/1096/plan.md sections 3.5 and 6; adr/0286 (the ADR file in docs/adr whose name starts 0286-); docs/adr/0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md; src/privacyfence/local_files.py (`require_local_files` at about line 287); src/privacyfence/web/routes_file_bridge.py; src/privacyfence/web/mcp_dispatch.py (`McpDispatcher.call` at about line 255, the staged-download guard at about lines 340-350, the status fields at about lines 704 and 729-739).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      Read first: docs/1096/plan.md sections 3.5 and 6; adr/0299 (the ADR file in docs/adr whose name starts 0299-); docs/adr/0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md; src/privacyfence/local_files.py (`require_local_files` at about line 287); src/privacyfence/web/routes_file_bridge.py; src/privacyfence/web/mcp_dispatch.py (`McpDispatcher.call` at about line 255, the staged-download guard at about lines 340-350, the status fields at about lines 704 and 729-739).
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. First write the failing test, in tests/unit/web/test_mcp_dispatch.py: a tool call carrying an argument that the tool's ToolSpec does not declare reaches the connector without that argument. Then implement the filter exactly as plan section 3.5 "Undeclared arguments" says, at the start of `McpDispatcher.call`. Keep the test: it is the safety net for removed parameters.
       2. local_files.py: delete `LocalFilesNeeded`, `META_KEY`, `build_need_uploads_files`, `force_bridge_for_tests`, `_deliver_direct`, `_deliver_bridge` and the bridge-collecting part of `require_local_files` (a path that is not an `upload:` reference and cannot be read directly raises `LocalFileAccessError(NO_BRIDGE_UPLOAD_MESSAGE)`); rewrite `NO_BRIDGE_UPLOAD_MESSAGE` as plan section 3.5 gives; make `can_access_user_files` return `False` unconditionally (keep its `download_mode` parameter); make `deliver_file` keep only its link branch; remove the `privilege_separation` import and replace each `is_enabled()` use by `False`, deleting the dead branch. Keep every name plan section 3.5 lists as kept. Connectors still call `can_access_user_files`, `deliver_file`, `require_local_files` and use `download_mode`; the connector phases remove those.
       3. routes_file_bridge.py: keep `mount_capability_routes`, `/mcp-files/slots/{slot}`, `/mcp-files/fetch/{token}` and their helpers; delete the bearer router, `build_file_bridge_asgi_app`, `mount_file_bridge`, the `/uploads` and `/downloads` handlers and the import of `single_token_verifier`. web/mcp_auth.py: delete `single_token_verifier` and `MCP_TOKEN_FILE_NAME`; in routes_mcp.py remove the import (about line 60) and the branch of `build_mcp_asgi_app` that uses it (about line 942), keeping the verifier the organization branch builds; if the organization branch also needs `single_token_verifier`, stop with status=blocked.
       4. routes_mcp.py: delete the `X-PrivacyFence-File-Bridge` header handling, `_need_uploads_result`, the `except local_files.LocalFilesNeeded` clause and the `deliver` `_meta` block (about lines 291-310 and 505-567); rewrite `SERVER_INSTRUCTIONS` (about line 96) per plan section 3.5. mcp_tools.py: rewrite the `privacyfence_status` description (about lines 264-267) to drop the companion and deprecation wording. mcp_dispatch.py: delete the `deprecation` field and `next_step: open_privacyfence_companion` (about lines 704 and 729-739) and the `_mode == "local"` branches (about lines 542, 559, 704, 717); make the organization staging paths set `staged_download` on the call state and add a test that a repeated identical call does not mint a second one-time link.
-      5. Tests: delete tests/integration/test_shim_mcp_contract.py; delete `TestFileBridgeOverTheWire` (tests/unit/web/test_routes_mcp.py about line 486), the local status and deprecation test (tests/unit/web/test_mcp_dispatch.py about line 974), the bridge tests of tests/unit/test_local_files.py and tests/unit/web/test_routes_file_bridge.py (keep the tests of the upload, capability and deliver_export code), the tests of `single_token_verifier` in tests/unit/web/test_mcp_auth.py, and in tests/unit/connectors/test_drive_connector.py, test_gmail_connector.py and test_confluence_connector.py every test that needs `force_bridge_for_tests` or the bridge handshake (a test that only used it to pick the direct-disk path is deleted too). In tests/conftest.py delete the `local_files.force_bridge_for_tests(False)` reset (about line 125) but keep the `configure_file_bridge()` call.
+      5. Tests: in tests/unit/web/test_mcp_tools.py delete the cases that assert `open_privacyfence_companion` (about lines 376-387); delete tests/integration/test_shim_mcp_contract.py; delete `TestFileBridgeOverTheWire` (tests/unit/web/test_routes_mcp.py about line 486), the local status and deprecation test (tests/unit/web/test_mcp_dispatch.py about line 974), the bridge tests of tests/unit/test_local_files.py and tests/unit/web/test_routes_file_bridge.py (keep the tests of the upload, capability and deliver_export code), the tests of `single_token_verifier` in tests/unit/web/test_mcp_auth.py, and in tests/unit/connectors/test_drive_connector.py, test_gmail_connector.py and test_confluence_connector.py every test that needs `force_bridge_for_tests` or the bridge handshake (a test that only used it to pick the direct-disk path is deleted too). In tests/conftest.py delete the `local_files.force_bridge_for_tests(False)` reset (about line 125) but keep the `configure_file_bridge()` call.
       6. Regenerate: python3 scripts/generate_tools_reference.py then python3 -m pytest tests/unit/test_docs_tools_reference.py -q.
       7. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m pytest tests/integration/test_mcp_daemon_contract.py -q, python3 -m mypy src/privacyfence, and the coverage of local_files, routes_file_bridge, routes_mcp, mcp_dispatch, mcp_auth against their floors in scripts/check_coverage_floor.py (python3 -m pytest tests/unit -q --cov=privacyfence --cov-branch --cov-report=term-missing and read those modules); add tests for any shortfall.
       Stop with status=blocked if grep finds `LocalFilesNeeded` outside local_files.py and routes_mcp.py.
@@ -745,8 +758,8 @@ phases:
       - tests/unit/test_gmail_client.py
       - tests/unit/test_drive_client.py
     brief: |
-      Read first: docs/1096/plan.md section 3.5; adr/0286-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md; src/privacyfence/connectors/drive.py (`download_mode` default about line 161, `_upload_file` about 1677-1740, the download methods and `_deliver_org_download`); src/privacyfence/connectors/gmail.py (`download_mode` about line 325 and uses about 1116-1256, 1482-1641); src/privacyfence/gmail_client.py about lines 119-140 and 906.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      Read first: docs/1096/plan.md section 3.5; adr/0299-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md; src/privacyfence/connectors/drive.py (`download_mode` default about line 161, `_upload_file` about 1677-1740, the download methods and `_deliver_org_download`); src/privacyfence/connectors/gmail.py (`download_mode` about line 325 and uses about 1116-1256, 1482-1641); src/privacyfence/gmail_client.py about lines 119-140 and 906.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       0. In local_files.py give every function that has a `download_mode` parameter the default `download_mode: str = "org"` (a later phase deletes the parameter), so callers can drop the argument one connector at a time.
       1. Remove the `download_mode` attribute and every parameter of that name, and every `download_mode != "org"` branch, from drive.py, gmail.py, gmail_client.py and drive_client.py; keep the organization branch as the only path (inline base64 when it fits `DownloadDeliveryConfig.inline_max_bytes`, else the staged one-time link). Remove `destination_dir` and plain `local_path` from the ToolSpec params and the method signatures of the tools in these two connectors. Drive upload and Gmail attachments accept `upload:<id>` references only; a path that does not start with `local_files.UPLOAD_REF_PREFIX` raises the connector's existing error type with the text from plan section 3.5 (`NO_BRIDGE_UPLOAD_MESSAGE`).
       2. Delete the plain-path branches: the `is_org_local_path` branch of drive `_upload_file` and the non-`upload:` branch of `gmail_client._read_attachment`; delete every call to `local_files.can_access_user_files` and `local_files.deliver_file` in these two connectors.
@@ -773,8 +786,8 @@ phases:
       - tests/unit/connectors/test_jira_connector.py
       - tests/unit/connectors/test_assets_connector.py
     brief: |
-      Read first: docs/1096/plan.md section 3.5; the ADR file in docs/adr whose name starts 0286-; src/privacyfence/connectors/salesforce.py, jira.py, assets.py (grep `download_mode`, `destination_dir`, `can_access_user_files`, `deliver_file`, `local_path`).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      Read first: docs/1096/plan.md section 3.5; the ADR file in docs/adr whose name starts 0299-; src/privacyfence/connectors/salesforce.py, jira.py, assets.py (grep `download_mode`, `destination_dir`, `can_access_user_files`, `deliver_file`, `local_path`).
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. In each of the three connectors delete the `download_mode` attribute, every parameter of that name, every `!= "org"` branch, every call to `local_files.can_access_user_files` and `local_files.deliver_file`, and `destination_dir` and plain `local_path` from ToolSpec params and method signatures; the organization path (inline base64, or the staged one-time link) is the only code left.
       2. Update the tool descriptions per ADR 0115 and regenerate docs/tools-reference.md with python3 scripts/generate_tools_reference.py.
       3. Tests: rewrite the affected tests of the three connector test files to the single organization path; add one test per changed tool that a non-`upload:` path, where the tool takes one, is refused with the text of `local_files.NO_BRIDGE_UPLOAD_MESSAGE`.
@@ -806,8 +819,8 @@ phases:
       - tests/unit/test_local_files.py
       - tests/unit/test_daemon_main.py
     brief: |
-      Read first: docs/1096/plan.md section 3.5; the ADR file in docs/adr whose name starts 0286-; src/privacyfence/export_files.py (`DESTINATION_ERROR`, `check_destination`); src/privacyfence/daemon_main.py (about lines 1695-2032, the `download_mode` computation and the `connector.download_mode = ...` assignments in build_connectors).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      Read first: docs/1096/plan.md section 3.5; the ADR file in docs/adr whose name starts 0299-; src/privacyfence/export_files.py (`DESTINATION_ERROR`, `check_destination`); src/privacyfence/daemon_main.py (about lines 1695-2032, the `download_mode` computation and the `connector.download_mode = ...` assignments in build_connectors).
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Grist, Peek, Confluence (and confluence_client.py): delete the `download_mode` attribute, every parameter of that name, every `!= "org"` branch, every call to `local_files.can_access_user_files` and `local_files.deliver_file`, and `destination_dir` and plain `local_path` from ToolSpec params and signatures. Peek and Grist already refuse non-`upload:` paths in organization mode: make that the only behaviour and keep their error texts.
       2. export_files.py: delete `DESTINATION_ERROR`, `check_destination` and the local `destination_dir` handling; keep `visible_specs`, `refuse_if_exports_off`, `refuse_org_without_staging`.
       3. local_files.py: delete `can_access_user_files` and `deliver_file` and every `download_mode` parameter of `read_local_file`, `local_file_size`, `deliver_export`, `check_delivery_size` and `require_local_files`, with their callers.
@@ -869,7 +882,7 @@ phases:
       - tests/conftest.py
     brief: |
       Read first: docs/1096/plan.md sections 3.2 and 6; src/privacyfence/paths.py (`data_dir`, the `handoff_dir`, `control_socket_dir`, `authority_dir` and the privilege_separation calls about lines 150-203, `windows_data_dir`, `is_bundled`); src/privacyfence/step_up_config.py about lines 211 and 412; src/privacyfence/audit_log.py about lines 1131-1139; src/privacyfence/secure_files.py about lines 99-103.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Pin the five survivors to their organization values first: paths.py — in `data_dir()` delete exactly the two lines that call `privilege_separation.data_dir_override()` and return its `secure_mkdir`, and the `privilege_separation` import; keep the rest of `data_dir()` as it is, and keep `is_bundled`, `windows_data_dir`, `is_windows` and `authority_dir` (`data_dir()` and the audit log use them); delete `handoff_dir`, `control_socket_dir`, `bundle_macos_dir` and `app_bundle_path` when they exist and nothing else imports them (a diff to `data_dir()` beyond the two lines is a stop condition); web/server.py — `_write_mcp_url_file` writes `paths.data_dir() / MCP_URL_FILE_NAME` with `secure_files.atomic_write_text(path, url)` and `_clear_mcp_url_file` unlinks that same path (on an unseparated install `handoff_dir()` was already `data_dir()`, so nothing moves); drop the docstring text about the handoff directory; secure_files.py — delete the `shared_dir_mode` hook and the `write_handoff_file` comment; step_up_config.py — replace `is_enabled() or dev_allows_unseparated()` by `False` at both sites and delete the dead branches; audit_log.py — if its use of `windows_data_dir`/`is_windows` (about lines 1131-1139) depends on privilege separation, replace only that dependency by the unseparated value; the resolved audit directory on Linux must not change; local_files.py — if any privilege_separation reference is left, replace it by its organization value.
       2. Confirm with `grep -rnE "^\s*(from|import)\s.*(privilege_separation|windows_acl)" src scripts tests --include=*.py` that only the files in `touches` still import them, then delete src/privacyfence/privilege_separation.py, src/privacyfence/windows_acl.py, the three scripts/*_privilege_separation.* files, tests/unit/test_privilege_separation.py and tests/unit/test_windows_acl.py.
       3. tests/integration/test_org_guide_configs.py: delete the "shipped Linux daemon unit" section (about lines 199-230) that reads scripts/linux_privilege_separation.sh; this file is part of the required org-mode-smoke check, so run it: python3 -m pytest tests/integration/test_org_guide_configs.py -q.
@@ -907,7 +920,7 @@ phases:
       - scripts/qa_readme_screenshots.py
     brief: |
       Read first: docs/1096/plan.md sections 2 and 3.2; src/privacyfence/settings_window_html.py (`_capabilities_for` about line 3438, `_admin_capabilities` about 3408, the `LOCAL_MODE` constants, the `CAPS.mode !== 'org'` JavaScript about lines 661, 1209, 2322, the `ai_client` section); src/privacyfence/web_shell.py (`_NAV_ITEMS` about line 513, `local_mode_deprecation_html` about line 635).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. settings_window_html.py: `build_html` keeps working for the organization Settings and Admin pages (routes_admin.py and the org settings routes call it with `mode="org"`). Remove the `mode` parameter's local value: delete every local-only branch, the `LOCAL_MODE` set, the `CAPS.mode !== 'org'` JavaScript, the local bundle-upload UI and the `ai_client` section; the parameter itself is removed in a later phase, so keep `mode` accepted and ignored with default "org".
       2. approval_window_html.py: keep the card builder and nonce extraction used by gate.py, card_builder.py, dialog_window_html.py and routes_approvals.py; delete the native-window and shim bits. approval_list_html.py: strip the local agent-label bits only. dialog_window_html.py: delete `build_choice_html` and `PICKER_WIDTH` (only the deleted settings controller used them). web_prompt.py: delete `block_on_choice`. web_approval_ui.py: keep the organization path; delete only a local branch if grep finds one. web_shell.py: delete `local_mode_deprecation_html`, the local `_NAV_ITEMS` and the desktop strip; keep `ORG_NAV_ITEMS`.
       3. Tests: strip the matching cases of the seven unit test files; the six `tests/integration/test_settings_*_browser.py` files call `build_html` with the default mode and import `tests.unit.test_settings_window_html._make_state`: keep them, make them use mode "org", and keep `_make_state` working. Update scripts/render_ui_review.py and scripts/qa_readme_screenshots.py so they render the organization pages; if either imports Pillow, keep the import until the dependency phase decides (grep first).
@@ -932,8 +945,8 @@ phases:
       - tests/conftest.py
     brief: |
       Read first: docs/1096/plan.md sections 3.2 and 3.4; src/privacyfence/org_mode.py (`resolve_mode` about line 94, `Mode`, `LOCAL_MODE_DEPRECATION` about line 67, `is_single_user` about line 146, `_idp_present`, the guards at about lines 847 and 900); the `resolve_mode` call sites: `grep -rn "resolve_mode" src --include=*.py`.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
-      1. org_mode.py: replace `resolve_mode` by `validate_mode(org_config: dict[str, Any]) -> None` with the same checks and the same texts as plan section 3.4 and no return value. Delete `Mode`, `DEFAULT_MODE`, `LOCAL_MODE_DEPRECATION` and their `__all__` entries (keep `refuse_local_mode`). `is_single_user(org_config)` returns `not _idp_present(org_config)`. The two guards `if resolve_mode(org_config) != "org": return ...` (about lines 847 and 900) are deleted with their early return.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
+      1. org_mode.py (keep `CONNECTOR_ORG_SECTION`, `ConfigurationError`, `provisioning_key` and `connector_enabled`: the upstream MCP and agent-runtime code use them): replace `resolve_mode` by `validate_mode(org_config: dict[str, Any]) -> None` with the same checks and the same texts as plan section 3.4 and no return value. Delete `Mode`, `DEFAULT_MODE`, `LOCAL_MODE_DEPRECATION` and their `__all__` entries (keep `refuse_local_mode`). `is_single_user(org_config)` returns `not _idp_present(org_config)`. The two guards `if resolve_mode(org_config) != "org": return ...` (about lines 847 and 900) are deleted with their early return.
       2. daemon_main.py: call `org_mode.validate_mode(...)` exactly twice: in the function that contains the call at about line 553 (where the bundle is loaded) and at the start of `run_app` (about line 2406). Every other `resolve_mode` call (about lines 630, 679, 699, 975, 2414, 2415, 2436, 2761, and the docstring at about line 491) drops the call, the `mode=` keyword it fed and the branch that tested it (`== "org"` is always true; `== "local"` branches were deleted earlier). `mode` parameters that other modules still declare are removed in the next phase: pass nothing new; if a callee still requires `mode`, pass the literal `"org"` and leave the parameter for the next phase.
       3. privacy_filter.py (docstring about line 99) and agent_label.py (docstring about line 25): reword so neither names `resolve_mode` nor says the default is local.
       4. tests/unit/test_org_mode.py: rename the resolve_mode tests to `validate_mode` and keep every text assertion; delete the DEFAULT_MODE and deprecation tests. tests/unit/test_daemon_main.py and tests/conftest.py: remove references to the deleted names.
@@ -962,13 +975,16 @@ phases:
       - tests/unit/test_admin_config.py
       - tests/unit/test_oauth_apps.py
       - tests/unit/test_scoped_tokens.py
+      - tests/unit/web/test_tool_schema_portability.py
+      - tests/unit/test_personal_settings.py
+      - scripts/qa_fixture_recorder.py
       - tests/unit/test_grist_auth.py
       - tests/unit/test_peek_client.py
     brief: |
       Read first: docs/1096/plan.md section 3.2; `grep -rn "mode=\|org_mode=\|mode: Mode" src --include=*.py` (the full call list); src/privacyfence/admin_config.py (`config_for` about line 440, callers about lines 945 and 1035); src/privacyfence/oauth_apps.py (`effective_org_config` about line 327).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Remove the parameter that only distinguished local from organization mode, keeping the organization behaviour: `admin_config.config_for(bundle, *, mode, single_user)` becomes `config_for(bundle, *, single_user)` and the same for the two functions that call it (about lines 945 and 1035) and their `mode` parameter; `oauth_apps.effective_org_config(..., mode=...)` loses `mode`; `scoped_tokens.policy_from_org_config(org_config, *, org_mode)` loses `org_mode` (about line 192; the local value `False` was only used by the deleted local server); `grist_auth.bundle_settings(..., org_mode=...)` and `peek_client.bundle_base_url(..., org_mode=...)` lose `org_mode` and behave as `org_mode=True`.
-      2. Update every caller: daemon_main.py (about lines 676-705, 1507, 2011, 2026, 2231, 2332), web/routes_admin.py (about lines 315 and 621), web/routes_connect.py (about lines 130 and 155), web/server.py (about line 1470).
+      2. Also update tests/unit/web/test_tool_schema_portability.py (about line 93, `policy_from_org_config({}, org_mode=False)`), scripts/qa_fixture_recorder.py (about lines 980 and 1318, `bundle_base_url(..., org_mode=True)` and `bundle_settings(..., org_mode=True)`) and tests/unit/test_personal_settings.py (about lines 48, 72, 96, `build_export(..., mode="local")`: keep what the export format needs, drop the parameter); keep `oauth_apps.apply_environment` and its `agent_runtimes` call. Update every caller: daemon_main.py (about lines 676-705, 1507, 2011, 2026, 2231, 2332), web/routes_admin.py (about lines 315 and 621), web/routes_connect.py (about lines 130 and 155), web/server.py (about line 1470).
       3. Update the tests of the changed functions to the new signatures; delete cases that exercise the local value.
       4. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m mypy src/privacyfence, python3 scripts/mypy_strict_modules.py and the coverage of the changed modules against their floors.
       Stop with status=blocked if `grep -rn "mode=\"local\"\|mode='local'" src` is not empty after step 2.
@@ -998,7 +1014,7 @@ phases:
       - tests/conftest.py
     brief: |
       Read first: docs/1096/plan.md sections 3.2 and 3.7; `grep -rn "mode" src/privacyfence/settings_window_html.py | head -60`; `grep -rn "from_local_config\|default_local_step_up\|local_enrollment_banner\|_mode\b" src --include=*.py`.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. settings_window_html.py: delete the `mode` parameter of `build_html` (kept and ignored since the renderer phase) and of the helpers that took it, and update the callers in web/routes_settings.py, web/routes_admin.py, web/routes_approvals.py and web/org_settings_scope.py (delete the `LOCAL_MODE` constants that remain).
       2. step_up_config.py: delete `from_local_config`, `default_local_step_up` and `local_enrollment_banner`; webauthn_stepup.py: delete the local-enrollment pieces; connector.py: delete the `_mode`/`download_mode` fields that remain (grep first); keep every branch the organization path uses.
       3. catalog_server.py (about lines 26 and 33): point `https://privacyfence.eu/download/` at `https://privacyfence.eu/install/` and fix tests/unit/test_catalog_server.py.
@@ -1050,11 +1066,11 @@ phases:
       - .gitignore
     brief: |
       Read first: docs/1096/plan.md section 3.6; .tld/toolkit.yaml; .claude/hooks/session-start.sh (the `cd mcpb/shim && npm ci` lines about 78-79); .github/pull_request_template.md.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Delete every path in `touches` that is a desktop packaging file, build script, `mcpb/` or `installer/`/`debian/`/`resources/linux/`. Before deleting each script, run `grep -rln "<script name>" . --exclude-dir=.git --exclude-dir=node_modules` and fix every hit that is in a file of `touches`; list any other hit in your final report (docs, build.yml and the other workflows belong to later phases).
       2. Delete the tests of deleted things: tests/unit/test_dev_start.py, test_pyinstaller_hidden_imports.py, test_macos_sign_retry.py, test_macos_uninstall_message.py. Keep tests/unit/test_setup_py.py (it tests the changelog build hook of ADR 0237). In tests/unit/test_builtin_apps_script.py (about line 282) and tests/unit/test_telegram_credentials.py (about line 163) remove the assertions that read `build_dmg.sh`, `build_deb.sh` and `build_installer.ps1`, keeping every assertion about the scripts that stay. Edit tests/diagnostics.py to drop desktop packaging diagnostics (grep it for dmg, pkg, deb, installer, companion).
-      3. .tld/toolkit.yaml: delete the two `verify.dod` entries that run `npm test` and `npm run typecheck` in `mcpb/shim`; delete the `dod_conditional` entries whose `when` is `mcpb/shim/src/**` (keep the other file patterns of that entry only if it lists more than the shim; the entry for `web/mcp_auth.py` and `web/server.py` stays with the shim glob removed, and its `do:` text says `pytest tests/integration -v`, and test_mcp_daemon_contract.py must pass` instead of naming test_shim_mcp_contract.py) and the entry for `cloudflare/downloads/**`; reword the `build.yml` dispatchable entry's `use_when` to `The org image, the SBOM and the release assets`. Remove the matching lines from .claude/hooks/session-start.sh, the `/cut-release` command text and the steward skill that mention the DMG, .pkg, .mcpb, installer or .deb, and the pull_request_template checkboxes for the shim and downloads Worker.
-      4. .github/workflows/tests.yml, job `test` only: delete the `setup-node` step and its cache on `mcpb/shim/package-lock.json`, the steps "Install shim dependencies", "Run shim test suite", "Type-check shim" and "Build shim", and the `PRIVACYFENCE_REQUIRE_NODE` env; in `test-python-compat` delete the `--ignore=tests/integration/test_shim_mcp_contract.py` argument and the comment above it. Keep the `ai_client` `npm ci` step.
+      3. .tld/toolkit.yaml: delete the `deps.audit` entry whose `cwd` is `mcpb/shim` (keep the pip, `cloudflare/oauth-relay` and `lock_freshness` entries and the `n8n/**` `dod_conditional` entry); delete the two `verify.dod` entries that run `npm test` and `npm run typecheck` in `mcpb/shim`; delete the `dod_conditional` entries whose `when` is `mcpb/shim/src/**` (keep the other file patterns of that entry only if it lists more than the shim; the entry for `web/mcp_auth.py` and `web/server.py` stays with the shim glob removed, and its `do:` text says `pytest tests/integration -v`, and test_mcp_daemon_contract.py must pass` instead of naming test_shim_mcp_contract.py) and the entry for `cloudflare/downloads/**`; reword the `build.yml` dispatchable entry's `use_when` to `The org image, the SBOM and the release assets`. Remove the matching lines from .claude/hooks/session-start.sh, the `/cut-release` command text and the steward skill that mention the DMG, .pkg, .mcpb, installer or .deb, and the pull_request_template checkboxes for the shim and downloads Worker.
+      4. .github/workflows/tests.yml, job `test` only: keep the `setup-node` step (the n8n node and the AI-client installs need Node) and delete only the `mcpb/shim/package-lock.json` line of its `cache-dependency-path`; keep the "Install n8n node dependencies" step; delete the steps "Install shim dependencies", "Run shim test suite", "Type-check shim" and "Build shim", and the `PRIVACYFENCE_REQUIRE_NODE` env; in `test-python-compat` delete only the `--ignore=tests/integration/test_shim_mcp_contract.py` argument (keep the `--ignore` of tests/integration/test_n8n_node_contract.py) and reword the comment above it to name only the n8n test. Keep the `ai_client` `npm ci` step and the `n8n-node` job.
       5. .gitignore: delete the `*.mcpb` line and the comment naming `mcpb/shim, cloudflare/downloads`.
       6. scripts/build_org_bundle.py is not deleted here (the release phase does it).
       7. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m mypy src/privacyfence.
@@ -1073,6 +1089,11 @@ phases:
     touches:
       - .github/workflows/build.yml
       - .github/workflows/publish-pypi.yml
+      - .github/workflows/publish-n8n-node.yml
+      - .github/workflows/publish-org-image.yml
+      - scripts/release_run_guard.py
+      - scripts/release_check.py
+      - tests/unit/test_release_check.py
       - scripts/r2_release.py
       - scripts/pre_release_check.py
       - scripts/build_org_bundle.py
@@ -1084,15 +1105,15 @@ phases:
       - tests/unit/test_docs_configuration_reference.py
       - docs/configuration-reference.md
     brief: |
-      Read first: docs/1096/plan.md section 3.6; adr/0288-releases-build-the-org-image-the-package-and-the-sbom-only.md; .github/workflows/build.yml (jobs `build` about lines 42-356, `build-windows` 358-591, `build-deb` 593-741, `sbom` 882-970, `finalize-release` 1013-1182); scripts/r2_release.py (`_INSTALLERS` about line 152, `finalize` about 422-489); tests/unit/test_release_assets.py.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      Read first: docs/1096/plan.md section 3.6; adr/0301-releases-build-the-org-image-the-package-and-the-sbom-only.md; .github/workflows/build.yml (jobs `build` about lines 42-356, `build-windows` 358-591, `build-deb` 593-741, `sbom` 882-970, `finalize-release` 1013-1182); scripts/r2_release.py (`_INSTALLERS` about line 152, `finalize` about 422-489); tests/unit/test_release_assets.py.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. build.yml: delete the jobs `build`, `build-windows`, `build-deb`. First move out of them: the step "Run org-mode Ubuntu release smoke test" (in `build-deb`, about line 650) into `build-org-image` (same command, same environment), and the R2 upload of scripts/sync_room_directory.py, scripts/sign_connector_config.py and the connector-config page (`cp website/tools/connector-config/index.html dist/...`; from the step "Publish release artifacts to Cloudflare R2" of `build`, about lines 332-350) into `finalize-release`. Do not upload scripts/build_org_bundle.py.
       2. `sbom`: delete the `setup-node` step, "Generate Node shim SBOM", `sbom-shim-npm.cdx.json` from the artifact paths and the R2 upload arguments; fix the stale comments about lines 877-881 and 935-939.
       3. `finalize-release`: `needs: [sbom, build-org-image]`; remove `actions: read`; delete the graphical-coverage step if still present; in "Attach release assets" delete the globs `PrivacyFence-*.dmg`, `PrivacyFence.mcpb`, `PrivacyFence-*-setup.exe`, `privacyfence_*.deb`, `sbom-shim-npm.cdx.json` and `scripts/build_org_bundle.py`; delete "Publish release manifest and promote to latest" and "Smoke-test the published download routes (HEAD)"; keep the sync plugin zip, the connector-config page, the pre-release notes step and the `stable` branch step last; rewrite the header comments about lines 972-1012 and the "Download build artifacts" comment so they name only what exists.
       4. scripts/r2_release.py: delete `_INSTALLERS`, `REQUIRED_ARTIFACT_IDS`, `classify_installer`, `build_manifest`, `verify`, `promote`, `finalize` and the manifest and `latest` paths; keep `channel`, `check-tag`, `upload`, `sha256_file`, `_r2_client`, `_head`, `_stored_sha256` and the module docstring (rewritten). Edit tests/unit/test_r2_release.py to the kept functions.
       5. scripts/build_org_bundle.py: delete it (it refuses `--mode org` and is desktop-only) together with tests/unit/test_build_org_bundle.py, and turn the link to it in docs/adr/0152 (about line 51) into plain text (docs/adr/README.md rule 2). Edit tests/unit/test_release_assets.py (it hard-codes `jobs["build"]` and asserts build_org_bundle at about lines 35-37) so it reads the `finalize-release` job and asserts the assets that remain; edit tests/unit/test_docs_configuration_reference.py and docs/configuration-reference.md to drop what they parse from build_org_bundle.py (grep both for it). Organization mode keeps reading a legacy `org/org_bundle.json`; do not touch that code.
-      6. scripts/pre_release_check.py: delete the "shim npm test" and "shim typecheck" checks (about lines 65-68) and fix tests/unit/test_pre_release_check.py.
-      7. .github/workflows/publish-pypi.yml: fix the comments about lines 3-11, 70-73, 113 and 175 that name the DMG, notarization, build_dmg/deb/installer; keep `wait_for_build` and shorten its timeout to 30 minutes.
+      6. scripts/pre_release_check.py: delete the "shim npm test" and "shim typecheck" checks (about lines 65-68) and fix tests/unit/test_pre_release_check.py. If the release-retirement work (issue 1093) has merged, scripts/pre_release_check.py is replaced by scripts/release_check.py (tests/unit/test_release_check.py): make the same deletion there instead and delete nothing else.
+      7. .github/workflows/publish-n8n-node.yml (comments about lines 58-62 and 90) and .github/workflows/publish-org-image.yml (comments about lines 9-10, 23, 74 and 152): reword the comments that name the DMG, installer, .deb or publish-mcp-registry.yml so they name only build.yml; change no job and no timeout. scripts/release_run_guard.py: reword its docstring (about line 11) so it names no deleted workflow. publish-pypi.yml is handled by a later phase.
       8. Run ruff check ., python3 -m pytest tests/unit -q, python3 -m mypy src/privacyfence, and python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/build.yml'))".
       Stop with status=blocked if the sbom or build-org-image job needs an artifact produced by a deleted job.
     acceptance:
@@ -1114,12 +1135,13 @@ phases:
       - tests/unit/test_mcp_registry_server_json.py
       - .github/workflows/dependency-audit.yml
       - .github/dependabot.yml
+      - .tld/toolkit.yaml
     brief: |
       Read first: docs/1096/plan.md section 3.6; .github/workflows/dependency-audit.yml; .github/dependabot.yml.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Delete cloudflare/downloads/ (src, test, migrations, wrangler.toml, package files), .github/workflows/deploy-download-worker.yml, .github/workflows/publish-mcp-registry.yml, scripts/mcp_registry_server_json.py and tests/unit/test_mcp_registry_server_json.py. `cloudflare/oauth-relay/` stays.
-      2. .github/dependabot.yml: delete the blocks for `/mcpb/shim` (npm, about lines 43-44) and `/cloudflare/downloads` (about lines 5-6 and 51-60); keep every other block.
-      3. .github/workflows/dependency-audit.yml: delete the `npm-audit` job (about lines 200-222), the `npm-audit-worker` job (about lines 224-249), the `mcpb/shim` and `cloudflare/downloads/package*.json` path filters (about lines 55-58 and 67-70) and the prose about the Worker (about lines 33-43).
+      2. .github/dependabot.yml: delete the blocks for `/mcpb/shim` and `/cloudflare/downloads`; keep every other block, including the `/n8n` block and the `cooldown` settings, and update the count in the header comment. .tld/toolkit.yaml: delete the `deps.audit` entry whose `cwd` is `cloudflare/downloads`.
+      3. .github/workflows/dependency-audit.yml: delete the `npm-audit-worker` job and the `cloudflare/downloads/package*.json` path filters and the prose about the Worker; in the `npm-audit` job delete only the `mcpb/shim` steps, its `mcpb/shim` path filters and its line of `cache-dependency-path` (the job still audits `n8n/`; keep every `n8n/` line).
       4. Run `grep -rln "downloads-worker\|CF_DOWNLOADS_WORKER\|mcp_registry_server_json\|publish-mcp-registry" .github scripts tests` and fix each hit that is in a file of `touches`; list any other hit in your final report (the docs phases handle docs).
       5. Run ruff check ., python3 -m pytest tests/unit -q, and python3 -c "import yaml; [yaml.safe_load(open(p)) for p in ('.github/workflows/dependency-audit.yml', '.github/dependabot.yml')]".
       Stop with status=blocked if a workflow other than the two deleted ones uses the `downloads-worker` environment.
@@ -1140,8 +1162,8 @@ phases:
       - tests/unit/test_update_branch_protection.py
       - tests/unit/test_check_coverage_floor.py
     brief: |
-      Read first: docs/1096/plan.md section 3.6; adr/0289-linux-is-the-only-ci-platform.md; scripts/update_branch_protection.py (`REQUIRED_STATUS_CHECKS` about lines 106-107, the comment about line 90); scripts/check_coverage_floor.py (`WINDOWS_MODULE_FLOORS` about lines 246-249, `--platform` about 303-306 and 324-326, the floors of deleted modules about lines 138, 153, 199, 212, 228).
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      Read first: docs/1096/plan.md section 3.6; adr/0302-linux-is-the-only-ci-platform.md; scripts/update_branch_protection.py (`REQUIRED_STATUS_CHECKS` about lines 106-107, the comment about line 90); scripts/check_coverage_floor.py (`WINDOWS_MODULE_FLOORS` about lines 246-249, `--platform` about 303-306 and 324-326, the floors of deleted modules about lines 138, 153, 199, 212, 228).
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. tests.yml: delete the jobs `platform-windows` (about lines 267-310, including its `--platform windows` coverage step and the `platform-windows-coverage` artifact) and `platform-macos` (about lines 322-350).
       2. scripts/update_branch_protection.py: remove `platform-windows` and `platform-macos` from `REQUIRED_STATUS_CHECKS`; update tests/unit/test_update_branch_protection.py (about line 359) and fix any comment that names the graphical-session gate.
       3. scripts/check_coverage_floor.py: delete `WINDOWS_MODULE_FLOORS` and the `--platform` option with the docstring text about it, and delete the floor of any module that no longer exists (earlier phases removed the ones they deleted: check every key with `ls src/privacyfence/<module>.py` and delete the missing ones). Leave `OVERALL_FLOOR` and the other floors unchanged (re-measured in the last code phase). Edit tests/unit/test_check_coverage_floor.py to match.
@@ -1163,7 +1185,7 @@ phases:
       - requirements/README.md
     brief: |
       Read first: docs/1096/plan.md section 3.6; pyproject.toml; requirements/README.md; scripts/update_dependency_locks.sh.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Before editing, run `grep -rn "PIL\|pystray\|pyinstaller" src scripts tests --include=*.py`; if scripts/qa_readme_screenshots.py or scripts/render_ui_review.py (or any file that stays) imports PIL, keep `Pillow` in the `dev` extra only and delete it from the runtime dependencies; otherwise delete both entries.
       2. pyproject.toml: delete the `pystray` and runtime `Pillow` dependencies (the `sys_platform == 'darwin' or 'win32'` markers, about lines 162-170), `pyinstaller>=6.0` in the dev extra (about line 217), the `Download = "https://privacyfence.eu/download/"` project URL (replace it with nothing), the classifiers `Operating System :: MacOS`, `Operating System :: Microsoft :: Windows` and `Intended Audience :: End Users/Desktop` (keep the Linux classifier).
       3. If `uv` is missing run `python3 -m pip install uv`. Run scripts/update_dependency_locks.sh (needs the package index) and commit the resulting requirements/*.lock.txt. `pywin32` stays if the lock still resolves it as a transitive dependency of `mcp`.
@@ -1202,8 +1224,8 @@ phases:
       - tests/integration/test_releases_page.py
       - tests/integration/test_website_consent.py
     brief: |
-      Read first: docs/1096/plan.md section 3.7; the ADR file in docs/adr whose name starts 0287-; docs/adr/0277-the-websites-primary-call-to-action-is-install.md; scripts/build_site.py (PAGES about lines 97-126, STATIC 146-149, RELEASES_API/ALL_RELEASES_API/HISTORY_API/DOWNLOAD_ORIGIN 89-92, PLATFORMS 219-228, `render_download_cards`, `prerender_download`, `fetch_stable_manifest` 446-523, the /releases/ pre-render 526-665, call sites about 1338-1370, `--release-manifest` about 1457-1461, the `softwareVersion` JSON-LD); website/_partials/footer.html line 14; scripts/site_security_headers.py line 34.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      Read first: docs/1096/plan.md section 3.7; the ADR file in docs/adr whose name starts 0300-; docs/adr/0277-the-websites-primary-call-to-action-is-install.md; scripts/build_site.py (PAGES about lines 97-126, STATIC 146-149, RELEASES_API/ALL_RELEASES_API/HISTORY_API/DOWNLOAD_ORIGIN 89-92, PLATFORMS 219-228, `render_download_cards`, `prerender_download`, `fetch_stable_manifest` 446-523, the /releases/ pre-render 526-665, call sites about 1338-1370, `--release-manifest` about 1457-1461, the `softwareVersion` JSON-LD); website/_partials/footer.html line 14; scripts/site_security_headers.py line 34.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Replace website/download/index.html by a static stub page (same partials, title "Download", one paragraph and two links: PrivacyFence runs as the Docker image or an organization server, link /install/; installers of PrivacyFence 7 remain on https://github.com/privacyfence/privacyfence/releases) and delete website/download/download.js. Delete website/releases/ and the download-counter code of website/stats.js (delete the file if nothing else is in it; keep `site.js`).
       2. scripts/build_site.py: delete `/releases/` from PAGES, the pre-render and manifest functions listed above, the constants, `--release-manifest`, the `softwareVersion` injection and the STATIC entries for the deleted scripts; update the module docstring. Doc sets are not touched here (a later phase edits them).
       3. website/_partials/footer.html: delete the `/releases/` link. scripts/site_security_headers.py: delete `https://downloads.privacyfence.eu` from `connect-src`. website/index.html: delete the `downloadUrl` and `operatingSystem` JSON-LD properties and the download-count statistic with its `stats.js` reference (about lines 39 and 204).
@@ -1235,6 +1257,7 @@ phases:
     brief: |
       Read first: docs/1096/plan.md section 3.7; `grep -rniE "dmg|\.pkg|\.deb|installer|mcpb|desktop mode|companion|local mode" website/enterprise website/faq website/security website/privacy website/gdpr website/how-it-works website/connectors/telegram website/assets website/styles.css`.
       No plan section, phase id or issue number goes into pages; cite ADR numbers only in contributor docs.
+      0. website/enterprise/index.html: delete the sentence "Do not install the desktop `.deb` on this host.".
       1. In each page of `touches` rewrite every sentence that names the desktop installers, the DMG, `.pkg`, `.deb`, the `.mcpb` extension, "desktop mode", the companion app or "local mode": say that PrivacyFence runs as the Docker image (single-user, on one computer) or as an organization server, and link `/install/`. Do not link to a doc that a later docs phase deletes (install-macos, install-windows, install-linux, platform-support, packaging); link `/install/` instead.
       2. website/assets/architecture.svg and architecture-narrow.svg: delete the text and shapes that label the extension and the companion; keep the AI client, the PrivacyFence server, the approver and the services. website/styles.css: delete the rules whose selectors only the deleted download and releases pages used (grep each class name in website/ before deleting).
       3. Run ruff check ., python3 -m pytest tests/unit/test_website_pages.py tests/unit/test_website_links.py tests/unit/test_build_site.py -q, the exact build command of the `build` step in .github/workflows/website-build.yml.
@@ -1291,7 +1314,7 @@ phases:
       - scripts/r2_release.py
     brief: |
       Read first: docs/1096/plan.md section 3.7; docs/README.md; downloads-and-release-kpi.md (the sections "Release archive (R2)", "Cloudflare resources", "Credentials / account-owned tokens"); packaging.md lines about 306-348 (Glama listing, organization Docker image, CI); tests/unit/test_docs_references_exist.py.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. In the docs directory `git mv` the file downloads-and-release-kpi.md to release-archive.md; keep its sections "Release archive (R2)", "Cloudflare resources" and "Credentials / account-owned tokens" (edited so nothing mentions the download Worker as live: say it is retired), delete the download-count, KPI and Worker sections. Fix every link to the old name: docs/oauth-relay.md (about lines 33 and 42), docs/releasing.md (about lines 307-316), docs/README.md, scripts/build_site.py `CONTRIBUTOR_DOCS`, cloudflare/oauth-relay/worker-configuration.d.ts (line 2), and every other hit of `grep -rn "downloads-and-release-kpi" . --include=*` outside docs/adr.
       2. Delete install-macos.md, install-windows.md, install-linux.md, platform-support.md, packaging.md; before deleting packaging.md move its "Organization Docker image" section into docs/org-mode-docker.md and its CI and Glama sections into docs/releasing.md (rewritten for what the pipeline builds after this change: the org image, the package, the SBOM). Delete tests/unit/test_docs_platform_pages.py and tests/unit/test_minimum_os_versions.py.
       3. docs/README.md: remove the rows for the five deleted docs and the renamed one's old name, add the row for release-archive.md in the same format as its neighbours. scripts/build_site.py: remove the deleted docs from `CONTRIBUTOR_DOCS` and any published list; tests/unit/test_website_docs_pages.py (about lines 87-91 asserts `content_group("install-macos") == "platform"`): change it to a doc that still exists. tests/unit/test_docs_no_history.py: remove the deleted names from PUBLISHED_DOCS and CONTRIBUTOR_DOCS.
@@ -1331,6 +1354,8 @@ phases:
       - docs/connector-qa.md
       - docs/peek-setup.md
       - docs/oidc-provider.md
+      - docs/upstream-mcp.md
+      - docs/n8n-node.md
       - docs/salesforce-setup.md
       - docs/google-cloud-setup.md
       - docs/grist-setup.md
@@ -1341,13 +1366,14 @@ phases:
       - plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md
     brief: |
       Read first: docs/1096/plan.md sections 3.3, 3.4, 3.5 and 3.7; docs/README.md; docs/moving-to-organization-mode.md; docs/coding-and-testing-guidelines.md section on docs (the no-history rule: the words "no longer", "formerly", "used to" and "now" are banned in published docs by tests/unit/test_docs_no_history.py).
-      No plan section, phase id or issue number goes into docs; cite ADR 0283-0290 by number only in contributor docs.
+      No plan section, phase id or issue number goes into docs; cite ADR 0296-0303 by number only in contributor docs.
       1. docs/moving-to-organization-mode.md: rewrite from "deprecated, will be removed" to "PrivacyFence 8 runs only in organization mode": what a desktop install is, what happens when 8 starts on one (quote the two refusal texts of plan section 3.3 and 3.4), the two ways forward (single-user Docker; an organization server), bringing rules along, and "Before upgrading to 8.x" (install the latest 7.x, start it once, check the Admin line). Keep the "Going back to 6.x" section if its content is still true; delete what describes the strip, the notification and the status notice. Do not add anchors the docs site cannot serve before the 8.0.0 tag.
-      2. docs/connect-claude-desktop.md: delete "Local mode", the extension and `.mcpb` references and the "Files, local mode" part; keep the custom-connector and Docker sections. docs/connect-claude-code.md and docs/connect-chatgpt.md: delete the "Local mode" sections, the companion token steps, the "Files" paragraph about the shim (files go through upload slots, ADR 0286) and the local-mode troubleshooting rows. docs/connect-claude-ai.md: delete the "Local mode: not available" lines. docs/connect-gemini-enterprise.md: fix any install-* link.
+      2. docs/connect-claude-desktop.md: delete "Local mode", the extension and `.mcpb` references and the "Files, local mode" part; keep the custom-connector and Docker sections. docs/connect-claude-code.md and docs/connect-chatgpt.md: delete the "Local mode" sections, the companion token steps, the "Files" paragraph about the shim (files go through upload slots, ADR 0299) and the local-mode troubleshooting rows. docs/connect-claude-ai.md: delete the "Local mode: not available" lines. docs/connect-gemini-enterprise.md: fix any install-* link.
       3. docs/getting-started.md ("What you need", "Pick your platform", "Local or organization deployment"), docs/how-it-works.md ("The pieces", "Opening PrivacyFence opens Approvals", "Local mode and organization mode", "Files", "Which AI system is asking"), docs/security-and-compliance.md ("Deployment modes", "Local-mode trust boundary", "Privilege separation", local-install paragraphs of passkeys and recovery), docs/configuration-reference.md (local-mode keys, `--print-mcp-token`, companion; keep it matching settings.yaml.example because tests/unit/test_docs_configuration_reference.py parses it), docs/approvals-and-policy.md, docs/connecting-a-service.md, docs/telegram-setup.md, docs/ai-client-qa.md, docs/privacyfence-sync.md ("Local mode" section): describe organization mode and single-user Docker only.
       4. Minor edits: the install-* and platform-support links in docs/org-mode-setup-guide.md (5 places; keep "Moving a person from a desktop install"; delete the "For IT admins" bundle sections), connector-qa.md, peek-setup.md, oidc-provider.md, salesforce-setup.md, google-cloud-setup.md, grist-setup.md, atlassian-setup.md.
       5. README.md: the lines naming the OS table with `.dmg`, `-setup.exe` and `.deb` (about lines 50-56), the install steps (about 87-97), the extension and diagram caption text (about 11, 13, 42-44), "ChatGPT desktop on macOS" (about 59) and "in local mode the name" (about 117). README.md is the PyPI long description: every link must resolve and tests/unit/test_readme_site_links.py must pass. SECURITY.md: delete the companion app and `.mcpb` shim from the in-scope list (about lines 22-23). docs/README.md: update the section intros that say "in local mode and in an organization deployment" and the `connect-claude-desktop` row text.
       6. sync/README.md and its byte-identical copy plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md: delete the "Local mode (PrivacyFence on your own computer)" section and the lines about the companion, macOS Keychain, launchd and desktop installs (about lines 54, 134, 256, 746, 900-992); `DEFAULT_SERVER` stays. Edit both files identically, then `diff sync/README.md plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md` must print nothing.
+      6b. docs/upstream-mcp.md (about lines 19-20, "In any other mode (single-user, desktop)... refuses the start") and docs/oidc-provider.md (about line 136): drop the sentences about modes other than organization mode. tests/unit/test_docs_no_history.py lists docs/n8n-node.md as a published doc: check it and docs/upstream-mcp.md for the banned words.
       7. src/privacyfence/resources/settings.yaml.example: delete the comments and keys that apply only to desktop mode (`grep -nE "companion|desktop|local mode|privilege" src/privacyfence/resources/settings.yaml.example`), and keep docs/configuration-reference.md in step with it (tests/unit/test_docs_configuration_reference.py parses both). Never delete a key that code under src/privacyfence still reads (grep the key name first).
       8. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py tests/unit/test_docs_configuration_reference.py tests/unit/test_readme_site_links.py tests/unit/test_website_agent_pages.py tests/unit/test_website_links.py -q, then python3 -m pytest tests/unit -q and, in sync/, the sync tests as `.tld/toolkit.yaml` verify.dod_conditional says only if sync/ source changed (it did not: skip).
       Stop with status=blocked if a doc describes behaviour you cannot confirm from the code (name the doc and the sentence) instead of guessing, or if a settings.yaml.example key you would delete is still read by code.
@@ -1373,9 +1399,9 @@ phases:
       - docs/release-archive*
     brief: |
       Read first: docs/1096/plan.md sections 3.6 and 3.7; docs/releasing.md; docs/testing-policy.md; docs/coding-and-testing-guidelines.md (sections 1.9, 2.1, 2.7, 2.12, 3, 4); CONTRIBUTING.md.
-      No plan section, phase id or issue number goes into docs; cite ADR 0283-0290 by number.
-      1. docs/testing-policy.md: rewrite the seven-layer table (layer 3 runs on Linux only; layer 6 "Packaged artifact" becomes the Docker image and Ubuntu release smoke tests), delete the `platform-windows` and `platform-macos` rows, the shim steps of the `test` row, the `--ignore` note of `test-python-compat`, and "Layer 6: packaged artifact" (about lines 265-296) except what still applies to the org image.
-      2. docs/releasing.md: rewrite "Pre-flight `build.yml` itself" (mentions of build, build-windows, build-deb), "Packaged-artifact release gating" (the `needs:` list becomes `[sbom, build-org-image]`), delete "Who can download a pre-release" (the Worker), update the Cloudflare R2 section to say R2 keeps uploads and no manifest, and keep its links to release-archive.md valid.
+      No plan section, phase id or issue number goes into docs; cite ADR 0296-0303 by number.
+      1. docs/testing-policy.md (keep the n8n rows, the `n8n-node` job row and the n8n half of the `test-python-compat` ignore note): rewrite the seven-layer table (layer 3 runs on Linux only; layer 6 "Packaged artifact" becomes the Docker image and Ubuntu release smoke tests), delete the `platform-windows` and `platform-macos` rows, the shim steps of the `test` row, the `--ignore` note of `test-python-compat`, and "Layer 6: packaged artifact" (about lines 265-296) except what still applies to the org image.
+      2. docs/releasing.md (keep "Publishing the n8n node to npm"; rewrite the paragraph at about lines 140-145 that says build.yml builds and signs the DMG): rewrite "Pre-flight `build.yml` itself" (mentions of build, build-windows, build-deb), "Packaged-artifact release gating" (the `needs:` list becomes `[sbom, build-org-image]`), delete "Who can download a pre-release" (the Worker), update the Cloudflare R2 section to say R2 keeps uploads and no manifest, and keep its links to release-archive.md valid.
       3. docs/coding-and-testing-guidelines.md: update sections 1.9, 2.1 (the table of test locations), 2.7 (the definition of done: it must match `verify.dod` and `dod_conditional` of .tld/toolkit.yaml after the packaging phase: no npm shim lines, no cloudflare/downloads line), 2.12 (diagnostics), 3 (the PyInstaller row of adding a connector) and delete section 4 "Packaging changes" (about line 551); delete mentions of the KPI doc and the Worker.
       4. CONTRIBUTING.md: delete `deploy-download-worker.yml` (about line 46), the install-type text (about lines 75 and 81) and the `mcpb/shim/` Node section (about lines 92-93). AGENTS.md (about lines 15, 23-24) and CLAUDE.md (about line 9, the R2 archive line): remove what names `mcpb/`, the DMG or the Worker; keep both files thin.
       5. docs/release-testing.md: delete the per-platform "Human checks" sections (macOS, Windows, Debian/Ubuntu); keep "Every platform" and "Org mode on a phone". docs/dev-vs-live-setup.md: rewrite to the organization and single-user dev setup (a development server next to a live one on the same machine, separate data directories and ports), deleting the packaged-install clash material.
@@ -1395,7 +1421,7 @@ phases:
       - tests/unit/test_check_coverage_floor.py
     brief: |
       Read first: scripts/check_coverage_floor.py (`OVERALL_FLOOR`, the per-module floor tables and how it reads coverage.json); docs/coding-and-testing-guidelines.md section 2.7.
-      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0283-0290 by number.
+      No plan section, phase id or issue number goes into code, tests, comments or docstrings; cite ADR 0296-0303 by number.
       1. Run the full measurement exactly as verify.dod does: pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json, then python3 scripts/check_coverage_floor.py coverage.json.
       2. For every floor key whose module no longer exists, delete the key. For every module the script reports below its floor, add tests for the missing lines until it passes; never lower a floor to pass.
       3. For `OVERALL_FLOOR` and for every module whose measured coverage is more than 0.5 percentage points above its floor, raise the floor to the measured value rounded down to one decimal (the script's own ratchet convention: read its header comment first).
@@ -1449,27 +1475,27 @@ phases:
       - docs/adr/0261-*.md
       - docs/adr/0262-*.md
       - docs/adr/0277-*.md
-      - docs/adr/0283-*.md
-      - docs/adr/0284-*.md
-      - docs/adr/0285-*.md
-      - docs/adr/0286-*.md
-      - docs/adr/0287-*.md
-      - docs/adr/0288-*.md
-      - docs/adr/0289-*.md
+      - docs/adr/0296-*.md
+      - docs/adr/0297-*.md
+      - docs/adr/0298-*.md
+      - docs/adr/0299-*.md
+      - docs/adr/0300-*.md
+      - docs/adr/0301-*.md
+      - docs/adr/0302-*.md
       - docs/adr/*.md
       - docs/adr/README.md
       - CHANGELOG.md
     brief: |
       Read first: docs/1096/plan.md section 3.8 (the table and the list of old ADRs); docs/adr/README.md (the supersession convention and the Index table); docs/adr/0087-*.md and its index row (the example of a Status line that points forward); CHANGELOG.md lines 1-60 and the `### Removed` entries of 7.0.0.
       No plan section, phase id or issue number goes into an ADR or the changelog.
-      1. For each old ADR listed in plan section 3.8, change only its `## Status` section: keep the existing text and append the forward reference as the line `**Superseded by ADR 0283, <date>.**` (a Markdown link to the new ADR file, relative to the old ADR's own directory) (or `Deprecated:`/`Amended by` as the list says; the exact words and target numbers per ADR are in plan section 3.8). Never edit another section of an old ADR. Update that ADR's row in the Index table of docs/adr/README.md (Status column) in the same style as 0087's row.
-      2. In the Status line of each of ADRs 0283-0290 append the sentence `Implemented.` and change nothing else in them; the bodies, including their Verification sections, were written final by the first phase.
-      3. `grep -rliE "companion|mcpb|privilege|installer|DMG" docs/adr` and for every ADR it lists that is not in plan section 3.8's list, read its Decision section: if it describes behaviour that exists only in desktop mode (an installer, the companion, privilege separation, the control channel, the extension, the file bridge), append `Deprecated: ADR 0283 removed desktop mode` to its Status and Index row; if it only mentions a desktop term in passing, leave it. Report the added numbers in your final message.
+      1. For each old ADR listed in plan section 3.8, change only its `## Status` section: keep the existing text and append the forward reference as the line `**Superseded by ADR 0296, <date>.**` (a Markdown link to the new ADR file, relative to the old ADR's own directory) (or `Deprecated:`/`Amended by` as the list says; the exact words and target numbers per ADR are in plan section 3.8). Never edit another section of an old ADR. Update that ADR's row in the Index table of docs/adr/README.md (Status column) in the same style as 0087's row.
+      2. In the Status line of each of ADRs 0296-0303 append the sentence `Implemented.` and change nothing else in them; the bodies, including their Verification sections, were written final by the first phase.
+      3. `grep -rliE "companion|mcpb|privilege|installer|DMG" docs/adr` and for every ADR it lists that is not in plan section 3.8's list, read its Decision section: if it describes behaviour that exists only in desktop mode (an installer, the companion, privilege separation, the control channel, the extension, the file bridge), append `Deprecated: ADR 0296 removed desktop mode` to its Status and Index row; if it only mentions a desktop term in passing, leave it. Ignore hits in ADRs 0285 and 0289 (their frozen text names desktop mode and `mcpb/shim/` only as a rejected alternative). Report the added numbers in your final message.
       4. CHANGELOG.md, under `## [Unreleased]`, add a `### Removed` block (and a `### Changed` block for the three behaviour changes) of entries in the file's `- **Bold sentence.** Detail.` style: the macOS, Windows and Linux installers and the companion are gone; the Claude Desktop extension (`.mcpb`) and its MCP registry entry are no longer published; the download page and Worker are retired (old installers remain on their GitHub Releases); `PRIVACYFENCE_MODE=local` and a bundle `"mode": "local"` refuse to start; 8 refuses a data directory that has desktop traces or no 7.x marker (quote the two texts' first sentences); tools no longer take `destination_dir` or a plain `local_path` and attachments take `upload:<id>` only (start this entry with `**Breaking:`); `privacyfence_status` no longer carries `deprecation` or `next_step: open_privacyfence_companion` (`**Breaking:`); `privacyfence-companion` is removed; Windows and macOS test legs dropped from CI is internal and gets no entry. Open no version heading.
       5. Run python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q, python3 -m pytest tests/unit -q (the changelog parser tests included), ruff check ..
       Stop with status=blocked if an ADR Status section has no `## Status` heading in the form the README describes.
     acceptance:
-      - grep -c "Superseded by \[ADR 0283\]" docs/adr/0002-*.md docs/adr/0003-*.md docs/adr/0261-*.md prints 1 for each file
+      - grep -c "Superseded by \[ADR 0296\]" docs/adr/0002-*.md docs/adr/0003-*.md docs/adr/0261-*.md prints 1 for each file
       - grep -n "^## \[" CHANGELOG.md | head -3 shows ## [Unreleased] first and no new version heading
       - python3 -m pytest tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_docs_no_history.py -q passes
       - python3 -m pytest tests/unit -q passes
