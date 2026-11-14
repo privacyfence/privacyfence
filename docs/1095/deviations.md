@@ -21,7 +21,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-delivery-core
 
-- pending
+- worker: none reported; docs/tools-reference.md did not change because the generator output holds no status tool description
+- review: worker had no toolkit so ran no dod or roles; no roles are required for these paths; orchestrator re-ran ruff, mypy and the unit suite after the merge
 
 ## p5-admin-setting
 
