@@ -177,7 +177,7 @@ async def test_a_signing_failure_sends_nothing_and_is_claim_failed(signer, monke
 
 
 async def test_a_result_over_the_cap_is_too_large(signer):
-    big = [{"id": "9", "domain": "general", "title": "Big", "body": "x" * 1_000_001}]
+    big = [{"id": "9", "audience": "general", "title": "Big", "body": "x" * 1_000_001}]
     async with _client(signer, documents=big) as client:
         with pytest.raises(UpstreamMcpClientError) as caught:
             await client.call_tool("search", {"query": "big"}, _caller("general"))
