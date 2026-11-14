@@ -385,3 +385,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md) | The privacyFenceApi credential holds the address and the token, and has no authenticate block | Accepted; amends 0278 |
 | [0292](0292-the-n8n-node-carries-its-own-handshake-only-mcp-client.md) | The n8n node carries its own handshake-only MCP client with no dependencies | Accepted; relates to 0289 |
 | [0293](0293-the-n8n-node-never-follows-redirects-or-builds-errors-from-caught-values.md) | The n8n node never follows a redirect and never builds an error or an item from a caught error, a request or a credential value | Accepted; relates to 0291 |
+| [0294](0294-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 |

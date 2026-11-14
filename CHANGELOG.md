@@ -53,6 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **PrivacyFence needs Python 3.11.5 or newer** (it was 3.11). The fixed releases of `soupsieve`, which `beautifulsoup4` depends on, do not install on 3.11.0 to 3.11.4. Desktop installers and the Docker image are not affected.
 - **A token delivered to n8n keeps its credential when it expires, and a person can extend the token.** Settings → Scoped tokens has an **Extend** button on every token: it sets the token to expire the chosen number of days from today, behind the same confirmation and passkey step-up as creating a token. An expired token's n8n credential is no longer deleted; it is deleted when the token is revoked, and works again when the token is extended. `privacyfence_runtime_credential_status` answers `expired` for such a token ([ADR 0283](docs/adr/0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md), [ADR 0284](docs/adr/0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md)).
 - **Admin → Agent runtimes has a credential type for n8n.** The default is unchanged: delivery still creates an n8n bearer credential for the MCP Client node. Choosing **PrivacyFence node** makes delivery create a `privacyFenceApi` credential that holds the token and this server's address, for the PrivacyFence node; delivery then refuses, before a token is created, when the community node is not installed in that n8n. Tokens already delivered keep their type. See [docs/n8n-node.md](docs/n8n-node.md).
 

@@ -22,7 +22,7 @@ exercised independently.
 
 ### 1.1 Language baseline
 
-- Python 3.11+. Every module starts with `from __future__ import annotations` (right after the
+- Python 3.11.5+. Every module starts with `from __future__ import annotations` (right after the
   module docstring, before other imports).
 - Prefer the standard library over new dependencies (stated in `CONTRIBUTING.md`).
 - Use modern union syntax, `X | None`, not `Optional[X]`. `src/privacyfence/` has no
