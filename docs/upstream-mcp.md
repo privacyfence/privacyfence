@@ -17,13 +17,16 @@ Why it is built this way: [ADR 0285](adr/0285-upstream-mcp-servers-are-declared-
 ## For operators
 
 Organization servers only. In any other mode (single-user, desktop) a non-empty
-`PRIVACYFENCE_UPSTREAM_MCP_FILE` refuses the start.
+`PRIVACYFENCE_UPSTREAM_MCP_FILE` or `PRIVACYFENCE_UPSTREAM_MCP` refuses the start. On a Docker install
+see [Upstream MCP file](org-mode-docker.md#upstream-mcp-file).
 
 ### The operator file
 
-Set `PRIVACYFENCE_UPSTREAM_MCP_FILE` to the path of a JSON file (see the
-[configuration reference](configuration-reference.md)). It is read once, at startup; **a change to the file
-needs a restart**.
+Set `PRIVACYFENCE_UPSTREAM_MCP_FILE` to the path of a YAML or JSON file (see the
+[configuration reference](configuration-reference.md)). A name ending in `.yaml` or `.yml` is read as
+YAML, any other name as JSON. Or put the same text in `PRIVACYFENCE_UPSTREAM_MCP` (always read as YAML,
+so one-line JSON works too). Set one of the two, never both: both refuse the start. The declaration is
+read once, at startup; **a change to it needs a restart**.
 
 ```json
 {
@@ -45,14 +48,33 @@ needs a restart**.
 }
 ```
 
+The same declaration in YAML (quote an `id` or tool name that YAML reads as a boolean, such as `"no"` or `"on"`):
+
+```yaml
+version: 1
+upstreams:
+  - id: kh
+    label: Knowledge hub
+    url: https://kh.example.internal/mcp
+    audience: https://kh.example.internal
+    tools:
+      search: {gate: auto, verb: search}
+      propose_change: {gate: popup, verb: add, effect: Adds a change proposal to the knowledge hub.}
+    grants:
+      - match: "*"
+        domains: [general]
+```
+
 The AI client sees each declared tool as `<id>_<tool>`, here `kh_search` and `kh_propose_change`. Any
-mistake in the file refuses the start; the message names the JSON path of the bad value
+mistake in the declaration refuses the start; the message names the path of the bad value
 (`PRIVACYFENCE_UPSTREAM_MCP_FILE: upstreams[0].tools.search.gate: ...`) and never quotes the value.
 
 | Rule | Detail |
 |---|---|
-| Keys | `version` must be `1`. Only `version` and `upstreams` at the top; only `id`, `label`, `url`, `audience`, `tools` in an upstream; only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
-| Size | At most 8 upstreams and 50 tools per upstream. |
+| Keys | `version` must be `1`. Only `version` and `upstreams` at the top; only `id`, `label`, `url`, `audience`, `tools`, `grants` in an upstream; only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
+| Size | At most 8 upstreams, 50 tools and 200 grants per upstream; the file or inline text is at most 256 KiB. |
+| Repeated key | A key that appears twice in one mapping or object is refused (`the file repeats a key.` or `the text repeats a key.`), so a repeated tool name cannot silently keep the last gate. |
+| Format | A YAML file is checked by the same rules as JSON; a wrong top level still reads `must be a JSON object`. |
 | `id` | 2-16 characters, lowercase letters and digits, starting with a letter; unique. It may not collide with a built-in connector name (such as `gmail`, `drive`, `privacyfence`): `upstream id "<id>" collides with the built-in connector "<name>"`. |
 | `label` | 1-60 characters, no control characters. It names the server on cards and in the tool descriptions. |
 | `url` | `https://` with any host, or `http://` only for `localhost`, a loopback address or a single-word host name (a container on the same Docker network, such as `http://knowledge-hub:8080/mcp`). No user name, no fragment. |
@@ -99,7 +121,7 @@ hold which domains is set in `admin_config.json` under `upstream_mcp` (on an org
   address (case-insensitive). A person's domains are the union of every grant that matches them.
 - A domain name is 1-63 characters: lowercase letters, digits, underscores and hyphens, starting with a
   letter or digit. At most 200 grants per upstream.
-- A grant for an id the operator file does not declare is logged once and ignored. An invalid section is
+- A grant for an id the declaration does not declare is logged once and ignored. An invalid section is
   reported as `admin_config.json: upstream_mcp.<id>.grants[<n>]: <problem>`; at startup it refuses the
   start, and in a running server the last good grants stay in force and the error is logged.
 - **"Verified" matters.** Grants match only an email address PrivacyFence treats as verified: the
@@ -108,6 +130,11 @@ hold which domains is set in `admin_config.json` under `upstream_mcp` (on an org
   The single-user person is verified. An unverified or empty address gets no domains, so the upstream returns no data for
   that person. Sessions that began before this feature carry no verification bit and give no domains until
   the person signs in again.
+- **Seeding grants.** An upstream may carry `grants` in the declaration itself (a list of `match` and
+  `domains`, as above). On start they are copied into `admin_config.json` once per upstream id. An id that
+  is already there is never touched, even when its grants are empty, and nothing is removed: taking an
+  upstream out of the declaration removes nothing. After the first start `admin_config.json` owns the
+  grants ([ADR 0288](adr/0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md)).
 - **Grant edits apply without a restart:** PrivacyFence re-reads the file when its modification time
   changes, and the next call uses the new grants. There is no Admin page control for grants; it is a file
   edit. Because every claim lives 60 seconds, a revoked grant stops working within a minute.

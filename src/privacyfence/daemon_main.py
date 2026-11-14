@@ -986,6 +986,10 @@ def _maybe_start_web_server(
             raise org_mode.ConfigurationError(
                 f"{upstream_mcp_config.ENV_VAR} is set, but this is not an organization server."
             )
+        if os.environ.get(upstream_mcp_config.ENV_VAR_INLINE, "").strip():
+            raise org_mode.ConfigurationError(
+                f"{upstream_mcp_config.ENV_VAR_INLINE} is set, but this is not an organization server."
+            )
         ignored = oauth_apps.set_auto_provision_variables()
         if ignored:
             logger.warning("%s is ignored outside organization mode.", ", ".join(ignored))
@@ -1672,17 +1676,25 @@ def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
 
 
 def _configure_upstream_mcp(issuer_url: str) -> None:
-    """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` set (ADR 0285): load the operator
-    file, register the declared tools into the policy tables, and configure the runtime. Raises
+    """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` or ``PRIVACYFENCE_UPSTREAM_MCP`` set
+    (ADR 0285, 0288): load the declaration, seed its grants, register the declared tools into the policy tables, and configure the runtime. Raises
     ``org_mode.ConfigurationError`` (the start is refused) on any problem."""
-    path = os.environ.get(upstream_mcp_config.ENV_VAR, "").strip()
-    if not path:
+    upstreams = upstream_mcp_config.load_declared()
+    if upstreams is None:
         return
-    upstreams = upstream_mcp_config.load_upstreams(Path(path))
+    upstream_mcp_registry.register(upstreams)
+    try:
+        seeded = admin_config.seed_upstream_grants(upstream_mcp_config.seed_payload(upstreams))
+    except admin_config.AdminConfigError as error:
+        raise org_mode.ConfigurationError(str(error)) from None
+    if seeded:
+        logger.info(
+            "Seeded the domain grants of upstream(s) %s from the declaration; edit them in admin_config.json from now on.",
+            ", ".join(seeded),
+        )
     grants = upstream_mcp_config.GrantStore(
         admin_config.admin_config_path(), frozenset(upstream.id for upstream in upstreams),
     )
-    upstream_mcp_registry.register(upstreams)
     upstream_mcp_runtime.configure(
         upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url), grants=grants,
     )

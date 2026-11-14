@@ -4,6 +4,7 @@
 
 Accepted — 2026-11-14. Implemented: `src/privacyfence/upstream_mcp_config.py`, `upstream_mcp_registry.py`,
 `upstream_mcp_runtime.py`, `upstream_mcp_client.py`, `connectors/upstream_mcp.py`.
+Amended by [ADR 0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md).
 
 ## Context
 

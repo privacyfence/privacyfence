@@ -376,6 +376,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0282](0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md) | Runtime delivery is organization-mode only and starts only from an AI proposal | Accepted; relates to 0250, 0261 |
 | [0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md) | Only a person can extend a scoped token, from today and capped by max_days | Accepted; amends 0164, 0165 |
 | [0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md) | An expired token's n8n credential is kept until the token is revoked | Accepted; amends 0280, 0281; relates to 0283 |
-| [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196 |
+| [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196; amended by 0288 |
 | [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274 |
-| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272 |
+| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272; amended by 0288 |
+| [0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) | The upstream MCP declaration can be YAML or inline, and seeds the grants | Accepted; amends 0285, 0287 |
