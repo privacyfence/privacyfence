@@ -49,7 +49,11 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p10-adrs-changelog
 
-- pending
+- gate: owner chose on the board to widen the link-test plan-doc exemption to docs/<n>/plan.md instead of editing the confirmed plan; the worker changed tests/unit/test_docs_links.py and tests/unit/test_docs_references_exist.py accordingly
+- scope: out of scope by touches, accepted: tests/unit/test_docs_links.py and tests/unit/test_docs_references_exist.py (the owner decision above)
+- worker: ADR 0283 states MIT for the n8n/ package per the owner decision; amendment marks added to the 0278 and 0280 index rows as the ADR rules ask
+- retry: first report was blocked on two plan-link tests; resumed on the same branch after the owner decision
+- review: worker had no toolkit so ran no dod or roles, none are required for these paths; orchestrator re-ran ruff, the full unit suite (21653 passed) and the n8n tests after the merge
 
 ## Final review
 
