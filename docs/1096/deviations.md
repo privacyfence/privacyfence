@@ -5,7 +5,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p00-adrs-new
 
-- pending
+- worker: First worker found no tld CLI in its container, so it ran no dod or roles; the orchestrator ran them (owner choice orch_roles).
+- retry: Two gate-rerun workers stopped at once because tld was still missing; no code changed.
 
 ## p01-org-test-harness
 
