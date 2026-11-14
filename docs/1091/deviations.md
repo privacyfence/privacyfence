@@ -69,4 +69,5 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Finishing
 
-- pending
+- scope: two phases changed one file each outside their touches, both still in the final diff and accepted: tests/unit/test_website_connector_pages.py (p8, the owner-approved upstream_mcp exemption) and tests/unit/web/test_routes_org_settings.py (p10, the org create-route tests)
+- review: the definition-of-done gate ran on the feature branch: full pytest with coverage (22578 passed, 86 skipped, browser tests run with PRIVACYFENCE_TEST_CHROMIUM), coverage ratchet, ruff, bandit, mypy, strict mypy, mcpb/shim tests and typecheck all pass; no role is required at the dod point; the live QA fixture row does not apply because the upstream connector has no external provider
