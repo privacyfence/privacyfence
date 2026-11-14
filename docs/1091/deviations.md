@@ -34,7 +34,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p7-client-catalog
 
-- pending
+- worker: structured results and non-text blocks are tested by patching ClientSession.call_tool because the reference server never returns them; a schema whose properties is not a dict or whose required is not a list is skipped with the non-object reason
+- review: the lock script re-resolved all four lock files: no package added or removed in runtime, but 16 runtime pins moved (including pypdf 6.21.4 to 7.1.0, soupsieve 3.0.4 to 4.1, cbor2 6.1.5 to 6.3.0) and dev swapped pyee for lazy-importer; unit and integration suites pass; owner should look at the pin movement in review
 
 ## p8-connector
 
