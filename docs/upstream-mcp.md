@@ -125,8 +125,8 @@ the audiences of the Workspace groups they belong to. The map from groups to aud
   every group they belong to.
 - `all` is the one unrestricted audience: an addition to it applies at once. Every other audience is
   restricted and needs an administrator's approval for each person ([below](#group-membership)).
-- **Grants were replaced by groups.** A `grants` key in the declaration is ignored with a
-  warning at start; nothing is seeded from the declaration any more, and `admin_config.json` holds `groups`.
+- **Grants were replaced by groups.** A `grants` key in the declaration is refused at
+  start with this message; nothing is seeded from the declaration any more, and `admin_config.json` holds `groups`.
 - A group map for an id the declaration does not declare is logged once and ignored. An invalid section is
   reported as `admin_config.json: upstream_mcp.<id>.groups: <problem>`; at startup it refuses the start, and
   in a running server the last good map stays in force and the error is logged.
