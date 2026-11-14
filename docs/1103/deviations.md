@@ -23,7 +23,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-claim-core
 
-- pending
+- worker: ClaimSigner accepts an injectable clock (not in the brief signature); no other deviation. Worker could not doorbell the parent, found by timer (no doorbell).
 
 ## p6-verifier
 
