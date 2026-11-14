@@ -21,7 +21,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-extend-ui
 
-- pending
+- worker: The dialog also rejects non-digit input such as 1e2 or 2.5 in addition to the 1..max_days range check.
+- review: The two new browser tests did not run: no Chromium launches here, so the browser tests skip. A skip is not a pass. The 5 docs-link tests stay red until p5. Worker had no tld CLI; no roles required.
 
 ## p5-retire-adr-docs-changelog
 
