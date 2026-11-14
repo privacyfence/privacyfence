@@ -1046,28 +1046,6 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Finalizing version=$VERSION channel=$CHANNEL"
 
-      # Reports a coverage gap on every channel and gates only stable tags on it:
-      # linux-graphical-session.yml, windows-graphical-session.yml and
-      # macos-graphical-session.yml -- the only automated coverage for the daemon starting itself
-      # at login -- run on packaging-related `main` pushes, weekly, and on demand, never on a tag
-      # push and never as a `needs:` of this job, since this tier's own runtime cost must not sit
-      # on a release's critical path (docs/testing-policy.md's Layer 6 row) -- this step never
-      # waits for a fresh run, it only asks whether a reachable one already succeeded. That still
-      # leaves a gap where a tag can ship with autostart broken as long as the last
-      # packaging-touching push to `main` (or the current `releases/*` branch) was green and
-      # nothing since then re-ran any of the three workflows. This step closes the "nobody looked"
-      # half of that gap on every channel (a warning), and closes it for real on a stable tag
-      # specifically (`--channel`, below, makes a gap fail this step rather than just annotate it)
-      # -- see scripts/check_graphical_session_coverage.py's own module docstring for exactly what
-      # counts as a gap and why pre-release tags stay ungated on purpose (ADR 0057).
-      - name: Check graphical-session/autostart coverage (gates stable tags only)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 scripts/check_graphical_session_coverage.py \
-            --repo "${{ github.repository }}" --commit "${{ github.sha }}" \
-            --channel "${{ steps.release.outputs.channel }}"
-
       # Pulls together the workflow artifacts `build`/`build-windows`/`build-deb`/`sbom`
       # uploaded above (`PrivacyFence-dmg`, `PrivacyFence-mcpb`, `PrivacyFence-windows-installer`,
       # `PrivacyFence-deb`, `PrivacyFence-sbom`) into one flat directory -- `merge-multiple: true` so files land

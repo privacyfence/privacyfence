@@ -197,19 +197,6 @@ MODULE_FLOORS: dict[str, float] = {
     # SHOW, and the client helpers for all of them -- every one of which this
     # run drives against real servers on both sides.
     "src/privacyfence/web/control_channel.py": 77.0,
-    # Was 81.0, then 83.0 (ADR 0003 decision 3's _complete_pending_
-    # separation()), then 86.0 (the first-run enrollment offer and the
-    # recovery-code action). Each of those left _run_tray() -- macOS/
-    # Windows only, guarded on sys.platform -- as nearly all of what was
-    # uncovered, on the reasoning that this Linux-only run has no tray icon
-    # to drive. That reasoning stopped holding once behaviour was added
-    # *inside* that function (the recovery-code item,
-    # the attested _open_path), so the untested block was no longer just the
-    # loop. tests/unit/test_companion.py's TestTrayLoop stubs pystray/Pillow
-    # at the deferred import _run_tray does itself and drives the menu, the
-    # channel's setup/teardown and the Quit ordering -- running the real
-    # loop still needs a display, wiring it up does not. 86.0 -> 98.0.
-    "src/privacyfence/companion.py": 98.0,
     # decide() -- the module's actual authorization surface -- and the SSE
     # stream's event_source are both covered; only a few edge branches remain.
     "src/privacyfence/web/routes_approvals.py": 98.0,

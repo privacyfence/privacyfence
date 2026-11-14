@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.platform
+pytestmark = pytest.mark.integration
 
 # Distinct, uniform, repeated-byte payloads -- a torn read (part one
 # writer's content, part the other's) is trivially detectable: a well-formed

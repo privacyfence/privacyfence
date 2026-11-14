@@ -25,7 +25,7 @@ import pytest
 
 from privacyfence import daemon_main
 
-pytestmark = pytest.mark.platform
+pytestmark = pytest.mark.integration
 
 # Blocks on stdin after acquiring, so the parent test controls exactly when
 # it lets go (rather than racing a fixed sleep) -- printed feedback (flushed
