@@ -77,21 +77,21 @@ def daemon(tmp_path, monkeypatch):
     # A token can only name tools the gate knows; register the echo tool as an ungated one.
     monkeypatch.setitem(TOOL_TO_GATE, ECHO_TOOL, "auto")
     policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-    store = scoped_tokens.ScopedTokenStore(lambda: [SINGLE_USER])
-    store.load()
-    scoped_tokens.set_store(store)
-    token, secret = store.create(
-        SINGLE_USER, label="n8n-contract", days=30, rules=[], tools=[ECHO_TOOL], policy=policy,
-    )
     dispatcher = McpDispatcher(
         lambda: {"contract_test": EchoConnector()}, mode="org",
         scoped_token_policy=policy,
     )
-    try:
-        with single_user_org_server(tmp_path, dispatcher=dispatcher) as server:
+    with single_user_org_server(tmp_path, dispatcher=dispatcher) as server:
+        store = scoped_tokens.ScopedTokenStore(lambda: [SINGLE_USER])
+        store.load()
+        scoped_tokens.set_store(store)
+        try:
+            token, secret = store.create(
+                SINGLE_USER, label="n8n-contract", days=30, rules=[], tools=[ECHO_TOOL], policy=policy,
+            )
             yield server.mcp_url, store, token, secret
-    finally:
-        scoped_tokens.set_store(None)
+        finally:
+            scoped_tokens.set_store(None)
 
 
 def _drive(url: str, secret: str, tool: str, arguments: dict | None = None) -> dict:

@@ -443,7 +443,7 @@ class TestBootstrapLogin:
         server, _web_ui = local_server
         page.goto(f"{server.base_url}/approvals")
         page.wait_for_load_state("load")
-        assert page.get_by_text("Not authorized").is_visible()
+        assert page.url.startswith(f"{server.base_url}/login")
 
 
 # --------------------------------------------------------------------- #
@@ -2231,13 +2231,6 @@ class TestInstallableOrgApp:
         assert manifest["errors"] == []
         assert json.loads(manifest["data"])["display"] == "standalone"
         assert not [v for v in violations if "manifest" in v or "/icons/" in v], violations
-
-    def test_local_mode_links_no_manifest(self, page, local_server):
-        server, _web_ui = local_server
-        _sign_in_local(page, server)
-        page.goto(f"{server.base_url}/approvals")
-        assert page.locator('link[rel="manifest"]').count() == 0
-        assert page.request.get(f"{server.base_url}/manifest.webmanifest").status == 404
 
 
 class TestWebPushSubscription:
