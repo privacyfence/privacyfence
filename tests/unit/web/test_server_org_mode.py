@@ -7,6 +7,7 @@ which don't), TLS/trusted-proxies plumbing, and base_url/allowed_hosts.
 from __future__ import annotations
 
 import base64
+import contextlib
 import dataclasses
 import hashlib
 from urllib.parse import parse_qs, urlsplit
@@ -789,3 +790,85 @@ class TestBrowserSignInPolicy:
         assert isinstance(policy, oi.IdpAuthzPolicy)
         assert policy.builtin is True and policy.admin_emails == ("alice@acme.com",)
         assert policy.allowed_domains == ("acme.org",) and policy.issuer == "https://idp.example.com"
+
+
+class TestUpstreamMcpOrgMode:
+    """The claim key set and the tool-list fetch are mounted only when upstream servers are configured."""
+
+    @staticmethod
+    def _configure(tmp_path):
+        from privacyfence import upstream_mcp_runtime
+        from privacyfence.upstream_claims import ClaimSigner
+        from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+
+        upstreams = parse_upstreams({
+            "version": 1,
+            "upstreams": [{
+                "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+                "tools": {"search": {"gate": "auto", "verb": "search"}},
+            }],
+        }, source="test")
+        signer = ClaimSigner(
+            issuer=f"{ISSUER}/upstream-mcp", key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"),
+        )
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams, signer=signer, grants=GrantStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+        )
+        return signer
+
+    @staticmethod
+    def _app(tmp_path, monkeypatch, dispatcher):
+        return build_app(
+            WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), mcp_dispatcher=dispatcher,
+            allowed_hosts=frozenset({"pf.example.com"}),
+        )
+
+    def test_jwks_route_is_absent_when_nothing_is_configured(self, tmp_path, monkeypatch):
+        app = self._app(tmp_path, monkeypatch, McpDispatcher(lambda: {}))
+        assert TestClient(app, base_url=ISSUER).get("/upstream-mcp/jwks").status_code == 404
+
+    def test_jwks_route_serves_the_signers_keys_when_configured(self, tmp_path, monkeypatch):
+        signer = self._configure(tmp_path)
+        app = self._app(tmp_path, monkeypatch, McpDispatcher(lambda: {}))
+        response = TestClient(app, base_url=ISSUER).get("/upstream-mcp/jwks")
+        assert response.status_code == 200
+        assert response.json() == signer.jwks()
+
+    def test_the_lifespan_fetches_tool_lists_and_notifies_the_dispatcher(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        self._configure(tmp_path)
+        seen: list[bool] = []
+
+        @contextlib.asynccontextmanager
+        async def fake_lifespan(notify):
+            seen.append(notify == dispatcher.notify_tools_changed)
+            yield
+
+        dispatcher = McpDispatcher(lambda: {})
+        monkeypatch.setattr(upstream_mcp_runtime, "lifespan", fake_lifespan)
+        app = self._app(tmp_path, monkeypatch, dispatcher)
+        with TestClient(app, base_url=ISSUER):
+            pass
+        assert seen == [True]
+
+    def test_the_lifespan_is_not_entered_when_nothing_is_configured(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        entered: list[bool] = []
+
+        @contextlib.asynccontextmanager
+        async def fake_lifespan(notify):
+            entered.append(True)
+            yield
+
+        monkeypatch.setattr(upstream_mcp_runtime, "lifespan", fake_lifespan)
+        with TestClient(self._app(tmp_path, monkeypatch, McpDispatcher(lambda: {})), base_url=ISSUER):
+            pass
+        assert entered == []
+
+    def test_no_lifespan_without_a_dispatcher_but_the_keys_are_still_served(self, tmp_path, monkeypatch):
+        self._configure(tmp_path)
+        app = self._app(tmp_path, monkeypatch, None)
+        with TestClient(app, base_url=ISSUER) as client:
+            assert client.get("/upstream-mcp/jwks").status_code == 200

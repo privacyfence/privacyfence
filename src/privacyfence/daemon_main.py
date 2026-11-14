@@ -97,6 +97,7 @@ from . import (
     admin_config,
     agent_label,
     agent_overrides,
+    agent_runtimes,
     audit_forwarding,
     connector_configs,
     data_format,
@@ -109,8 +110,13 @@ from . import (
     policy_upgrade,
     privilege_separation,
     relay_client,
+    runtime_credential_sweeper,
     scoped_tokens,
     step_up_config,
+    upstream_claims,
+    upstream_mcp_config,
+    upstream_mcp_registry,
+    upstream_mcp_runtime,
 )
 from .policy import store as policy_store
 
@@ -976,6 +982,14 @@ def _maybe_start_web_server(
             raise org_mode.ConfigurationError(
                 "PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server."
             )
+        if os.environ.get(upstream_mcp_config.ENV_VAR, "").strip():
+            raise org_mode.ConfigurationError(
+                f"{upstream_mcp_config.ENV_VAR} is set, but this is not an organization server."
+            )
+        if os.environ.get(upstream_mcp_config.ENV_VAR_INLINE, "").strip():
+            raise org_mode.ConfigurationError(
+                f"{upstream_mcp_config.ENV_VAR_INLINE} is set, but this is not an organization server."
+            )
         ignored = oauth_apps.set_auto_provision_variables()
         if ignored:
             logger.warning("%s is ignored outside organization mode.", ", ".join(ignored))
@@ -1389,6 +1403,16 @@ def _start_org_web_server(
     # Validated here so a broken "grist"."auto_provision" refuses startup; the provisioner
     # itself re-reads it in grist_provisioning.start below.
     org_mode.GristProvisioningConfig.from_org_config(org_config)
+    # Validated here so a malformed "agent_runtimes" section or URL refuses startup (ADR 0278-0282).
+    # The key is read once without catching ConfigurationError, so a key set both inline and as
+    # _FILE, or an unreadable key file, refuses startup too.
+    agent_runtime = agent_runtimes.N8nRuntimeConfig.from_org_config(org_config)
+    agent_runtime_key = agent_runtimes.api_key()
+    if agent_runtime.enabled and not (agent_runtime.base_url and agent_runtime_key):
+        logger.warning(
+            "agent_runtimes.n8n is enabled but its URL or API key is missing; "
+            "n8n credentials are not provisioned.",
+        )
     oauth_apps.check_environment_auto_provision(
         single_user=idp is None, grist_oauth=bool((org_config.get("grist") or {}).get("client_id"))
     )
@@ -1458,6 +1482,8 @@ def _start_org_web_server(
     # token for a person drops their cached connectors so the next request sees it.
     peek_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
     grist_provisioning.start(org_config, on_change=connector_registry.evict, stop_event=_shutdown_event)
+    if agent_runtime.base_url and agent_runtime_key:
+        runtime_credential_sweeper.start(config=agent_runtime, stop_event=_shutdown_event)
     if idp is None and oauth_apps.environment_auto_provision():
         # Single-user install: its one person is provisioned as verified (ADR 0272).
         from .web.single_user_auth import SINGLE_USER_PRINCIPAL
@@ -1491,11 +1517,14 @@ def _start_org_web_server(
         unattended_sessions_enabled=unattended_sessions_enabled,
         registry=approval_registry,
         scoped_token_policy=scoped_tokens.policy_from_org_config(org_config, org_mode=True),
+        agent_runtime=agent_runtime,
     )
 
     push_notifier, push_store = _start_web_push(org_config, approval_registry, issuer_url=server_config.issuer_url)
 
     _flush_deferred_warnings()
+
+    _configure_upstream_mcp(server_config.issuer_url)
 
     oidc_clients = oidc_provider.clients_from_env()
     oidc = None
@@ -1644,6 +1673,32 @@ def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
         )
         return DEFAULT_REPORT_MAX_PAGES
     return value
+
+
+def _configure_upstream_mcp(issuer_url: str) -> None:
+    """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` or ``PRIVACYFENCE_UPSTREAM_MCP`` set
+    (ADR 0285, 0288): load the declaration, seed its grants, register the declared tools into the policy tables, and configure the runtime. Raises
+    ``org_mode.ConfigurationError`` (the start is refused) on any problem."""
+    upstreams = upstream_mcp_config.load_declared()
+    if upstreams is None:
+        return
+    upstream_mcp_registry.register(upstreams)
+    try:
+        seeded = admin_config.seed_upstream_grants(upstream_mcp_config.seed_payload(upstreams))
+    except admin_config.AdminConfigError as error:
+        raise org_mode.ConfigurationError(str(error)) from None
+    if seeded:
+        logger.info(
+            "Seeded the domain grants of upstream(s) %s from the declaration; edit them in admin_config.json from now on.",
+            ", ".join(seeded),
+        )
+    grants = upstream_mcp_config.GrantStore(
+        admin_config.admin_config_path(), frozenset(upstream.id for upstream in upstreams),
+    )
+    upstream_mcp_runtime.configure(
+        upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url), grants=grants,
+    )
+    logger.info("Upstream MCP server(s): %s", ", ".join(upstream.id for upstream in upstreams))
 
 
 def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tuple[list, dict[str, str]]:
@@ -2036,6 +2091,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         except MiroClientError as exc:
             logger.warning("Miro connector disabled: %s", exc)
             failures["miro"] = _classify_connector_failure(exc)
+
+    if upstream_mcp_runtime.configured():
+        connectors.extend(upstream_mcp_runtime.connectors_for_principal())
 
     return connectors, failures
 
@@ -2655,6 +2713,7 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
     store = scoped_tokens.ScopedTokenStore(scoped_token_principals)
     revoked = store.revoke_all(principal_id)
     print(f"Revoked {revoked} scoped token(s) for {principal_id}.")
+    print("A running PrivacyFence server deletes these tokens' n8n credentials within 5 minutes.")
     return 0
 
 

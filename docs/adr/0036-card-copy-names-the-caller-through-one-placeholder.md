@@ -3,6 +3,7 @@
 ## Status
 
 Accepted (recorded retroactively on 2026-09-24; decided on 2026-09-24 in #648 and #654).
+Amended by [ADR 0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md): an upstream MCP server declared as a connector is sent a signed caller claim, so it does learn who is asking.
 
 ## Context
 

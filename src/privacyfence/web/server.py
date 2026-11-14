@@ -96,8 +96,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import (
-    __version__, agent_label, auto_accept, latency, paths, privilege_separation, relay_client,
-    scoped_token_proposals, scoped_tokens, web_shell, webauthn_stepup,
+    __version__, agent_label, agent_runtimes, auto_accept, latency, paths, privilege_separation, relay_client,
+    runtime_credentials, scoped_token_proposals, scoped_tokens, web_shell, webauthn_stepup,
 )
 from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
@@ -390,6 +390,13 @@ def scoped_token_page_data(
             by_connector.setdefault(connector, []).append(name)
     tokens = []
     activity = store.activity_for(principal)
+    # Delivery records exist only in organization mode; looking them up on a local install would
+    # create the org directory (ADR 0281).
+    delivered = (
+        {r.token_id: r for r in runtime_credentials.get_store().all()
+         if r.principal_id == principal.id and r.state == runtime_credentials.DELIVERED}
+        if delivery == "once" else {}
+    )
     for token in own_tokens:
         seen = activity.get(token.id, scoped_tokens.TokenActivity())
         expired = token.expired(now)
@@ -402,15 +409,23 @@ def scoped_token_page_data(
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
             "allow_personal_data_reads": token.allow_personal_data_reads,
+            "upstream_domains": {uid: sorted(doms) for uid, doms in sorted(token.upstream_domains.items())},
             "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
             "last_denied_tool": seen.last_denied_tool,
+            "runtime_credential": (
+                None if token.id not in delivered else {
+                    "runtime": delivered[token.id].runtime,
+                    "credential_name": delivered[token.id].credential_name,
+                    "workflow_id": delivered[token.id].workflow_id,
+                }
+            ),
         })
     proposals = [
         {"id": p.id, "label": p.request["label"], "agent_label": agent_label.label_for(p.agent).text,
          "expires_at": p.expires_at}
         for p in scoped_token_proposals.get_registry().pending_for(principal.id)
     ]
-    return {
+    page: dict[str, Any] = {
         "delivery": delivery, "proposals": proposals, "proposals_enabled": policy.allow_ai_proposals,
         "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
         "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": rules,
@@ -424,6 +439,19 @@ def scoped_token_page_data(
             for entry in policy_catalogue.scope_catalogue() if entry["connector"] in connector_names
         ],
     }
+    from .. import upstream_mcp_runtime  # function-local, as in _build_org_app
+
+    if upstream_mcp_runtime.configured():
+        # The data domains a token may narrow are the ones the person holds themselves.
+        held = upstream_mcp_runtime.held_domains(principal, principal.email_verified)
+        page["upstreams"] = [
+            {
+                "id": row["id"], "label": row["label"], "tools": by_connector.get(str(row["id"]), []),
+                "domains": sorted(held.get(str(row["id"]), frozenset())),
+            }
+            for row in upstream_mcp_runtime.status()
+        ]
+    return page
 
 
 def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWiring:
@@ -453,6 +481,10 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
     def _rename(token_id: str, label: str) -> tuple[str, ScopedToken] | None:
         return scoped_tokens.get_store().rename(LOCAL_PRINCIPAL, token_id, label)
 
+    def _extend(token_id: str, days: int) -> tuple[float, ScopedToken] | None:
+        with principal_scope(LOCAL_PRINCIPAL):
+            return scoped_tokens.get_store().extend(LOCAL_PRINCIPAL, token_id, days, policy=policy)
+
     def _revoke_all() -> int:
         return scoped_tokens.get_store().revoke_all(LOCAL_PRINCIPAL.id)
 
@@ -466,7 +498,8 @@ def build_scoped_token_wiring(mcp_dispatcher: McpDispatcher) -> ScopedTokenWirin
         )
 
     return ScopedTokenWiring(
-        store_create=_create, store_revoke=_revoke, store_rename=_rename, store_revoke_all=_revoke_all,
+        store_create=_create, store_revoke=_revoke, store_rename=_rename, store_extend=_extend,
+        store_revoke_all=_revoke_all,
         send_secret=_send, page_data=_page_data,
     )
 
@@ -1348,9 +1381,10 @@ def _build_org_app(
 
     from ..org_mode import AuthzPolicyConfig
     from . import (
-        routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security, routes_whats_new,
-        single_user_auth,
+        routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security, routes_upstream_mcp,
+        routes_whats_new, single_user_auth,
     )
+    from .. import upstream_mcp_runtime
     from .routes_settings import build_org_routes
 
     if org.provider.single_user != (org.idp is None):
@@ -1381,6 +1415,13 @@ def _build_org_app(
     extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url, sessions=org.sessions))
     if org.oidc is not None:
         extra_routes.extend(routes_oidc.build_routes(org.oidc, sessions=org.sessions))
+    claim_signer = upstream_mcp_runtime.signer()
+    if upstream_mcp_runtime.configured() and claim_signer is not None:
+        # ADR 0286: the key set an upstream verifies claims against; the lifespan fetches each
+        # upstream's tool list once the server runs.
+        extra_routes.extend(routes_upstream_mcp.build_routes(claim_signer))
+        if mcp_dispatcher is not None:
+            lifespans.append(upstream_mcp_runtime.lifespan(mcp_dispatcher.notify_tools_changed))
     # Mounted unconditionally here (every _build_org_app call is already
     # org mode) -- needs nothing from org.connector_registry, only
     # org.sessions, same reasoning /approvals'/security's own unconditional
@@ -1454,6 +1495,7 @@ def _build_org_app(
             nav_items=web_shell.ORG_NAV_ITEMS,
         ))
     scoped_token_policy = scoped_tokens.policy_from_org_config(org.org_config, org_mode=True)
+    agent_runtime = agent_runtimes.N8nRuntimeConfig.from_org_config(org.org_config)
     org_scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None
     if mcp_dispatcher is not None:
         dispatcher = mcp_dispatcher
@@ -1482,6 +1524,7 @@ def _build_org_app(
         # needs /mcp, so without a dispatcher the page offers none.
         scoped_token_policy=scoped_token_policy, scoped_token_store=scoped_tokens.get_store(),
         scoped_token_page_data=org_scoped_token_page_data,
+        agent_runtime=agent_runtime,
     ))
     # The Admin API shares the effective config dict, so a live change reaches every holder.
     extra_routes.extend(routes_admin.build_org_routes(

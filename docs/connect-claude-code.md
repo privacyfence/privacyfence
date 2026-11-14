@@ -81,7 +81,7 @@ A client holding it sees only the tools you chose, and a call goes through only 
 auto-accepts it. Anything else is denied at once; a scoped token never raises an approval card.
 Settings flags a token with 14 days or fewer left, and `privacyfence_status` tells the client its
 expiry. **Revoke** stops one token at once; **Revoke all** stops every one. Your own token and your
-other clients are not affected. A token's rules, tools and expiry cannot be edited. Deleting or changing an Auto-accept rule does not change a token. **Rename** changes only its name, and clients using it keep working. For any other change, **Duplicate** fills the New token form
+other clients are not affected. A token's rules and tools cannot be edited. Deleting or changing an Auto-accept rule does not change a token. **Rename** changes only its name, and clients using it keep working. **Extend** moves the expiry to the number of days you choose from today, never earlier than it is now, with the same secret, rules and tools, so clients using it keep working. For any other change, **Duplicate** fills the New token form
 from an existing token, with a numbered name, so you can create a replacement and revoke the old
 one, with a copy of its rules. The form lists only the tools the selected rules cover, plus the tools that need no rule. On the New token form, a second checkbox, **Let reads return personal data**, lets covered Gmail message and thread reads, Slack reads and Drive file content reads return personal data (the scan still runs and is audited). The rules are the token's own: add them on the form (a scope, a value and verbs, as on the Auto-accept page) or copy one of your Auto-accept rules, and they never auto-accept anything for your other AI clients ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)). A Gmail query rule such as `in:inbox` does not match a message you sent, so a thread holding your own reply is not covered by it. See
 [Scoped tokens](security-and-compliance.md#scoped-tokens).
@@ -129,7 +129,7 @@ named, expiring bearer token with its own rules and a chosen list of tools, for 
 in. The token is shown once, in a dialog with a Copy button; it is not stored and cannot be shown
 again. Pass it as the bearer token (`Authorization: Bearer pfst_…`) to `/mcp`. Its lifetime is 90
 days by default and at most the administrator's limit. Revoke it in the same page. It is
-[deny-only](security-and-compliance.md#scoped-tokens). A token's rules, tools and expiry cannot be edited. Deleting or changing an Auto-accept rule does not change a token. **Rename** changes only its name, and clients using it keep working. For any other change, **Duplicate** fills
+[deny-only](security-and-compliance.md#scoped-tokens). A token's rules and tools cannot be edited. Deleting or changing an Auto-accept rule does not change a token. **Rename** changes only its name, and clients using it keep working. **Extend** moves the expiry to the number of days you choose from today, never earlier than it is now, with the same secret, rules and tools, so clients using it keep working. For any other change, **Duplicate** fills
 the New token form from an existing token, with a numbered name, so you can create a replacement
 and revoke the old one, with a copy of its rules. The form lists only the tools the selected rules cover, plus the tools that
 need no rule. On the New token form, a second checkbox, **Let reads return personal data**, lets covered Gmail message and thread reads, Slack reads and Drive file content reads return personal data (the scan still runs and is audited). The rules are the token's own: add them on the form (a scope, a value and verbs, as on the Auto-accept page) or copy one of your Auto-accept rules, and they never auto-accept anything for your other AI clients ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)). A Gmail query rule such as `in:inbox` does not match a message you sent, so a thread holding your own reply is not covered by it.
@@ -145,6 +145,8 @@ Instead of building the token by hand, ask Claude to propose one for the routine
 - If Claude asked for personal data to be allowed, those boxes start unticked; only you can tick them.
 - Continue, then type the token's name to confirm that you are delegating access (and use your passkey, if your installation asks for one).
 - The token is shown once, in a dialog, for you to copy. Claude never receives the token, and is not told whether you created it. A proposal lasts one hour and can be used once; Decline discards it. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md).
+
+**For an n8n workflow.** If your administrator set up [n8n delivery](org-mode-setup-guide.md#delivering-tokens-to-n8n), Claude can pass `deliver_to: {"runtime": "n8n", "workflow_id": "..."}`. The review page then names your n8n host. When you confirm, PrivacyFence creates the token as an n8n credential itself, and Claude calls `privacyfence_runtime_credential_status` to get the credential's id for the MCP Client node. Anyone who can edit workflows in that n8n, Claude included, can use and read the token ([ADR 0278](adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)). Revoking the token deletes the credential within 5 minutes.
 
 ### A cloud routine with a scoped token
 

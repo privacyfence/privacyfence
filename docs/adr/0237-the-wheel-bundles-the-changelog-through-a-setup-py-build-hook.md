@@ -11,7 +11,7 @@ Organization mode shows each person the release notes since the version they las
 server needs `CHANGELOG.md` at run time, but the built wheel held only files under
 `src/privacyfence/`. The organization image installs that wheel, and so does the pip install in the
 setup guide, so neither had the changelog. `CHANGELOG.md` has to stay at the repository root:
-`scripts/changelog_section.py`, `.claude/toolkit.yaml`, `CONTRIBUTING.md` and GitHub's own
+`scripts/changelog_section.py`, `.tld/toolkit.yaml`, `CONTRIBUTING.md` and GitHub's own
 changelog link all expect it there. There was no `setup.py`; the build backend is
 `setuptools.build_meta`, configured in `pyproject.toml`.
 

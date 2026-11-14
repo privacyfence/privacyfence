@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-10-28. Implemented.
+Amended by [ADR 0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md) and [ADR 0280](0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md): a delivered token can be read through the runtime, and its credential id is reported.
 
 ## Context
 

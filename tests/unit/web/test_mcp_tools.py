@@ -105,6 +105,25 @@ class TestToolInputSchema:
         schema = mcp_tools.tool_input_schema(spec)
         assert schema == {"type": "object", "properties": {}}
 
+    def test_tool_input_schema_uses_raw_schema_verbatim(self):
+        raw = {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "object", "properties": {"a": {"type": "integer"}}},
+                "ids": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["ids"],
+        }
+        spec = ToolSpec(name="up", description="d", params=[ToolParam("ignored", "str", True)], input_schema=raw)
+        assert mcp_tools.tool_input_schema(spec) == raw
+
+    def test_tool_input_schema_returns_a_copy(self):
+        raw = {"type": "object", "properties": {"a": {"type": "string"}}}
+        spec = ToolSpec(name="up", description="d", input_schema=raw)
+        out = mcp_tools.tool_input_schema(spec)
+        out["properties"]["b"] = {"type": "string"}
+        assert "b" not in spec.input_schema["properties"]
+
 
 _READ = ToolSpec(name="r", description="d", read_only=True)
 _WRITE = ToolSpec(name="w", description="d", read_only=False)
@@ -205,9 +224,27 @@ class TestMetaToolManifest:
         assert set(schema["required"]) == {"reason", "label"}
         assert set(schema["properties"]) == {
             "reason", "label", "days", "from_session", "rules", "tools", "allow_personal_data",
-            "allow_personal_data_reads",
+            "allow_personal_data_reads", "deliver_to",
         }
+        assert mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.input_schema["properties"]["deliver_to"]["type"] == "object"
         assert mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL in mcp_tools.META_TOOLS
+
+    def test_runtime_credential_status_is_a_read_only_meta_tool_that_requires_the_proposal(self):
+        tool = mcp_tools.RUNTIME_CREDENTIAL_STATUS_TOOL
+        assert tool in mcp_tools.META_TOOLS
+        assert tool.name in mcp_tools.META_TOOL_NAMES
+        assert set(tool.input_schema["required"]) == {"proposal_id", "reason"}
+        assert set(tool.input_schema["properties"]) == {"proposal_id", "reason"}
+        annotations = tool.annotations
+        assert (annotations.read_only_hint, annotations.destructive_hint, annotations.idempotent_hint) == (
+            True, False, True,
+        )
+
+    def test_runtime_credential_status_description_says_what_it_returns_and_who_cannot_call_it(self):
+        description = mcp_tools.RUNTIME_CREDENTIAL_STATUS_TOOL.description
+        assert "Returns" in description
+        assert "privacyfence_propose_scoped_token" in description
+        assert "A scoped token cannot call it" in description
 
     def test_propose_scoped_token_is_not_read_only(self):
         annotations = mcp_tools.PROPOSE_SCOPED_TOKEN_TOOL.annotations
@@ -411,3 +448,10 @@ class TestListAndProposePolicyOverRealTransport:
             })
         assert result.is_error is True
         assert "cannot govern" in result.content[0].text
+
+
+def test_the_status_tool_description_names_expired_for_extend():
+    from privacyfence.web.mcp_tools import RUNTIME_CREDENTIAL_STATUS_TOOL
+
+    assert "'expired'" in RUNTIME_CREDENTIAL_STATUS_TOOL.description
+    assert "Extend" in RUNTIME_CREDENTIAL_STATUS_TOOL.description
