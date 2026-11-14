@@ -3046,6 +3046,24 @@ class TestOrgModeConnectorRegistry:
             "is ignored outside organization mode."
         ]
 
+    def test_local_mode_warns_that_the_n8n_variables_are_ignored(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "yes")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "proj1")
+        monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "true")
+
+        with caplog.at_level(logging.WARNING, logger="privacyfence.daemon"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": False}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config={"mode": "local"},
+            )
+
+        warnings = [r.getMessage() for r in caplog.records if "ignored outside organization mode" in r.getMessage()]
+        assert warnings == [
+            "PRIVACYFENCE_N8N_DELIVERY, PRIVACYFENCE_N8N_PROJECT_ID, PRIVACYFENCE_PEEK_AUTO_PROVISION "
+            "is ignored outside organization mode."
+        ]
+
     def test_org_server_starts_the_relay_registration_loop_on_the_shared_config(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         events: list = []
@@ -3254,6 +3272,20 @@ class TestOrgModeConnectorRegistry:
             self._start_with_runtime(monkeypatch, tmp_path, {"n8n": {"enabled": "yes"}})
         with pytest.raises(org_mode.ConfigurationError, match="agent_runtimes"):
             self._start_with_runtime(monkeypatch, tmp_path, {"n8n": {"mcp_url": "ftp://x"}})
+
+    def test_delivery_without_the_key_refuses_start(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        with pytest.raises(org_mode.ConfigurationError) as raised:
+            self._start_with_runtime(monkeypatch, tmp_path, {}, key=None)
+        assert str(raised.value) == (
+            "PRIVACYFENCE_N8N_DELIVERY=true needs PRIVACYFENCE_N8N_URL and "
+            "PRIVACYFENCE_N8N_API_KEY or PRIVACYFENCE_N8N_API_KEY_FILE."
+        )
+
+    def test_a_bad_delivery_value_refuses_start(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "yes")
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_N8N_DELIVERY must be true, or unset."):
+            self._start_with_runtime(monkeypatch, tmp_path, {}, key="k")
 
     def test_org_server_refuses_an_n8n_key_set_inline_and_as_a_file(self, monkeypatch, tmp_path):
         key_file = tmp_path / "n8n.key"

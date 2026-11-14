@@ -1,4 +1,4 @@
-# ADR 0294: The supported Python floor is 3.11.5
+# ADR 0295: The supported Python floor is 3.11.5
 
 ## Status
 

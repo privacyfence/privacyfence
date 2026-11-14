@@ -141,6 +141,10 @@ hooks:
     enabled: true
   board_gate:
     enabled: true
+  protect_paths_allow:
+    - .github/workflows/build.yml
+    - .github/workflows/release.yml
+    - .tld/toolkit.yaml
 
 admin:
   policy: .tld/admin-policy.yaml

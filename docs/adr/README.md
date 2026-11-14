@@ -344,7 +344,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) | An AI client can propose a scoped token; only a person creates it, after a narrowing-only review and a typed-name confirmation | Accepted; relates to 0013, 0034, 0104, 0164, 0165, 0195, 0220, 0236; amended by 0278, 0280 |
 | [0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md) | A token proposal is attributed to the client that made it | Accepted; amends 0006 |
 | [0252](0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md) | Each MCP session keeps its approved calls in memory so a token can be proposed from them | Accepted |
-| [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165 |
+| [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165; amended by 0294 |
 | [0254](0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md) | The reads flag of a scoped token covers Drive file content | Accepted; amends 0219 |
 | [0255](0255-built-in-oauth-apps-ship-in-every-distribution.md) | Built-in OAuth apps ship in the server distributions | Accepted; relates to 0040 |
 | [0256](0256-org-config-holds-only-startup-settings-and-app-credentials.md) | The org config holds only startup settings and app credentials | Accepted; amends 0016, 0196 |
@@ -370,10 +370,10 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) | Links to a docs page the next release publishes fall back to GitHub until it does | Accepted; amends 0099 |
 | [0277](0277-the-websites-primary-call-to-action-is-install.md) | The website's primary call to action is Install | Accepted |
 | [0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md) | A scoped token can be delivered into an agent runtime, n8n first, as a credential PrivacyFence writes itself | Accepted; amends 0165, 0250; amended by 0290, 0291; relates to 0164, 0220 |
-| [0279](0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md) | The n8n address and API key come only from the server environment | Accepted; relates to 0241, 0257 |
+| [0279](0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md) | The n8n address and API key come only from the server environment | Accepted; relates to 0241, 0257; amended by 0294 |
 | [0280](0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md) | `privacyfence_runtime_credential_status` reports a delivered proposal's credential to the client that proposed it | Accepted; amends 0250; amended by 0284, 0290 |
 | [0281](0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md) | A sweeper deletes the runtime credential of a revoked, expired or undelivered token | Accepted; relates to 0164, 0165; amended by 0284 |
-| [0282](0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md) | Runtime delivery is organization-mode only and starts only from an AI proposal | Accepted; relates to 0250, 0261 |
+| [0282](0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md) | Runtime delivery is organization-mode only and starts only from an AI proposal | Accepted; relates to 0250, 0261; amended by 0294 |
 | [0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md) | Only a person can extend a scoped token, from today and capped by max_days | Accepted; amends 0164, 0165 |
 | [0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md) | An expired token's n8n credential is kept until the token is revoked | Accepted; amends 0280, 0281; relates to 0283 |
 | [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196; amended by 0288 |
@@ -385,4 +385,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md) | The privacyFenceApi credential holds the address and the token, and has no authenticate block | Accepted; amends 0278 |
 | [0292](0292-the-n8n-node-carries-its-own-handshake-only-mcp-client.md) | The n8n node carries its own handshake-only MCP client with no dependencies | Accepted; relates to 0289 |
 | [0293](0293-the-n8n-node-never-follows-redirects-or-builds-errors-from-caught-values.md) | The n8n node never follows a redirect and never builds an error or an item from a caught error, a request or a credential value | Accepted; relates to 0291 |
-| [0294](0294-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 |
+| [0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md) | n8n delivery can be switched on from the server environment | Accepted; amends 0253, 0279, 0282; relates to 0165, 0257 |
+| [0295](0295-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 |
