@@ -75,7 +75,12 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p08a-routes-settings-admin
 
-- pending
+- worker: The brief premise was wrong: handle_org_config_upload took a SettingsController and a LocalSessionStore and its only caller was the local routes_admin factory. It was deleted with the tests that covered only it (owner-visible orchestrator decision); tests of _gate_upload and read_bounded_form moved to tests/unit/web/test_routes_org_config_upload.py.
+- worker: Also deleted with no remaining users: the _ALLOWED_ACTIONS, _NON_SENSITIVE_ACTIONS and _BESPOKE_* sets, AiClientConnect, ScopedTokenWiring, _call_action, settings_page_state, _snapshot, _is_confirmed, MAX_ORG_CONFIG_BYTES and the routes_admin state_extra argument. _SENSITIVE_ACTIONS is trimmed to the five organization actions.
+- worker: The extend_scoped_token shim entry is KEPT, because the organization settings page and its route need it; only the dead _BESPOKE_* path sets were removed.
+- worker: org_settings_scope.py: local-only entries now have modes=frozenset() (NOT_APPLICABLE_ACTIONS unchanged); the LOCAL_MODE constant stays because settings_window_html.py imports it (a later phase removes it).
+- worker: Coverage after merge: org_settings_scope 100%, routes_admin 99% (floor 98), routes_settings 96% (no floor). The tip is an empty marker commit.
+- retry: Sent back once after the worker stopped blocked on the handle_org_config_upload premise. No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p08b-routes-approvals-security
 
