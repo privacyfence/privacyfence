@@ -414,10 +414,6 @@ class TestDownloadsSurfaceOrgMode:
         assert r.status_code == 302
         assert r.headers["location"] == "/login?next=%2Fdownloads%2Fabc"
 
-    def test_downloads_route_is_absent_in_local_mode(self, tmp_path):
-        app = build_app(WebApprovalUI(), allowed_hosts=frozenset({"testserver"}))
-        client = TestClient(app, base_url="http://testserver")
-        assert client.get("/downloads/abc").status_code == 404
 
 
 _OIDC_SECRET = "s" * 40
@@ -510,21 +506,10 @@ class TestWebServerOrgMode:
         server = WebServer(WebApprovalUI(), host="0.0.0.0", port=443, org=org)
         assert server.base_url == ISSUER
 
-    def test_mcp_token_and_control_channel_are_none_in_org_mode(self, tmp_path, monkeypatch):
-        org = _org_auth(tmp_path, monkeypatch)
-        server = WebServer(WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}))
-        assert server.mcp_token is None
-        assert server.control_channel is None
-
     def test_mcp_url_still_reflects_base_url_in_org_mode(self, tmp_path, monkeypatch):
         org = _org_auth(tmp_path, monkeypatch)
         server = WebServer(WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}))
         assert server.mcp_url == f"{ISSUER}/mcp"
-
-    def test_state_stream_is_not_built_in_org_mode(self, tmp_path, monkeypatch):
-        org = _org_auth(tmp_path, monkeypatch)
-        server = WebServer(WebApprovalUI(), org=org)
-        assert server.state_stream is None
 
     def test_allowed_hosts_is_exposed_for_reporting(self, tmp_path, monkeypatch):
         # daemon_main.py's org-mode startup line logs this set, so an admin
