@@ -151,7 +151,9 @@ def _default_config() -> dict[str, Any]:
         "authz": {},
         "step_up": {},
         "scoped_tokens": {},
-        "agent_runtimes": {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}},
+        "agent_runtimes": {
+            "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
+        },
         "audit_forwarding": {},
         # Domain grants for upstream MCP servers (upstream_mcp_config.GrantStore reads them).
         "upstream_mcp": {},
@@ -896,6 +898,7 @@ def _apply_agent_runtimes(config: dict[str, Any], params: dict[str, Any]) -> tup
             "enabled": _param(params, "enabled", bool),
             "project_id": _param(params, "project_id", str).strip(),
             "mcp_url": _param(params, "mcp_url", str).strip(),
+            "credential_type": _param(params, "credential_type", str).strip(),
         },
     }
     _validated(N8nRuntimeConfig.from_org_config, "agent_runtimes", candidate)

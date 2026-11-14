@@ -45,6 +45,10 @@ RECORD_FAILED = (
     "PrivacyFence could not write its delivery record, so it created nothing. "
     "Ask your administrator to check the server's log."
 )
+NODE_NOT_INSTALLED = (
+    "n8n does not know the PrivacyFence credential type. "
+    "Ask the n8n administrator to install the community node n8n-nodes-privacyfence, then try again."
+)
 _UNEXPECTED_ERROR = "an unexpected error occurred"
 
 
@@ -63,6 +67,14 @@ class RuntimeCredential:
     state: str
     created_at: float
     boot_id: str
+    credential_type: str = "httpBearerAuth"
+
+
+def credential_data(credential_type: str, mcp_url: str, secret: str) -> dict[str, str]:
+    """The ``data`` of the n8n credential. Holds the secret: never log or audit it."""
+    if credential_type == "privacyFenceApi":
+        return {"mcpUrl": mcp_url, "token": secret}
+    return {"token": secret}
 
 
 class RuntimeCredentialStoreError(RuntimeError):
@@ -84,6 +96,7 @@ def _from_json(raw: dict[str, Any]) -> RuntimeCredential:
         credential_id=str(raw["credential_id"]), credential_name=str(raw["credential_name"]),
         workflow_id=str(raw["workflow_id"]), mcp_url=str(raw["mcp_url"]), state=str(raw["state"]),
         created_at=float(raw["created_at"]), boot_id=str(raw["boot_id"]),
+        credential_type=str(raw.get("credential_type", "httpBearerAuth")),
     )
 
 
@@ -231,7 +244,7 @@ class DeliveryOutcome:
     token: ScopedToken | None
     record: RuntimeCredential | None
     error: str  # "" on success
-    status: int  # 200, 400, 500 or 502
+    status: int  # 200, 400, 500, 502 or 503
 
 
 def _delivered_summary(record: RuntimeCredential, token: ScopedToken) -> str:
@@ -271,7 +284,7 @@ def deliver(
         endpoint=agent_runtimes.endpoint(config.base_url), project_id=config.project_id,
         credential_id=credential_id, credential_name=agent_runtimes.credential_name(bound["label"]),
         workflow_id=target.workflow_id, mcp_url=proposal.mcp_url, state=CREATING,
-        created_at=time.time(), boot_id=BOOT_ID,
+        created_at=time.time(), boot_id=BOOT_ID, credential_type=config.credential_type,
     )
 
     def fail(error: Exception, *, delete_credential: bool) -> DeliveryOutcome:
@@ -295,6 +308,17 @@ def deliver(
         record_event("runtime_credential_delivery_failed", record, _failed_summary(record, bound["label"], error))
         return DeliveryOutcome(None, None, DELIVERY_FAILED, 502)
 
+    if config.credential_type == "privacyFenceApi":
+        try:
+            api.check_type(config.credential_type)
+        except Exception as exc:
+            record_event(
+                "runtime_credential_delivery_failed", record, _failed_summary(record, bound["label"], exc),
+            )
+            if isinstance(exc, N8nApiClientError) and exc.status == 404:
+                return DeliveryOutcome(None, None, NODE_NOT_INSTALLED, 503)
+            return DeliveryOutcome(None, None, DELIVERY_FAILED, 502)
+
     with records.in_flight(credential_id):
         try:
             records.add(record)
@@ -316,8 +340,10 @@ def deliver(
                 records.remove(credential_id)
             return DeliveryOutcome(None, None, str(exc), 400)
         try:
-            api.create_bearer_credential(
-                credential_id=credential_id, name=record.credential_name, token=secret,
+            api.create_credential(
+                credential_id=credential_id, name=record.credential_name,
+                credential_type=config.credential_type,
+                data=credential_data(config.credential_type, proposal.mcp_url, secret),
                 project_id=config.project_id,
             )
         except Exception as exc:
@@ -359,14 +385,18 @@ def status_for(
         if token is None:
             return not_delivered
         answer: dict[str, Any] = {
-            "runtime": record.runtime, "credential_id": record.credential_id,
-            "credential_name": record.credential_name, "credential_type": "httpBearerAuth",
-            "node_authentication": "bearerAuth", "mcp_url": record.mcp_url,
+            "state": "delivered", "runtime": record.runtime, "credential_id": record.credential_id,
+            "credential_name": record.credential_name, "credential_type": record.credential_type,
         }
+        if record.credential_type == "privacyFenceApi":
+            answer["node"] = agent_runtimes.N8N_NODE_TYPE
+        else:
+            answer["node_authentication"] = "bearerAuth"
+        answer["mcp_url"] = record.mcp_url
         when = datetime.fromtimestamp(token.expires_at, timezone.utc).isoformat()
         if not token.expired(now):
-            return {"state": "delivered", **answer, "token_expires_at": when}
-        return {"state": "expired", **answer, "token_expired_at": when, "message": EXPIRED_MESSAGE}
+            return {**answer, "token_expires_at": when}
+        return {**answer, "state": "expired", "token_expired_at": when, "message": EXPIRED_MESSAGE}
     proposal = registry.get(principal_id, proposal_id, now)
     if record is not None and record.state == CREATING or (record is None and proposal is not None):
         pending: dict[str, Any] = {"state": "pending"}

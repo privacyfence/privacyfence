@@ -52,7 +52,7 @@ ACTION_BODIES = {
     "set_authz": {"allowed_domains": "example.com", "groups_claim": "", "required_groups": ""},
     "tighten_step_up": {"enabled": True, "require_passkey": True, "scope": "writes"},
     "set_scoped_tokens": SCOPED_TOKENS,
-    "set_agent_runtimes": {"enabled": True, "project_id": "proj1", "mcp_url": ""},
+    "set_agent_runtimes": {"enabled": True, "project_id": "proj1", "mcp_url": "", "credential_type": "httpBearerAuth"},
     "set_audit_forwarding": {
         "enabled": False, "kind": "syslog", "syslog_host": "logs.example.com", "syslog_port": 514,
         "syslog_protocol": "udp", "http_url": "",
@@ -345,7 +345,20 @@ class TestAudit:
 
 
 class TestAgentRuntimes:
-    BODY = {"enabled": True, "project_id": "proj1", "mcp_url": ""}
+    BODY = {"enabled": True, "project_id": "proj1", "mcp_url": "", "credential_type": "httpBearerAuth"}
+
+    def test_the_credential_type_is_required_and_reaches_the_config(self):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        _enrol(ADMIN)
+        body = {k: v for k, v in self.BODY.items() if k != "credential_type"}
+        assert world.post("set_agent_runtimes", body, csrf).status_code == 400
+        body = {**self.BODY, "mcp_url": "https://pf.example.com/mcp", "credential_type": "privacyFenceApi"}
+        r = _passkey_post(world, "set_agent_runtimes", body, csrf)
+        assert r.status_code == 200, r.text
+        assert admin_config.load()["agent_runtimes"]["n8n"]["credential_type"] == "privacyFenceApi"
+        state = world.client.get("/api/admin/state").json()
+        assert state["agent_runtimes"]["n8n"]["credential_type"] == "privacyFenceApi"
 
     def test_the_action_is_org_only_sensitive_and_restarts(self):
         spec = routes_admin.ADMIN_ACTIONS["set_agent_runtimes"]

@@ -1,6 +1,6 @@
-"""Client for the n8n public API, used to put a bearer credential into n8n and take it out again.
+"""Client for the n8n public API, used to put a credential into n8n and take it out again.
 
-It creates and deletes ``httpBearerAuth`` credentials and checks that the API key works.
+It creates and deletes credentials of a given type and checks that the API key works.
 Redirects are never followed, TLS is always verified, and nothing logs the API key or the
 token; an error carries a fixed text with the host and at most an HTTP status, never a
 response body, a header or the request (ADR 0278-0282).
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_RESPONSE_BYTES = 1_000_000
-_CREDENTIAL_TYPE = "httpBearerAuth"
+_TYPE_RE = re.compile(r"[A-Za-z][A-Za-z0-9]{0,63}")
 _OWN_ID_RE = re.compile(r"[0-9a-f]{16}")
 _ANY_ID_RE = re.compile(r"[A-Za-z0-9]{1,16}")
 
@@ -112,12 +112,14 @@ class N8nApi:
             if total > MAX_RESPONSE_BYTES:
                 return
 
-    def create_bearer_credential(self, *, credential_id: str, name: str, token: str, project_id: str) -> None:
+    def create_credential(
+        self, *, credential_id: str, name: str, credential_type: str, data: dict[str, Any], project_id: str
+    ) -> None:
         payload: dict[str, Any] = {
             "id": credential_id,
             "name": name,
-            "type": _CREDENTIAL_TYPE,
-            "data": {"token": token},
+            "type": credential_type,
+            "data": data,
         }
         if project_id:
             payload["projectId"] = project_id
@@ -133,7 +135,7 @@ class N8nApi:
         if answer is None:
             raise self._not_created()
         answered_id = answer.get("id")
-        if answered_id == credential_id and answer.get("type") == _CREDENTIAL_TYPE:
+        if answered_id == credential_id and answer.get("type") == credential_type:
             return
         if isinstance(answered_id, str) and _ANY_ID_RE.fullmatch(answered_id):
             try:
@@ -158,6 +160,8 @@ class N8nApi:
             raise
         return True
 
-    def check(self) -> None:
+    def check_type(self, credential_type: str) -> None:
+        if not _TYPE_RE.fullmatch(credential_type):
+            raise ValueError("Not a credential type name.")
         logger.info("n8n check at %s", self.host)
-        self._send("GET", f"/api/v1/credentials/schema/{_CREDENTIAL_TYPE}", ok=(200,))
+        self._send("GET", f"/api/v1/credentials/schema/{credential_type}", ok=(200,))

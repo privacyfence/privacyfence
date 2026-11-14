@@ -198,7 +198,7 @@ class TestImportCopies:
             "authz": {"allowed_domains": ["example.com"]},
             "step_up": {"enabled": True, "scope": "writes"},
             "scoped_tokens": {"max_ttl": 5},
-            "agent_runtimes": {"n8n": {"enabled": True, "project_id": "", "mcp_url": ""}},
+            "agent_runtimes": {"n8n": {"enabled": True, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"}},
             "audit_forwarding": {"http": {"bearer_token_env": "TOKEN_VAR"}},
         }
         config = _import(copy.deepcopy(bundle))
@@ -1002,12 +1002,38 @@ class TestPlainSections:
 
 
 class TestAgentRuntimes:
-    PARAMS = {"enabled": True, "project_id": "proj1", "mcp_url": "https://pf.example.com/mcp"}
+    PARAMS = {
+        "enabled": True, "project_id": "proj1", "mcp_url": "https://pf.example.com/mcp",
+        "credential_type": "httpBearerAuth",
+    }
 
     def test_the_default_is_present(self, clean_env):
-        assert admin_config._default_config()["agent_runtimes"] == {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}}
+        assert admin_config._default_config()["agent_runtimes"] == {
+            "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
+        }
 
-    def test_a_change_saves_the_three_fields(self, clean_env):
+    @pytest.mark.parametrize("credential_type", ["httpBearerAuth", "privacyFenceApi"])
+    def test_both_credential_types_are_accepted(self, clean_env, credential_type):
+        params = {**self.PARAMS, "credential_type": credential_type}
+        assert _change("set_agent_runtimes", params) == ("Changed agent runtimes", ["agent_runtimes"])
+        assert _stored()["agent_runtimes"]["n8n"] == params
+
+    def test_another_credential_type_is_refused_with_the_exact_text(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError) as exc:
+            _change("set_agent_runtimes", {**self.PARAMS, "credential_type": "oauth2"})
+        assert "agent_runtimes.n8n.credential_type must be httpBearerAuth or privacyFenceApi." in str(exc.value)
+        assert admin_config.load() is None
+
+    def test_privacyfenceapi_with_an_empty_mcp_url_is_refused(self, clean_env):
+        with pytest.raises(admin_config.AdminConfigError) as exc:
+            _change("set_agent_runtimes", {**self.PARAMS, "credential_type": "privacyFenceApi", "mcp_url": ""})
+        assert (
+            "agent_runtimes.n8n.mcp_url is required for the privacyFenceApi credential type: "
+            "the credential keeps this server's address."
+        ) in str(exc.value)
+        assert admin_config.load() is None
+
+    def test_a_change_saves_the_four_fields(self, clean_env):
         assert _change("set_agent_runtimes", self.PARAMS) == ("Changed agent runtimes", ["agent_runtimes"])
         assert _stored()["agent_runtimes"] == {"n8n": self.PARAMS}
         assert _change("set_agent_runtimes", self.PARAMS) == ("", [])

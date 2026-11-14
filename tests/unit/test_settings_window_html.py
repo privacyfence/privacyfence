@@ -1827,7 +1827,9 @@ class TestOrgAdminSections:
         assert 'data-f="enabled" data-t="bool" checked' in page
         assert 'data-f="project_id"' in page and 'value="proj1"' in page
         assert 'data-f="mcp_url"' in page and 'value="https://pf.example.com/mcp"' in page
-        assert sorted(re.findall(r'data-f="(\w+)"', page)) == ["enabled", "mcp_url", "project_id"]
+        assert sorted(re.findall(r'data-f="(\w+)"', page)) == ["credential_type", "enabled", "mcp_url", "project_id"]
+        assert "Credential type in n8n" in page
+        assert '<option value="httpBearerAuth" selected>' in page and '<option value="privacyFenceApi"' in page
         assert "n8n.internal.example\" " not in page and re.search(r'value="https://n8n', page) is None
 
     def test_unset_address_and_key_say_which_variable_to_set(self):

@@ -1155,6 +1155,15 @@ The version is not checked.
 4. Open **Admin → Agent runtimes**, check that the address and key show as set, tick **Turn on n8n delivery**,
    optionally set the **n8n project id** (empty means the key owner's personal space) and **PrivacyFence MCP
    address for n8n** (empty means this server's address), and save. Restart when asked.
+5. Choose **Credential type in n8n**. **MCP Client node** (the default) delivers n8n's built-in bearer
+   credential, which goes on an MCP Client node. **PrivacyFence node** delivers a PrivacyFence API credential
+   that holds the token and the PrivacyFence MCP address, for the community node `n8n-nodes-privacyfence`
+   ([the node](n8n-node.md)). That choice needs the node installed in n8n and the **PrivacyFence MCP address
+   for n8n** set; if n8n does not know the credential type, delivery says so and mints no token. The setting
+   is server-wide: with it, an AI Agent in n8n uses one PrivacyFence node per call instead of the MCP Client
+   Tool. For the PrivacyFence node, PrivacyFence also asks n8n for the credential type's schema before it
+   creates anything; if your n8n Enterprise API key cannot read that, delivery fails with the generic
+   failure text and no token is minted.
 
 Claude then calls `privacyfence_propose_scoped_token` with `deliver_to`, and `privacyfence_runtime_credential_status`
 for the credential's id. Revoking the token deletes the n8n credential within 5 minutes. An expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it.
