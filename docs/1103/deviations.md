@@ -63,7 +63,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p14-token-admin-only
 
-- pending
+- None.
 
 ## p15-admin-approvals
 
