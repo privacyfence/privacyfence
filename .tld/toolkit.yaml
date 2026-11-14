@@ -144,7 +144,6 @@ hooks:
   protect_paths_allow:
     - .github/workflows/build.yml
     - .github/workflows/release.yml
-    - .github/workflows/dependency-audit.yml
     - .tld/toolkit.yaml
     - .github/workflows/tests.yml
     - .github/workflows/publish-pypi.yml
