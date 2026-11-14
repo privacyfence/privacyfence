@@ -61,6 +61,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - conflict: merging main (the n8n scoped-token delivery feature, PR 1094) conflicted in CHANGELOG.md, docs/adr/README.md, docs/configuration-reference.md, scoped_tokens.py, routes_settings.py and test_server.py; fix-1 kept both features
 - review: main took ADRs 0278-0282, so this plan ADRs 0278-0280 were renumbered to 0283-0285 everywhere outside docs/1091 on the owner decision (ask a-0213d8fce9cc9789); the plan text still names 0278-0280, so its final check for those ADRs is met by 0283-0285
 - review: tests/unit/test_docs_references_exist.py now exempts docs/adr/ citations in docs/<n>/plan.md as it already did for old-layout plans, because the frozen plan still names the old ADR filenames; owner decision (ask a-adfde717d85da958); the plan file is unchanged
+- review: fix-2 (final review): ADRs 0036, 0164 and 0236 and their index rows now point forward to ADRs 0284 and 0285; configuration-reference.md now says grant edits apply live; the docker exec snippets write the file atomically; docs only
 
 ## Final review
 
