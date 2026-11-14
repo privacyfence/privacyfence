@@ -2718,6 +2718,49 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --rotate-upstream-claim-key / --revoke-upstream-claim-key
+# ---------------------------------------------------------------------------- #
+
+def run_rotate_upstream_claim_key() -> int:
+    """Add a new Ed25519 key to the upstream identity-claim key set (plan 3.4).
+
+    The new key is published in the JWKS at once and starts signing five minutes
+    later, so verifiers' cached key sets already hold it; the previous key stays
+    published for the overlap. Runs as the account that owns the data, after the
+    runtime identity check; a running server re-reads the file on its next call.
+    """
+    from . import upstream_claim_keys
+
+    keys = upstream_claim_keys.KeySet(org_dir() / upstream_claim_keys.FILENAME)
+    keys.ensure()
+    new = keys.rotate()
+    starts = datetime.fromtimestamp(new.signs_from, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(
+        f"Rotated: new key {new.kid} starts signing at {starts}; "
+        "the previous key stays published for the configured overlap."
+    )
+    return 0
+
+
+def run_revoke_upstream_claim_key(kid: str) -> int:
+    """Remove one key from the upstream identity-claim key set and its JWKS at once."""
+    from . import upstream_claim_keys
+
+    keys = upstream_claim_keys.KeySet(org_dir() / upstream_claim_keys.FILENAME)
+    keys.ensure()
+    try:
+        removed = keys.revoke(kid)
+    except upstream_claim_keys.KeySetError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if not removed:
+        print("No such key.", file=sys.stderr)
+        return 1
+    print(f"Revoked key {kid}.")
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # --relay-dns-records
 # ---------------------------------------------------------------------------- #
 
@@ -3041,6 +3084,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "For a direct HTTP MCP client with no PrivacyFence extension of its own."
         ),
     )
+    parser.add_argument(
+        "--rotate-upstream-claim-key", action="store_true",
+        help=(
+            "Add a new key to the upstream identity-claim key set and exit. It is published at once and "
+            "starts signing five minutes later. Run it as the account the daemon runs as."
+        ),
+    )
+    parser.add_argument(
+        "--revoke-upstream-claim-key", metavar="KID", default=None,
+        help=(
+            "Remove the key KID from the upstream identity-claim key set and its JWKS at once, and exit. "
+            "Refused for the only key that can sign. Run it as the account the daemon runs as."
+        ),
+    )
     # ADR 0165: an administrator takes back all of one person's scoped tokens.
     parser.add_argument(
         "--revoke-scoped-tokens", metavar="PRINCIPAL_ID", default=None,
@@ -3190,6 +3247,10 @@ def main(argv: list[str] | None = None) -> int:
     # must run as the account that owns it.
     if args.revoke_scoped_tokens is not None:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
+    if args.rotate_upstream_claim_key:
+        return run_rotate_upstream_claim_key()
+    if args.revoke_upstream_claim_key is not None:
+        return run_revoke_upstream_claim_key(args.revoke_upstream_claim_key)
     if args.relay_dns_records:
         return run_relay_dns_records()
     if args.print_env_from_bundle:
