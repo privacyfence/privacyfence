@@ -18,10 +18,13 @@ from __future__ import annotations
 import argparse
 import contextlib
 import contextvars
+import importlib.util
 import json
+import sys
 import threading
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import jwt
@@ -32,11 +35,27 @@ from mcp.server.lowlevel.server import Server as MCPServer
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
 CLAIM_TYPE = "pf-upstream-claim+jwt"
+V1_CLAIM_HEADER = "x-privacyfence-claim"
+MAX_BODY_BYTES = 1024 * 1024
+
+
+def _load_pf_claim_verify() -> Any:
+    """Load the vendorable verifier by path, as an upstream that vendors the file would."""
+    path = Path(__file__).resolve().parents[1] / "contrib" / "verifier" / "pf_claim_verify.py"
+    spec = importlib.util.spec_from_file_location("pf_claim_verify", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+pf_claim_verify = _load_pf_claim_verify()
 
 DEFAULT_DOCUMENTS: list[dict[str, str]] = [
     {"id": "1", "domain": "general", "title": "Policy overview", "body": "The company policy in brief."},
@@ -148,6 +167,14 @@ def build_app(
     verifier = _Verifier(
         audience=audience, issuer=issuer, jwks=jwks, jwks_url=jwks_url, public_key_pem=public_key_pem,
     )
+    # The v1 claim (X-PrivacyFence-Claim, EdDSA) path. Its issuer has no "/upstream-mcp" suffix. With a
+    # PEM key or no issuer there is no Ed25519 key set to check it against, so that path answers 401.
+    v1_issuer = issuer[: -len("/upstream-mcp")] if issuer and issuer.endswith("/upstream-mcp") else issuer
+    v1_verifier = None
+    if v1_issuer and (jwks is not None or jwks_url):
+        v1_verifier = pf_claim_verify.ClaimVerifier(
+            issuer=v1_issuer, audience=audience, jwks=jwks, jwks_url=jwks_url,
+        )
     server = _build_server(list(DEFAULT_DOCUMENTS if documents is None else documents))
     # Stateless: every request is verified and handled on its own, so its claim is the one in force.
     manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=True)
@@ -155,6 +182,10 @@ def build_app(
     class _Endpoint:
         async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
             request = Request(scope, receive)
+            v1_token = request.headers.get(V1_CLAIM_HEADER)
+            if v1_token is not None:
+                await self._handle_v1(scope, receive, send, request, v1_token)
+                return
             header = request.headers.get("authorization", "")
             try:
                 scheme, _, token = header.partition(" ")
@@ -167,6 +198,47 @@ def build_app(
             reset = _claims.set(claims)
             try:
                 await manager.handle_request(scope, receive, send)
+            finally:
+                _claims.reset(reset)
+
+        async def _handle_v1(
+            self, scope: Scope, receive: Receive, send: Send, request: Request, token: str,
+        ) -> None:
+            body = b""
+            more = True
+            while more:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    break
+                body += message.get("body", b"")
+                if len(body) > MAX_BODY_BYTES:
+                    await PlainTextResponse("request too large", status_code=413)(scope, receive, send)
+                    return
+                more = message.get("more_body", False)
+            try:
+                if v1_verifier is None:
+                    raise ValueError("no v1 verifier")
+                principal = v1_verifier.verify(token.strip(), body=body)
+            except Exception:  # noqa: BLE001 -- every failure is the same 401, with no detail
+                await JSONResponse({"error": "invalid_claim"}, status_code=401)(scope, receive, send)
+                return
+            claims = {
+                "sub": principal.sub,
+                "domains": list(principal.audiences),
+                "act": {"type": "service" if principal.principal_type == "service" else "ai_client"},
+            }
+            sent = False
+
+            async def replay() -> Any:
+                nonlocal sent
+                if not sent:
+                    sent = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+                return await receive()
+
+            reset = _claims.set(claims)
+            try:
+                await manager.handle_request(scope, replay, send)
             finally:
                 _claims.reset(reset)
 
@@ -185,8 +257,12 @@ def main() -> None:
     parser.add_argument("--audience", required=True)
     parser.add_argument("--issuer")
     key = parser.add_mutually_exclusive_group(required=True)
-    key.add_argument("--jwks-url")
-    key.add_argument("--jwks-file")
+    key.add_argument(
+        "--jwks-url",
+        help="JWKS URL. The old Authorization path wants RSA keys, the X-PrivacyFence-Claim path Ed25519 "
+        "keys, until the old path is removed.",
+    )
+    key.add_argument("--jwks-file", help="JWKS file; same key-type rule as --jwks-url.")
     key.add_argument("--public-key-file")
     args = parser.parse_args()
 
