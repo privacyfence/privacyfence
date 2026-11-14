@@ -1,4 +1,4 @@
-# ADR 0285: Data domains come from grants on a verified email, and scoped tokens only narrow them
+# ADR 0287: Data domains come from grants on a verified email, and scoped tokens only narrow them
 
 ## Status
 
@@ -8,7 +8,7 @@ and [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md). Implemented:
 
 ## Context
 
-The upstream (ADR 0283) filters by the data domains in the claim (ADR 0284). Something has to decide
+The upstream (ADR 0285) filters by the data domains in the claim (ADR 0286). Something has to decide
 which domains a person holds. `Principal.email` is cosmetic, and an unverified address must not unlock
 data. A scoped token (ADR 0164, 0236) is a deny-only credential: it can do less than its owner, never more.
 
@@ -59,5 +59,5 @@ domain sees none, and tokens made before this change send none.
 [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md),
 [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md),
 [ADR 0272](0272-a-single-user-install-provisions-its-one-person-as-verified.md),
-[ADR 0283](0283-upstream-mcp-servers-are-declared-connectors.md),
-[ADR 0284](0284-privacyfence-sends-the-upstream-a-signed-caller-claim.md).
+[ADR 0285](0285-upstream-mcp-servers-are-declared-connectors.md),
+[ADR 0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md).

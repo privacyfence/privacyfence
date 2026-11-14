@@ -1,4 +1,4 @@
-"""The signed caller claim PrivacyFence sends to an upstream MCP server (ADR 0284).
+"""The signed caller claim PrivacyFence sends to an upstream MCP server (ADR 0286).
 
 Every HTTP request to an upstream carries ``Authorization: Bearer <jwt>``: an RS256 token, signed
 with its own key (not the OIDC one), naming who the call is for (``sub``, ``email``, ``domains``)

@@ -273,7 +273,7 @@ TOOL_REGISTRY: dict[str, ToolRegistryEntry] = _build_registry()
 def rebuild_registry() -> None:
     """Rebuild ``TOOL_REGISTRY`` in place from the current tables, so every importer that holds
     the dict object sees the change. Used when upstream MCP tools are registered or removed
-    (``upstream_mcp_registry``, ADR 0283)."""
+    (``upstream_mcp_registry``, ADR 0285)."""
     TOOL_REGISTRY.clear()
     TOOL_REGISTRY.update(_build_registry())
 

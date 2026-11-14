@@ -225,7 +225,7 @@ Paste the report into the PR description under `## Web smoke check`.
 
 A connector with no external provider, the upstream MCP connector, has no live fixture and is not in
 `CONNECTOR_CHECKS`: the reference server `scripts/upstream_mcp_reference_server.py` covers it ([ADR
-0283](adr/0283-upstream-mcp-servers-are-declared-connectors.md)).
+0285](adr/0285-upstream-mcp-servers-are-declared-connectors.md)).
 
 Live provider credentials exist only on the project's self-hosted runner, `runner.privacyfence.eu`
 (label `privacyfence-live`), as local files — never as GitHub Actions secrets, never on a

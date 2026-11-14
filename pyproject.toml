@@ -54,7 +54,7 @@ dependencies = [
     "google-auth-oauthlib>=1.1.0",
     "google-api-python-client>=2.100.0",
     "pyyaml>=6.0",
-    # mcp's client transport needs it for upstream MCP servers (ADR 0283).
+    # mcp's client transport needs it for upstream MCP servers (ADR 0285).
     "httpx2>=2.5",
     # Floor at 50.0.0: 49.0.0 (the lowest version the other floors let a fresh resolve pick)
     # carries PYSEC-2026-3552; dependency-audit.yml's floor-audit job checks the lowest-direct set.

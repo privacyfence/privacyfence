@@ -1,4 +1,4 @@
-"""An organization server in front of the reference upstream, over real loopback sockets (ADR 0283-0285).
+"""An organization server in front of the reference upstream, over real loopback sockets (ADR 0285-0287).
 
 The server is a real ``WebServer`` in organization mode; the upstream is the p6 reference server on
 another port, verifying PrivacyFence's claims against the server's own ``/upstream-mcp/jwks``. The
