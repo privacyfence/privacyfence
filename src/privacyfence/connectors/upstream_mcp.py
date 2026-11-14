@@ -157,34 +157,92 @@ class UpstreamMcpConnector(Connector):
     # ------------------------------------------------------------------ #
 
     async def _forward(self, declared: DeclaredTool, args: dict[str, Any]) -> CallResult:
+        """Send the call and write the one ``upstream_forwarded`` execution record, whatever the outcome."""
         upstream = self._require_upstream()
         if self._client is None or self._caller is None:
             raise RuntimeError("This upstream connector is not configured.")
+        started = time.time()
         caller: IdentityCaller | None = None
-        if upstream.identity_claim == "required":
-            try:
-                caller = self._caller()
-            except CallerNotAllowedError:
-                logger.warning("Upstream %s call to %s refused: caller type not allowed", upstream.id, declared.name)
-                raise UpstreamCallRefusedError(
-                    f"PrivacyFence does not allow this caller to use the {upstream.label} server."
-                ) from None
+        result: CallResult | None = None
+        status = "ok"
         try:
-            return await self._client.call_tool(declared.name, args, caller)
-        except UpstreamMcpClientError as exc:
-            logger.warning("Upstream %s call to %s failed: %s", upstream.id, declared.name, exc.kind)
-            if exc.kind == "too_large":
-                raise UpstreamUnavailableError(
-                    f"The {upstream.label} result is larger than 1 MB; ask for less."
-                ) from None
-            if exc.kind == "claim_failed":
-                raise UpstreamUnavailableError(
-                    f"The {upstream.label} call was not sent: PrivacyFence could not sign the caller claim."
-                ) from None
-            if exc.kind == "tool_error":
-                detail = _clean(exc.detail)[:MAX_ERROR_DETAIL_CHARS]
-                raise UpstreamToolError(f"The {upstream.label} server returned an error: {detail}") from None
-            raise UpstreamUnavailableError(f"The {upstream.label} server could not be reached.") from None
+            if upstream.identity_claim == "required":
+                try:
+                    caller = self._caller()
+                except CallerNotAllowedError:
+                    status = "refused"
+                    logger.warning("Upstream %s call to %s refused: caller type not allowed", upstream.id, declared.name)
+                    raise UpstreamCallRefusedError(
+                        f"PrivacyFence does not allow this caller to use the {upstream.label} server."
+                    ) from None
+            try:
+                result = await self._client.call_tool(declared.name, args, caller)
+                return result
+            except UpstreamMcpClientError as exc:
+                logger.warning("Upstream %s call to %s failed: %s", upstream.id, declared.name, exc.kind)
+                if exc.kind == "too_large":
+                    status = "too_large"
+                    raise UpstreamUnavailableError(
+                        f"The {upstream.label} result is larger than 1 MB; ask for less."
+                    ) from None
+                if exc.kind == "claim_failed":
+                    status = "claim_failed"
+                    raise UpstreamUnavailableError(
+                        f"The {upstream.label} call was not sent: PrivacyFence could not sign the caller claim."
+                    ) from None
+                if exc.kind == "tool_error":
+                    status = "tool_error"
+                    detail = _clean(exc.detail)[:MAX_ERROR_DETAIL_CHARS]
+                    raise UpstreamToolError(f"The {upstream.label} server returned an error: {detail}") from None
+                status = "unreachable"
+                raise UpstreamUnavailableError(f"The {upstream.label} server could not be reached.") from None
+        finally:
+            self._forward_audit(declared, caller, result, status, time.time() - started)
+
+    def _forward_audit(
+        self,
+        declared: DeclaredTool,
+        caller: IdentityCaller | None,
+        result: CallResult | None,
+        status: str,
+        latency: float,
+    ) -> None:
+        """One execution record per forwarded call. Holds no token, argument value or upstream text."""
+        upstream = self._require_upstream()
+        try:
+            metadata = {
+                "upstream": upstream.id,
+                "claim_version": "1",
+                "identity_claim": upstream.identity_claim,
+            }
+            if caller is not None and caller.token_id:
+                metadata["token_id"] = caller.token_id
+            if caller is not None and caller.approved_by:
+                metadata["approved_by"] = caller.approved_by
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(),
+                request_id="",
+                connector=self.name,
+                tool=declared.exposed_name,
+                tool_name=f"{upstream.label}: {declared.name}",
+                summary=f"Forwarded {declared.name} to {upstream.label}",
+                sender=upstream.label,
+                decision="upstream_forwarded",
+                auto_accept_rule="",
+                latency_seconds=latency,
+                claude_reason=current_reason(),
+                claim_jti=result.jti if result is not None else "",
+                claim_sub=caller.sub if caller is not None else "",
+                claim_principal_type=caller.principal_type if caller is not None else "",
+                claim_audiences=list(caller.audiences) if caller is not None else [],
+                claim_act=dict(caller.act or {}) if caller is not None else {},
+                claim_req=result.req if result is not None else "",
+                upstream_status=status,
+                metadata=metadata,
+            ))
+        except Exception as exc:  # noqa: BLE001 -- an audit failure never changes the call outcome
+            logger.warning("Audit log write failed: %s", exc)
 
     def _auto_audit(self, declared: DeclaredTool, args: dict[str, Any], created_at: float) -> None:
         upstream = self._require_upstream()
