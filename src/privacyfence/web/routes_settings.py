@@ -2050,6 +2050,7 @@ def build_org_routes(
                         upstream_audiences=bound.get("upstream_audiences") or None,
                         principal_email_verified=session_email_verified,
                         held_audiences=held_audiences,
+                        is_admin=principal.is_admin,
                     ),
                 )
             except ScopedTokenError as exc:
