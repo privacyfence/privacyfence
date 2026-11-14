@@ -31,7 +31,7 @@ _STYLE_SRC_SITE = "style-src 'self'"
 _DIRECTIVES_BEFORE_SCRIPT = ["default-src 'self'"]
 _DIRECTIVES_AFTER_STYLE = [
     f"img-src 'self' data: {_GA} {_GTM}",
-    f"connect-src 'self' https://downloads.privacyfence.eu {_GA} https://*.analytics.google.com {_GTM}",
+    f"connect-src 'self' {_GA} https://*.analytics.google.com {_GTM}",
     "font-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",
