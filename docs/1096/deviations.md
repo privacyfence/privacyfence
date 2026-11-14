@@ -18,7 +18,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p02-orphans
 
-- pending
+- worker: Deleted three tests in tests/unit/test_privilege_separation.py that read files this phase deletes (outside touches; orchestrator-approved; they collide with phases p06 and p13, which delete or trim the same file).
+- scope: scope: tests/unit/test_privilege_separation.py
+- retry: The worker first stopped blocked on those three failing tests; sent back with the approval above. The first two commits had no Plan-Phase trailer, so a marker commit was added; no tld CLI in the worker container, the orchestrator ran the checks (owner choice orch_roles).
 
 ## p03-settings-state
 
