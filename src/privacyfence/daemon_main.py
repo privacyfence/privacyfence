@@ -78,12 +78,10 @@ import logging
 import os
 import sys
 import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse, urlsplit
 
 import portalocker
 import yaml
@@ -126,7 +124,6 @@ from .paths import (
     safe_principal_id,
     user_dir,
 )
-from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, Principal, current_principal
 from .webauthn_stepup import StepUpRequirementChange
 from .app_credentials import telegram_app_credentials
@@ -168,9 +165,8 @@ from .connectors.tasks import TasksConnector
 from .connectors.peek import PeekConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
-from .atlassian_oauth import AtlassianOAuthError, assets_enabled, assets_workspace_override, scopes_for
+from .atlassian_oauth import AtlassianOAuthError, assets_enabled, assets_workspace_override
 from .atlassian_users import AtlassianUserDirectory, erase_overdue_caches
-from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
 from .calendar_client import CalendarClient, CalendarClientError
 from .assets_client import AssetsClient, AssetsClientError
@@ -180,30 +176,22 @@ from .contacts_client import ContactsClient, ContactsClientError
 from .drive_client import DriveClient, DriveClientError
 from .gmail_client import GmailClient, GmailClientError
 from .grist_auth import GristClientError
-from .grist_auth import authorize_interactive as grist_authorize_interactive
 from .grist_auth import bundle_settings as grist_bundle_settings
 from .grist_auth import load_token_file as load_grist_token
 from .grist_auth import resolve_credential as grist_resolve_credential
 from .grist_client import GristClient
 from .jira_client import JiraClient, JiraClientError
 from .miro_auth import MiroClientError, MiroTokenProvider
-from .miro_auth import authorize_interactive as miro_authorize_interactive
 from .miro_auth import bundle_settings as miro_bundle_settings
 from .miro_auth import load_token_file as load_miro_token
 from .miro_client import MiroClient
 from .salesforce_client import DEFAULT_REPORT_MAX_PAGES, SalesforceClient, SalesforceClientError
-from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .salesforce_client import load_token_file as load_salesforce_token
 from .slack_client import SlackClient, SlackClientError
 from .peek_client import PeekClient, PeekClientError, PeekProvisioningClient
 from .peek_client import bundle_base_url as peek_bundle_base_url
 from .peek_client import load_token_file as load_peek_token
-from .peek_client import normalize_base_url as peek_normalize_base_url
-from .peek_client import poll_device_login as peek_poll_device_login
 from .peek_client import resolve_server as peek_resolve_server
-from .peek_client import save_token_file as save_peek_token
-from .peek_client import start_device_login as peek_start_device_login
-from .slack_client import authorize_interactive as slack_authorize_interactive
 from .slack_client import load_token_file as load_slack_token
 from .tasks_client import TasksClient, TasksClientError
 from .telegram_client import TelegramClientError, TelegramPrivacyFenceClient
@@ -1836,260 +1824,6 @@ def _log_cache_warm_failure(future: "concurrent.futures.Future[None]") -> None:
 
 
 # ---------------------------------------------------------------------------- #
-# OAuth / interactive-auth setup commands (headless/dev use — the primary UX
-# path is now "Authenticate…" in PrivacyFence Settings)
-# ---------------------------------------------------------------------------- #
-
-def run_gmail_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = GmailClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["gmail"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except GmailClientError as exc:
-        print(f"Gmail OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Gmail OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_drive_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = DriveClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["drive"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except DriveClientError as exc:
-        print(f"Drive OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Drive OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_contacts_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = ContactsClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["contacts"]))
-    try:
-        client.authorize_interactive()
-        result = client.check_connection()
-    except ContactsClientError as exc:
-        print(f"Contacts OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Contacts OAuth complete. Authorized as: {result}")
-    return 0
-
-
-def run_calendar_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = CalendarClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["calendar"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except CalendarClientError as exc:
-        print(f"Calendar OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Calendar OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_tasks_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = TasksClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["tasks"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except TasksClientError as exc:
-        print(f"Tasks OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Tasks OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_apps_script_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = AppsScriptClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["apps_script"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except AppsScriptClientError as exc:
-        print(f"Apps Script OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Apps Script OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_slack_oauth(org_config: dict[str, Any]) -> int:
-    slack_org = org_config.get("slack") or {}
-    if not slack_org.get("client_id") or not slack_org.get("client_secret"):
-        print("No Slack organization config installed.", file=sys.stderr)
-        return 1
-    try:
-        token = slack_authorize_interactive(
-            client_id=slack_org["client_id"],
-            client_secret=slack_org["client_secret"],
-            token_file=_resolve_path(TOKEN_FILES["slack"]),
-            user_scopes=slack_org.get("user_scopes"),
-        )
-    except SlackClientError as exc:
-        print(f"Slack OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Slack OAuth complete. Authorized for workspace: {token.get('team_name')}")
-    return 0
-
-
-def run_salesforce_oauth(org_config: dict[str, Any]) -> int:
-    sf_org = org_config.get("salesforce") or {}
-    if not sf_org.get("consumer_key") or not sf_org.get("consumer_secret"):
-        print("No Salesforce organization config installed.", file=sys.stderr)
-        return 1
-    try:
-        token = salesforce_authorize_interactive(
-            consumer_key=sf_org["consumer_key"],
-            consumer_secret=sf_org["consumer_secret"],
-            token_file=_resolve_path(TOKEN_FILES["salesforce"]),
-            login_url=sf_org.get("login_url", "https://login.salesforce.com"),
-        )
-    except SalesforceClientError as exc:
-        print(f"Salesforce OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Salesforce OAuth complete. Authorized for instance: {token.get('instance_url')}")
-    return 0
-
-
-def run_grist_oauth(org_config: dict[str, Any]) -> int:
-    try:
-        bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=False)
-        if bundle.oauth is None:
-            print("No Grist OAuth app in the organization config.", file=sys.stderr)
-            return 1
-        record = grist_authorize_interactive(bundle.oauth, _resolve_path(TOKEN_FILES["grist"]))
-    except GristClientError as exc:
-        print(f"Grist OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    host = urlparse(str(record.get("server_url") or bundle.oauth.server_url)).netloc
-    print(f"Grist OAuth complete. Signed in to {host}.")
-    return 0
-
-
-def run_miro_oauth(org_config: dict[str, Any]) -> int:
-    try:
-        miro_config = miro_bundle_settings(org_config.get("miro") or {})
-        record = miro_authorize_interactive(miro_config, _resolve_path(TOKEN_FILES["miro"]))
-    except MiroClientError as exc:
-        print(f"Miro OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Miro OAuth complete. Signed in to the Miro team {record.get('team_id')}.")
-    return 0
-
-
-def _cli_pick_atlassian_resource(resources: list[dict[str, Any]]) -> dict[str, Any]:
-    """Terminal ``pick_resource`` for ``--atlassian-oauth``.
-
-    Every other caller of ``resolve_resource_and_save`` already has a
-    fallback for "can't/won't prompt": settings_controller.py's GUI picker
-    falls back to ``resources[0]`` when cancelled, and org mode's
-    routes_connect.py._first_resource always takes ``resources[0]`` outright
-    (there's no prompting surface in a server redirect flow). This CLI flow
-    is the one call site with neither -- without a ``pick_resource`` it hit
-    ``resolve_resource_and_save``'s hard failure whenever Atlassian's
-    accessible-resources response had more than one entry.
-
-    That happens even for a single-site account: mixing classic Jira scopes
-    with granular Confluence scopes (atlassian_oauth.py's DEFAULT_SCOPES) is
-    exactly the case atlassian_oauth.py's own scope comments describe as
-    "tracked separately" by Atlassian, and in practice that means the same
-    site URL comes back as more than one resource entry. Auto-pick among
-    same-URL duplicates the same way the other two callers effectively do;
-    only prompt on stdin when the URLs actually differ, i.e. a genuine
-    multi-site account.
-    """
-    urls = {r.get("url", "") for r in resources}
-    if len(urls) <= 1:
-        return resources[0]
-    print("Multiple Atlassian sites are accessible with this account:")
-    for i, resource in enumerate(resources):
-        print(f"  [{i}] {resource.get('url', '?')}")
-    while True:
-        choice = input(f"Choose a site [0-{len(resources) - 1}]: ").strip()
-        try:
-            idx = int(choice)
-        except ValueError:
-            idx = -1
-        if 0 <= idx < len(resources):
-            return resources[idx]
-        print("Invalid choice, try again.")
-
-
-def run_atlassian_oauth(org_config: dict[str, Any], config: dict[str, Any] | None = None) -> int:
-    atlassian_org = org_config.get("atlassian") or {}
-    if not atlassian_org.get("client_id") or not atlassian_org.get("client_secret"):
-        print("No Atlassian organization config installed.", file=sys.stderr)
-        return 1
-    try:
-        token = atlassian_authorize_interactive(
-            client_id=atlassian_org["client_id"],
-            client_secret=atlassian_org["client_secret"],
-            token_file=_resolve_path(TOKEN_FILES["atlassian"]),
-            scopes=scopes_for(assets=assets_enabled(config or {}, org_config)),
-            pick_resource=_cli_pick_atlassian_resource,
-        )
-    except AtlassianOAuthError as exc:
-        print(f"Atlassian OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Atlassian OAuth complete. Authorized for site: {token.get('site_url')}")
-    return 0
-
-
-def run_telegram_setup() -> int:
-    creds = telegram_app_credentials()
-    if not creds:
-        print(
-            "No Telegram app credentials in this build. For local dev, set "
-            "PRIVACYFENCE_TELEGRAM_API_ID and PRIVACYFENCE_TELEGRAM_API_HASH.",
-            file=sys.stderr,
-        )
-        return 1
-    api_id, api_hash = creds
-    session_file = _resolve_path(TOKEN_FILES["telegram"])
-    client = TelegramPrivacyFenceClient(api_id=api_id, api_hash=api_hash, session_file=session_file)
-    asyncio.run(client.authorize_interactive())
-    print(f"Telegram session saved to {session_file}")
-    return 0
-
-
-def run_peek_login(org_config: dict[str, Any]) -> int:
-    try:
-        pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=False)
-    except PeekClientError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    expired_message = "The Peek sign-in code expired. Run --peek-login again."
-    try:
-        base = pinned or peek_normalize_base_url(input("Peek server address: "))
-        login = peek_start_device_login(base)
-        print(f"Open {login.verification_url} and approve the code {login.user_code}.")
-        while True:
-            time.sleep(login.interval)
-            if time.time() > login.expires_at:
-                print(expired_message, file=sys.stderr)
-                return 1
-            poll = peek_poll_device_login(base, login.device_code)
-            if poll.status == "approved":
-                save_peek_token(_resolve_path(TOKEN_FILES["peek"]), base, poll.token)
-                print(f"Peek sign-in complete. Connected to {urlsplit(base).netloc}.")
-                return 0
-            if poll.status == "denied":
-                print("The Peek sign-in was denied.", file=sys.stderr)
-                return 1
-            if poll.status in ("expired", "consumed"):
-                print(expired_message, file=sys.stderr)
-                return 1
-    except PeekClientError as exc:
-        print(f"Peek sign-in failed: {exc}", file=sys.stderr)
-        return 1
-
-
-# ---------------------------------------------------------------------------- #
 # Main app
 # ---------------------------------------------------------------------------- #
 
@@ -2231,119 +1965,6 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     finally:
         audit_logger.close()
         _release_instance_lock()
-    return 0
-
-
-# ---------------------------------------------------------------------------- #
-# --print-sign-in-link
-# ---------------------------------------------------------------------------- #
-
-def run_print_sign_in_link() -> int:
-    """The break-glass way in: a sign-in link printed in the human's own
-    terminal, never handed to the agent (ADR 0013: no MCP tool mints a
-    sign-in credential, since that would hand exactly this credential to the
-    party it governs).
-
-    The ordinary way into the web UI is the companion's own Open Approvals
-    item. This exists for when that is not reachable: an SSH session, a
-    desktop whose applications menu nobody has open, a tray icon that failed
-    to start. It asks the daemon for a link that can *approve*
-    (``MINT CONSOLE``), which the daemon grants only once the companion has
-    put its own dialog in front of whoever is at the login session -- the
-    command runs as the same OS user the agent does, so what makes the
-    resulting session attributable to a person is that a person clicked
-    Allow, not that the request arrived from a terminal.
-
-    If nothing confirms it, this still prints a link, and says what that link
-    is: an unattested session, which signs the reader in to *see* what is
-    pending but not to release it (web/session_auth.py's
-    ``PROVENANCE_UNATTESTED``). That beats printing nothing -- the reader may
-    well be locked out precisely because no companion is running, and
-    starting one is easier from inside the UI than from a refusal.
-
-    The URL goes to stdout alone, so ``privacyfence-app --print-sign-in-link``
-    can be piped into a browser command; everything else goes to stderr.
-    """
-    # Deferred, like every other web/ import in this module: this command is
-    # a one-shot client that never starts a server, and control_channel.py is
-    # the one web module with no rendering or ASGI weight behind it.
-    from .web import control_channel
-
-    base_url = control_channel.read_base_url()
-    if base_url is None:
-        print(
-            "PrivacyFence does not appear to be running in local mode -- there is no sign-in link "
-            "to mint. (Organization mode signs in through its own /login page instead.)",
-            file=sys.stderr,
-        )
-        return 1
-    try:
-        code = control_channel.mint_console_bootstrap_code()
-    except OSError as exc:
-        print(f"Could not reach PrivacyFence's control channel: {exc}", file=sys.stderr)
-        return 1
-    except control_channel.ControlChannelError as exc:
-        print(f"This link was not confirmed: {exc}", file=sys.stderr)
-        try:
-            code = control_channel.mint_bootstrap_code()
-        except (OSError, control_channel.ControlChannelError) as fallback_exc:
-            print(f"Could not mint a sign-in link at all: {fallback_exc}", file=sys.stderr)
-            return 1
-        print(
-            "Printing a view-only link instead: it will show you what is waiting, but approving "
-            "from it will be refused. Start PrivacyFence's companion app and run this again for "
-            "one that can approve.",
-            file=sys.stderr,
-        )
-    print(f"{base_url}/approvals?bootstrap={code}")
-    print(
-        "Open this on this machine within a few minutes -- it is consumed by the first visit, "
-        "successful or not. Settings is one click away in the page's own navigation.",
-        file=sys.stderr,
-    )
-    return 0
-
-
-# ---------------------------------------------------------------------------- #
-# --print-mcp-token
-# ---------------------------------------------------------------------------- #
-
-def run_print_mcp_token() -> int:
-    """ADR 0008's own break-glass-style path for ``/mcp``: a direct HTTP
-    MCP client with no ``.mcpb`` shim of its own (Claude Code, a hand-
-    rolled script) has nowhere to read a bearer token from any more on a
-    privilege-separated install, where each principal's token lives in its
-    own service-owned ``authority_dir()`` (``mcp_auth._mcp_token_path()``).
-    This runs the
-    identical ``MINT MCP`` mint the shim itself does
-    (``mcpb/shim/src/controlChannel.ts``), as this OS account, and prints
-    the result -- the same token this account gets back every time it asks,
-    for as long as it keeps running as itself.
-
-    The URL goes to stdout alone, like ``--print-sign-in-link``, so this
-    can be composed into a shell command (e.g. ``claude mcp add ... --header
-    "Authorization: Bearer $(privacyfence-app --print-mcp-token)"``);
-    everything else goes to stderr.
-    """
-    from .web import control_channel
-
-    base_url = control_channel.read_base_url()
-    if base_url is None:
-        print(
-            "PrivacyFence does not appear to be running in local mode -- there is no MCP token "
-            "to mint. (Organization mode uses its own OAuth 2.1 sign-in instead.)",
-            file=sys.stderr,
-        )
-        return 1
-    try:
-        token = control_channel.mint_mcp_token()
-    except OSError as exc:
-        print(f"Could not reach PrivacyFence's control channel: {exc}", file=sys.stderr)
-        return 1
-    except control_channel.ControlChannelError as exc:
-        print(f"Could not mint an MCP token: {exc}", file=sys.stderr)
-        return 1
-    print(token)
     return 0
 
 
@@ -2660,46 +2281,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # is the human's privacy policy, not the agent's own operational data.
     default_config = str(authority_root(Path(PROJECT_ROOT)) / "config" / "settings.yaml")
     parser.add_argument("--config", default=default_config)
-    parser.add_argument("--gmail-oauth", action="store_true")
-    parser.add_argument("--drive-oauth", action="store_true")
-    parser.add_argument("--contacts-oauth", action="store_true")
-    parser.add_argument("--calendar-oauth", action="store_true")
-    parser.add_argument("--tasks-oauth", action="store_true")
-    parser.add_argument("--apps-script-oauth", action="store_true")
-    parser.add_argument("--slack-oauth", action="store_true")
-    parser.add_argument("--salesforce-oauth", action="store_true")
-    parser.add_argument("--atlassian-oauth", action="store_true")
-    parser.add_argument("--grist-oauth", action="store_true")
-    parser.add_argument("--miro-oauth", action="store_true")
-    parser.add_argument("--telegram-setup", action="store_true")
-    parser.add_argument(
-        "--peek-login", action="store_true",
-        help="Sign in to Peek with Peek's device sign-in and save the token.",
-    )
-    # The break-glass path from ADR 0013 -- see
-    # run_print_sign_in_link() for what it does and what it deliberately does
-    # not claim. Documented in --help rather than hidden: it is what the
-    # not-authorized page and the docs now point a locked-out human at, in
-    # place of asking their agent for a link.
-    parser.add_argument(
-        "--print-sign-in-link", action="store_true",
-        help=(
-            "Print a one-time sign-in link for PrivacyFence's own web UI and exit. Run this "
-            "yourself, in your own terminal -- PrivacyFence's companion app confirms it with you "
-            "before the link is allowed to approve anything."
-        ),
-    )
-    # ADR 0008: the CLI's own equivalent of the .mcpb shim's mintMcpToken()
-    # -- for a direct HTTP MCP client (Claude Code, another tool with no
-    # shim of its own) that needs the bearer token /mcp expects, without
-    # reading a shared file that (on a separated install) no longer exists.
-    parser.add_argument(
-        "--print-mcp-token", action="store_true",
-        help=(
-            "Print this OS account's own MCP bearer token (minting one on first use) and exit. "
-            "For a direct HTTP MCP client with no PrivacyFence extension of its own."
-        ),
-    )
     # ADR 0165: an administrator takes back all of one person's scoped tokens.
     parser.add_argument(
         "--revoke-scoped-tokens", metavar="PRINCIPAL_ID", default=None,
@@ -2753,22 +2334,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "provisioning key in the environment."
         ),
     )
-    # How the Windows Service Control Manager starts the
-    # daemon on a privilege-separated install -- see windows_service.py for
-    # why Windows needs an argv flag where macOS and Linux needed only a
-    # different service manager pointed at the same unchanged executable.
-    # Hidden from --help: nobody runs this by hand, and the one person who
-    # tries after reading it out of `sc qc` gets a message saying so
-    # (windows_service.run_service()).
-    parser.add_argument("--windows-service", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.idp_secret_file and not args.print_env_from_bundle:
         parser.error("--idp-secret-file goes with --print-env-from-bundle")
     return args
 
 
-# Why main() last returned 1, for a caller with no stderr to read it from: a Windows service has
-# none, so windows_service puts this in the Event Log entry for the failed start.
+# Why main() last returned 1, for a caller that cannot read stderr.
 _last_startup_error: str | None = None
 
 
@@ -2786,7 +2358,7 @@ def _refuse_to_start(message: str, *, logged: bool = False) -> int:
 
     ``logged`` once setup_logging() has run, to put it in the log file too -- the same pair the
     "Fatal error" path writes. Before that there is no log file to write to (settings.yaml names
-    it), which is why the recorded reason is what a Windows service reports instead.
+    it).
     """
     _note_startup_error(message)
     if logged:
@@ -2796,29 +2368,7 @@ def _refuse_to_start(message: str, *, logged: bool = False) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # A windowed Windows build started with no console has no std streams
-    # at all -- see std_streams.py. src/_daemon_entry.py already calls this
-    # before importing anything; repeating it here covers every other way
-    # main() is reached (the `privacyfence-app` console script, a dev run).
-    ensure_std_streams()
     args = parse_args(argv)
-
-    # Before anything else: this process is not the
-    # daemon, it is the shell the Service Control Manager expects to talk
-    # to. It hands itself to the SCM, which calls back into this same
-    # function with no arguments at all -- so every check below
-    # runs exactly once, in the service's own
-    # run rather than in the dispatcher that precedes it.
-    if args.windows_service:
-        from . import windows_service
-
-        return windows_service.run_service()
-
-    # A pure client of the control channel -- no config, no logging setup.
-    if args.print_sign_in_link:
-        return run_print_sign_in_link()
-    if args.print_mcp_token:
-        return run_print_mcp_token()
 
     # Before anything reads or rewrites data: a newer release's data is not ours to touch.
     try:
@@ -2839,15 +2389,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.grist_release is not None:
         return run_grist_release(args.grist_release)
 
-    oauth_flag = (
-        args.gmail_oauth or args.drive_oauth or args.contacts_oauth
-        or args.calendar_oauth or args.tasks_oauth or args.apps_script_oauth
-        or args.slack_oauth
-        or args.salesforce_oauth or args.atlassian_oauth or args.grist_oauth
-        or args.miro_oauth
-        or args.telegram_setup or args.peek_login
-    )
-
     try:
         config = load_config(args.config, principal=LOCAL_PRINCIPAL)
     except (FileNotFoundError, ValueError) as exc:
@@ -2856,34 +2397,6 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(config)
 
     try:
-        if oauth_flag:
-            org_config = _release_org_config()
-            if args.gmail_oauth:
-                return run_gmail_oauth(org_config)
-            if args.drive_oauth:
-                return run_drive_oauth(org_config)
-            if args.contacts_oauth:
-                return run_contacts_oauth(org_config)
-            if args.calendar_oauth:
-                return run_calendar_oauth(org_config)
-            if args.tasks_oauth:
-                return run_tasks_oauth(org_config)
-            if args.apps_script_oauth:
-                return run_apps_script_oauth(org_config)
-            if args.slack_oauth:
-                return run_slack_oauth(org_config)
-            if args.salesforce_oauth:
-                return run_salesforce_oauth(org_config)
-            if args.atlassian_oauth:
-                return run_atlassian_oauth(org_config, config)
-            if args.grist_oauth:
-                return run_grist_oauth(org_config)
-            if args.miro_oauth:
-                return run_miro_oauth(org_config)
-            if args.telegram_setup:
-                return run_telegram_setup()
-            if args.peek_login:
-                return run_peek_login(org_config)
         return run_app(config, args.config)
     except Exception as exc:
         logger.error("Fatal error: %s", exc, exc_info=True)
