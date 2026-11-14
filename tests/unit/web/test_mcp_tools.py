@@ -105,6 +105,25 @@ class TestToolInputSchema:
         schema = mcp_tools.tool_input_schema(spec)
         assert schema == {"type": "object", "properties": {}}
 
+    def test_tool_input_schema_uses_raw_schema_verbatim(self):
+        raw = {
+            "type": "object",
+            "properties": {
+                "filter": {"type": "object", "properties": {"a": {"type": "integer"}}},
+                "ids": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["ids"],
+        }
+        spec = ToolSpec(name="up", description="d", params=[ToolParam("ignored", "str", True)], input_schema=raw)
+        assert mcp_tools.tool_input_schema(spec) == raw
+
+    def test_tool_input_schema_returns_a_copy(self):
+        raw = {"type": "object", "properties": {"a": {"type": "string"}}}
+        spec = ToolSpec(name="up", description="d", input_schema=raw)
+        out = mcp_tools.tool_input_schema(spec)
+        out["properties"]["b"] = {"type": "string"}
+        assert "b" not in spec.input_schema["properties"]
+
 
 _READ = ToolSpec(name="r", description="d", read_only=True)
 _WRITE = ToolSpec(name="w", description="d", read_only=False)
