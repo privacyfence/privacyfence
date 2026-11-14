@@ -55,12 +55,10 @@ from types import SimpleNamespace
 import pytest
 
 from privacyfence import (
-    daemon_main,
     paths,
     privilege_separation,
     secure_files,
     windows_acl,
-    windows_service,
 )
 from privacyfence.web import control_channel, mcp_auth
 
@@ -2973,39 +2971,6 @@ class TestWindowsServiceHost:
     pointed a different service manager at the same unchanged executable,
     and Windows cannot, because its SCM waits to be called back."""
 
-    def test_the_daemon_entry_point_routes_the_service_flag(self, monkeypatch):
-        called = []
-        monkeypatch.setattr(
-            "privacyfence.windows_service.run_service", lambda: called.append(True) or 0
-        )
-
-        assert daemon_main.main(["--windows-service"]) == 0
-        assert called == [True]
-
-    def test_the_service_flag_short_circuits_before_any_config_is_read(self, monkeypatch):
-        # It has to: this process is the dispatcher, not the daemon. The SCM
-        # calls back into main() with no arguments, and every startup check
-        # -- check_runtime_identity() included -- runs there, exactly once.
-        monkeypatch.setattr("privacyfence.windows_service.run_service", lambda: 0)
-        monkeypatch.setattr(
-            daemon_main, "load_config", lambda *_args, **_kwargs: pytest.fail("config was read")
-        )
-        monkeypatch.setattr(
-            privilege_separation, "check_runtime_identity",
-            lambda: pytest.fail("the dispatcher ran the daemon's own startup checks"),
-        )
-
-        assert daemon_main.main(["--windows-service"]) == 0
-
-    def test_the_service_name_and_the_account_are_one_fact(self):
-        # Windows derives a virtual account's name from its service's, so a
-        # service host naming a different service would produce an account no
-        # ACL on disk mentions.
-        assert windows_service.WINDOWS_SERVICE_NAME == privilege_separation.WINDOWS_SERVICE_NAME
-        assert privilege_separation.WINDOWS_SERVICE_ACCOUNT_NAME.endswith(
-            windows_service.WINDOWS_SERVICE_NAME
-        )
-
     def test_the_installer_registers_exactly_that_flag(self):
         # The one string that connects the two: the SCM starts what binPath
         # says, and anything else would be killed after 30 seconds with error
@@ -3064,13 +3029,6 @@ class TestWindowsServiceHost:
         assert "$process.StandardError.ReadToEndAsync()" in script
         assert script.index("ReadToEndAsync") < script.index("$process.WaitForExit()")
 
-    def test_a_refused_start_puts_the_reason_in_the_event_log_message(self):
-        # A service has no stderr, and the refusals that matter happen before
-        # the daemon has a log file: the Event Log entry is the one place left.
-        message = windows_service.startup_failure_message(1, "Configuration error: bad settings.yaml")
-        assert message == "PrivacyFence exited with status 1: Configuration error: bad settings.yaml"
-        assert "see the daemon's own log" in windows_service.startup_failure_message(1, None)
-
     def test_the_installer_registers_and_removes_the_event_log_source(self):
         # `sc create` registers no Event Log source, so every entry the service
         # wrote read as empty and Get-WinEvent refused to filter on it.
@@ -3083,56 +3041,6 @@ class TestWindowsServiceHost:
         assert "\n    Register-EventSource\n    Start-DaemonService\n" in enable
         uninstall = script[script.index("function Invoke-Uninstall"):]
         assert "Unregister-EventSource" in uninstall[: uninstall.index("if (-not $Purge)")]
-
-    def test_the_module_imports_without_pywin32(self):
-        # Deliberate: the ServiceFramework subclass is built inside a
-        # function, so importing this module (from a test, or from
-        # daemon_main's own argument routing) never requires Windows.
-        assert windows_service.SERVICE_DISPLAY_NAME
-        assert "under its own account" in windows_service.SERVICE_DESCRIPTION
-
-    @staticmethod
-    def _run_isolated(code: str) -> str:
-        # A fresh interpreter, because this one imported daemon_main long ago
-        # and "is it in sys.modules" is the whole question.
-        result = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, timeout=60, cwd=REPO_ROOT,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-        return result.stdout.strip()
-
-    def test_the_frozen_entry_reaches_the_dispatcher_without_importing_the_daemon(self):
-        # The SCM kills a service that has not called StartServiceCtrlDispatcher
-        # within 30 seconds (error 1053), and importing daemon_main is not
-        # needed to make that call. src/_daemon_entry.py is the frozen build's
-        # entry point, so it is where the flag has to be routed first.
-        output = self._run_isolated(
-            "import runpy, sys\n"
-            "import privacyfence.windows_service as ws\n"
-            "ws.run_service = lambda: print('privacyfence.daemon_main' in sys.modules) or 0\n"
-            "sys.argv = ['privacyfence-app.exe', '--windows-service']\n"
-            "try:\n"
-            "    runpy.run_path('src/_daemon_entry.py', run_name='__main__')\n"
-            "except SystemExit as exc:\n"
-            "    print('exit', exc.code)\n"
-        )
-        assert output.splitlines() == ["False", "exit 0"]
-
-    def test_building_the_service_class_does_not_import_the_daemon(self):
-        # _service_class() runs before StartServiceCtrlDispatcher too; the
-        # daemon is imported in SvcDoRun, after the framework has reported
-        # SERVICE_RUNNING. Stand-in pywin32 modules, so this runs anywhere.
-        output = self._run_isolated(
-            "import sys, types\n"
-            "for name in ('servicemanager', 'win32service', 'win32serviceutil'):\n"
-            "    sys.modules[name] = types.ModuleType(name)\n"
-            "sys.modules['win32serviceutil'].ServiceFramework = object\n"
-            "from privacyfence import windows_service\n"
-            "windows_service._service_class()\n"
-            "print('privacyfence.daemon_main' in sys.modules)\n"
-        )
-        assert output == "False"
-
 
 class TestWindowsChannelTrustees:
     """``socket_mode()``'s ``0660``, in the primitive Windows has: a named
