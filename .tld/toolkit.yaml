@@ -140,3 +140,23 @@ hooks:
 
 admin:
   policy: .tld/admin-policy.yaml
+
+deps:
+  cooldown_days: 3
+  time_budget_minutes: 90
+  audit:
+    - ecosystem: "pip"
+      run: "pip-audit --strict -r requirements/runtime.lock.txt"
+    - ecosystem: "npm"
+      run: "npm audit --omit=dev --audit-level=high"
+      cwd: "mcpb/shim"
+    - ecosystem: "npm"
+      run: "npm audit --omit=dev --audit-level=high"
+      cwd: "cloudflare/downloads"
+    - ecosystem: "npm"
+      run: "npm audit --omit=dev --audit-level=high"
+      cwd: "cloudflare/oauth-relay"
+  lock_freshness:
+    - when: ["pyproject.toml"]
+      run: "scripts/update_dependency_locks.sh"
+      lockfiles: ["requirements/*.lock.txt"]
