@@ -2539,23 +2539,41 @@ class TestMaybeStartWebServerOrgMode:
         ):
             daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
 
-    def test_upstream_mcp_grants_seed_once_and_the_first_ones_stay(self, monkeypatch, tmp_path, caplog):
-        from privacyfence import admin_config, upstream_mcp_registry, upstream_mcp_runtime
+    def test_upstream_mcp_operator_grants_are_ignored_not_seeded(self, monkeypatch, tmp_path, caplog):
+        from privacyfence import admin_config
 
-        first = [{"match": "*", "domains": ["general"]}]
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(first))
-        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
+        grants = [{"match": "*", "domains": ["general"]}]
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(grants))
+        with caplog.at_level(logging.WARNING, logger=daemon_main.logger.name):
             self._start_org(monkeypatch, tmp_path)
-        assert "Seeded the domain grants of upstream(s) kh" in caplog.text
-        assert admin_config.load()["upstream_mcp"] == {"kh": {"grants": first}}
+        assert "grants were replaced by groups and are ignored" in caplog.text
+        assert (admin_config.load() or {}).get("upstream_mcp", {}) == {}
 
-        upstream_mcp_registry.unregister_all()
-        upstream_mcp_runtime.reset()
-        monkeypatch.setenv(
-            "PRIVACYFENCE_UPSTREAM_MCP", self._inline([{"match": "@x.com", "domains": ["hr"]}]),
-        )
+    def test_upstream_mcp_static_membership_file_builds_a_static_resolver(self, monkeypatch, tmp_path):
+        from privacyfence import group_membership, upstream_mcp_runtime
+
+        members = tmp_path / "members.json"
+        members.write_text('{"version": 1, "groups": {"a@co.example": ["x@co.example"]}}', encoding="utf-8")
+        data = json.loads(self._inline())
+        data["membership"] = {"source": "static", "file": str(members)}
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", json.dumps(data))
         self._start_org(monkeypatch, tmp_path)
-        assert admin_config.load()["upstream_mcp"] == {"kh": {"grants": first}}
+        assert isinstance(upstream_mcp_runtime._runtime.resolver, group_membership.StaticFileResolver)
+
+    def test_upstream_mcp_default_membership_is_the_snapshot_resolver(self, monkeypatch, tmp_path):
+        from privacyfence import group_membership, upstream_mcp_runtime
+
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        self._start_org(monkeypatch, tmp_path)
+        assert isinstance(upstream_mcp_runtime._runtime.resolver, group_membership.SnapshotResolver)
+
+    def test_upstream_mcp_grants_in_admin_config_refuse_the_start(self, monkeypatch, tmp_path):
+        (tmp_path / "admin_config.json").write_text(
+            json.dumps({"version": 1, "upstream_mcp": {"kh": {"grants": []}}}), encoding="utf-8",
+        )
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        with pytest.raises(org_mode.ConfigurationError, match="grants were replaced by groups"):
+            self._start_org(monkeypatch, tmp_path)
 
     def test_upstream_mcp_collision_leaves_admin_config_unseeded(self, monkeypatch, tmp_path):
         from privacyfence import admin_config
@@ -2573,7 +2591,8 @@ class TestMaybeStartWebServerOrgMode:
     def test_build_connectors_appends_the_upstream_connectors_when_configured(self, tmp_path):
         from privacyfence import oidc_provider, upstream_mcp_runtime
         from privacyfence.upstream_claims import ClaimSigner
-        from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+        from privacyfence.group_membership import StaticFileResolver
+        from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 
         upstreams = parse_upstreams(json.loads(self._upstream_file(tmp_path).read_text()), source="test")
         assert daemon_main.build_connectors({}, {})[0] == []
@@ -2583,7 +2602,8 @@ class TestMaybeStartWebServerOrgMode:
                 issuer="https://pf.example/upstream-mcp",
                 key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"),
             ),
-            grants=GrantStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            resolver=StaticFileResolver(tmp_path / "members.json"),
         )
         connectors, failures = daemon_main.build_connectors({}, {})
         assert [c.name for c in connectors] == ["kh"]

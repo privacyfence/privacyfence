@@ -102,6 +102,7 @@ from . import (
     connector_configs,
     data_format,
     grist_provisioning,
+    group_membership,
     oauth_apps,
     oidc_provider,
     org_bundle_signing,
@@ -1677,26 +1678,30 @@ def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
 
 def _configure_upstream_mcp(issuer_url: str) -> None:
     """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` or ``PRIVACYFENCE_UPSTREAM_MCP`` set
-    (ADR 0285, 0288): load the declaration, seed its grants, register the declared tools into the policy tables, and configure the runtime. Raises
+    (ADR 0285, 0289): load the declaration, register the declared tools into the policy tables, build the group maps
+    and the membership resolver, and configure the runtime. Raises
     ``org_mode.ConfigurationError`` (the start is refused) on any problem."""
     upstreams = upstream_mcp_config.load_declared()
     if upstreams is None:
         return
+    _claim_settings, membership = upstream_mcp_config.load_settings()
     upstream_mcp_registry.register(upstreams)
-    try:
-        seeded = admin_config.seed_upstream_grants(upstream_mcp_config.seed_payload(upstreams))
-    except admin_config.AdminConfigError as error:
-        raise org_mode.ConfigurationError(str(error)) from None
-    if seeded:
-        logger.info(
-            "Seeded the domain grants of upstream(s) %s from the declaration; edit them in admin_config.json from now on.",
-            ", ".join(seeded),
-        )
-    grants = upstream_mcp_config.GrantStore(
+    for upstream in upstreams:
+        if upstream.grants:
+            logger.warning(
+                "Upstream %s declares grants in the operator file; grants were replaced by groups and are ignored.",
+                upstream.id,
+            )
+    groups = upstream_mcp_config.GroupMapStore(
         admin_config.admin_config_path(), frozenset(upstream.id for upstream in upstreams),
     )
+    resolver: group_membership.MembershipResolver
+    if membership.source == "static":
+        resolver = group_membership.StaticFileResolver(Path(membership.file or ""))
+    else:
+        resolver = group_membership.SnapshotResolver(group_membership.get_store())
     upstream_mcp_runtime.configure(
-        upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url), grants=grants,
+        upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url), groups=groups, resolver=resolver,
     )
     logger.info("Upstream MCP server(s): %s", ", ".join(upstream.id for upstream in upstreams))
 

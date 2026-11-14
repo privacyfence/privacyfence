@@ -13,7 +13,8 @@ from privacyfence import oidc_provider, scoped_tokens, upstream_mcp_runtime
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.upstream_claims import ClaimSigner
 from privacyfence.upstream_mcp_client import UpstreamMcpClientError
-from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+from privacyfence import group_membership
+from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 
 _FILE = {
     "version": 1,
@@ -31,13 +32,21 @@ _FILE = {
         },
     ],
 }
-_GRANTS = {
+_GROUPS = {
     "upstream_mcp": {
-        "kh": {"grants": [
-            {"match": "*", "domains": ["general"]},
-            {"match": "@hr.example", "domains": ["hr"]},
-            {"match": "ann@hr.example", "domains": ["finance"]},
-        ]},
+        "kh": {"groups": {
+            "everyone@co.example": ["general"],
+            "hr@co.example": ["hr"],
+            "finance@co.example": ["finance"],
+        }},
+    },
+}
+_MEMBERS = {
+    "version": 1,
+    "groups": {
+        "everyone@co.example": ["bob@x.example", "ann@hr.example", "Zed@x.example"],
+        "hr@co.example": ["ann@hr.example"],
+        "finance@co.example": ["ann@hr.example"],
     },
 }
 
@@ -56,11 +65,14 @@ def upstreams():
 @pytest.fixture
 def configured(tmp_path, upstreams):
     path = tmp_path / "admin_config.json"
-    path.write_text(json.dumps(_GRANTS), encoding="utf-8")
+    path.write_text(json.dumps(_GROUPS), encoding="utf-8")
+    members = tmp_path / "members.json"
+    members.write_text(json.dumps(_MEMBERS), encoding="utf-8")
     key = oidc_provider.load_or_create_signing_key(tmp_path / "key.pem")
     signer = ClaimSigner(issuer="https://pf.example/upstream-mcp", key=key)
     upstream_mcp_runtime.configure(
-        upstreams=upstreams, signer=signer, grants=GrantStore(path, frozenset({"kh", "wiki"})),
+        upstreams=upstreams, signer=signer, groups=GroupMapStore(path, frozenset({"kh", "wiki"})),
+        resolver=group_membership.StaticFileResolver(members),
     )
     return upstreams
 
@@ -122,7 +134,7 @@ class TestCallerFor:
         assert claim.domains == ("finance", "general", "hr")
         assert claim.act == _AI_CLIENT_ACT
 
-    def test_grants_are_per_upstream(self, configured):
+    def test_group_maps_are_per_upstream(self, configured):
         principal = Principal(id="u1", email="ann@hr.example", email_verified=True)
         assert _caller(configured[1], principal).domains == ()
 
@@ -160,7 +172,7 @@ class TestCallerFor:
         assert claim.domains == ()
 
 
-class TestHeldDomains:
+class TestHeldAudiences:
     def test_one_entry_per_upstream(self, configured):
         held = upstream_mcp_runtime.held_audiences(Principal(id="u1", email="ann@hr.example"), True)
         assert held == {"kh": frozenset({"general", "hr", "finance"}), "wiki": frozenset()}
@@ -168,6 +180,50 @@ class TestHeldDomains:
     def test_an_unverified_person_holds_nothing(self, configured):
         held = upstream_mcp_runtime.held_audiences(Principal(id="u1", email="ann@hr.example"), False)
         assert held == {"kh": frozenset(), "wiki": frozenset()}
+
+
+class TestAudiencesForEmail:
+    def test_static_resolver_gives_the_union_over_groups(self, configured):
+        assert upstream_mcp_runtime.audiences_for_email("kh", " Ann@HR.example ", True) == {
+            "general", "hr", "finance",
+        }
+
+    def test_unverified_or_empty_email_gets_nothing(self, configured):
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", False) == frozenset()
+        assert upstream_mcp_runtime.audiences_for_email("kh", "", True) == frozenset()
+
+    def test_a_person_in_no_group_or_an_unmapped_upstream_gets_nothing(self, configured):
+        assert upstream_mcp_runtime.audiences_for_email("kh", "nobody@x.example", True) == frozenset()
+        assert upstream_mcp_runtime.audiences_for_email("wiki", "ann@hr.example", True) == frozenset()
+
+    def test_snapshot_resolver_grants_all_at_once_and_restricted_after_approval(self, tmp_path, upstreams):
+        path = tmp_path / "admin_config.json"
+        everyone = {"upstream_mcp": {"kh": {"groups": {
+            "everyone@co.example": ["all"], "hr@co.example": ["hr"],
+        }}}}
+        path.write_text(json.dumps(everyone), encoding="utf-8")
+        store = group_membership.MembershipStore(tmp_path / "group_membership.json")
+        groups = GroupMapStore(path, frozenset({"kh", "wiki"}))
+        key = oidc_provider.load_or_create_signing_key(tmp_path / "key.pem")
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams, signer=ClaimSigner(issuer="https://pf.example/upstream-mcp", key=key),
+            groups=groups, resolver=group_membership.SnapshotResolver(store),
+        )
+        mapping = groups.group_audiences("kh")
+        result = store.apply_snapshot(
+            {"everyone@co.example": ["ann@hr.example"], "hr@co.example": ["ann@hr.example"]},
+            group_audiences=mapping, now=1000.0, max_additions=20,
+        )
+        assert result.status == "applied"
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == {"all"}
+        store.approve("hr@co.example", "hr", "ann@hr.example", group_audiences=mapping, now=1001.0)
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == {"all", "hr"}
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", False) == frozenset()
+
+    def test_a_scoped_token_gets_owner_now_intersected_with_chosen(self, configured):
+        scope = _scope(principal_email_verified=True, upstream_audiences={"kh": frozenset({"general", "legal"})})
+        claim = _caller(configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True), scope)
+        assert claim.domains == ("general",)
 
 
 class TestStatus:

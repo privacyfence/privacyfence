@@ -988,7 +988,8 @@ class TestStatus:
     def test_status_lists_the_upstreams_when_configured(self, tmp_path, authenticated):
         from privacyfence import oidc_provider, upstream_mcp_runtime
         from privacyfence.upstream_claims import ClaimSigner
-        from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+        from privacyfence.group_membership import StaticFileResolver
+        from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 
         upstreams = parse_upstreams({
             "version": 1,
@@ -1003,7 +1004,8 @@ class TestStatus:
                 issuer="https://pf.example/upstream-mcp",
                 key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"),
             ),
-            grants=GrantStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            resolver=StaticFileResolver(tmp_path / "members.json"),
         )
         dispatcher = _dispatcher({}, mode="org")
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])

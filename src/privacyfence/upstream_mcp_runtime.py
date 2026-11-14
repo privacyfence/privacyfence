@@ -20,12 +20,13 @@ from dataclasses import dataclass
 import httpx2
 
 from . import upstream_claims
+from .group_membership import MembershipResolver
 from .connectors.upstream_mcp import UpstreamMcpConnector
 from .principal import Principal, current_principal
 from .scoped_tokens import current_token_scope
 from .upstream_claims import CallerClaim, ClaimSigner
 from .upstream_mcp_client import UpstreamMcpClient, UpstreamToolCatalog
-from .upstream_mcp_config import GrantStore, UpstreamServer
+from .upstream_mcp_config import GroupMapStore, UpstreamServer
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +48,16 @@ class _Entry:
 class _Runtime:
     entries: dict[str, _Entry]
     signer: ClaimSigner
-    grants: GrantStore
+    groups: GroupMapStore
+    resolver: MembershipResolver
 
 
 _runtime: _Runtime | None = None
 
 
 def configure(
-    *, upstreams: Sequence[UpstreamServer], signer: ClaimSigner, grants: GrantStore,
+    *, upstreams: Sequence[UpstreamServer], signer: ClaimSigner, groups: GroupMapStore,
+    resolver: MembershipResolver,
     transport: httpx2.AsyncBaseTransport | None = None,
 ) -> None:
     global _runtime
@@ -64,7 +67,7 @@ def configure(
         )
         for upstream in upstreams
     }
-    _runtime = _Runtime(entries=entries, signer=signer, grants=grants)
+    _runtime = _Runtime(entries=entries, signer=signer, groups=groups, resolver=resolver)
 
 
 def configured() -> bool:
@@ -97,6 +100,15 @@ def connectors_for_principal() -> list[UpstreamMcpConnector]:
     ]
 
 
+def audiences_for_email(upstream_id: str, email: str, verified: bool) -> frozenset[str]:
+    """The audiences ``email`` holds on ``upstream_id`` now; empty unless the email is verified."""
+    assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
+    address = email.strip().lower()
+    if not verified or not address:
+        return frozenset()
+    return _runtime.resolver.audiences_for(address, _runtime.groups.group_audiences(upstream_id))
+
+
 def caller_for(upstream: UpstreamServer) -> CallerClaim:
     """Who is calling ``upstream`` right now, and which of its audiences they may see."""
     assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
@@ -104,17 +116,17 @@ def caller_for(upstream: UpstreamServer) -> CallerClaim:
     scope = current_token_scope()
     if scope is None:
         verified = principal.email_verified
-        domains = _runtime.grants.domains_for(upstream.id, principal.email, verified)
+        audiences = audiences_for_email(upstream.id, principal.email, verified)
     else:
         verified = bool(getattr(scope, "principal_email_verified", False))
-        held = _runtime.grants.domains_for(upstream.id, scope.principal_email, verified)
+        held = audiences_for_email(upstream.id, scope.principal_email, verified)
         chosen = getattr(scope, "upstream_audiences", {}).get(upstream.id, ())
-        domains = tuple(sorted(set(held) & set(chosen)))
+        audiences = held & frozenset(chosen)
     return CallerClaim(
         sub=principal.id,
         email=principal.email if verified else "",
         email_verified=verified,
-        domains=domains,
+        domains=tuple(sorted(audiences)),
         act=upstream_claims.actor_from_context(),
     )
 
@@ -124,7 +136,7 @@ def held_audiences(principal: Principal, email_verified: bool) -> dict[str, froz
     if _runtime is None:
         return {}
     return {
-        upstream_id: frozenset(_runtime.grants.domains_for(upstream_id, principal.email, email_verified))
+        upstream_id: audiences_for_email(upstream_id, principal.email, email_verified)
         for upstream_id in _runtime.entries
     }
 
