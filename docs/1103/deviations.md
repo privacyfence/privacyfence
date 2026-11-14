@@ -9,7 +9,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-membership-store
 
-- pending
+- worker: Worker interpreted: parked counts new (email, group, restricted audience) triples; bootstrap additions are left out of the 24 h cap; an unmapped group is dropped like a removal; approve/decline return 0 for the all audience.
+- worker: Worker reported blocked because the tld plugin is absent in its container; no roles are required for its files, so I accepted the head after my own review and the unit suite.
 
 ## p3-audit-fields
 
