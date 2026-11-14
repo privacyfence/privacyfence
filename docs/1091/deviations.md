@@ -26,7 +26,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-tool-registration
 
-- pending
+- worker: register also refuses an exposed tool name repeated within one call (collision check covers duplicates), which the brief did not list; no other deviation
 
 ## p6-reference-upstream
 
