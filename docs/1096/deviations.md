@@ -63,7 +63,15 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p07-server-local
 
-- pending
+- worker: Outside touches: tests/unit/test_privilege_separation.py (deleted test_mcp_token_moved_out_of_the_shared_handoff_dir, which called the removed load_or_create_mcp_token; dropped that one call from test_resolving_paths_does_not_retighten_the_handoff_dir), tests/unit/web/test_control_channel.py (deleted two tests that built the local app or used rotate_mcp_token), tests/unit/web/test_routes_approvals.py (TestPerPrincipalIsolation._app builds its resolver inline) and tests/unit/web/test_routes_setti
+- worker: server.py went beyond the brief: build_app stays as a thin organization-only wrapper because the org tests call it; WebServer now takes only org, host, port, mcp_dispatcher, principal_resolver, the TLS arguments and trusted_proxies (daemon_main never passed allow_quit, notifications_*, step_up, agent_overrides, startup_admin or org_config); _state_stream_route and _state_stream_loop_lifespan were deleted with their tests; wait_until_ready is kept and always returns None.
+- worker: mcp_auth.py: single_token_verifier is kept and returns a private _SingleTokenVerifier because PerUserTokenVerifier is gone; a small TestSingleTokenVerifier covers it. Two _scoped_rule_entry tests that sat in a deleted class were restored to keep the branch covered. Coverage after merge: server.py 98% (floor 95), mcp_auth.py 100% (floor 98).
+- worker: tests/integration/test_shim_mcp_contract.py and test_settings_personal_transfer_browser.py still build a local WebServer; they were not run and are deleted by p11 and p09. Comments in routes_mcp.py, routes_file_bridge.py and control_channel.py still name PerUserTokenVerifier.
+- scope: scope: tests/unit/test_privilege_separation.py
+- scope: scope: tests/unit/web/test_control_channel.py
+- scope: scope: tests/unit/web/test_routes_approvals.py
+- scope: scope: tests/unit/web/test_routes_settings.py
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p08a-routes-settings-admin
 
