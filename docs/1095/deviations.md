@@ -31,7 +31,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-contract-test
 
-- pending
+- review: worker had no toolkit so ran no dod or roles; none are required for these paths; orchestrator ran the integration contract test and the field-name pin (5 passed, none skipped) and ruff after the merge
 
 ## p7-publish-workflow
 
