@@ -45,7 +45,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p9-docs
 
-- pending
+- review: worker had no toolkit so ran no dod or roles, none are required for these paths; orchestrator re-ran ruff and the full unit suite after the merge (only the ADR 0283-0287 links of the plan text stay red until p10); docs read against the built code and match
 
 ## p10-adrs-changelog
 
