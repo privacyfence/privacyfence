@@ -587,6 +587,10 @@ _JS = r"""
   // step_up.scope -- the org's bundle, or config/settings.yaml in local
   // mode -- is the minimum: a rung narrower than it is drawn locked, with
   // no data-action, so this control can only ever ask for more.
+  var CREDENTIAL_TYPE_OPTIONS = [
+    ['httpBearerAuth', 'MCP Client node (n8n\u2019s built-in bearer credential)'],
+    ['privacyFenceApi', 'PrivacyFence node (community node n8n-nodes-privacyfence)'],
+  ];
   var STEP_UP_SCOPE_LABELS = [
     ['writes', 'Writes only'],
     ['writes_and_pii_reads', 'Writes & PII reads'],
@@ -2560,6 +2564,10 @@ _JS = r"""
       checkRow('Let AI clients ask for a token to be delivered into n8n.', 'enabled', r.enabled, 'Turn on n8n delivery'),
       textFieldRow('n8n project id', 'Leave empty to use the API key owner\u2019s personal space.', 'project_id', r.project_id || ''),
       textFieldRow('PrivacyFence MCP address for n8n', 'Leave empty to use this server\u2019s address.', 'mcp_url', r.mcp_url || ''),
+      selectFieldRow('Credential type in n8n', 'credential_type', CREDENTIAL_TYPE_OPTIONS, r.credential_type || 'httpBearerAuth',
+        'Credential type in n8n', 'The PrivacyFence node needs the community node n8n-nodes-privacyfence installed in n8n and a ' +
+        'PrivacyFence MCP address above. The setting is server-wide: with it, an AI Agent in n8n uses one PrivacyFence node per call ' +
+        'instead of the MCP Client Tool.'),
       rowHtml('n8n address', esc(urlText), ''),
       rowHtml('n8n API key', esc(status.key_set ? 'Set' : 'Not set: set ' + keyVar), ''),
     ];
@@ -3396,7 +3404,9 @@ def _admin_section_defaults() -> dict[str, dict[str, Any]]:
         "authz": {"allowed_domains": [], "groups_claim": "", "required_groups": []},
         "step_up": {"enabled": False, "require_passkey": False, "scope": DEFAULT_STEP_UP_SCOPE},
         "scoped_tokens": {"enabled": False, "max_days": scoped_tokens.DEFAULT_DAYS, "allow_ai_proposals": False},
-        "agent_runtimes": {"n8n": {"enabled": False, "project_id": "", "mcp_url": ""}},
+        "agent_runtimes": {
+            "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
+        },
         "audit_forwarding": {
             "enabled": False, "kind": org_mode.DEFAULT_AUDIT_FORWARDING_KIND,
             "syslog": {"host": "", "port": org_mode.DEFAULT_SYSLOG_PORT, "protocol": org_mode.DEFAULT_SYSLOG_PROTOCOL},

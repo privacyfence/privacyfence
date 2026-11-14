@@ -155,7 +155,9 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
     ),
     "tighten_step_up": (("enabled", bool, True), ("require_passkey", bool, True), ("scope", str, True)),
     "set_scoped_tokens": (("enabled", bool, True), ("max_days", int, True), ("allow_ai_proposals", bool, True)),
-    "set_agent_runtimes": (("enabled", bool, True), ("project_id", str, True), ("mcp_url", str, True)),
+    "set_agent_runtimes": (
+        ("enabled", bool, True), ("project_id", str, True), ("mcp_url", str, True), ("credential_type", str, True),
+    ),
     "set_audit_forwarding": (
         ("enabled", bool, True), ("kind", str, True), ("syslog_host", str, True), ("syslog_port", int, True),
         ("syslog_protocol", str, True), ("http_url", str, True),
