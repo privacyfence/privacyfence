@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 N8N_URL_ENV = "PRIVACYFENCE_N8N_URL"
 N8N_API_KEY_ENV = "PRIVACYFENCE_N8N_API_KEY"  # the variable's name, never a key; secret-scan:allow
 RUNTIMES = ("n8n",)
+CREDENTIAL_TYPES = ("httpBearerAuth", "privacyFenceApi")
+DEFAULT_CREDENTIAL_TYPE = "httpBearerAuth"
+N8N_NODE_PACKAGE = "n8n-nodes-privacyfence"
+N8N_NODE_TYPE = "n8n-nodes-privacyfence.privacyFence"
 
 DELIVERY_UNAVAILABLE = (
     "Delivery to n8n is not set up on this PrivacyFence server. "
@@ -38,6 +42,21 @@ DELIVERY_MESSAGE = (
     "tools and rules narrow. Calls that would need an approval are refused at once. Tools in "
     "uncovered_tools have no rule, so the token's calls to them will be denied."
 )
+DELIVERY_MESSAGE_PRIVACYFENCE_NODE = (
+    "Give the person this link. They review the token in PrivacyFence Settings, can narrow it, "
+    "and confirm it themselves. When they do, PrivacyFence creates an n8n credential of type "
+    "privacyFenceApi holding the token and this server's address; call "
+    "privacyfence_runtime_credential_status with this proposal_id to get the credential's id for "
+    "the PrivacyFence node (community node n8n-nodes-privacyfence, which must be installed in that n8n). "
+    "Anyone who can edit workflows in that n8n can use the credential, so keep its tools and rules narrow. "
+    "Calls that would need an approval are refused at once. Tools in uncovered_tools have no rule, "
+    "so the token's calls to them will be denied."
+)
+
+
+def delivery_message(credential_type: str) -> str:
+    return DELIVERY_MESSAGE if credential_type == "httpBearerAuth" else DELIVERY_MESSAGE_PRIVACYFENCE_NODE
+
 
 _PROJECT_ID_RE = re.compile(r"[A-Za-z0-9]{1,36}")
 _WORKFLOW_ID_RE = re.compile(r"[A-Za-z0-9]{1,36}")
@@ -51,6 +70,7 @@ class N8nRuntimeConfig:
     base_url: str
     project_id: str
     mcp_url: str
+    credential_type: str = DEFAULT_CREDENTIAL_TYPE
 
     @classmethod
     def from_org_config(
@@ -74,12 +94,23 @@ class N8nRuntimeConfig:
             raise org_mode.ConfigurationError(
                 "agent_runtimes.n8n.mcp_url must be empty, an https:// URL, or http:// on localhost."
             )
+        credential_type = n8n.get("credential_type", DEFAULT_CREDENTIAL_TYPE)
+        if credential_type not in CREDENTIAL_TYPES:
+            raise org_mode.ConfigurationError(
+                "agent_runtimes.n8n.credential_type must be httpBearerAuth or privacyFenceApi."
+            )
+        if credential_type == "privacyFenceApi" and not mcp_url:
+            raise org_mode.ConfigurationError(
+                "agent_runtimes.n8n.mcp_url is required for the privacyFenceApi credential type: "
+                "the credential keeps this server's address."
+            )
         raw_url = env.get(N8N_URL_ENV, "").strip()
         return cls(
             enabled=enabled,
             base_url=normalize_n8n_url(raw_url) if raw_url else "",
             project_id=project_id,
             mcp_url=mcp_url,
+            credential_type=credential_type,
         )
 
 

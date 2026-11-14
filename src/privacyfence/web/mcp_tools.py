@@ -362,10 +362,11 @@ RUNTIME_CREDENTIAL_STATUS_TOOL = types.Tool(
         "Report whether a proposed token was delivered to n8n, and the n8n credential to use. Call it "
         "with the proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to, "
         "after the person has confirmed it. Returns state 'delivered' with credential_id, "
-        "credential_name, credential_type, node_authentication, mcp_url and token_expires_at; 'pending' "
-        "while the person has not decided; or 'not_delivered' for anything else. Put credential_id on "
-        "the MCP Client node with authentication bearerAuth and endpoint mcp_url. It never returns the "
-        "token. A scoped token cannot call it."
+        "credential_name, credential_type, mcp_url and token_expires_at, plus node (the PrivacyFence "
+        "node to put the credential on) for credential_type privacyFenceApi, or node_authentication "
+        "bearerAuth for httpBearerAuth, which goes on an MCP Client node whose endpoint is mcp_url; "
+        "'pending' while the person has not decided; or 'not_delivered' for anything else. It never "
+        "returns the token. A scoped token cannot call it."
     ),
     input_schema={
         "type": "object",
