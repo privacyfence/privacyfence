@@ -86,6 +86,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## Final review
 
 - final: Blocking: p15 approve/decline of group membership is audited only as a generic settings_change entry, but ADR 0299, design 3.7 and the AuditEntry comment name group_membership_approved and group_membership_declined; fix-2 writes those entries.
+- final: fix-2 also fixed three non-blocking findings (grants wording in two docs; rotate/revoke now read claim.key_overlap_hours; an uncanonicalisable argument now reports claim_failed through a request_unhashable flag on IdentityClaimAuth). Left open: on a tool_error the upstream_forwarded entry has no claim_jti or claim_req (already a recorded phase 11 deviation).
 
 ## Finishing
 
