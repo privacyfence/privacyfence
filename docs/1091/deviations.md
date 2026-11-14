@@ -45,7 +45,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p9-org-wiring
 
-- pending
+- worker: settings_controller.py left unchanged because none of its connector-keyed lookups raise for an upstream id; added a signer() accessor to the runtime for the JWKS route; the org_mode skip test lives in tests/unit/test_upstream_mcp_runtime.py instead of test_org_mode.py (outside touches)
 
 ## p10-scoped-token-domains
 
