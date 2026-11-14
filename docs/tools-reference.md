@@ -106,7 +106,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 12 | 2 | 3 | 7 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
-| **Total** | **171** | **59** | **39** | **73** |
+| [group membership sync](#privacyfence-administration) | 1 | 1 | 0 | 0 |
+| **Total** | **172** | **60** | **39** | **73** |
 
 ## Gmail
 
@@ -353,3 +354,9 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `miro_create_items` | write | `popup` | Add sticky notes, cards, texts, shapes or frames to one Miro board, up to 20 in one request. |
 | `miro_update_board` | write | `popup` | Rename a Miro board or change its description. |
 | `miro_update_items` | write | `popup` | Change existing items on one Miro board (text, color, position, size, or which frame they are in), up to 20 in one request. |
+
+## PrivacyFence administration
+
+| Tool | Direction | Gate | What it does |
+|---|---|---|---|
+| `privacyfence_update_group_membership` | write | `auto` | Send the full membership snapshot of every Workspace group PrivacyFence maps to audiences. |

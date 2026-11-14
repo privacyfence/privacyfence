@@ -58,6 +58,7 @@ CONNECTOR_TITLES: dict[str, str] = {
     "peek": "Peek",
     "miro": "Miro",
     "upstream_mcp": "Upstream MCP servers",
+    "privacyfence": "PrivacyFence administration",
 }
 
 # Short names for the summary table, same keys.
@@ -78,6 +79,7 @@ CONNECTOR_SHORT: dict[str, str] = {
     "peek": "Peek",
     "miro": "Miro",
     "upstream_mcp": "Upstream MCP",
+    "privacyfence": "group membership sync",
 }
 
 GATE_ORDER: tuple[str, ...] = ("auto", "review", "popup")

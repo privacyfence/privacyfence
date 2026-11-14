@@ -94,6 +94,28 @@ def _scope(**fields):
     return SimpleNamespace(**{**base, **fields})
 
 
+class TestGroupMembershipHelpers:
+    def test_unconfigured_defaults(self):
+        assert upstream_mcp_runtime.all_group_audiences() == {}
+        assert upstream_mcp_runtime.max_additions() == group_membership.DEFAULT_MAX_ADDITIONS
+
+    def test_all_group_audiences_merges_upstreams(self, tmp_path, upstreams):
+        path = tmp_path / "admin_config.json"
+        path.write_text(json.dumps({"upstream_mcp": {
+            "kh": {"groups": {"hr@co.example": ["hr"], "everyone@co.example": ["general"]}},
+            "wiki": {"groups": {"hr@co.example": ["wiki-hr"]}},
+        }}), encoding="utf-8")
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams, signer=_signer(tmp_path), groups=GroupMapStore(path, frozenset({"kh", "wiki"})),
+            resolver=group_membership.StaticFileResolver(tmp_path / "none.json"), membership_max_additions=7,
+        )
+        assert upstream_mcp_runtime.all_group_audiences() == {
+            "hr@co.example": frozenset({"hr", "wiki-hr"}),
+            "everyone@co.example": frozenset({"general"}),
+        }
+        assert upstream_mcp_runtime.max_additions() == 7
+
+
 class TestUnconfigured:
     def test_nothing_is_configured(self):
         assert upstream_mcp_runtime.configured() is False

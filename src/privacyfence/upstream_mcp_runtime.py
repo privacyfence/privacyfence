@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import httpx2
 
 from .agent_identity import current_agent, current_client_id
+from . import group_membership
 from .group_membership import MembershipResolver
 from .connectors.upstream_mcp import UpstreamMcpConnector
 from .principal import Principal, current_principal
@@ -50,6 +51,7 @@ class _Runtime:
     signer: ClaimSigner
     groups: GroupMapStore
     resolver: MembershipResolver
+    membership_max_additions: int = group_membership.DEFAULT_MAX_ADDITIONS
 
 
 _runtime: _Runtime | None = None
@@ -58,6 +60,7 @@ _runtime: _Runtime | None = None
 def configure(
     *, upstreams: Sequence[UpstreamServer], signer: ClaimSigner, groups: GroupMapStore,
     resolver: MembershipResolver,
+    membership_max_additions: int = group_membership.DEFAULT_MAX_ADDITIONS,
     transport: httpx2.AsyncBaseTransport | None = None,
 ) -> None:
     global _runtime
@@ -67,7 +70,8 @@ def configure(
         )
         for upstream in upstreams
     }
-    _runtime = _Runtime(entries=entries, signer=signer, groups=groups, resolver=resolver)
+    _runtime = _Runtime(entries=entries, signer=signer, groups=groups, resolver=resolver,
+                       membership_max_additions=membership_max_additions)
 
 
 def configured() -> bool:
@@ -107,6 +111,24 @@ def audiences_for_email(upstream_id: str, email: str, verified: bool) -> frozens
     if not verified or not address:
         return frozenset()
     return _runtime.resolver.audiences_for(address, _runtime.groups.group_audiences(upstream_id))
+
+
+def all_group_audiences() -> dict[str, frozenset[str]]:
+    """Group name to audiences, merged over every upstream (the same group in two upstreams unions its audiences)."""
+    if _runtime is None:
+        return {}
+    merged: dict[str, frozenset[str]] = {}
+    for upstream_id in _runtime.entries:
+        for group, audiences in _runtime.groups.group_audiences(upstream_id).items():
+            merged[group] = merged.get(group, frozenset()) | audiences
+    return merged
+
+
+def max_additions() -> int:
+    """The snapshot addition cap from the operator file's ``membership`` section."""
+    if _runtime is None:
+        return group_membership.DEFAULT_MAX_ADDITIONS
+    return _runtime.membership_max_additions
 
 
 def _native_tool_names(upstream: UpstreamServer, entry: _Entry | None, allowed: frozenset[str] | None) -> tuple[str, ...]:

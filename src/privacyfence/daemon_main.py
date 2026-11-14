@@ -169,6 +169,7 @@ from .connectors.contacts import ContactsConnector
 from .connectors.drive import DriveConnector
 from .connectors.gmail import GmailConnector
 from .connectors.grist import GristConnector
+from .connectors.group_membership import GroupMembershipConnector
 from .connectors.jira import JiraConnector
 from .connectors.miro import MiroConnector
 from .connectors.salesforce import SalesforceConnector
@@ -1704,7 +1705,7 @@ def _configure_upstream_mcp(issuer_url: str) -> None:
         upstreams=upstreams, signer=identity_claim.load_signer(
             issuer_url, overlap_seconds=claim_settings.key_overlap_hours * 3600,
         ),
-        groups=groups, resolver=resolver,
+        groups=groups, resolver=resolver, membership_max_additions=membership.max_additions,
     )
     logger.info("Upstream MCP server(s): %s", ", ".join(upstream.id for upstream in upstreams))
 
@@ -2102,6 +2103,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
 
     if upstream_mcp_runtime.configured():
         connectors.extend(upstream_mcp_runtime.connectors_for_principal())
+
+    if org_mode.resolve_mode(org_config) == "org":
+        connectors.append(GroupMembershipConnector())
 
     return connectors, failures
 

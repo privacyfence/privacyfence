@@ -6216,7 +6216,8 @@ class TestEffectiveOrgConfigWiring:
 
         connectors, _failures = daemon_main.build_connectors({}, org_config)
 
-        assert [c.name for c in connectors] == ["slack"]
+        # Organization mode also offers the group membership sync tool.
+        assert [c.name for c in connectors] == ["slack", "privacyfence"]
 
     def test_local_mode_does_not_use_a_builtin_app(self, monkeypatch):
         self._builtin_slack(monkeypatch)
