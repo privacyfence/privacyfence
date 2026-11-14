@@ -1,0 +1,54 @@
+{
+  "name": "n8n-nodes-privacyfence",
+  "version": "0.0.0-dev",
+  "description": "n8n community node for PrivacyFence: call the tools a PrivacyFence server lets a workflow use.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/privacyfence/privacyfence/blob/main/docs/n8n-node.md",
+  "keywords": [
+    "n8n-community-node-package",
+    "privacyfence",
+    "mcp"
+  ],
+  "author": {
+    "name": "PrivacyFence",
+    "email": "info@privacyfence.eu"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/privacyfence/privacyfence.git",
+    "directory": "n8n"
+  },
+  "scripts": {
+    "build": "n8n-node build",
+    "build:watch": "tsc --watch",
+    "dev": "n8n-node dev",
+    "lint": "n8n-node lint",
+    "lint:fix": "n8n-node lint --fix",
+    "prepublishOnly": "n8n-node prerelease",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.mts"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "strict": true,
+    "credentials": [
+      "dist/credentials/PrivacyFenceApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/PrivacyFence/PrivacyFence.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@n8n/node-cli": "0.56.4",
+    "eslint": "9.32.0",
+    "prettier": "3.6.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.2"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}
