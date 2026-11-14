@@ -261,11 +261,11 @@ class TestPrincipalScopedList:
         assert "Preparing this request" in r.text
 
     def test_show_approval_wraps_the_webauthn_helper_js_in_a_script_tag(self):
-        """Regression: _org_bridge_shim used to concatenate PF_WEBAUTHN_JS
+        """Regression: _org_decide_shim used to concatenate PF_WEBAUTHN_JS
         *before* its own <script> tag opened, so the helper functions
         (pfB64uToBuf/pfWebauthnCreate/pfWebauthnGet) landed in the document
         as literal visible text at the top of the rendered card instead of
-        executing -- see web/routes_approvals.py's own _org_bridge_shim."""
+        executing -- see web/routes_approvals.py's own _org_decide_shim."""
         app, sessions, web_ui = _app()
         approval = _register(web_ui, ALICE, dedupe_key="a1")
         client = _client(app)
