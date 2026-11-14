@@ -2202,7 +2202,7 @@ _JS = r"""
   var ADMIN_NAV_ITEMS = [
     ['services', 'Services'], ['features', 'Features'], ['org_config', 'Organization configuration'],
     ['delivery', 'File delivery'], ['access', 'Sign-in'], ['step_up', 'Step-up'],
-    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
+    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['membership', 'Group membership'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
   ];
 
   // The provider setup doc for each service on the website: the doc's file name without .md.
@@ -2693,6 +2693,42 @@ _JS = r"""
     return '<div class="pf-page"><h1 class="pf-page-title">Agent runtimes</h1>' + formCardHtml('runtimes', rows, 'agent runtimes') + '</div>';
   }
 
+  // Who is waiting to join a group's restricted audience (src/privacyfence/group_membership.py). Each
+  // card covers one (group, audience) and its buttons act on that row alone, never across groups.
+  function membershipTimeText(at) {
+    if (typeof at !== 'number' || !isFinite(at)) { return 'Never'; }
+    return new Date(at * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
+  }
+
+  function membershipPendingCardHtml(row, readOnly) {
+    var emails = (row.emails || []).slice(0, 5).map(esc).join(', ');
+    var more = row.count > 5 ? ' and ' + (row.count - 5) + ' more' : '';
+    var payload = { group: row.group, audience: row.audience };
+    var confirmText = 'Give ' + row.count + ' person(s) in ' + row.group + ' access to the ' + row.audience + ' audience?';
+    var controls = readOnly ? '' : '<div class="pf-row-controls">' +
+      '<div class="button primary" role="button" tabindex="0" aria-label="Approve all for ' + esc(row.group) + ' and ' + esc(row.audience) + '" ' +
+      dataAttr('approve_group_membership', payload) + ' data-confirm="' + esc(confirmText) + '">Approve all</div>' +
+      '<div class="button danger" role="button" tabindex="0" aria-label="Decline all for ' + esc(row.group) + ' and ' + esc(row.audience) + '" ' +
+      dataAttr('decline_group_membership', payload) + '>Decline all</div></div>';
+    return '<div class="card pf-card pf-membership-pending">' +
+      rowHtml(row.group + ' → ' + row.audience, esc(row.count + ' waiting: ' + emails + more), controls) + '</div>';
+  }
+
+  function renderMembership(state) {
+    var m = state.group_membership || {};
+    var isStatic = m.source === 'static';
+    var rejected = m.last_rejected;
+    var rejectedText = rejected ? (rejected.reason || 'Rejected') + ' (' + membershipTimeText(rejected.at) + ')' : 'None';
+    var status = '<div class="card pf-card">' +
+      rowHtml('Source', esc(isStatic ? 'static (a file on the server; read-only)' : 'snapshot'), '') +
+      rowHtml('Last update', esc(membershipTimeText(m.updated_at)), '') +
+      rowHtml('Last rejected snapshot', esc(rejectedText), '') + '</div>';
+    var pending = m.pending || [];
+    var body = pending.length ? pending.map(function (row) { return membershipPendingCardHtml(row, isStatic); }).join('') :
+      '<div class="card pf-card">' + rowHtml('Nothing is waiting for approval.', '', '') + '</div>';
+    return '<div class="pf-page"><h1 class="pf-page-title">Group membership</h1>' + status + body + '</div>';
+  }
+
   // The bearer token's variable name is shown, never an input: the server sends that variable's
   // value to the URL above it, so a page that could set both could send any secret anywhere.
   function renderAuditForwarding(state) {
@@ -2744,6 +2780,7 @@ _JS = r"""
       case 'step_up': return renderStepUp(state);
       case 'tokens': return renderTokens(state);
       case 'runtimes': return renderRuntimes(state);
+      case 'membership': return renderMembership(state);
       case 'audit': return renderAuditForwarding(state);
       case 'privacy': return renderAdminPrivacy(state);
       case 'stats': return renderStats(state);
@@ -3564,7 +3601,7 @@ def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
         "sections": dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats"), is_admin,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "membership", "audit", "privacy", "stats"), is_admin,
         ),
         "not_applicable_actions": [],
         "defaults": _admin_section_defaults() if is_admin else {},
