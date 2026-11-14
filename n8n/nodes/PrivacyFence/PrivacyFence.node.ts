@@ -1,6 +1,6 @@
 import type {
 	ICredentialTestFunctions,
-	ICredentialsDecrypted,
+	INode,
 	IExecuteFunctions,
 	INodeCredentialTestResult,
 	INodeExecutionData,
@@ -9,17 +9,16 @@ import type {
 	INodeTypeDescription,
 	ILoadOptionsFunctions,
 } from 'n8n-workflow';
-import { NodeConnectionTypes } from 'n8n-workflow';
+import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 async function getTools(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-	throw new Error('not implemented');
+	throw new NodeOperationError(this.getNode(), 'not implemented');
 }
 
 async function privacyFenceApiTest(
 	this: ICredentialTestFunctions,
-	credential: ICredentialsDecrypted,
 ): Promise<INodeCredentialTestResult> {
-	throw new Error('not implemented');
+	throw new NodeOperationError({ name: 'PrivacyFence' } as INode, 'not implemented');
 }
 
 export class PrivacyFence implements INodeType {
@@ -57,12 +56,14 @@ export class PrivacyFence implements INodeType {
 				default: 'callTool',
 			},
 			{
-				displayName: 'Tool',
+				displayName: 'Tool Name or ID',
 				name: 'tool',
 				type: 'options',
 				typeOptions: { loadOptionsMethod: 'getTools' },
 				required: true,
 				default: '',
+				description:
+					'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 				displayOptions: { show: { operation: ['callTool'] } },
 			},
 			{
@@ -108,6 +109,6 @@ export class PrivacyFence implements INodeType {
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
-		throw new Error('not implemented');
+		throw new NodeOperationError(this.getNode(), 'not implemented');
 	}
 }

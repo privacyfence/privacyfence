@@ -2,7 +2,7 @@
   "name": "n8n-nodes-privacyfence",
   "version": "0.0.0-dev",
   "description": "n8n community node for PrivacyFence: call the tools a PrivacyFence server lets a workflow use.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "homepage": "https://github.com/privacyfence/privacyfence/blob/main/docs/n8n-node.md",
   "keywords": [
     "n8n-community-node-package",
