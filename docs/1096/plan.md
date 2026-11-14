@@ -132,8 +132,8 @@ Files reach the server only through the upload slot (`privacyfence_create_upload
 - Coverage floors: `scripts/check_coverage_floor.py` loses `WINDOWS_MODULE_FLOORS`, `--platform` and the floors of deleted modules; `OVERALL_FLOOR` and the floors of shrunken modules are re-measured in the last code phase.
 
 - **The pip release.** `publish-pypi.yml` stays, with its name, because the trusted-publisher entries on pypi.org and test.pypi.org are bound to the workflow file name; it loses the `privacyfence` build, `publish-testpypi`, `publish-pypi` and `publish-r2`, and keeps `dedupe`, `wait_for_build`, a `build` job that builds only `privacyfence-sync`, `publish-testpypi-sync` (`needs: [build, wait_for_build]`) and `publish-pypi-sync` (`needs: [build, publish-testpypi-sync]`), each stable-only with its environment (`testpypi`, `pypi`) unchanged. The wheel is built only in `build-org-image` and `tests.yml` `org-docker-image`; it is not published, not attached to a release and not uploaded to R2. `dependency-audit.yml`'s `floor-audit` job, which exists because `pip install privacyfence` resolves from the pyproject ranges, is deleted; `test-python-compat`, `requires-python` and ADR 0295 are left alone (separate decision). `pyproject.toml` loses the PyPI sidebar metadata (keywords, classifiers, `[project.urls]`) and `twine`; `setup.py`, `MANIFEST.in`, `setuptools_scm` and `requirements/release.lock.txt` stay because they build the image's wheel. `tests.yml` `org-mode-smoke` stays as a required check: it keeps the nginx guide check and the installed-wheel daemon smoke test (`tests/integration/test_org_ubuntu_release_smoke.py`, reworded), and loses only the systemd unit check. The Glama listing (ADR 0114) installs the catalog server from PyPI; its build spec lives on Glama (manual step).
-- **Protected paths.** The tld protect-paths hook blocks edits to `.github/workflows/**` and any `package-lock.json` unless `hooks.protect_paths_allow` in `.tld/toolkit.yaml` lists them; today it lists only `build.yml`, `release.yml` and the toolkit file. The owner extends the list before implementation (manual step `mb2`).
-- **The release.yml retirement (issue 1093).** That work, planned separately and not merged, deletes `release.yml`, replaces `scripts/pre_release_check.py` by `scripts/release_check.py` and rewrites parts of `docs/releasing.md`, `CLAUDE.md` and `CONTRIBUTING.md`. The briefs here name the files as they are today and tell a worker to edit the replacement when it exists; the owner picks the order (manual step `mb3`).
+- **Protected paths.** The tld protect-paths hook blocks edits to `.github/workflows/**` and any `package-lock.json` unless `hooks.protect_paths_allow` in `.tld/toolkit.yaml` lists them; today it lists only `build.yml`, `release.yml` and the toolkit file. The owner extends the list before implementation (manual step `mb1`).
+- **The release.yml retirement (issue 1093).** That work, planned separately and not merged, deletes `release.yml`, replaces `scripts/pre_release_check.py` by `scripts/release_check.py` and rewrites parts of `docs/releasing.md`, `CLAUDE.md` and `CONTRIBUTING.md`. The briefs here name the files as they are today and tell a worker to edit the replacement when it exists; the owner picks the order (manual step `mb2`).
 
 ### 3.7 Docs and website
 
@@ -191,21 +191,14 @@ Old ADRs that get a Status line (body frozen): `Superseded by [ADR 0296]` for 00
 
 ### Before implementation
 
-**mb1-7x-final (about 10 minutes).**
-
-1. Open https://github.com/privacyfence/privacyfence/pulls and merge or close every pull request you want in 7.x: merging this work makes `main` an 8.x branch.
-2. Cut the last 7.x release you want by following "Cutting a release" in https://github.com/privacyfence/privacyfence/blob/feature/drop-desktop-mode/docs/releasing.md, or create a `releases/7.x` branch from the current `main` on https://github.com/privacyfence/privacyfence/branches for later 7.x patches.
-3. You should see the release on https://github.com/privacyfence/privacyfence/releases, or the new branch in the list. That release is also the last one `pip install privacyfence` will ever find: the `privacyfence` PyPI project is not published again.
-4. Done when: no 7.x change you still want is waiting only on `main`, and you know which branch later 7.x patches go to.
-
-**mb2-protect-paths (about 10 minutes).**
+**mb1-protect-paths (about 10 minutes).**
 
 1. Open https://github.com/privacyfence/privacyfence/blob/feature/drop-desktop-mode/.tld/toolkit.yaml and find `hooks.protect_paths_allow` (it lists `build.yml`, `release.yml` and the toolkit file today).
 2. On a new branch, edit `.tld/toolkit.yaml` and add these entries to `hooks.protect_paths_allow`, one per line: `.github/workflows/tests.yml`, `.github/workflows/publish-pypi.yml`, `.github/workflows/publish-org-image.yml`, `.github/workflows/publish-n8n-node.yml`, `.github/workflows/publish-mcp-registry.yml`, `.github/workflows/deploy-download-worker.yml`, `.github/workflows/deploy-oauth-relay-worker.yml`, `.github/workflows/ai-client-canary.yml`, `.github/workflows/dependency-audit.yml`, `.github/workflows/linux-graphical-session.yml`, `.github/workflows/macos-graphical-session.yml`, `.github/workflows/windows-graphical-session.yml`, `.github/workflows/pages.yml`, `.github/workflows/website-build.yml`, `mcpb/shim/package-lock.json` and `cloudflare/downloads/package-lock.json`.
 2b. Open a pull request with that change at https://github.com/privacyfence/privacyfence/pulls.
 3. Merge it. Done when `.tld/toolkit.yaml` on `main` lists every entry of step 2.
 
-**mb3-release-retirement-order (about 5 minutes).**
+**mb2-release-retirement-order (about 5 minutes).**
 
 1. Open https://github.com/privacyfence/privacyfence/issues/1093 (the retirement of `release.yml`).
 2. If its work is not merged, either merge it first (recommended: it is smaller, and this plan then edits the files it leaves) or accept that each worker merges `main` into the feature branch before a phase that edits the release docs, `build.yml` or the pre-release script.
@@ -263,10 +256,10 @@ The live QA report of the touched connectors is not manual: phase `p12d` dispatc
 - **Tool-schema break.** Agents with a cached schema send removed arguments; §3.5's dispatcher filter handles it, and the first removing phase tests it.
 - **Whole-tree gates outside `fast`.** `mypy src/privacyfence`, `tests/integration`, the doc tests and the coverage floor fail without showing in `verify.fast`; each phase's acceptance names them.
 - **Coverage floor.** Stripped modules that keep a 100% floor (`session_auth`, `secure_files`, `principal`) must keep it; the shrunken modules' floors are re-measured last (`p22`).
-- **7.x clients.** The 7.x desktop update checker (GitHub releases/latest) will offer 8.0, which has no installer. Not fixed here; the last 7.x release (`mb1`) is the place.
+- **7.x clients.** The 7.x desktop update checker (GitHub releases/latest) will offer 8.0, which has no installer. Not fixed here; 7.x gets no further release (`v7.0.2` stays the last, and it already carries the migration marker the start-up check relies on).
 - **Trusted publisher.** `privacyfence-sync`'s publisher entries on PyPI and TestPyPI name the workflow `publish-pypi.yml` and the environments `pypi` and `testpypi`; renaming the file or an environment breaks the next release. Tell: a diff that renames either. Stop with `status=blocked`.
 - **Existing pip installs.** `pip install privacyfence` keeps resolving to the last 7.x release forever; the plan can only say so in the docs and in the changelog (manual step `ma5`).
-- **Plan 1093 and this plan edit the same release docs.** See manual step `mb3`; a worker that finds a file or section named in a brief already changed, renamed or deleted reads the current text before editing and edits the replacement.
+- **Plan 1093 and this plan edit the same release docs.** See manual step `mb2`; a worker that finds a file or section named in a brief already changed, renamed or deleted reads the current text before editing and edits the replacement.
 - **Lockfile regeneration needs `uv` and the package index.** If the phase `p17` worker cannot reach it, it stops with `status=blocked`; the owner then runs `scripts/update_dependency_locks.sh`.
 - **A phase brief names a symbol or line that does not exist.** Line numbers in the briefs come from commit `9eb7b4c1` and have drifted by up to about 40 lines on the current `main`; search by symbol first. Where a brief says `file:line`, grep for the symbol; if the symbol is absent or the surrounding code is clearly different from what the brief describes, stop with `status=blocked`.
 
@@ -278,15 +271,11 @@ feature_branch: feature/drop-desktop-mode
 tracking_issue: 1096
 max_parallel: 2
 manual_before:
-  - id: mb1-7x-final
-    title: Ship what 7.x still needs before main becomes 8.x
-    why: Merging this work makes main an 8.x branch; 7.x fixes waiting on main would have to ship from a branch.
-    done_when: Every 7.x change you want is released or on a releases/7.x branch, and you know where later 7.x patches go.
-  - id: mb2-protect-paths
+  - id: mb1-protect-paths
     title: Let the phase workers edit the workflow files this plan changes
     why: The protect-paths hook blocks edits to .github/workflows/** and package-lock.json except for files listed in hooks.protect_paths_allow of .tld/toolkit.yaml; phases p02, p15a, p15b, p15c, p16, p18a, p20b and p24a edit or delete workflows and lockfiles the list does not name.
-    done_when: .tld/toolkit.yaml on main lists every file named in the steps of mb2 under hooks.protect_paths_allow.
-  - id: mb3-release-retirement-order
+    done_when: .tld/toolkit.yaml on main lists every file named in the steps of mb1 under hooks.protect_paths_allow.
+  - id: mb2-release-retirement-order
     title: Decide the order against the release.yml retirement (issue 1093)
     why: Both changes edit docs/releasing.md, scripts/pre_release_check.py (or its replacement), CLAUDE.md, CONTRIBUTING.md and build.yml; the briefs name release.yml and pre_release_check.py and tell a worker to use the replacement when it exists.
     done_when: Either the 1093 work is merged, or you accept that the workers merge main into the feature branch before each phase that edits those files.
