@@ -15,7 +15,7 @@ time changes, so an edit applies to the next call without a restart. Who is in a
 ``group_membership.MembershipResolver``, not by this module. The operator file also takes the top-level
 keys ``claim`` and ``membership`` (``parse_settings``).
 
-See ADR 0285 (upstream MCP servers as a connector) and ADR 0289 (audiences come from groups).
+See ADR 0285 (upstream MCP servers as a connector) and ADR 0297 (audiences come from groups).
 """
 from __future__ import annotations
 

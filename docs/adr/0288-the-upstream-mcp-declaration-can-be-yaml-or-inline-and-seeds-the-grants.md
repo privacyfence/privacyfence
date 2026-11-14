@@ -4,6 +4,7 @@
 
 Accepted — 2026-11-14. Implemented.
 Amends [ADR 0285](0285-upstream-mcp-servers-are-declared-connectors.md) and [ADR 0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md).
+Amended by [ADR 0297](0297-audiences-come-from-group-membership-and-tokens-only-narrow-them.md).
 
 ## Context
 
