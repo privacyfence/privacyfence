@@ -178,8 +178,6 @@ async def test_a_signing_failure_sends_nothing_and_is_claim_failed(signer, monke
 
 def test_arguments_that_cannot_be_canonicalised_mark_the_claim_as_failed(signer):
     # The SDK itself serialises NaN as null, so the end-to-end path cannot carry it; the auth is the guard.
-    import json
-
     import httpx2
 
     from privacyfence.identity_claim import ClaimSigningError, IdentityClaimAuth
