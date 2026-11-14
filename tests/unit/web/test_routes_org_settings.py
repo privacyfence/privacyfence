@@ -1884,15 +1884,23 @@ class TestScopedTokenProposalRoutes:
 
 
 class _FakeN8n:
-    def __init__(self, create_error=None):
+    def __init__(self, create_error=None, check_error=None):
         self.create_error = create_error
+        self.check_error = check_error
         self.created: list[dict] = []
         self.deleted: list[str] = []
 
-    def create_bearer_credential(self, *, credential_id, name, token, project_id):
+    def check_type(self, credential_type):
+        if self.check_error is not None:
+            raise self.check_error
+
+    def create_credential(self, *, credential_id, name, credential_type, data, project_id):
         if self.create_error is not None:
             raise self.create_error
-        self.created.append({"credential_id": credential_id, "name": name, "token": token, "project_id": project_id})
+        self.created.append({
+            "credential_id": credential_id, "name": name, "credential_type": credential_type, "data": data,
+            "token": data["token"], "project_id": project_id,
+        })
 
     def delete_credential(self, credential_id):
         self.deleted.append(credential_id)
@@ -1907,7 +1915,7 @@ class TestDeliveryFromProposal:
         enabled=True, base_url="https://n8n.example.com", project_id="proj1", mcp_url="",
     )
 
-    def _setup(self, tmp_path, monkeypatch, *, api="fake", store_cls=None):
+    def _setup(self, tmp_path, monkeypatch, *, api="fake", store_cls=None, config=None):
         _seed(tmp_path, monkeypatch, "alice")
         _seed(tmp_path, monkeypatch, "bob")
         runtime_credentials.set_store(runtime_credentials.RuntimeCredentialStore(tmp_path / "records.json"))
@@ -1915,7 +1923,7 @@ class TestDeliveryFromProposal:
         monkeypatch.setattr(agent_runtimes, "api_for", lambda config: fake)
         store = scoped_tokens.ScopedTokenStore(lambda: [ALICE, BOB])
         app, sessions = _app(
-            scoped_token_policy=self.T.ON, scoped_token_store=store, agent_runtime=self.CONFIG,
+            scoped_token_policy=self.T.ON, scoped_token_store=store, agent_runtime=config or self.CONFIG,
             scoped_token_page_data=lambda principal: {"tokens": [], "proposals": [], "proposals_enabled": True},
         )
         client = _client(app)
@@ -1969,6 +1977,23 @@ class TestDeliveryFromProposal:
         assert self.T._live(proposal)
         assert [t for t in store.tokens_for(ALICE)] == []
         assert "scoped_token_proposal_accepted" not in [d for d, _ in self.T._decisions()]
+
+    def test_privacyfence_api_without_the_node_gives_503_and_restores_the_proposal(self, tmp_path, monkeypatch):
+        config = agent_runtimes.N8nRuntimeConfig(
+            enabled=True, base_url="https://n8n.example.com", project_id="proj1",
+            mcp_url="https://pf.example.com/mcp", credential_type="privacyFenceApi",
+        )
+        client, csrf, store, fake = self._setup(tmp_path, monkeypatch, config=config)
+        fake.check_error = N8nApiClientError("n8n at n8n.example.com answered HTTP 404.", status=404)
+        proposal = self._propose()
+
+        r = client.post(self.T.CREATE, json=self.T._body(proposal, csrf))
+
+        assert r.status_code == 503
+        assert r.json() == {"error": runtime_credentials.NODE_NOT_INSTALLED}
+        assert self.T._live(proposal)
+        assert store.tokens_for(ALICE) == [] and fake.created == []
+        assert runtime_credentials.get_store().all() == []
 
     def test_revoke_failure_gives_500_and_does_not_restore(self, tmp_path, monkeypatch):
         client, csrf, store, fake = self._setup(tmp_path, monkeypatch)

@@ -72,6 +72,43 @@ class TestFromOrgConfig:
         assert ar.N8nRuntimeConfig.from_org_config(org, environ={}).mcp_url == mcp
 
 
+class TestCredentialType:
+    def test_default_is_bearer(self):
+        cfg = ar.N8nRuntimeConfig.from_org_config({}, environ={})
+        assert cfg.credential_type == "httpBearerAuth" == ar.DEFAULT_CREDENTIAL_TYPE
+        assert ar.CREDENTIAL_TYPES == ("httpBearerAuth", "privacyFenceApi")
+
+    def test_privacyfence_api_with_mcp_url(self):
+        org = {"agent_runtimes": {"n8n": {"credential_type": "privacyFenceApi", "mcp_url": "https://pf.example/mcp"}}}
+        assert ar.N8nRuntimeConfig.from_org_config(org, environ={}).credential_type == "privacyFenceApi"
+
+    @pytest.mark.parametrize("value", ["", "other", 5, None])
+    def test_other_value_is_refused(self, value):
+        org = {"agent_runtimes": {"n8n": {"credential_type": value}}}
+        with pytest.raises(ConfigurationError) as err:
+            ar.N8nRuntimeConfig.from_org_config(org, environ={})
+        assert str(err.value) == "agent_runtimes.n8n.credential_type must be httpBearerAuth or privacyFenceApi."
+
+    def test_privacyfence_api_needs_an_mcp_url(self):
+        org = {"agent_runtimes": {"n8n": {"credential_type": "privacyFenceApi"}}}
+        with pytest.raises(ConfigurationError) as err:
+            ar.N8nRuntimeConfig.from_org_config(org, environ={})
+        assert str(err.value) == (
+            "agent_runtimes.n8n.mcp_url is required for the privacyFenceApi credential type: "
+            "the credential keeps this server's address."
+        )
+
+    def test_delivery_message_follows_the_type(self):
+        assert ar.delivery_message("httpBearerAuth") == ar.DELIVERY_MESSAGE
+        text = ar.delivery_message("privacyFenceApi")
+        assert text == ar.DELIVERY_MESSAGE_PRIVACYFENCE_NODE
+        assert "n8n-nodes-privacyfence" in text and "privacyFenceApi" in text
+
+    def test_constants(self):
+        assert ar.N8N_NODE_PACKAGE == "n8n-nodes-privacyfence"
+        assert ar.N8N_NODE_TYPE == "n8n-nodes-privacyfence.privacyFence"
+
+
 class TestNormalizeUrl:
     @pytest.mark.parametrize(
         ("raw", "expected"),

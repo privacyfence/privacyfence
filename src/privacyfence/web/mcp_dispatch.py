@@ -554,12 +554,14 @@ class McpDispatcher:
             )
         delivery = None
         mcp_url = ""
+        credential_type = agent_runtimes.DEFAULT_CREDENTIAL_TYPE
         if "deliver_to" in params:
             runtime_config = self._agent_runtime
             if self._mode == "local" or runtime_config is None or not agent_runtimes.delivery_available(runtime_config):
                 raise ValueError(agent_runtimes.DELIVERY_UNAVAILABLE)
             delivery = agent_runtimes.parse_deliver_to(params["deliver_to"])
             mcp_url = agent_runtimes.mcp_url_for(runtime_config, base_url)
+            credential_type = runtime_config.credential_type
         rules = params.get("rules", [])
         tools = params.get("tools", [])
         uncovered: list[str] = []
@@ -624,7 +626,7 @@ class McpDispatcher:
                 "runtime": delivery.runtime, "workflow_id": delivery.workflow_id,
                 "status_tool": "privacyfence_runtime_credential_status",
             }
-            result["message"] = agent_runtimes.DELIVERY_MESSAGE
+            result["message"] = agent_runtimes.delivery_message(credential_type)
         return result
 
     def runtime_credential_status(self, params: dict) -> dict:

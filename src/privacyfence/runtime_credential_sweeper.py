@@ -152,7 +152,7 @@ def _run(
     token_store: ScopedTokenStore, config: agent_runtimes.N8nRuntimeConfig, api: N8nApi,
 ) -> None:
     try:
-        api.check()
+        api.check_type(config.credential_type)
     except N8nApiClientError as exc:
         logger.warning("The n8n API check failed: %s", exc)
 
