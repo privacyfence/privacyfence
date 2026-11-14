@@ -191,8 +191,6 @@ Security = "https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md"
 
 [project.scripts]
 privacyfence-app = "privacyfence.daemon_main:main"
-# The companion app (ADR 0002) -- see companion.py's own module docstring.
-privacyfence-companion = "privacyfence.companion:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -322,11 +320,6 @@ markers = [
     "browser: real Chromium via Playwright",
     "packaged: runs against a built installer/artifact",
     "live: touches a real third-party provider (self-hosted runner only)",
-    # OS-level path/process/locking/daemon-discovery behavior, homed under
-    # tests/platform/ rather than scattered across existing files.
-    # Deliberately a separate marker from `system`, which is the full
-    # daemon/MCP/approval/audit scenario -- a different concept.
-    "platform: OS-level path/process/locking/daemon behavior (tests/platform/)",
 ]
 
 [tool.coverage.run]

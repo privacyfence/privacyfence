@@ -112,15 +112,6 @@ ci:
     - workflow: connector-live-check.yml
       use_when: The weekly drift check of `main` itself; not for a branch's definition-of-done QA row
       notes: No inputs. It checks `main`'s code, not a branch's, so it cannot stand in for the QA row; use qa-record-fixture.yml with `branch=` or run `--check` locally with QA credentials.
-    - workflow: windows-graphical-session.yml
-      use_when: Windows autostart / Task Scheduler behaviour
-      notes: No inputs.
-    - workflow: linux-graphical-session.yml
-      use_when: Linux systemd --user / XDG autostart behaviour
-      notes: No inputs.
-    - workflow: macos-graphical-session.yml
-      use_when: macOS LaunchAgent autostart, .pkg install
-      notes: No inputs.
     - workflow: build.yml
       use_when: A real DMG, .pkg, .mcpb, Windows installer or .deb
       notes: No inputs. Each platform job runs its own packaged-artifact smoke test before upload.
