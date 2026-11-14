@@ -169,7 +169,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p18c-website-agents
 
-- pending
+- worker: website/ai-agents/claude-ai/index.html was also rewritten (inside website/ai-agents/**). The ChatGPT page is now organization-mode only (a Developer Mode app), because its only other path was the desktop app. clients.json: only the connects text of Claude Desktop and ChatGPT changed.
+- worker: The worker ran only the first website-build step and the targeted tests; the orchestrator re-ran the build, the full unit suite and the docs tests after the merge.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p19-docs-platform
 
