@@ -315,3 +315,74 @@ def test_add_is_disabled_without_a_verb(page):
     assert not _add_button_disabled(page)
     page.click('[data-st-new-verb="read"]')
     assert _add_button_disabled(page)
+
+
+UPSTREAM_DATA = {
+    **DATA,
+    "tools": DATA["tools"] + [{"connector": "kh", "tools": ["kh_search"]}],
+    "auto_tools": DATA["auto_tools"] + ["kh_search"],
+    "upstreams": [{"id": "kh", "label": "Knowledge hub", "tools": ["kh_search"], "domains": ["general", "hr"]}],
+}
+
+
+@pytest.fixture
+def upstream_page(browser):
+    pg = browser.new_page()
+    pg.set_content(build_html(
+        _make_state(), mode="org", initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(UPSTREAM_DATA),
+    ))
+    yield pg
+    pg.close()
+
+
+def test_an_upstream_fieldset_shows_only_with_one_of_its_tools_ticked(upstream_page):
+    page = upstream_page
+    assert page.query_selector("[data-st-domains-for]") is None
+    page.click('[data-st-tool="kh_search"]')
+    assert page.inner_text("[data-st-domains-for] legend") == "Data domains for Knowledge hub"
+    assert page.inner_text("[data-st-domains-for] .pf-hint") == (
+        "The token sees only the domains you tick, and never more than you can see yourself.")
+    assert page.eval_on_selector_all(
+        "[data-st-domain]", "els => els.map(e => [e.getAttribute('data-st-domain'), e.getAttribute('aria-checked')])",
+    ) == [["general", "false"], ["hr", "false"]]
+    page.click('[data-st-tool="kh_search"]')
+    assert page.query_selector("[data-st-domains-for]") is None
+
+
+def test_the_created_token_holds_exactly_the_ticked_domain(upstream_page, tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, scoped_tokens
+    from privacyfence.principal import Principal
+
+    page = upstream_page
+    _capture_posts(page)
+    page.fill("[data-st-label]", "kh job")
+    page.click('[data-st-tool="kh_search"]')
+    page.click('[data-st-domain="hr"]')
+    page.click("[data-st-create]")
+    [posted] = page.evaluate("window.__posted")
+    assert posted["upstream_domains"] == {"kh": ["hr"]}
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
+    monkeypatch.setitem(auto_accept.TOOL_TO_GATE, "kh_search", "auto")
+    alice = Principal(id="alice", email="alice@example.com", email_verified=True)
+    body = scoped_tokens.normalise_create_request(posted)
+    assert body is not None
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    token, _secret = store.create(
+        alice, label=body["label"], days=body["days"], rules=body["rules"], tools=body["tools"],
+        policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
+        upstream_domains=body["upstream_domains"], held_domains={"kh": frozenset({"general", "hr"})},
+        principal_email_verified=True,
+    )
+    assert token.upstream_domains == {"kh": frozenset({"hr"})}
+
+
+def test_no_domain_ticked_sends_none(upstream_page):
+    page = upstream_page
+    _capture_posts(page)
+    page.fill("[data-st-label]", "kh job")
+    page.click('[data-st-tool="kh_search"]')
+    page.click("[data-st-create]")
+    [posted] = page.evaluate("window.__posted")
+    assert posted["upstream_domains"] == {}
