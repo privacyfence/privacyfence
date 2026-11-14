@@ -320,3 +320,23 @@ class TestRecord:
         monkeypatch.setattr(audit_log, "get_audit_logger", boom)
         stp.record("scoped_token_proposed", _proposal(), "x")
         assert "Audit log write failed" in caplog.text
+
+
+class TestUpstreamTools:
+    @pytest.fixture(autouse=True)
+    def _runtime(self, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        monkeypatch.setattr(upstream_mcp_runtime, "upstream_ids", lambda: frozenset({"kh"}))
+
+    def test_a_proposal_naming_an_upstream_tool_is_refused(self):
+        with pytest.raises(stp.ProposalError, match="Upstream tools cannot be proposed; create the token in Settings."):
+            _proposal(request=_request(tools=["gmail_list_messages", "kh_search"]))
+
+    def test_a_proposal_of_built_in_tools_is_unaffected(self):
+        assert _proposal().request["tools"] == ["drive_download_file", "gmail_list_messages"]
+
+    def test_the_review_cannot_add_a_domain(self):
+        proposed = _request()
+        assert stp.narrowing_error(proposed, {**proposed, "upstream_domains": {}}) is None
+        assert stp.narrowing_error(proposed, {**proposed, "upstream_domains": {"kh": ["hr"]}}) == stp.WIDENED_MESSAGE

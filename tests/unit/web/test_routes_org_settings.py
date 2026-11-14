@@ -1356,6 +1356,59 @@ class TestScopedTokenRoutes:
         assert token.allow_personal_data_reads is True
         assert token.allow_personal_data is False
 
+    def _hold(self, monkeypatch, held):
+        from privacyfence import upstream_mcp_runtime
+
+        monkeypatch.setattr(upstream_mcp_runtime, "configured", lambda: True)
+        seen: list = []
+
+        def fake_held(principal, email_verified):
+            seen.append((principal.id, email_verified))
+            return held
+
+        monkeypatch.setattr(upstream_mcp_runtime, "held_domains", fake_held)
+        return seen
+
+    def test_a_token_gets_the_domains_ticked_and_the_sessions_verified_bit(self, tmp_path, monkeypatch):
+        client, _csrf, store = self._setup(tmp_path, monkeypatch)
+        seen = self._hold(monkeypatch, {"kh": frozenset({"general", "hr"})})
+        app, sessions = _app(scoped_token_policy=self.ENABLED, scoped_token_store=store)
+        client = _client(app)
+        session_id = sessions.create(ALICE, email_verified=True)
+        client.cookies.set(org_session.SESSION_COOKIE, session_id)
+
+        r = self._post(
+            client, "create", {**self.BODY, "upstream_domains": {"kh": ["hr"]}, "confirmed": True}, session_id,
+        )
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert token.upstream_domains == {"kh": frozenset({"hr"})}
+        assert token.principal_email_verified is True
+        assert seen == [("alice", True)]
+
+    def test_a_domain_the_person_does_not_hold_is_a_400_and_creates_nothing(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        self._hold(monkeypatch, {"kh": frozenset({"general"})})
+
+        r = self._post(
+            client, "create", {**self.BODY, "upstream_domains": {"kh": ["finance"]}, "confirmed": True}, csrf,
+        )
+
+        assert r.status_code == 400
+        assert r.json() == {"error": "You can only give a token domains you have: finance"}
+        assert store.tokens_for(ALICE) == []
+
+    def test_an_unverified_session_holds_what_the_runtime_gives_it(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        seen = self._hold(monkeypatch, {})
+
+        r = self._post(client, "create", {**self.BODY, "upstream_domains": {"kh": ["hr"]}, "confirmed": True}, csrf)
+
+        assert r.status_code == 400
+        assert seen == [("alice", False)]
+        assert store.tokens_for(ALICE) == []
+
     def test_org_audit_summary_names_the_reads_flag(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
 

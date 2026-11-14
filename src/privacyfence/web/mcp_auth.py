@@ -240,6 +240,7 @@ class ScopedTokenVerifier(TokenVerifier):
                 "email": found.principal_email,
                 "display_name": found.principal_display_name,
                 "is_admin": False,
+                "email_verified": found.principal_email_verified,
                 "scoped_token_id": found.id,
             },
         )
