@@ -179,9 +179,10 @@ def _restore_upstream_tool_tables():
     # upstream_mcp_registry.register writes the process-wide policy tables; a test that registers
     # upstream tools must not leak them into the next one.
     yield
-    from privacyfence import upstream_mcp_registry
+    from privacyfence import upstream_mcp_registry, upstream_mcp_runtime
 
     upstream_mcp_registry.unregister_all()
+    upstream_mcp_runtime.reset()
 
 
 @pytest.fixture(autouse=True)
