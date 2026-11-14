@@ -46,6 +46,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **An AI client can have a scoped token delivered into n8n.** On an organization server, an administrator sets `PRIVACYFENCE_N8N_URL` and `PRIVACYFENCE_N8N_API_KEY` and turns on Admin → Agent runtimes. `privacyfence_propose_scoped_token` then takes `deliver_to: {"runtime": "n8n"}`; once the person confirms, PrivacyFence creates the token as an n8n credential, and the new `privacyfence_runtime_credential_status` tool reports its id. Revoking or expiry deletes the credential within 5 minutes. Anyone who can edit workflows in that n8n can use and read the token ([ADR 0278](docs/adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)).
+- **An n8n node for PrivacyFence.** `n8n-nodes-privacyfence` is a community node with a **List tools** and a **Call a tool** operation: pick one of the tools a PrivacyFence token allows, give a reason, and get the result as workflow data, without setting up an MCP Client node by hand. It is published to npm with provenance on stable releases and is MIT-licensed; see [docs/n8n-node.md](docs/n8n-node.md).
+
+### Changed
+
+- **Admin → Agent runtimes has a credential type for n8n.** The default is unchanged: delivery still creates an n8n bearer credential for the MCP Client node. Choosing **PrivacyFence node** makes delivery create a `privacyFenceApi` credential that holds the token and this server's address, for the PrivacyFence node; delivery then refuses, before a token is created, when the community node is not installed in that n8n. Tokens already delivered keep their type. See [docs/n8n-node.md](docs/n8n-node.md).
 
 ## [7.0.2] — 2026-11-06
 
