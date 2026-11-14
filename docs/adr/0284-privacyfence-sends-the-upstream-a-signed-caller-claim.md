@@ -1,4 +1,4 @@
-# ADR 0279: PrivacyFence sends the upstream a signed caller claim
+# ADR 0284: PrivacyFence sends the upstream a signed caller claim
 
 ## Status
 
@@ -7,7 +7,7 @@ Implemented: `src/privacyfence/upstream_claims.py`, `web/routes_upstream_mcp.py`
 
 ## Context
 
-An upstream MCP server (ADR 0278) must filter its own data by who is asking: ranking and pagination stay
+An upstream MCP server (ADR 0283) must filter its own data by who is asking: ranking and pagination stay
 correct only when the filter is inside its queries, and a guessed document id must be checked where the
 data lives. PrivacyFence is the one place that knows the person, their policy and what is calling, so it
 has to tell the upstream, in a form the upstream can verify and not forge. [ADR
@@ -66,4 +66,4 @@ the boundary 0036 kept closed, in this one signed form, to a server the operator
 [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md),
 [ADR 0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md),
 [ADR 0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md),
-[ADR 0278](0278-upstream-mcp-servers-are-declared-connectors.md).
+[ADR 0283](0283-upstream-mcp-servers-are-declared-connectors.md).

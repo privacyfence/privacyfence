@@ -3141,6 +3141,83 @@ class TestOrgModeConnectorRegistry:
                 unattended_sessions_enabled=False, org_config=org_config,
             )
 
+    _N8N_ENV = ("PRIVACYFENCE_N8N_API_KEY", "PRIVACYFENCE_N8N_API_KEY_FILE")
+    _N8N_ON = {"n8n": {"enabled": True}}
+
+    def _start_with_runtime(self, monkeypatch, tmp_path, section, *, key=None, url="https://n8n.example.com"):
+        self._no_bind(monkeypatch, tmp_path)
+        for name in self._N8N_ENV:
+            monkeypatch.delenv(name, raising=False)
+        if url:
+            monkeypatch.setenv("PRIVACYFENCE_N8N_URL", url)
+        else:
+            monkeypatch.delenv("PRIVACYFENCE_N8N_URL", raising=False)
+        if key is not None:
+            monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", key)
+        sweeps, dispatchers = [], []
+        monkeypatch.setattr(
+            daemon_main.runtime_credential_sweeper, "start", lambda **kw: sweeps.append(kw),
+        )
+        from privacyfence.web import mcp_dispatch
+
+        real = mcp_dispatch.McpDispatcher
+
+        def spy(*args, **kwargs):
+            dispatchers.append(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(mcp_dispatch, "McpDispatcher", spy)
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False,
+            org_config=self._org_config(agent_runtimes=section),
+        )
+        return sweeps, dispatchers
+
+    def test_org_server_refuses_a_malformed_agent_runtimes_section(self, monkeypatch, tmp_path):
+        with pytest.raises(org_mode.ConfigurationError, match="agent_runtimes"):
+            self._start_with_runtime(monkeypatch, tmp_path, {"n8n": {"enabled": "yes"}})
+        with pytest.raises(org_mode.ConfigurationError, match="agent_runtimes"):
+            self._start_with_runtime(monkeypatch, tmp_path, {"n8n": {"mcp_url": "ftp://x"}})
+
+    def test_org_server_refuses_an_n8n_key_set_inline_and_as_a_file(self, monkeypatch, tmp_path):
+        key_file = tmp_path / "n8n.key"
+        key_file.write_text("k")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY_FILE", str(key_file))
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "k2")
+        monkeypatch.setattr(
+            daemon_main.runtime_credential_sweeper, "start", lambda **kw: pytest.fail("started"),
+        )
+        with pytest.raises(org_mode.ConfigurationError, match="not both"):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False,
+                org_config=self._org_config(agent_runtimes=self._N8N_ON),
+            )
+
+    def test_the_credential_sweeper_starts_only_with_a_url_and_a_key(self, monkeypatch, tmp_path):
+        sweeps, _ = self._start_with_runtime(monkeypatch, tmp_path, self._N8N_ON, key="k")
+        assert len(sweeps) == 1
+        assert sweeps[0]["config"].base_url == "https://n8n.example.com"
+        assert sweeps[0]["stop_event"] is daemon_main._shutdown_event
+
+        sweeps, _ = self._start_with_runtime(monkeypatch, tmp_path, self._N8N_ON)
+        assert sweeps == []
+        sweeps, _ = self._start_with_runtime(monkeypatch, tmp_path, {}, key="k", url="")
+        assert sweeps == []
+
+    def test_an_enabled_runtime_without_a_key_logs_one_warning(self, monkeypatch, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            self._start_with_runtime(monkeypatch, tmp_path, self._N8N_ON, url="")
+        assert len([r for r in caplog.records if "agent_runtimes.n8n is enabled" in r.getMessage()]) == 1
+
+    def test_the_dispatcher_receives_the_agent_runtime_config(self, monkeypatch, tmp_path):
+        _, dispatchers = self._start_with_runtime(monkeypatch, tmp_path, self._N8N_ON, key="k")
+        config = dispatchers[0]["agent_runtime"]
+        assert config.enabled is True
+        assert config.base_url == "https://n8n.example.com"
+
 
 class TestPeekRelease:
     """``privacyfence-app --peek-release PRINCIPAL_ID``: take back the Peek token PrivacyFence minted."""
@@ -5381,14 +5458,20 @@ class TestRevokeScopedTokens:
 
         made, alice = store
         assert daemon_main.run_revoke_scoped_tokens("alice") == 0
-        assert capsys.readouterr().out == "Revoked 2 scoped token(s) for alice.\n"
+        assert capsys.readouterr().out == (
+            "Revoked 2 scoped token(s) for alice.\n"
+            "A running PrivacyFence server deletes these tokens' n8n credentials within 5 minutes.\n"
+        )
         # The file is what a running daemon re-reads on the token's next use.
         fresh = scoped_tokens.ScopedTokenStore(lambda: [alice])
         fresh.load()
         assert fresh.tokens_for(alice) == []
         assert made.tokens_for(alice) == []
         assert daemon_main.run_revoke_scoped_tokens("alice") == 0
-        assert capsys.readouterr().out == "Revoked 0 scoped token(s) for alice.\n"
+        assert capsys.readouterr().out == (
+            "Revoked 0 scoped token(s) for alice.\n"
+            "A running PrivacyFence server deletes these tokens' n8n credentials within 5 minutes.\n"
+        )
 
     @pytest.mark.parametrize("principal_id", ["nobody", "../escape", "", "users"])
     def test_revoke_scoped_tokens_for_an_unknown_account_exits_1_and_creates_no_folder(
@@ -5435,7 +5518,7 @@ class TestRevokeScopedTokens:
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         monkeypatch.setattr(daemon_main, "data_dir", lambda: tmp_path)
         assert daemon_main.run_revoke_scoped_tokens("local") == 0
-        assert capsys.readouterr().out == "Revoked 0 scoped token(s) for local.\n"
+        assert capsys.readouterr().out.startswith("Revoked 0 scoped token(s) for local.\n")
 
 
 class TestGristRelease:

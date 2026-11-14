@@ -1,6 +1,6 @@
 """Registers the operator's declared upstream MCP tools into the policy tables at startup.
 
-``register`` runs once, before the web server serves (ADR 0278). For every declared tool it writes
+``register`` runs once, before the web server serves (ADR 0283). For every declared tool it writes
 the gate, operation key, verb, effect text and approval-window layout into the same module-level
 tables the built-in connectors use, then rebuilds the two derived values (``TOOL_REGISTRY``,
 ``propose.ALL_OPERATIONS``). No scope selector, catalogue entry or proposable scope is added, so an

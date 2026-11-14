@@ -23,7 +23,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger, released_req
 from ..auto_accept import (
     PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
 )
-from .. import audit_log, local_files, scoped_tokens
+from .. import agent_runtimes, audit_log, local_files, runtime_credentials, scoped_tokens
 from ..org_mode import LOCAL_MODE_DEPRECATION
 from ..connector import Connector
 from ..agent_identity import current_agent
@@ -136,6 +136,7 @@ class McpDispatcher:
         unattended_sessions_enabled: bool = False,
         registry: PendingApprovalRegistry | None = None,
         scoped_token_policy: ScopedTokenPolicy | None = None,
+        agent_runtime: agent_runtimes.N8nRuntimeConfig | None = None,
     ) -> None:
         self._connectors_provider = connectors_provider
         # "local" or "org" -- privacyfence_status's own mode field, and what
@@ -156,6 +157,8 @@ class McpDispatcher:
         self._unattended_changed_listener: Callable[[], None] | None = None
         # None in a test that never wires one: scoped_token_proposals_enabled() is then False.
         self._scoped_token_policy = scoped_token_policy
+        # The n8n delivery setup of an organization server (ADR 0278); None where there is none.
+        self._agent_runtime = agent_runtime
         # The approved (or auto-gated) calls each MCP session has made, newest last, as
         # (tool, agent args, my_email) -- what privacyfence_propose_scoped_token's from_session
         # builds a bundle from. In memory only; end_session() drops it.
@@ -523,6 +526,14 @@ class McpDispatcher:
         policy = self._scoped_token_policy
         return policy is not None and policy.enabled and policy.allow_ai_proposals
 
+    def runtime_delivery_enabled(self) -> bool:
+        """Whether a token proposal may ask for delivery into n8n, and the status tool is offered."""
+        return (
+            self._mode == "org"
+            and self.scoped_token_proposals_enabled()
+            and agent_runtimes.delivery_available(self._agent_runtime)
+        )
+
     async def propose_scoped_token(self, session_key: Hashable, params: dict, base_url: str) -> dict:
         """privacyfence_propose_scoped_token's handler (ADR 0251): validates, registers a
         proposal for a person to review in Settings and returns its link. Never mints a token."""
@@ -541,6 +552,14 @@ class McpDispatcher:
                 "Request denied: this connection is in an unattended session, so nobody is there "
                 "to review a token proposal."
             )
+        delivery = None
+        mcp_url = ""
+        if "deliver_to" in params:
+            runtime_config = self._agent_runtime
+            if self._mode == "local" or runtime_config is None or not agent_runtimes.delivery_available(runtime_config):
+                raise ValueError(agent_runtimes.DELIVERY_UNAVAILABLE)
+            delivery = agent_runtimes.parse_deliver_to(params["deliver_to"])
+            mcp_url = agent_runtimes.mcp_url_for(runtime_config, base_url)
         rules = params.get("rules", [])
         tools = params.get("tools", [])
         uncovered: list[str] = []
@@ -574,17 +593,18 @@ class McpDispatcher:
         proposal = new_proposal(
             principal=principal, request=body, source="session" if from_session else "bundle",
             agent=current_agent(), reason=str(params.get("reason", "")), uncovered_tools=uncovered,
+            delivery=delivery, mcp_url=mcp_url,
         )
         get_registry().add(proposal)
         record_proposal(
             "scoped_token_proposed", proposal,
             f"Token '{body['label']}' proposed: {len(body['rules'])} rule(s), {len(body['tools'])} tool(s), "
-            f"{body['days']} days",
+            f"{body['days']} days" + (", delivery to n8n" if delivery is not None else ""),
         )
         # Only a copy rule's sentence reads the person's Auto-accept rows.
         own_rows = get_policy_rows() if any(rule["kind"] == "copy" for rule in body["rules"]) else []
         data = review_data(proposal, own_rows)
-        return {
+        result: dict[str, Any] = {
             "proposal_id": proposal.id,
             "review_url": base_url.rstrip("/") + REVIEW_PATH.format(proposal_id=proposal.id),
             "expires_at": datetime.fromtimestamp(proposal.expires_at, timezone.utc).isoformat(),
@@ -599,6 +619,49 @@ class McpDispatcher:
                 "Tools in uncovered_tools have no rule, so the token's calls to them will be denied."
             ),
         }
+        if delivery is not None:
+            result["delivery"] = {
+                "runtime": delivery.runtime, "workflow_id": delivery.workflow_id,
+                "status_tool": "privacyfence_runtime_credential_status",
+            }
+            result["message"] = agent_runtimes.DELIVERY_MESSAGE
+        return result
+
+    def runtime_credential_status(self, params: dict) -> dict:
+        """privacyfence_runtime_credential_status's handler (ADR 0280): whether the caller's own
+        proposal was delivered into n8n. Never returns a token."""
+        if current_token_scope() is not None:
+            raise GateDeniedError("Request denied: a scoped token cannot read token deliveries.")
+        if not self.runtime_delivery_enabled():
+            raise ValueError(agent_runtimes.DELIVERY_UNAVAILABLE)
+        principal = current_principal()
+        result = runtime_credentials.status_for(
+            principal.id, str(params.get("proposal_id", "")), token_store=scoped_tokens.get_store(), registry=get_registry(),
+            now=time.time(),
+        )
+        self._audit_runtime_credential_status(principal, str(params.get("reason", "")))
+        return result
+
+    @staticmethod
+    def _audit_runtime_credential_status(principal: Principal, claude_reason: str) -> None:
+        try:
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(),
+                request_id=uuid.uuid4().hex[:12],
+                connector="policy",
+                tool="privacyfence_runtime_credential_status",
+                tool_name="privacyfence_runtime_credential_status",
+                summary="Read the delivery status of a proposed token",
+                sender=principal.id,
+                decision="runtime_credential_status_read",
+                auto_accept_rule="",
+                latency_seconds=0.0,
+                pii_detected=False,
+                claude_reason=claude_reason,
+            ))
+        except Exception as exc:
+            logger.warning("Audit log write failed for runtime credential status: %s", exc)
 
     @staticmethod
     def _audit_unattended_proposal(claude_reason: str) -> None:
@@ -641,7 +704,7 @@ class McpDispatcher:
             "deprecation": LOCAL_MODE_DEPRECATION if self._mode == "local" else None,
         }
 
-        # ADR 0278: only when the operator configured upstream MCP servers.
+        # ADR 0283: only when the operator configured upstream MCP servers.
         from .. import upstream_mcp_runtime
 
         if upstream_mcp_runtime.configured():

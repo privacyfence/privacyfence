@@ -146,6 +146,8 @@ Instead of building the token by hand, ask Claude to propose one for the routine
 - Continue, then type the token's name to confirm that you are delegating access (and use your passkey, if your installation asks for one).
 - The token is shown once, in a dialog, for you to copy. Claude never receives the token, and is not told whether you created it. A proposal lasts one hour and can be used once; Decline discards it. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md).
 
+**For an n8n workflow.** If your administrator set up [n8n delivery](org-mode-setup-guide.md#delivering-tokens-to-n8n), Claude can pass `deliver_to: {"runtime": "n8n", "workflow_id": "..."}`. The review page then names your n8n host. When you confirm, PrivacyFence creates the token as an n8n credential itself, and Claude calls `privacyfence_runtime_credential_status` to get the credential's id for the MCP Client node. Anyone who can edit workflows in that n8n, Claude included, can use and read the token ([ADR 0278](adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)). Revoking the token deletes the credential within 5 minutes.
+
 ### A cloud routine with a scoped token
 
 A scheduled Claude Code routine that runs in the cloud (claude.ai/code) uses the claude.ai

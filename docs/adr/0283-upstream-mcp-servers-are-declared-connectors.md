@@ -1,4 +1,4 @@
-# ADR 0278: Upstream MCP servers are declared connectors
+# ADR 0283: Upstream MCP servers are declared connectors
 
 ## Status
 
@@ -70,5 +70,5 @@ and integration tests.
 [ADR 0077](0077-the-approval-popup-never-proposes-a-rule-for-the-extra-scope-operations.md),
 [ADR 0115](0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md),
 [ADR 0196](0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md),
-[ADR 0279](0279-privacyfence-sends-the-upstream-a-signed-caller-claim.md),
-[ADR 0280](0280-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md).
+[ADR 0284](0284-privacyfence-sends-the-upstream-a-signed-caller-claim.md),
+[ADR 0285](0285-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md).

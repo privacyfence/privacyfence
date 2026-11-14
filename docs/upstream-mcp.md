@@ -6,9 +6,9 @@ enforces that tool policy with cards, scoped tokens and the audit log, like a bu
 Every request to the upstream carries a 60-second signed claim naming the person, the data domains they
 may see and what is calling, and the upstream filters its own queries by it.
 
-Why it is built this way: [ADR 0278](adr/0278-upstream-mcp-servers-are-declared-connectors.md),
-[ADR 0279](adr/0279-privacyfence-sends-the-upstream-a-signed-caller-claim.md) and
-[ADR 0280](adr/0280-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md).
+Why it is built this way: [ADR 0283](adr/0283-upstream-mcp-servers-are-declared-connectors.md),
+[ADR 0284](adr/0284-privacyfence-sends-the-upstream-a-signed-caller-claim.md) and
+[ADR 0285](adr/0285-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md).
 
 - **Operators:** [write the file](#the-operator-file), [grant domains](#domain-grants), restart.
 - **Upstream implementers:** [verify the claim and filter by `domains`](#for-upstream-implementers).

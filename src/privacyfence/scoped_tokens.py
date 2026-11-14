@@ -24,7 +24,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from . import auto_accept, paths, secure_files
 from .principal import Principal
@@ -43,6 +43,7 @@ MAX_TOKENS_PER_PRINCIPAL = 50
 MAX_RULES_PER_TOKEN = 50
 LABEL_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9 ._-]{0,59}\Z")
 STORE_FILE_NAME = "scoped_tokens.json"
+TOKEN_ID_RE = re.compile(r"\Ast-[0-9a-f]{12}\Z")
 ACTIVITY_FILE_NAME = "scoped_token_activity.json"
 # A runner looping on calls writes the activity file at most this often per person.
 USE_WRITE_INTERVAL_SECONDS = 60.0
@@ -60,6 +61,10 @@ _LIMIT_PAIR_SUCCESSORS: dict[tuple[str, str], tuple[str, str]] = {
     ("slack.mentions_of_me", "slack.read_messages"):
         ("slack.mentions_of_me_all_results", "slack.read_messages"),
 }
+
+
+def new_token_id() -> str:
+    return "st-" + secrets.token_hex(6)
 
 
 @dataclass(frozen=True)
@@ -565,6 +570,8 @@ class ScopedTokenStore:
         self._tokens: dict[str, list[ScopedToken]] = {}
         self._stamps: dict[str, _Stamp] = {}
         self._index: dict[str, tuple[str, str]] = {}  # digest -> (principal_id, token_id)
+        # Principals whose token file exists but could not be read at the last load.
+        self._unreadable: set[str] = set()
         # Last use and last denial (ADR 0206): kept apart from the token file, which create, rename
         # and revoke rewrite, and written at most once per USE_WRITE_INTERVAL_SECONDS per principal.
         self._activity: dict[str, dict[str, TokenActivity]] = {}
@@ -585,6 +592,7 @@ class ScopedTokenStore:
         """Re-read one principal's file into memory. The lock is held."""
         stamp = self._stamp(principal)
         tokens: list[ScopedToken] = []
+        self._unreadable.discard(principal.id)
         if stamp is not None:
             try:
                 data = json.loads(self._path(principal).read_text(encoding="utf-8"))
@@ -597,6 +605,7 @@ class ScopedTokenStore:
             except (OSError, ValueError, KeyError, TypeError):
                 logger.warning("Skipping an unreadable scoped token file for %s", principal.id)
                 tokens = []
+                self._unreadable.add(principal.id)
         for token in tokens:
             if token.legacy_raw is not None:
                 logger.warning(
@@ -649,11 +658,16 @@ class ScopedTokenStore:
         held_domains: Mapping[str, frozenset[str]] | None = None,
         principal_email_verified: bool = False,
         now: float | None = None,
+        token_id: str | None = None,
     ) -> tuple[ScopedToken, str]:
         """Create a token holding its own rules, built from ``rules`` (``normalise_rule_requests``'s
         output): a ``new`` rule, a ``copy`` of one of the person's Auto-accept rows, or a
-        ``duplicate`` of a row of one of their tokens (ADR 0236)."""
+        ``duplicate`` of a row of one of their tokens (ADR 0236). A caller that must record the id
+        before the token exists passes ``token_id`` (``new_token_id()``); it must be unused by the person."""
         from .policy import scope_rows
+
+        if token_id is not None and not TOKEN_ID_RE.match(token_id):
+            raise ScopedTokenError("That token id is already in use.")
 
         tool_set = frozenset(tools)
         chosen_domains = {uid: frozenset(doms) for uid, doms in (upstream_domains or {}).items() if doms}
@@ -665,6 +679,8 @@ class ScopedTokenStore:
         with self._lock:
             self._refresh(principal)
             existing = self._tokens[principal.id]
+            if token_id is not None and any(t.id == token_id for t in existing):
+                raise ScopedTokenError("That token id is already in use.")
             base_rows = self._check_locked(
                 existing, label=label, days=days, rules=rules, tool_set=tool_set,
                 own_rows=own_rows, policy=policy,
@@ -673,7 +689,7 @@ class ScopedTokenStore:
             created = time.time() if now is None else now
             secret = mint_secret()
             token = ScopedToken(
-                id="st-" + secrets.token_hex(6),
+                id=token_id if token_id is not None else new_token_id(),
                 label=label,
                 digest=_digest(secret),
                 principal_id=principal.id,
@@ -795,6 +811,20 @@ class ScopedTokenStore:
         if check_existing and len(existing) >= MAX_TOKENS_PER_PRINCIPAL:
             raise ScopedTokenError(f"You have {MAX_TOKENS_PER_PRINCIPAL} tokens already; revoke one first.")
         return base_rows
+
+    def token_state(
+        self, principal: Principal, token_id: str, now: float | None = None,
+    ) -> Literal["live", "expired", "absent", "unknown"]:
+        """``unknown`` when the person's token file exists but could not be read."""
+        now = time.time() if now is None else now
+        with self._lock:
+            self._refresh(principal)
+            if principal.id in self._unreadable:
+                return "unknown"
+            token = next((t for t in self._tokens[principal.id] if t.id == token_id), None)
+        if token is None:
+            return "absent"
+        return "expired" if token.expired(now) else "live"
 
     def revoke(self, principal: Principal, token_id: str) -> bool:
         with self._lock:

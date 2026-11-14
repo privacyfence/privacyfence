@@ -14,7 +14,7 @@ The ``upstream_mcp`` section of ``admin_config.json`` grants *domains* to people
 when its modification time changes, so an edit applies to the next call without a restart. A person
 whose email is not verified, or is empty, gets no domains.
 
-See ADR 0278 (upstream MCP servers as a connector) and ADR 0280 (domain grants).
+See ADR 0283 (upstream MCP servers as a connector) and ADR 0285 (domain grants).
 """
 from __future__ import annotations
 
