@@ -398,10 +398,12 @@ single-user start instead of exposing the server on its address with a setup cod
 
 Written by the daemon when an administrator saves a change on the
 [Admin page](org-mode-setup-guide.md#the-admin-page); a desktop install keeps one too. It holds
-everything operational and is part of the backup. Do not edit it while the daemon runs, and do not
+everything operational and is part of the backup. Do not edit it while the daemon runs, except `upstream_mcp.<id>.grants`, which may be edited while it
+runs (see [upstream-mcp.md](upstream-mcp.md)); write the file in one step, while no one is saving on the
+Admin page. Do not
 rely on a hand edit surviving an Admin page save unless you restart afterwards. The only reason to
 edit it by hand is to relax a setting the page only lets you tighten (step-up), or to set a key the
-page has no control for. Stop the daemon, edit, start. A file that is not valid JSON, is not an
+page has no control for. For any other key, stop the daemon, edit, start. A file that is not valid JSON, is not an
 object, or has an unknown `version` refuses the start.
 
 | Key | Holds | Admin page |

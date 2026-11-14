@@ -257,14 +257,20 @@ Grant every domain to the single-user person and `general` to everyone else:
 
 ```
 docker exec -i privacyfence python3 - <<'PY'
-import json
+import json, os
 path = "/var/lib/privacyfence-org/.privacyfence/org/admin_config.json"
 config = json.load(open(path))
 config.setdefault("upstream_mcp", {})["ref"] = {"grants": [
     {"match": "*", "domains": ["general"]},
     {"match": "admin@privacyfence.localhost", "domains": ["general", "hr", "finance"]},
 ]}
-json.dump(config, open(path, "w"), indent=2)
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(config, f, indent=2)
+st = os.stat(path)
+os.chmod(tmp, st.st_mode & 0o7777)
+os.chown(tmp, st.st_uid, st.st_gid)
+os.replace(tmp, path)
 PY
 ```
 
@@ -272,11 +278,17 @@ Then keep only the `*` grant; the next `ref_search` returns `general` documents 
 
 ```
 docker exec -i privacyfence python3 - <<'PY'
-import json
+import json, os
 path = "/var/lib/privacyfence-org/.privacyfence/org/admin_config.json"
 config = json.load(open(path))
 config.setdefault("upstream_mcp", {})["ref"] = {"grants": [{"match": "*", "domains": ["general"]}]}
-json.dump(config, open(path, "w"), indent=2)
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(config, f, indent=2)
+st = os.stat(path)
+os.chmod(tmp, st.st_mode & 0o7777)
+os.chown(tmp, st.st_uid, st.st_gid)
+os.replace(tmp, path)
 PY
 ```
 
