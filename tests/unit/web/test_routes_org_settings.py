@@ -1368,10 +1368,10 @@ class TestScopedTokenRoutes:
             seen.append((principal.id, email_verified))
             return held
 
-        monkeypatch.setattr(upstream_mcp_runtime, "held_domains", fake_held)
+        monkeypatch.setattr(upstream_mcp_runtime, "held_audiences", fake_held)
         return seen
 
-    def test_a_token_gets_the_domains_ticked_and_the_sessions_verified_bit(self, tmp_path, monkeypatch):
+    def test_a_token_gets_the_audiences_ticked_and_the_sessions_verified_bit(self, tmp_path, monkeypatch):
         client, _csrf, store = self._setup(tmp_path, monkeypatch)
         seen = self._hold(monkeypatch, {"kh": frozenset({"general", "hr"})})
         app, sessions = _app(scoped_token_policy=self.ENABLED, scoped_token_store=store)
@@ -1380,32 +1380,32 @@ class TestScopedTokenRoutes:
         client.cookies.set(org_session.SESSION_COOKIE, session_id)
 
         r = self._post(
-            client, "create", {**self.BODY, "upstream_domains": {"kh": ["hr"]}, "confirmed": True}, session_id,
+            client, "create", {**self.BODY, "upstream_audiences": {"kh": ["hr"]}, "confirmed": True}, session_id,
         )
 
         assert r.status_code == 200
         [token] = store.tokens_for(ALICE)
-        assert token.upstream_domains == {"kh": frozenset({"hr"})}
+        assert token.upstream_audiences == {"kh": frozenset({"hr"})}
         assert token.principal_email_verified is True
         assert seen == [("alice", True)]
 
-    def test_a_domain_the_person_does_not_hold_is_a_400_and_creates_nothing(self, tmp_path, monkeypatch):
+    def test_an_audience_the_person_does_not_hold_is_a_400_and_creates_nothing(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
         self._hold(monkeypatch, {"kh": frozenset({"general"})})
 
         r = self._post(
-            client, "create", {**self.BODY, "upstream_domains": {"kh": ["finance"]}, "confirmed": True}, csrf,
+            client, "create", {**self.BODY, "upstream_audiences": {"kh": ["finance"]}, "confirmed": True}, csrf,
         )
 
         assert r.status_code == 400
-        assert r.json() == {"error": "You can only give a token domains you have: finance"}
+        assert r.json() == {"error": "You can only give a token audiences you have: finance"}
         assert store.tokens_for(ALICE) == []
 
     def test_an_unverified_session_holds_what_the_runtime_gives_it(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
         seen = self._hold(monkeypatch, {})
 
-        r = self._post(client, "create", {**self.BODY, "upstream_domains": {"kh": ["hr"]}, "confirmed": True}, csrf)
+        r = self._post(client, "create", {**self.BODY, "upstream_audiences": {"kh": ["hr"]}, "confirmed": True}, csrf)
 
         assert r.status_code == 400
         assert seen == [("alice", False)]

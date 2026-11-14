@@ -269,7 +269,7 @@ def deliver(
     *, principal: Principal, bound: dict[str, Any], proposal: TokenProposal,
     config: agent_runtimes.N8nRuntimeConfig, api: N8nApi, token_store: ScopedTokenStore,
     policy: ScopedTokenPolicy, on_abandoned: Callable[[], None] | None = None,
-    held_domains: Mapping[str, frozenset[str]] | None = None, principal_email_verified: bool = False,
+    held_audiences: Mapping[str, frozenset[str]] | None = None, principal_email_verified: bool = False,
 ) -> DeliveryOutcome:
     """Create the token and its credential in the runtime, recording both before either exists
     (ADR 0281). ``bound`` is the confirmed request; the secret goes to the runtime and nowhere else."""
@@ -330,8 +330,8 @@ def deliver(
                 tools=bound["tools"], policy=policy,
                 allow_personal_data=bound["allow_personal_data"],
                 allow_personal_data_reads=bound["allow_personal_data_reads"],
-                upstream_domains=bound.get("upstream_domains") or None,
-                held_domains=held_domains,
+                upstream_audiences=bound.get("upstream_audiences") or None,
+                held_audiences=held_audiences,
                 principal_email_verified=principal_email_verified,
                 token_id=token_id,
             )

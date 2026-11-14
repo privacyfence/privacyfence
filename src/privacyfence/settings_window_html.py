@@ -356,7 +356,7 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
-    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stPersonalDataReads: false, stDomains: {}, stDuplicateOf: null,
+    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stPersonalDataReads: false, stAudiences: {}, stDuplicateOf: null,
     stNewGroup: null, stNewValue: '', stNewVerbs: {}, stNewRules: [], stDupRules: {},
     // Review panel for an AI-proposed token (window.__pfScopedProposal); spLabel === null until first drawn.
     spLabel: null, spDays: null, spRules: {}, spVerbs: {}, spTools: {}, spPersonalData: false, spPersonalDataReads: false, spTyped: '',
@@ -1422,9 +1422,9 @@ _JS = r"""
     t.tools.forEach(function (name) { ui.stTools[name] = true; });
     ui.stPersonalData = !!t.allow_personal_data;
     ui.stPersonalDataReads = !!t.allow_personal_data_reads;
-    ui.stDomains = {};
-    Object.keys(t.upstream_domains || {}).forEach(function (id) {
-      t.upstream_domains[id].forEach(function (d) { ui.stDomains[id + '\u0000' + d] = true; });
+    ui.stAudiences = {};
+    Object.keys(t.upstream_audiences || {}).forEach(function (id) {
+      t.upstream_audiences[id].forEach(function (d) { ui.stAudiences[id + '\u0000' + d] = true; });
     });
     render(pyState);
     var form = document.querySelector('.pf-st-form');
@@ -1441,7 +1441,7 @@ _JS = r"""
     ui.stTools = {};
     ui.stPersonalData = false;
     ui.stPersonalDataReads = false;
-    ui.stDomains = {};
+    ui.stAudiences = {};
     ui.stNewGroup = null;
     ui.stNewValue = '';
     ui.stNewVerbs = {};
@@ -1459,37 +1459,37 @@ _JS = r"""
       '<span>' + esc(name) + ' <span class="pf-st-meta">· ' + esc(status.text) + '</span></span></div>';
   }
 
-  // An upstream whose tool is ticked, with the domains the person holds.
+  // An upstream whose tool is ticked, with the audiences the person holds.
   function scopedUpstreamsWithTools() {
     return (SCOPED.upstreams || []).filter(function (u) {
       return u.tools.some(function (name) { return !!ui.stTools[name]; });
     });
   }
 
-  function scopedDomainsHtml() {
+  function scopedAudiencesHtml() {
     var html = '';
     scopedUpstreamsWithTools().forEach(function (u) {
-      html += '<fieldset class="pf-st-domains" data-st-domains-for="' + esc(u.id) + '"><legend class="pf-row-title">Data domains for ' + esc(u.label) + '</legend>';
-      if (!u.domains.length) {
+      html += '<fieldset class="pf-st-audiences" data-st-audiences-for="' + esc(u.id) + '"><legend class="pf-row-title">Audiences for ' + esc(u.label) + '</legend>';
+      if (!u.audiences.length) {
         html += '<div class="pf-hint">You hold no data domain on this server, so the token sees none.</div>';
       } else {
         html += '<div class="pf-chips pf-caps-row">';
-        u.domains.forEach(function (d) {
-          var on = !!ui.stDomains[u.id + '\u0000' + d];
+        u.audiences.forEach(function (d) {
+          var on = !!ui.stAudiences[u.id + '\u0000' + d];
           html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
-            '" tabindex="0" aria-label="' + esc(u.label + ' domain ' + d) + '" data-st-domain="' + esc(d) + '" data-st-domain-upstream="' + esc(u.id) + '">' + esc(d) + '</div>';
+            '" tabindex="0" aria-label="' + esc(u.label + ' audience ' + d) + '" data-st-audience="' + esc(d) + '" data-st-audience-upstream="' + esc(u.id) + '">' + esc(d) + '</div>';
         });
         html += '</div>';
       }
-      html += '<div class="pf-hint">The token sees only the domains you tick, and never more than you can see yourself.</div></fieldset>';
+      html += '<div class="pf-hint">The token sees only the audiences you tick, and never more than you can see yourself.</div></fieldset>';
     });
     return html;
   }
 
-  function scopedChosenDomains() {
+  function scopedChosenAudiences() {
     var out = {};
     scopedUpstreamsWithTools().forEach(function (u) {
-      var picked = u.domains.filter(function (d) { return !!ui.stDomains[u.id + '\u0000' + d]; });
+      var picked = u.audiences.filter(function (d) { return !!ui.stAudiences[u.id + '\u0000' + d]; });
       if (picked.length) { out[u.id] = picked; }
     });
     return out;
@@ -1636,7 +1636,7 @@ _JS = r"""
         ', so ' + (uncovered.length === 1 ? 'its calls' : 'their calls') + ' will be denied. Select a rule that covers ' +
         (uncovered.length === 1 ? 'it' : 'them') + ', or untick ' + (uncovered.length === 1 ? 'it' : 'them') + '.</div>';
     }
-    html += scopedDomainsHtml();
+    html += scopedAudiencesHtml();
     var stPdOn = !!ui.stPersonalData;
     var stPdLabel = 'Let exports, downloads and page uploads carry personal data';
     html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (stPdOn ? ' on' : '') + '" role="checkbox" aria-checked="' +
@@ -2156,7 +2156,7 @@ _JS = r"""
       });
     }
     var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
-    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rules: rules, tools: tools, allow_personal_data: !!ui.stPersonalData, allow_personal_data_reads: !!ui.stPersonalDataReads, upstream_domains: scopedChosenDomains() });
+    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rules: rules, tools: tools, allow_personal_data: !!ui.stPersonalData, allow_personal_data_reads: !!ui.stPersonalDataReads, upstream_audiences: scopedChosenAudiences() });
   }
 
   // -------------------------------------------------------------------- //
@@ -3215,10 +3215,10 @@ _JS = r"""
     if (stNewRemoveEl) { ui.stNewRules.splice(parseInt(stNewRemoveEl.getAttribute('data-st-new-remove'), 10), 1); render(pyState); return; }
     var stToolEl = e.target.closest('[data-st-tool]');
     if (stToolEl) { var tn = stToolEl.getAttribute('data-st-tool'); ui.stTools[tn] = !ui.stTools[tn]; render(pyState); return; }
-    var stDomainEl = e.target.closest('[data-st-domain]');
-    if (stDomainEl) {
-      var dk = stDomainEl.getAttribute('data-st-domain-upstream') + '\u0000' + stDomainEl.getAttribute('data-st-domain');
-      ui.stDomains[dk] = !ui.stDomains[dk]; render(pyState); return;
+    var stAudienceEl = e.target.closest('[data-st-audience]');
+    if (stAudienceEl) {
+      var dk = stAudienceEl.getAttribute('data-st-audience-upstream') + '\u0000' + stAudienceEl.getAttribute('data-st-audience');
+      ui.stAudiences[dk] = !ui.stAudiences[dk]; render(pyState); return;
     }
     if (e.target.closest('[data-st-personal-data]')) { ui.stPersonalData = !ui.stPersonalData; render(pyState); return; }
     if (e.target.closest('[data-st-personal-data-reads]')) { ui.stPersonalDataReads = !ui.stPersonalDataReads; render(pyState); return; }

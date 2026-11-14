@@ -2031,8 +2031,8 @@ def build_org_routes(
         store = scoped_token_store or get_store()
         from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
 
-        held_domains = (
-            upstream_mcp_runtime.held_domains(principal, session_email_verified)
+        held_audiences = (
+            upstream_mcp_runtime.held_audiences(principal, session_email_verified)
             if upstream_mcp_runtime.configured() else {}
         )
         with principal_scope(principal):
@@ -2047,9 +2047,9 @@ def build_org_routes(
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
                         allow_personal_data_reads=bound["allow_personal_data_reads"],
-                        upstream_domains=bound.get("upstream_domains") or None,
+                        upstream_audiences=bound.get("upstream_audiences") or None,
                         principal_email_verified=session_email_verified,
-                        held_domains=held_domains,
+                        held_audiences=held_audiences,
                     ),
                 )
             except ScopedTokenError as exc:
@@ -2114,8 +2114,8 @@ def build_org_routes(
         store = scoped_token_store or get_store()
         from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
 
-        held_domains = (
-            upstream_mcp_runtime.held_domains(principal, session_email_verified)
+        held_audiences = (
+            upstream_mcp_runtime.held_audiences(principal, session_email_verified)
             if upstream_mcp_runtime.configured() else {}
         )
         with principal_scope(principal):
@@ -2127,7 +2127,7 @@ def build_org_routes(
                 lambda: runtime_credentials.deliver(
                     principal=principal, bound=bound, proposal=proposal, config=agent_runtime, api=api,
                     token_store=store, policy=token_policy, on_abandoned=runtime_credential_sweeper.wake,
-                    held_domains=held_domains, principal_email_verified=session_email_verified,
+                    held_audiences=held_audiences, principal_email_verified=session_email_verified,
                 ),
             )
             token = outcome.token

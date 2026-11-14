@@ -4,7 +4,7 @@
 then calls ``configure``. From there this module is the one place that knows the live upstream
 set: the connector list for a principal, the caller claim for one dispatched call (the only code
 that reads the caller contextvars on behalf of an upstream call, so connector code never does),
-the domains a person holds, the ``privacyfence_status`` rows, and the lifespan that fetches each
+the audiences a person holds, the ``privacyfence_status`` rows, and the lifespan that fetches each
 upstream's tool list once at startup, retrying with backoff until it succeeds. There is no periodic
 refresh: a description changing mid-session is a rug-pull vector.
 """
@@ -98,7 +98,7 @@ def connectors_for_principal() -> list[UpstreamMcpConnector]:
 
 
 def caller_for(upstream: UpstreamServer) -> CallerClaim:
-    """Who is calling ``upstream`` right now, and which of its data domains they may see."""
+    """Who is calling ``upstream`` right now, and which of its audiences they may see."""
     assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
     principal = current_principal()
     scope = current_token_scope()
@@ -108,7 +108,7 @@ def caller_for(upstream: UpstreamServer) -> CallerClaim:
     else:
         verified = bool(getattr(scope, "principal_email_verified", False))
         held = _runtime.grants.domains_for(upstream.id, scope.principal_email, verified)
-        chosen = getattr(scope, "upstream_domains", {}).get(upstream.id, ())
+        chosen = getattr(scope, "upstream_audiences", {}).get(upstream.id, ())
         domains = tuple(sorted(set(held) & set(chosen)))
     return CallerClaim(
         sub=principal.id,
@@ -119,8 +119,8 @@ def caller_for(upstream: UpstreamServer) -> CallerClaim:
     )
 
 
-def held_domains(principal: Principal, email_verified: bool) -> dict[str, frozenset[str]]:
-    """The domains ``principal`` holds, per upstream id (what a scoped token may narrow)."""
+def held_audiences(principal: Principal, email_verified: bool) -> dict[str, frozenset[str]]:
+    """The audiences ``principal`` holds, per upstream id (what a scoped token may narrow)."""
     if _runtime is None:
         return {}
     return {
