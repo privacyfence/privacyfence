@@ -41,6 +41,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - worker: The operator-file grants key is still parsed (UpstreamServer.grants) but ignored with a startup warning, and admin_config.seed_upstream_grants stays with no caller, because removing them touches files outside the phase (tests/integration/test_org_docker_deploy_files.py, tests/unit/test_admin_config.py, docs/org-mode-docker.md). To be settled before the final review.
 - worker: claim.key_overlap_hours is parsed but unused until phase 10 builds the new signer; docs/approvals-and-policy.md and docs/connector-qa.md still describe grants.
+- gate: Owner decision (board ask a-be024333bc4d3bb4): remove the operator-file grants key and the dead seeding code; fix-1 does it and the key is then refused with the groups message.
 
 ## p10-claim-switch
 
