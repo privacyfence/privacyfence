@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-28. Implemented.
 Amended by [0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md): the AI token proposals switch is on the Admin page (`scoped_tokens.allow_ai_proposals` in `org/admin_config.json`).
+Amended by [ADR 0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md): AI proposals (and scoped tokens) are also turned on by `PRIVACYFENCE_N8N_DELIVERY=true`, locked on Admin.
 
 ## Context
 

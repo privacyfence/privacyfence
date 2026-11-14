@@ -360,6 +360,32 @@ class TestAgentRuntimes:
         state = world.client.get("/api/admin/state").json()
         assert state["agent_runtimes"]["n8n"]["credential_type"] == "privacyFenceApi"
 
+    def test_state_carries_environment_locks(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_DELIVERY", "true")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_PROJECT_ID", "proj9")
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "sekret-value")
+        world = World()
+        world.sign_in(ADMIN)
+        response = world.client.get("/api/admin/state")
+        assert response.json()["environment_locks"] == {
+            "agent_runtimes": {
+                "enabled": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+                "project_id": {"value": "proj9", "variable": "PRIVACYFENCE_N8N_PROJECT_ID"},
+            },
+            "scoped_tokens": {
+                "enabled": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+                "allow_ai_proposals": {"value": True, "variable": "PRIVACYFENCE_N8N_DELIVERY"},
+            },
+        }
+        assert "sekret-value" not in response.text
+
+    def test_state_has_no_locks_without_variables(self):
+        world = World()
+        world.sign_in(ADMIN)
+        assert world.client.get("/api/admin/state").json()["environment_locks"] == {
+            "agent_runtimes": {}, "scoped_tokens": {},
+        }
+
     def test_the_action_is_org_only_sensitive_and_restarts(self):
         spec = routes_admin.ADMIN_ACTIONS["set_agent_runtimes"]
         assert (spec.modes, spec.sensitive, spec.applies) == (frozenset({"org"}), True, "restart")
