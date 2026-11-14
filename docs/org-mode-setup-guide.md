@@ -1173,7 +1173,7 @@ token proposals, so nothing needs to be ticked under **Admin → Scoped tokens**
 its field on the Admin page (the page shows the value and the variable's name); the longest token lifetime
 stays editable. The server refuses to start when `PRIVACYFENCE_N8N_DELIVERY=true` has no n8n address or
 key, or when a value is malformed. Remove a variable and its field goes back to what Admin stored
-([ADR 0288](adr/0288-n8n-delivery-can-be-switched-on-from-the-server-environment.md)).
+([ADR 0294](adr/0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md)).
 
 Claude then calls `privacyfence_propose_scoped_token` with `deliver_to`, and `privacyfence_runtime_credential_status`
 for the credential's id. Revoking the token deletes the n8n credential within 5 minutes. An expired token's credential is kept until the person extends the token (Settings → Scoped tokens → Extend) or revokes it.
