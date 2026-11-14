@@ -133,6 +133,8 @@ def sweep_once(
                 _sweep_record(record, records=records, token_store=token_store, api=api, now=now)
         except RuntimeCredentialStoreError as exc:
             logger.warning("Credential cleanup skipped %s: %s", record.credential_id, exc)
+        except Exception as exc:  # one bad record must not stop the others
+            logger.warning("Credential cleanup skipped a record: %s", type(exc).__name__)
 
 
 class _Sweeper:
