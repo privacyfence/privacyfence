@@ -58,7 +58,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p13-membership-tool
 
-- pending
+- gate: Owner decision (board ask a-06bdee891f6f1a4a): the membership tool is not added to the website connector list; the website tests skip the PrivacyFence administration reference row so the site stays at fifteen connectors. Worker sent back to adjust the website test files.
 
 ## p14-token-admin-only
 
