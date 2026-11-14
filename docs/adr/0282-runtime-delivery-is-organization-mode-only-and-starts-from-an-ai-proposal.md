@@ -4,6 +4,7 @@
 
 Accepted — 2026-11-13. Implemented.
 Relates to [ADR 0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) and [ADR 0261](0261-local-mode-is-deprecated-in-7-and-removed-in-8.md).
+Amended by [ADR 0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md): `PRIVACYFENCE_N8N_DELIVERY=true` turns on the scoped tokens and AI proposals delivery needs.
 
 ## Context
 
