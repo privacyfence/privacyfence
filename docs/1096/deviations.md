@@ -33,7 +33,19 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p04-mode-flip
 
-- pending
+- worker: Outside touches: removed the agent_label._local_mode patches and the two "Undetected" rendering tests in tests/unit/test_card_builder.py, tests/unit/test_approval_list_html.py and tests/unit/web/test_routes_mcp_agent_identity.py, because the switch no longer exists.
+- worker: Added an autouse fixture pinning org_mode.resolve_mode to "local" in tests/unit/test_settings_controller.py and tests/unit/web/test_routes_settings.py, because the desktop controller still exists; phase p09 deletes the controller and these tests.
+- worker: main() one-shot sign-in branch (--gmail-oauth and the other sign-in flags) now calls _release_org_config() instead of the deleted _local_effective_org_config; phase p06 removes those flags.
+- worker: Removed the unreachable mode != "org" check from daemon_main._first_bundle_difference and the PRIVACYFENCE_MODE case of TestRetireBundle.
+- worker: Kept four tests of TestLocalOverrideNeverAttests that start no local server as TestOverrideResolution; deleted the rest of the class and the _started_overrides helper.
+- worker: Deleted 8 build_connectors tests that relied on the old local default (Grist, Peek, Salesforce), test_enabled_but_local_mode_no_forwarder_built and two main() runtime-identity-check tests; TestLoadOrgConfigAdoption now pins resolve_mode; the no-mode-key bundle test expects the signed-bundle refusal.
+- worker: TIER_UNDETECTED and UNDETECTED_LABEL stay in agent_label.py because the card and list renderers still import them; request_shutdown stays for settings_controller until p09; Mode stays Literal["local","org"] until p14b.
+- scope: scope: tests/unit/test_approval_list_html.py
+- scope: scope: tests/unit/test_card_builder.py
+- scope: scope: tests/unit/test_settings_controller.py
+- scope: scope: tests/unit/web/test_routes_mcp_agent_identity.py
+- scope: scope: tests/unit/web/test_routes_settings.py
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p05-startup-data-check
 
