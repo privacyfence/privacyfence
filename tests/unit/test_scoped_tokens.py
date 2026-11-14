@@ -438,6 +438,19 @@ class TestAllowPersonalDataReads:
 class TestUpstreamDomains:
     HELD = {"kh": frozenset({"general", "hr"})}
 
+    def test_extend_keeps_the_domains_and_the_verified_flag(self):
+        store = _store()
+        token, _ = _create(
+            store, label="scoped", days=10, upstream_domains={"kh": ["hr"]}, held_domains=self.HELD,
+            principal_email_verified=True,
+        )
+        _, extended = store.extend(LOCAL_PRINCIPAL, token.id, 30, policy=ENABLED, now=NOW)
+        assert extended.upstream_domains == {"kh": frozenset({"hr"})}
+        assert extended.principal_email_verified is True
+        found = _store().tokens_for(LOCAL_PRINCIPAL)[0]
+        assert found.upstream_domains == {"kh": frozenset({"hr"})}
+        assert found.principal_email_verified is True
+
     def test_fields_round_trip_and_are_written_only_when_set(self, tmp_path):
         store = _store()
         plain, _ = _create(store, label="plain")
