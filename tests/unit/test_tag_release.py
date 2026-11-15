@@ -228,6 +228,29 @@ class TestMain:
         assert _run_git_output(["tag", "--list"], cwd=origin) == ""
         assert "not pushed" in capsys.readouterr().out
 
+    def test_check_only_creates_no_tag(self, tmp_path, capsys):
+        clone, _ = _init_repo_with_remote(tmp_path)
+        exit_code = tag_release.main(["0.1.0", "--repo", str(clone), "--no-fetch", "--check-only"])
+
+        assert exit_code == 0
+        assert _run_git_output(["tag", "--list"], cwd=clone) == ""
+        assert "checks passed for v0.1.0" in capsys.readouterr().out
+
+    def test_check_only_and_push_are_mutually_exclusive(self, tmp_path):
+        clone, _ = _init_repo_with_remote(tmp_path)
+        with pytest.raises(SystemExit) as excinfo:
+            tag_release.main(["0.1.0", "--repo", str(clone), "--no-fetch", "--check-only", "--push"])
+
+        assert excinfo.value.code == 2
+
+    def test_check_only_still_fails_a_sequential_gap(self, tmp_path, capsys):
+        clone, _ = _init_repo_with_remote(tmp_path)
+        exit_code = tag_release.main(["0.1.0a3", "--repo", str(clone), "--no-fetch", "--check-only"])
+
+        assert exit_code == 1
+        assert "must be a1" in capsys.readouterr().err
+        assert _run_git_output(["tag", "--list"], cwd=clone) == ""
+
     def test_pushes_with_flag(self, tmp_path, capsys):
         clone, origin = _init_repo_with_remote(tmp_path)
         exit_code = tag_release.main(["0.1.0", "--repo", str(clone), "--no-fetch", "--push"])
