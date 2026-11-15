@@ -456,7 +456,7 @@ class AuditEntry:
     claim_req: str = ""       # the claim's req: the hash binding it to one tool call
     upstream_status: str = ""  # ok | tool_error | unreachable | too_large | refused | claim_failed
     metadata: dict[str, str] = field(default_factory=dict)  # upstream, claim_version, identity_claim,
-                              # token_id, approved_by only; never argument values or upstream text
+                              # token_id, approved_by, gate only; never argument values or upstream text
 
     # ---- Hash-chain and provenance fields ----
     # All six below default to a value meaning "not yet stamped" and are
