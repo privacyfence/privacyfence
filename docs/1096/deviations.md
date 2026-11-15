@@ -334,7 +334,14 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- final: final: docs/configuration-reference.md lists thirteen removed command-line flags (--gmail-oauth ... --peek-login) in its options table (p20-docs-user)
+- final: final: docs/slack-setup.md and docs/miro-setup.md describe desktop installs, bundle flags and the deleted build_org_bundle.py as current (p20-docs-user)
+- final: final: docs/connector-qa.md tells contributors to run the deleted scripts/build_org_bundle.py (p20-docs-user)
+- final: final: docs/grist-setup.md says assistants can pass local_path, which the upload-slot change removed (p20-docs-user)
+- final: final: telegram_client.py error message points to the removed privacyfence-app --telegram-setup flag (p06-local-cli)
+- final: final: website ChatGPT agent page still offers ChatGPT desktop and a local token (p18c-website-agents)
+- final: final: website claude-ai, gemini-enterprise, claude-code, agents index and faq pages still send people to ChatGPT desktop or a local token (p18c-website-agents, p18b-website-copy)
+- final: final: website security, faq, slack, jira-confluence and gdpr pages still claim privilege separation and describe desktop installs as current (p18b-website-copy)
 
 ## Finishing
 
