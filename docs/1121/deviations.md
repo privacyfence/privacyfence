@@ -15,7 +15,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-refuse-before-forwarding
 
-- pending
+- worker: Three existing connector tests encoded the old scan and metadata behaviour and were updated (one asserting text-only scanning when structured content also exists was removed, one asserting indented JSON, one asserting metadata without gate). All are inside touches and follow plan 3.6.
+- retry: tld plugin absent in the worker container; the worker ran the verify.dod commands directly and reported done. No roles are required for this phase. Orchestrator re-ran ruff and the full unit suite on the merged tree: green.
 
 ## p4-token-form
 
