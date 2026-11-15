@@ -309,7 +309,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p21-docs-contributor
 
-- pending
+- worker: tests/unit/test_definition_of_done_drift.py (outside touches) changed one assertion from 'npm run dry-run' to 'npm run lint' because section 2.7 no longer lists the removed cloudflare/downloads line; the relay conditional in .tld/toolkit.yaml still lists 'npm run dry-run' and 2.7 does not mention it.
 
 ## p20b-docs-org-guide
 
