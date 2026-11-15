@@ -139,6 +139,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - scope: scope: tests/unit/web/test_tool_schema_portability.py
 - conflict: tests/unit/test_gmail_client.py auto-merged with the earlier loopback phase; no manual resolution needed.
 - retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
+- final: Final-review fix: a file fetched through its one-time link wrote its 'served' audit row to the anonymous principal's log; the staged download now carries the owner's principal id and the fetch route audits under it (unit test added, served-row assertion restored in test_pending_approval_releases_nothing).
 
 ## p12a-google-connectors
 
@@ -217,6 +218,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - scope: scope: tests/unit/web/test_server_org_mode.py
 - review: After merge: unit suite 19789 passed, 3 skipped; integration set 12 passed, 1 skipped; coverage ratchet passes; scripts/qa_fixture_recorder.py compiles and answers --help.
 - retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
+- final: Final-review fix: McpDispatcher no longer takes a mode parameter (privacyfence_status always reports org); client error messages now say 'Connect <Service> on the Connect page (/connect)' and the not-authenticated detector matches that phrase, so Google refresh-failed messages are classified not_authenticated too; start-up data check refuses cleanly on OSError and counts a dangling mcp_token symlink as a desktop trace; sync client no longer sends destination_dir; dead local-mode UI code and the 
 
 ## p14d-mode-leftovers
 
