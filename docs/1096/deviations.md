@@ -220,7 +220,19 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p14d-mode-leftovers
 
-- pending
+- worker: Outside touches: the five tests/integration/test_settings_*_browser.py files, tests/unit/web/test_routes_admin.py (four "unknown in local mode" tests deleted) and tests/unit/test_web_shell.py (a docstring) changed because build_html and the admin helpers lost their mode argument or a function was deleted.
+- worker: connector.py, catalog_server.py logic and tests/conftest.py needed no change beyond the /install/ URL. is_action_permitted(..., mode=) and the modes sets of ACTION_SCOPES and ADMIN_ACTIONS in org_settings_scope.py stay: they are the scope table key, not a local-mode switch. mint_recovery_code and store_recovery_code stay because routes_security.py uses them. DEFAULT_LOCAL_RP_ID was deleted (unused once from_local_config went); the accepted ADR 0010 still mentions it and was not touched.
+- worker: Two tests were added (LiveStepUpConfig.off_notice and organization defaults) to keep step_up_config.py above its 99% floor after the local tests went.
+- worker: Left for later: local-mode wording in the LiveStepUpConfig docstring and two "both modes" comments in step_up_config.py; routes_settings.py still passes mode="org" to the personal-settings builder (about line 851); a test named test_local_mode_has_no_relay_line and some "local mode" comments in tests/unit/test_settings_window_html.py.
+- scope: scope: tests/integration/test_settings_edit_verbs_browser.py
+- scope: scope: tests/integration/test_settings_scoped_token_form_browser.py
+- scope: scope: tests/integration/test_settings_scoped_token_proposal_browser.py
+- scope: scope: tests/integration/test_settings_show_ids_browser.py
+- scope: scope: tests/integration/test_settings_update_rule_browser.py
+- scope: scope: tests/unit/test_web_shell.py
+- scope: scope: tests/unit/web/test_routes_admin.py
+- review: paths.py changed only in docstrings (checked by the orchestrator in the diff), so data_dir() and authority_dir() behave exactly as before; the worker compared their values in a source checkout and two faked site-packages and dist-packages paths, but its bundled-install variants did not trigger is_bundled(), so that branch was not exercised by the comparison.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks, including the five settings browser tests with Chromium (48 passed), the integration set and the coverage ratchet (owner choice orch_roles); no roles are required for this diff.
 
 ## p15a-packaging
 
