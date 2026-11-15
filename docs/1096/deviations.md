@@ -317,7 +317,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p24a-pypi-workflow
 
-- pending
+- None.
 
 ## p22-ratchet
 
