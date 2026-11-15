@@ -1,7 +1,7 @@
 """The admin policy's required-check list must equal what the workflows report.
 
 A listed check that never reports blocks every merge, and a job that is renamed without the list
-silently stops gating. `.tld/admin-policy.yaml` is the one list (ADR 0313).
+silently stops gating. `.tld/admin-policy.yaml` is the one list (ADR 0315).
 """
 
 from __future__ import annotations
