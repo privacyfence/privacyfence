@@ -66,11 +66,6 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _refresh_lock = threading.Lock()
 
 
-def _section(config: dict[str, Any], key: str) -> dict[str, Any]:
-    value = config.get(key)
-    return value if isinstance(value, dict) else {}
-
-
 def _connectors(
     connectors: Mapping[str, connector_configs.LoadedConfig] | None
 ) -> Mapping[str, connector_configs.LoadedConfig]:
