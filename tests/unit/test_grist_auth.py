@@ -151,16 +151,13 @@ class TestNormalizeServerUrl:
 
 
 class TestBundleSettings:
-    def test_empty_section_in_local_mode(self):
-        assert bundle_settings({}, org_mode=False) == GristBundle("", None)
-
     def test_server_only(self):
-        assert bundle_settings({"server_url": "https://g.example.com/"}, org_mode=True) == GristBundle(
+        assert bundle_settings({"server_url": "https://g.example.com/"}) == GristBundle(
             "https://g.example.com", None,
         )
 
     def test_client_pair_defaults_server_and_auth_server(self):
-        bundle = bundle_settings({"client_id": "id", "client_secret": "sec"}, org_mode=False)
+        bundle = bundle_settings({"client_id": "id", "client_secret": "sec"})
         assert bundle.server_url == "https://docs.getgrist.com"
         assert bundle.oauth == GristOAuthConfig(
             "https://docs.getgrist.com", "id", "sec", "https://docs.getgrist.com",
@@ -168,7 +165,7 @@ class TestBundleSettings:
 
     def test_auth_server_url_defaults_to_the_server(self):
         bundle = bundle_settings(
-            {"server_url": "https://g.example.com", "client_id": "id", "client_secret": "sec"}, org_mode=True,
+            {"server_url": "https://g.example.com", "client_id": "id", "client_secret": "sec"},
         )
         assert bundle.oauth.auth_server_url == "https://g.example.com"
 
@@ -176,26 +173,26 @@ class TestBundleSettings:
         bundle = bundle_settings({
             "server_url": "https://g.example.com", "client_id": "id", "client_secret": "sec",
             "auth_server_url": "https://login.example.com/",
-        }, org_mode=False)
+        })
         assert bundle.oauth.auth_server_url == "https://login.example.com"
 
     @pytest.mark.parametrize("section", [{"client_id": "id"}, {"client_secret": "sec"}])
     def test_half_a_pair_is_incomplete(self, section):
         with pytest.raises(GristClientError) as err:
-            bundle_settings(section, org_mode=False)
+            bundle_settings(section)
         assert str(err.value) == "Grist organization config is incomplete: client_id and client_secret go together."
 
-    def test_org_mode_needs_a_server(self):
+    def test_it_needs_a_server(self):
         with pytest.raises(GristClientError) as err:
-            bundle_settings({}, org_mode=True)
+            bundle_settings({})
         assert str(err.value) == "Grist organization config not installed"
 
     def test_a_bad_url_raises_grist_client_error(self):
         with pytest.raises(GristClientError):
-            bundle_settings({"server_url": "http://g.example.com"}, org_mode=False)
+            bundle_settings({"server_url": "http://g.example.com"})
 
     def test_the_secret_is_not_in_the_repr(self):
-        bundle = bundle_settings({"client_id": "id", "client_secret": SECRET}, org_mode=False)
+        bundle = bundle_settings({"client_id": "id", "client_secret": SECRET})
         assert SECRET not in repr(bundle)
 
 

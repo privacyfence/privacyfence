@@ -778,7 +778,7 @@ def _build_org_app(
             # own module docstring on ``nav_items``.
             nav_items=web_shell.ORG_NAV_ITEMS,
         ))
-    scoped_token_policy = scoped_tokens.policy_from_org_config(org.org_config, org_mode=True)
+    scoped_token_policy = scoped_tokens.policy_from_org_config(org.org_config)
     agent_runtime = agent_runtimes.N8nRuntimeConfig.from_org_config(org.org_config)
     org_scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None
     if mcp_dispatcher is not None:

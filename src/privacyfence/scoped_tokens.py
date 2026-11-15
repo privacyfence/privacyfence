@@ -198,9 +198,7 @@ def _digest(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
-def policy_from_org_config(org_config: dict, *, org_mode: bool) -> ScopedTokenPolicy:
-    if not org_mode:
-        return ScopedTokenPolicy(True, LOCAL_MAX_DAYS, True)
+def policy_from_org_config(org_config: dict) -> ScopedTokenPolicy:
     section = org_config.get("scoped_tokens")
     if not isinstance(section, dict):
         section = {}

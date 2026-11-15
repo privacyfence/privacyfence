@@ -45,7 +45,7 @@ def _custom():
 
 
 def _doc_bytes(rows=(), **overrides):
-    document = ps.build_export(rows, None, mode="local", version="6.3.0", now=NOW)
+    document = ps.build_export(rows, None, mode="org", version="6.3.0", now=NOW)
     document.update(overrides)
     return json.dumps(document).encode()
 
@@ -69,7 +69,7 @@ class TestRoundTrip:
     def test_export_parse_plan_apply_reproduces_the_rows(self):
         originals = _two_rows()
         document = ps.parse_document(ps.export_bytes(ps.build_export(
-            originals, None, mode="local", version="6.3.0", now=NOW,
+            originals, None, mode="org", version="6.3.0", now=NOW,
         )))
         plan = _plan(document, [])
         assert [item.status for item in plan.items] == [ps.ItemStatus.ADD, ps.ItemStatus.ADD]
@@ -93,7 +93,7 @@ class TestExport:
 
     def test_exported_at_is_utc(self):
         local = NOW.astimezone(timezone(timedelta(hours=2)))
-        document = ps.build_export([], None, mode="local", version="1", now=local)
+        document = ps.build_export([], None, mode="org", version="1", now=local)
         assert document["exported_at"] == "2026-10-16T09:30:00+00:00"
 
     def test_export_bytes_is_indented_utf8_with_trailing_newline(self):
@@ -102,15 +102,15 @@ class TestExport:
 
     def test_former_ids_are_dropped(self):
         row = dataclasses.replace(_two_rows()[0], former_ids=("old-1",))
-        document = ps.build_export([row], None, mode="local", version="1", now=NOW)
+        document = ps.build_export([row], None, mode="org", version="1", now=NOW)
         assert "former_ids" not in document["auto_accept"]["rules"][0]
 
     def test_custom_rows_are_omitted_and_noted_only_then(self):
-        plain = ps.build_export(_two_rows(), None, mode="local", version="1", now=NOW)
+        plain = ps.build_export(_two_rows(), None, mode="org", version="1", now=NOW)
         assert plain["not_portable"] == [{"item": i, "note": n} for i, n in ps.NOT_PORTABLE]
         assert len(ps.NOT_PORTABLE) == 6
 
-        mixed = ps.build_export([*_two_rows(), _custom()], None, mode="local", version="1", now=NOW)
+        mixed = ps.build_export([*_two_rows(), _custom()], None, mode="org", version="1", now=NOW)
         assert len(mixed["auto_accept"]["rules"]) == 2
         assert {"item": "Custom rules", "note": (
             "Rules written by hand in settings.yaml are not exported; add them again on the Auto-accept page."
@@ -118,7 +118,7 @@ class TestExport:
         assert len(mixed["not_portable"]) == 7
 
     def test_nothing_identifying_is_written(self):
-        text = ps.export_bytes(ps.build_export(_two_rows(), None, mode="local", version="1", now=NOW)).decode()
+        text = ps.export_bytes(ps.build_export(_two_rows(), None, mode="org", version="1", now=NOW)).decode()
         assert "principal" not in text.lower()
 
 
@@ -183,7 +183,7 @@ class TestParseDocument:
         document = _parse(originals)
         assert list(document.rows) == originals
         assert document.dropped_rows == 0
-        assert document.source_mode == "local"
+        assert document.source_mode == "org"
         assert document.exported_at == "2026-10-16T09:30:00+00:00"
         assert document.step_up_scope is None
 
@@ -396,7 +396,7 @@ class TestToPreview:
             "sha256", "source_mode", "exported_at", "counts", "dropped_rows", "items", "step_up", "warnings",
         ]
         assert preview["sha256"] == "abc"
-        assert preview["source_mode"] == "local"
+        assert preview["source_mode"] == "org"
         assert preview["counts"] == {"add": 1, "extend": 0, "present": 1, "skip": 1}
         assert [list(i) for i in preview["items"]] == [["id", "sentence", "status", "reason"]] * 3
         assert preview["items"][0]["status"] == "add"

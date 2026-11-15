@@ -116,7 +116,7 @@ def _text(section: dict[str, Any], key: str) -> str:
     return str(section.get(key) or "").strip()
 
 
-def bundle_settings(section: dict[str, Any], *, org_mode: bool) -> GristBundle:
+def bundle_settings(section: dict[str, Any]) -> GristBundle:
     """Read the organization bundle's ``grist`` section."""
     client_id = _text(section, "client_id")
     client_secret = _text(section, "client_secret")
@@ -136,7 +136,7 @@ def bundle_settings(section: dict[str, Any], *, org_mode: bool) -> GristBundle:
             client_secret=client_secret,
             auth_server_url=normalize_server_url(raw_auth) if raw_auth else server_url,
         )
-    if org_mode and not server_url:
+    if not server_url:
         raise GristClientError("Grist organization config not installed")
     return GristBundle(server_url=server_url, oauth=oauth)
 

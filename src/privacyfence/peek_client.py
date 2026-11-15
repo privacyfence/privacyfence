@@ -90,7 +90,7 @@ def validate_slug(slug: str) -> str:
     return slug
 
 
-def bundle_base_url(section: dict[str, Any], *, org_mode: bool) -> str:
+def bundle_base_url(section: dict[str, Any]) -> str:
     """The Peek server an organization bundle pins, or ``""`` when it pins none."""
     raw = section.get("base_url") or ""
     url = ""
@@ -99,7 +99,7 @@ def bundle_base_url(section: dict[str, Any], *, org_mode: bool) -> str:
             url = normalize_base_url(str(raw))
         except PeekClientError as exc:
             raise PeekClientError(f"Peek organization config is not usable: {exc}") from exc
-    if org_mode and not url:
+    if not url:
         raise PeekClientError("Peek organization config not installed")
     return url
 
