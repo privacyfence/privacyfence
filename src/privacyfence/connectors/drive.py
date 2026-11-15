@@ -34,11 +34,6 @@ logger = logging.getLogger(__name__)
 # preview.
 _UPLOAD_PREVIEW_MAX_BYTES = 5_000_000
 
-# The ceiling passed to local_files.require_local_files() for drive_upload_file's upload_id --
-# an upload slot is buffered entirely in memory, so this is a real memory cap, not just a
-# preview-read cap like _UPLOAD_PREVIEW_MAX_BYTES above.
-_UPLOAD_MAX_BYTES = 50_000_000
-
 # Reuses the same 5MB value gmail.py's
 # _ATTACHMENT_PREFETCH_MAX_BYTES already uses for "small enough to just
 # fetch the whole thing instead of a bounded prefetch" -- see
@@ -1576,7 +1571,7 @@ class DriveConnector(Connector):
         if upload_ref:
             # Raises immediately -- LocalFileAccessError if the slot is unknown, expired or
             # already used -- rather than failing only once the human has already approved.
-            local_files.require_local_files([upload_ref], max_total_bytes=_UPLOAD_MAX_BYTES)
+            local_files.require_local_files([upload_ref])
             display_name = name.strip() or "(unnamed file)"
             size_bytes = local_files.local_file_size(upload_ref)
             source = "uploaded via privacyfence_create_upload_slot"

@@ -134,14 +134,14 @@ class TestConstructor:
     def test_missing_token_or_cloud_id(self, override):
         with pytest.raises(AssetsClientError) as exc:
             AssetsClient({**CONFIG, **override})
-        assert str(exc.value) == "Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings."
+        assert str(exc.value) == "Jira Assets is not authenticated. Connect Jira Assets on the Connect page (/connect)."
 
     @pytest.mark.parametrize("scopes", [[], None, ["read:jira-work"]])
     def test_missing_scope_needs_permission(self, scopes):
         with pytest.raises(AssetsClientError) as exc:
             AssetsClient({**CONFIG, "scopes": scopes})
         assert str(exc.value) == NEEDS_ASSETS_PERMISSION
-        assert "Use Authenticate…" in str(exc.value)
+        assert "Connect Jira Assets on the Connect page (/connect)" in str(exc.value)
 
     def test_bearer_header_and_no_network(self):
         client = AssetsClient(CONFIG)

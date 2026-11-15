@@ -78,7 +78,7 @@ def daemon(tmp_path, monkeypatch):
     monkeypatch.setitem(TOOL_TO_GATE, ECHO_TOOL, "auto")
     policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
     dispatcher = McpDispatcher(
-        lambda: {"contract_test": EchoConnector()}, mode="org",
+        lambda: {"contract_test": EchoConnector()},
         scoped_token_policy=policy,
     )
     with single_user_org_server(tmp_path, dispatcher=dispatcher) as server:

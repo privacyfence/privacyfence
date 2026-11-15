@@ -291,14 +291,14 @@ END_UNATTENDED_SESSION_TOOL = types.Tool(
 CREATE_UPLOAD_SLOT_TOOL = types.Tool(
     name="privacyfence_create_upload_slot",
     description=(
-        "Get a one-time URL to upload a local file to PrivacyFence, for a client without the "
-        "PrivacyFence extension (e.g. Claude Code) -- use it when a tool's local_path/attachments "
-        "parameter says PrivacyFence can't read your files directly. Returns {upload_id, upload_url, "
-        "method: 'PUT', max_bytes, expires_at, example}: PUT the raw bytes to upload_url (e.g. the "
-        "curl -T example); no Authorization header -- the URL is the credential. Then pass upload_id "
-        "to the tool that needs the file (its upload_id parameter, e.g. drive_upload_file, or an "
-        "'upload:<upload_id>' attachments entry, e.g. gmail_*_with_attachments). Never fetch "
-        "upload_url yourself or pass it as local_path. Single-use, expires in 10 minutes, claimable "
+        "Get a one-time URL to upload a local file to PrivacyFence. PrivacyFence never reads your "
+        "files directly: a tool that takes a file (e.g. drive_upload_file, gmail_*_with_attachments) "
+        "accepts only an upload made here. Returns {upload_id, upload_url, method: 'PUT', max_bytes, "
+        "expires_at, example}: PUT the raw bytes to upload_url (e.g. the curl -T example); no "
+        "Authorization header -- the URL is the credential. Then pass upload_id to the tool that needs "
+        "the file (its upload_id parameter, e.g. drive_upload_file, or an 'upload:<upload_id>' "
+        "attachments entry, e.g. gmail_*_with_attachments). Never fetch upload_url yourself or pass "
+        "it to a tool in place of the upload_id. Single-use, expires in 10 minutes, claimable "
         "only by your next tool call in this conversation. This uploads, gates and approves nothing: "
         "that happens when the destination tool runs. reason: one sentence on why this file is needed "
         "now (logged, self-reported, unverified)."

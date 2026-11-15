@@ -153,7 +153,7 @@ class ContactsClient:
             if not os.path.exists(self._token_file):
                 raise ContactsClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Authenticate Google Contacts from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
+                    "Connect Google Contacts on the Connect page (/connect) to authorize."
                 )
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
             if creds.valid:
@@ -165,13 +165,13 @@ class ContactsClient:
                 except Exception as exc:
                     raise ContactsClientError(
                         f"Failed to refresh Contacts OAuth token: {exc}. "
-                        "Reconnect Google Contacts from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                        "Connect Google Contacts on the Connect page (/connect) to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
             raise ContactsClientError(
                 "Cached Contacts OAuth token is invalid and cannot be refreshed. "
-                "Reconnect Google Contacts from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                "Connect Google Contacts on the Connect page (/connect) to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:

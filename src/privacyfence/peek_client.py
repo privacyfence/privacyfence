@@ -37,7 +37,7 @@ _GRANT_EMAIL_MAX = 254
 
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 _LOGIN_STATUSES = ("pending", "approved", "denied", "expired", "consumed")
-_REAUTH = "Use Authenticate… in PrivacyFence Settings"
+_REAUTH = "Connect Peek on the Connect page (/connect)"
 _SOURCE_DEVICE = "device"
 _SOURCE_PROVISIONED = "provisioned"
 _PROVISIONING_ID_RE = re.compile(r"[A-Za-z0-9._@-]{1,200}")
@@ -286,7 +286,7 @@ def load_token_file(path: str) -> dict[str, str]:
         with open(path, encoding="utf-8") as handle:
             raw = handle.read()
     except FileNotFoundError as exc:
-        raise PeekClientError("Peek is not authenticated. Use Authenticate… in PrivacyFence Settings.") from exc
+        raise PeekClientError("Peek is not authenticated. Connect Peek on the Connect page (/connect).") from exc
     except OSError as exc:
         raise _unreadable() from exc
     try:

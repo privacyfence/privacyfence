@@ -292,6 +292,19 @@ class TestLoadConfig:
         assert str(tmp_path) in err
         assert "belongs to a PrivacyFence desktop install" in daemon_main.last_startup_error()
 
+    def test_main_refuses_a_data_directory_it_cannot_write_the_marker_into(self, tmp_path, monkeypatch, capsys):
+        def fail(*args, **kwargs):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(data_format, "atomic_write_json", fail)
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+
+        assert daemon_main.main([]) == 1
+
+        err = capsys.readouterr().err
+        assert "Configuration error: The data-format marker could not be written" in err
+        assert "The data directory must be writable." in daemon_main.last_startup_error()
+
     def test_v1_sections_an_earlier_release_converted_are_removed(self, tmp_path):
         # 4.1-4.4 converted auto_accept_rules into auto_accept: on startup, set the marker, and
         # left the v1 section on disk. Refusing that file refused every upgrade from those
@@ -1348,7 +1361,7 @@ class TestBuildConnectorsGrist:
         def load(path):
             if record is None:
                 raise daemon_main.GristClientError(
-                    "Grist is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                    "Grist is not authenticated. Connect Grist on the Connect page (/connect)."
                 )
             return record
 
@@ -1410,7 +1423,7 @@ class TestBuildConnectorsPeek:
 
         def load(path):
             if record is None:
-                raise PeekClientError("Peek is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+                raise PeekClientError("Peek is not authenticated. Connect Peek on the Connect page (/connect).")
             return record
 
         def check(self):
@@ -1466,9 +1479,20 @@ class TestClassifyConnectorFailure:
     def test_file_not_found_is_not_authenticated_regardless_of_message(self):
         assert daemon_main._classify_connector_failure(FileNotFoundError("nope")) == "not_authenticated"
 
-    def test_use_authenticate_call_to_action_is_not_authenticated(self):
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Connect Gmail on the Connect page (/connect) to re-authorize.",
+            "Telegram session is not authorized. Connect Telegram on the Connect page (/connect) to authorize it.",
+            "Your Miro sign-in has expired or was revoked. Connect Miro on the Connect page (/connect) to sign in again.",
+        ],
+    )
+    def test_connect_page_call_to_action_is_not_authenticated(self, message):
+        assert daemon_main._classify_connector_failure(RuntimeError(message)) == "not_authenticated"
+
+    def test_slack_connect_page_call_to_action_is_not_authenticated(self):
         exc = daemon_main.SlackClientError(
-            "No Slack token found at '/x'. Use Authenticate… in the PrivacyFence Settings to sign in."
+            "No Slack token found at '/x'. Connect Slack on the Connect page (/connect) to sign in."
         )
         assert daemon_main._classify_connector_failure(exc) == "not_authenticated"
 
@@ -1528,7 +1552,7 @@ class TestBuildConnectorsFailureReasons:
     def test_not_authenticated_reason_for_slacks_real_no_token_message(self, monkeypatch):
         # Exercises slack_client.load_token_file's real message text (rather
         # than a test-only stand-in), since _classify_connector_failure's
-        # "not_authenticated" bucket depends on its exact "Use Authenticate…"
+        # "not_authenticated" bucket depends on its exact "on the Connect page (/connect)"
         # phrasing matching across every connector's own token loader.
         monkeypatch.setattr(daemon_main, "SlackClient", fake_client_class(result="ws"))
 
@@ -3147,7 +3171,7 @@ class TestBuildConnectorsMiro:
         def load(path):
             if record is None:
                 raise daemon_main.MiroClientError(
-                    "Miro is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                    "Miro is not authenticated. Connect Miro on the Connect page (/connect)."
                 )
             return record
 

@@ -1573,7 +1573,7 @@ class TestWriteToolsWithUploadRefAttachments:
         client.create_draft_with_attachments.return_value = {"draft_id": "d1"}
         ref = self._staged_upload_ref(b"x" * 10)
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             await connector.call(
                 "gmail_create_draft_with_attachments",
                 {"to": "alice@example.com", "subject": "Hi", "body": "body", "attachments": json.dumps([ref])},
@@ -1603,15 +1603,15 @@ class TestWriteToolsWithUploadRefAttachments:
         ref = self._staged_upload_ref(b"z" * 7)
         args = {"to": "alice@example.com", "subject": "Hi", "body": "body", "attachments": json.dumps([ref])}
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(ApprovalPending):
+        with local_files.call_context(), pytest.raises(ApprovalPending):
             await connector.call("gmail_create_draft_with_attachments", args)
         client.create_draft_with_attachments.assert_not_called()
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             await connector.call("gmail_create_draft_with_attachments", args)
         client.create_draft_with_attachments.assert_called_once()
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             local_files.LocalFileAccessError,
         ):
             await connector.call("gmail_create_draft_with_attachments", args)
@@ -1628,7 +1628,7 @@ class TestWriteToolsWithUploadRefAttachments:
         store.fill(token, owner.id, [b"data"])
         ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             local_files.LocalFileAccessError,
         ):
             await connector.call(

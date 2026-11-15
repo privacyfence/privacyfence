@@ -105,7 +105,7 @@ async def test_the_status_tool_is_listed_where_delivery_is_on(monkeypatch):
 
     monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
     dispatcher = McpDispatcher(
-        lambda: CONNECTORS, mode="org", scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
+        lambda: CONNECTORS, scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
         agent_runtime=agent_runtimes.N8nRuntimeConfig(True, "https://n8n.example.com", "", ""),
     )
     async with _connected_session(dispatcher) as session:

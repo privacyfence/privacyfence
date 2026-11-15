@@ -82,7 +82,7 @@ class HarnessConnector(Connector):
 def org_daemon(tmp_path: Path) -> Iterator[tuple[str, str]]:
     """Run a single-user org ``/mcp`` endpoint whose state lives under ``tmp_path``;
     yield ``(mcp_url, token)``."""
-    dispatcher = McpDispatcher(lambda: {"contract_test": HarnessConnector()}, mode="org")
+    dispatcher = McpDispatcher(lambda: {"contract_test": HarnessConnector()})
     with single_user_org_server(tmp_path, dispatcher=dispatcher) as server:
         yield server.mcp_url, server.bearer()
 

@@ -573,7 +573,7 @@ class PeekConnector(Connector):
                 raise ValueError("peek_upload_page: the page is larger than 10 MB.")
         else:
             source = f"{local_files.UPLOAD_REF_PREFIX}{upload_id.strip()}"
-            local_files.require_local_files([source], max_total_bytes=UPLOAD_MAX_BYTES)
+            local_files.require_local_files([source])
             data = local_files.read_local_file(source)
             if len(data) > UPLOAD_MAX_BYTES:
                 raise ValueError("peek_upload_page: the page is larger than 10 MB.")

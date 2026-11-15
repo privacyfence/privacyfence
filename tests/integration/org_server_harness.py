@@ -86,7 +86,7 @@ def single_user_org_server(
     """Run a single-user org server whose state lives under ``tmp_path``.
 
     Pass ``connectors`` (a provider returning ``{name: connector}``) to have the harness build
-    the org-mode dispatcher, or a ready ``dispatcher`` (built with ``mode="org"``).
+    the org-mode dispatcher, or a ready ``dispatcher``.
     """
     data = tmp_path / "pf-data"
     data.mkdir(parents=True, exist_ok=True)
@@ -104,7 +104,7 @@ def single_user_org_server(
         )
         provided = connectors if connectors is not None else (lambda: {})
         if dispatcher is None:
-            dispatcher = McpDispatcher(provided, mode="org")
+            dispatcher = McpDispatcher(provided)
         registry = ConnectorRegistry(factory=lambda principal: [])
         sessions = OrgSessionStore()
         org = OrgAuth(

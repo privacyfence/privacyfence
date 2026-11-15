@@ -104,7 +104,7 @@ def running_deferred_server(tmp_path):
     approval_ui.init_approval_ui(web_ui)
     # The registry is handed to the dispatcher too, as daemon_main.py does,
     # so privacyfence_await_approval can see the approvals this test makes.
-    dispatcher = McpDispatcher(lambda: {"gated_test": connector}, mode="org", registry=registry)
+    dispatcher = McpDispatcher(lambda: {"gated_test": connector}, registry=registry)
 
     with single_user_org_server(tmp_path, web_ui=web_ui, dispatcher=dispatcher) as server:
         yield connector, server

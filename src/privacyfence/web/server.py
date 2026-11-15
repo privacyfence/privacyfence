@@ -254,13 +254,12 @@ def _approved_upstream_tools(token: ScopedToken) -> list[dict[str, str]]:
 
 
 def scoped_token_page_data(
-    principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, delivery: str, connector_names: set[str],
+    principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, connector_names: set[str],
 ) -> dict[str, Any]:
     """What ``window.__pfScopedTokens`` carries for ``principal``: their
     tokens, the rules they may carry and the tools of their enabled
-    connectors. ``delivery`` is how a new secret reaches the person:
-    ``"companion"`` (local mode, ADR 0164) or ``"once"`` (organization mode,
-    ADR 0165). Must not be called under another principal's scope.
+    connectors. A new secret is shown to the person once (``delivery``
+    ``"once"``, ADR 0165). Must not be called under another principal's scope.
 
     Each rule's resource ids are shown by the names the Auto-accept page has
     cached (``cached_row_value``), so the two pages name a rule alike. A
@@ -294,13 +293,10 @@ def scoped_token_page_data(
             by_connector.setdefault(connector, []).append(name)
     tokens = []
     activity = store.activity_for(principal)
-    # Delivery records exist only in organization mode; looking them up on a local install would
-    # create the org directory (ADR 0281).
-    delivered = (
-        {r.token_id: r for r in runtime_credentials.get_store().all()
-         if r.principal_id == principal.id and r.state == runtime_credentials.DELIVERED}
-        if delivery == "once" else {}
-    )
+    delivered = {
+        r.token_id: r for r in runtime_credentials.get_store().all()
+        if r.principal_id == principal.id and r.state == runtime_credentials.DELIVERED
+    }
     for token in own_tokens:
         seen = activity.get(token.id, scoped_tokens.TokenActivity())
         expired = token.expired(now)
@@ -331,7 +327,7 @@ def scoped_token_page_data(
         for p in scoped_token_proposals.get_registry().pending_for(principal.id)
     ]
     page: dict[str, Any] = {
-        "delivery": delivery, "proposals": proposals, "proposals_enabled": policy.allow_ai_proposals,
+        "delivery": "once", "proposals": proposals, "proposals_enabled": policy.allow_ai_proposals,
         "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
         "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": rules,
         "auto_tools": sorted(
@@ -837,7 +833,7 @@ def _build_org_app(
         def org_scoped_token_page_data(principal: Principal) -> dict[str, Any]:
             # The dispatcher's connector set is the principal's own while scoped to them.
             return scoped_token_page_data(
-                principal, policy=scoped_token_policy, delivery="once", connector_names=set(dispatcher.connectors),
+                principal, policy=scoped_token_policy, connector_names=set(dispatcher.connectors),
             )
 
     # Mounted unconditionally, same reasoning as /approvals above --

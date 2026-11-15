@@ -1236,7 +1236,7 @@ class TestUploadFile:
 
         connector, client = make_connector()
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(LocalFileAccessError):
+        with local_files.call_context(), pytest.raises(LocalFileAccessError):
             await connector.call("drive_upload_file", {"upload_id": "/etc/passwd", "name": "x"})
 
         assert gated_call_spy == []
@@ -1260,7 +1260,7 @@ class TestUploadFile:
         store.fill(token, LOCAL_PRINCIPAL.id, [b"uploaded bytes"])
         upload_id = local_files._encode_token(token)
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call(
                 "drive_upload_file", {"upload_id": upload_id, "name": "report.pdf"},
             )
@@ -1285,7 +1285,7 @@ class TestUploadFile:
         store.fill(token, LOCAL_PRINCIPAL.id, [b"org bytes"])
         upload_id = local_files._encode_token(token)
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call(
                 "drive_upload_file", {"upload_id": upload_id, "name": "report.pdf"},
             )
@@ -1315,11 +1315,11 @@ class TestUploadFile:
         store.fill(token, LOCAL_PRINCIPAL.id, [b"pdf bytes"])
         args = {"upload_id": local_files._encode_token(token), "name": "report.pdf"}
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(ApprovalPending):
+        with local_files.call_context(), pytest.raises(ApprovalPending):
             await connector.call("drive_upload_file", args)
         client.upload_file_bytes.assert_not_called()
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call("drive_upload_file", args)
 
         assert result == {"id": "uploaded-after-approval"}
@@ -1340,9 +1340,9 @@ class TestUploadFile:
         store.fill(token, LOCAL_PRINCIPAL.id, [b"pdf bytes"])
         args = {"upload_id": local_files._encode_token(token), "name": "report.pdf"}
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             await connector.call("drive_upload_file", args)
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             LocalFileAccessError, match="expired or was already used",
         ):
             await connector.call("drive_upload_file", args)
@@ -1363,7 +1363,7 @@ class TestUploadFile:
 
         monkeypatch.setattr(drive_module, "gated_call", gate_while_another_call_consumes_the_slot)
         connector, client = make_connector()
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             LocalFileAccessError, match="already used by another call",
         ):
             await connector.call(
@@ -1383,7 +1383,7 @@ class TestUploadFile:
         store.fill(token, owner.id, [b"data"])
         upload_id = local_files._encode_token(token)
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             LocalFileAccessError,
         ):
             await connector.call("drive_upload_file", {"upload_id": upload_id, "name": "report.pdf"})
@@ -1392,7 +1392,7 @@ class TestUploadFile:
         from privacyfence import local_files
 
         connector, _client = make_connector()
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             LocalFileAccessError,
         ):
             await connector.call("drive_upload_file", {"upload_id": "not-a-real-slot", "name": "x"})

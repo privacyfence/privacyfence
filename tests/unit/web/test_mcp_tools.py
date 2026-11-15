@@ -378,7 +378,7 @@ class TestStatusOverRealTransport:
     model to send the human to their administrator, and hands over no credential."""
 
     async def test_an_un_onboarded_install_points_at_the_administrator(self):
-        dispatcher = _dispatcher({}, mode="org")
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [
             {"name": "gmail", "enabled": True, "authenticated": False, "blocked_by": "not_authenticated"},
         ])

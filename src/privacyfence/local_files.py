@@ -57,12 +57,11 @@ DEFAULT_MAX_DOWNLOAD_BYTES = 200_000_000
 UPLOAD_REF_PREFIX = "upload:"
 
 # The cap privacyfence_create_upload_slot enforces on a capability
-# upload. A slot is created before any connector-specific tool is named, so
-# there's no per-tool ceiling to size it against the way
-# connectors/drive.py's _UPLOAD_MAX_BYTES sizes drive_upload_file's own
-# upload cap -- reusing that same 50MB figure here isn't a coincidence, it's
-# the same "one multi-megabyte file" ceiling applied to the one path that has
-# to pick a single number for every tool that might later consume an upload_id.
+# upload, and the only per-file size cap an upload has: the slot is created
+# before any connector-specific tool is named, so this one "one multi-megabyte
+# file" ceiling covers every tool that might later consume an upload_id. A
+# connector that needs a smaller limit checks the bytes it reads (e.g. Gmail's
+# total-attachment cap in gmail_client, Grist's CSV cap, Peek's page cap).
 DEFAULT_CAPABILITY_UPLOAD_MAX_BYTES = 50_000_000
 
 _max_download_bytes = DEFAULT_MAX_DOWNLOAD_BYTES
@@ -99,12 +98,9 @@ _state_ctx: ContextVar["_CallState | None"] = ContextVar("privacyfence_file_brid
 
 
 @contextmanager
-def call_context(
-    *, bridge_available: bool = False, uploads: dict[str, str] | None = None, base_url: str = "",
-) -> Iterator[_CallState]:
+def call_context(*, base_url: str = "") -> Iterator[_CallState]:
     """Scopes one ``tools/call`` dispatch's file state. ``base_url`` is the ``/mcp`` origin, used
-    to build an absolute one-time download URL. ``bridge_available`` and ``uploads`` are accepted
-    and ignored: callers that still pass them are dropped one connector at a time."""
+    to build an absolute one-time download URL."""
     state = _CallState(base_url=base_url)
     token = _state_ctx.set(state)
     try:
@@ -197,7 +193,7 @@ def commit_uploads() -> None:
             )
 
 
-def require_local_files(paths: list[str], *, max_total_bytes: int) -> None:
+def require_local_files(paths: list[str]) -> None:
     """Called by a connector at the very top of its tool method, before any
     preview/PII-scan/gate work, so a missing or unreadable file is reported
     before the human is ever asked to approve anything.

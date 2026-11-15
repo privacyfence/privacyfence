@@ -131,20 +131,12 @@ class McpDispatcher:
         self,
         connectors_provider: Callable[[], dict[str, Connector]],
         *,
-        mode: str = "local",
         unattended_sessions_enabled: bool = False,
         registry: PendingApprovalRegistry | None = None,
         scoped_token_policy: ScopedTokenPolicy | None = None,
         agent_runtime: agent_runtimes.N8nRuntimeConfig | None = None,
     ) -> None:
         self._connectors_provider = connectors_provider
-        # "local" or "org" -- privacyfence_status's own mode field, and what
-        # decides which next_step an un-onboarded install reports (open the
-        # companion, or ask an administrator -- org mode has no local sign-in
-        # path at all). daemon_main.py passes "org" from
-        # _start_org_web_server; every other call site (and every existing
-        # test) keeps the local-mode default.
-        self._mode = mode
         self._inflight: dict[str, tuple[Any, float]] = {}
         self._last_write_at: dict[tuple[str, str], float] = {}
         self._unattended_sessions_enabled = unattended_sessions_enabled
@@ -541,11 +533,7 @@ class McpDispatcher:
 
     def runtime_delivery_enabled(self) -> bool:
         """Whether a token proposal may ask for delivery into n8n, and the status tool is offered."""
-        return (
-            self._mode == "org"
-            and self.scoped_token_proposals_enabled()
-            and agent_runtimes.delivery_available(self._agent_runtime)
-        )
+        return self.scoped_token_proposals_enabled() and agent_runtimes.delivery_available(self._agent_runtime)
 
     async def propose_scoped_token(self, session_key: Hashable, params: dict, base_url: str) -> dict:
         """privacyfence_propose_scoped_token's handler (ADR 0251): validates, registers a
@@ -711,7 +699,8 @@ class McpDispatcher:
         connectors = self._status_connector_rows()
         setup_complete = any(c["authenticated"] for c in connectors)
         result: dict[str, Any] = {
-            "mode": self._mode, "setup_complete": setup_complete, "connectors": connectors,
+            # Always "org" (ADR 0301): kept on the wire for clients that read it.
+            "mode": "org", "setup_complete": setup_complete, "connectors": connectors,
         }
 
         # ADR 0285: only when the operator configured upstream MCP servers.

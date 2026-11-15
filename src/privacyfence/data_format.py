@@ -95,26 +95,43 @@ def _says_org(root: Path) -> bool:
     return isinstance(bundle, dict) and bundle.get("mode") == "org"
 
 
+def _present(path: Path) -> bool:
+    """Whether anything is at ``path``, counting a symlink whose target is gone."""
+    return path.is_symlink() or path.exists()
+
+
 def check_upgrade_source(root: Path) -> None:
     """Refuse a data directory 8.x cannot trust (ADR 0302); write the marker into a fresh one.
 
     In order: data a newer release has moved on; desktop-install traces outside an organization
-    server; data that 7.x has not marked as fully upgraded."""
+    server; data that 7.x has not marked as fully upgraded. A data directory that cannot be
+    inspected, or a fresh one the marker cannot be written into, is refused as well."""
     marker = read_marker(root)
     check_not_newer(marker)
 
-    traces = [name for name in DESKTOP_TRACES if (root / name).exists() or (root / "authority" / name).exists()]
+    try:
+        traces = [name for name in DESKTOP_TRACES if _present(root / name) or _present(root / "authority" / name)]
+        has_person_data = any((root / name).exists() for name in PERSON_DATA)
+    except OSError as exc:
+        raise ConfigurationError(f"The data directory ({root}) could not be inspected: {exc}") from exc
     if traces and not _says_org(root):
         raise ConfigurationError(_DESKTOP_TEXT.format(root=root))
 
     if marker is None or marker["format"] < MINIMUM_FORMAT:
-        if any((root / name).exists() for name in PERSON_DATA):
+        if has_person_data:
             raise ConfigurationError(_CHECKPOINT_TEXT.format(root=root))
-        atomic_write_json(marker_path(root), {
-            "format": DATA_FORMAT,
-            "written_by": __version__,
-            "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        })
+        path = marker_path(root)
+        try:
+            atomic_write_json(path, {
+                "format": DATA_FORMAT,
+                "written_by": __version__,
+                "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            })
+        except OSError as exc:
+            raise ConfigurationError(
+                f"The data-format marker could not be written to {path}: {exc}. "
+                "The data directory must be writable."
+            ) from exc
 
 
 def status() -> dict[str, Any]:

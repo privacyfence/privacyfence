@@ -350,7 +350,7 @@ class TestConnect:
         fake_telethon_client.disconnect = AsyncMock()
         monkeypatch.setattr(client, "_build_client", lambda: fake_telethon_client)
 
-        with pytest.raises(TelegramClientError, match="not authorized"):
+        with pytest.raises(TelegramClientError, match=r"not authorized\. Connect Telegram on the Connect page \(/connect\)"):
             await client.connect()
         fake_telethon_client.disconnect.assert_awaited_once()
 

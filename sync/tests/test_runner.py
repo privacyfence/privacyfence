@@ -138,7 +138,7 @@ async def test_export_via_link_downloads_into_work_dir(write_recipe: RecipeWrite
     client = FakeClient({"grist_export_records": link})
     await run(write_recipe([export_step()]), client)
     assert client.downloads == [("https://pf.example/mcp-files/fetch/abc", tmp_path / "work" / "t.csv", "ff")]
-    assert client.args_of("grist_export_records")["destination_dir"] == str(tmp_path / "work")
+    assert "destination_dir" not in client.args_of("grist_export_records")
 
 
 async def test_assets_export_via_link_downloads_into_work_dir(write_recipe: RecipeWriter, tmp_path: Path) -> None:
@@ -147,7 +147,7 @@ async def test_assets_export_via_link_downloads_into_work_dir(write_recipe: Reci
     step = {"id": "obj", "tool": "assets_export_objects", "args": {"aql": "objectType = X", "file_name": "obj.csv"}}
     await run(write_recipe([step]), client)
     assert client.downloads == [("https://pf.example/mcp-files/fetch/abc", tmp_path / "work" / "obj.csv", "ff")]
-    assert client.args_of("assets_export_objects")["destination_dir"] == str(tmp_path / "work")
+    assert "destination_dir" not in client.args_of("assets_export_objects")
 
 
 async def test_a_download_path_outside_the_work_folder_is_refused(write_recipe: RecipeWriter, tmp_path: Path) -> None:
@@ -173,7 +173,7 @@ async def test_a_symlinked_download_path_is_refused(write_recipe: RecipeWriter, 
 
 async def test_export_written_in_place_is_checked_where_it_is(write_recipe: RecipeWriter, tmp_path: Path) -> None:
     def write(args: dict[str, Any]) -> dict[str, Any]:
-        path = Path(args["destination_dir"]) / "t.csv"
+        path = tmp_path / "work" / "t.csv"
         path.write_text("a\n1\n")
         return {"delivery": "local_disk", "path": str(path), "sha256": hashlib.sha256(b"a\n1\n").hexdigest()}
 
@@ -183,7 +183,7 @@ async def test_export_written_in_place_is_checked_where_it_is(write_recipe: Reci
 
 async def test_local_disk_sha_mismatch_fails(write_recipe: RecipeWriter, tmp_path: Path) -> None:
     def write(args: dict[str, Any]) -> dict[str, Any]:
-        path = Path(args["destination_dir"]) / "t.csv"
+        path = tmp_path / "work" / "t.csv"
         path.write_text("a\n1\n")
         return {"delivery": "local_disk", "path": str(path), "sha256": "00"}
 
@@ -196,12 +196,11 @@ async def test_inline_download_is_decoded(write_recipe: RecipeWriter, tmp_path: 
     step = {"id": "wb", "tool": "drive_download_file", "args": {"file_id": "f"}, "save_as": "wb.xlsx"}
     await run(write_recipe([step]), FakeClient({"drive_download_file": inline}))
     assert (tmp_path / "work" / "wb.xlsx").read_bytes() == b"PK\x03\x04"
-    assert not (tmp_path / "work" / ".download-wb").exists()
 
 
 async def test_drive_download_written_in_place_is_moved_to_save_as(write_recipe: RecipeWriter, tmp_path: Path) -> None:
     def write(args: dict[str, Any]) -> dict[str, Any]:
-        path = Path(args["destination_dir"]) / "Cash flow 2026.xlsx"
+        path = tmp_path / "work" / "Cash flow 2026.xlsx"
         path.write_bytes(b"xlsx")
         return {"path": str(path), "name": path.name, "size_bytes": 4, "truncated": False}
 
@@ -209,13 +208,12 @@ async def test_drive_download_written_in_place_is_moved_to_save_as(write_recipe:
     client = FakeClient({"drive_download_file": write})
     await run(write_recipe([step]), client)
     assert (tmp_path / "work" / "wb.xlsx").read_bytes() == b"xlsx"
-    assert client.args_of("drive_download_file")["destination_dir"] == str(tmp_path / "work" / ".download-wb")
-    assert not (tmp_path / "work" / ".download-wb").exists()
+    assert "destination_dir" not in client.args_of("drive_download_file")
 
 
 async def test_truncated_download_fails(write_recipe: RecipeWriter, tmp_path: Path) -> None:
     def write(args: dict[str, Any]) -> dict[str, Any]:
-        path = Path(args["destination_dir"]) / "big.xlsx"
+        path = tmp_path / "work" / "big.xlsx"
         path.write_bytes(b"x")
         return {"path": str(path), "truncated": True}
 
@@ -513,7 +511,7 @@ async def test_readme_salesforce_example_runs_end_to_end(tmp_path: Path) -> None
     script(tmp_path, "guard.py", "")
 
     def export(args: dict[str, Any]) -> dict[str, Any]:
-        path = Path(args["destination_dir"]) / "opps.csv"
+        path = tmp_path / "work" / "opps.csv"
         path.write_text("Opportunity_Id\n006A\n")
         sha = hashlib.sha256(path.read_bytes()).hexdigest()
         return {"delivery": "local_disk", "path": str(path), "sha256": sha}

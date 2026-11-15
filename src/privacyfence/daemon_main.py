@@ -1189,7 +1189,6 @@ def _start_org_web_server(
     sessions = OrgSessionStore()
     mcp_dispatcher = McpDispatcher(
         lambda: connector_registry.get(current_principal()).connectors,
-        mode="org",
         unattended_sessions_enabled=unattended_sessions_enabled,
         registry=approval_registry,
         scoped_token_policy=scoped_tokens.policy_from_org_config(org_config),
@@ -1302,6 +1301,11 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 # Connector construction (graceful: missing org config or auth → connector skipped)
 # ---------------------------------------------------------------------------- #
 
+# The call to action every connector client's sign-in error ends with
+# ("Connect <Service> on the Connect page (/connect)"); see below.
+_CONNECT_PAGE_HINT = "on the Connect page (/connect)"
+
+
 def _classify_connector_failure(exc: BaseException) -> str:
     """Turns a per-connector build failure into one of the three states
     status surfaces need told apart -- "never set up", "auth expired/revoked",
@@ -1313,12 +1317,12 @@ def _classify_connector_failure(exc: BaseException) -> str:
     pattern-match on:
 
     - a bare ``FileNotFoundError`` (the real Google OAuth client's own
-      behavior when a token file is absent) or "Use Authenticate…" (every
-      *ClientError's/*OAuthError's own "no token found"/"is not
-      authenticated" message below and in slack_client.py/
-      salesforce_client.py/atlassian_oauth.py's own ``load_token_file()``
-      helpers -- all phrased around the same "Use Authenticate… in
-      PrivacyFence Settings" call to action) means never authenticated.
+      behavior when a token file is absent) or "on the Connect page
+      (/connect)" (every *ClientError's/*OAuthError's own "no token
+      found"/"is not authenticated"/"sign-in expired" message below and in
+      the connector clients' own token loaders -- all phrased around the
+      same "Connect <Service> on the Connect page (/connect)" call to
+      action) means not authenticated.
     - "organization config not installed"/"app credentials not available"
       (this function's own raises just below, for a service with no org
       bundle section or, for Telegram, no baked-in app credentials) means
@@ -1329,7 +1333,7 @@ def _classify_connector_failure(exc: BaseException) -> str:
     third-party HTTP body) gets redacted before it can reach a
     client-facing surface."""
     msg = str(exc)
-    if isinstance(exc, FileNotFoundError) or "Use Authenticate…" in msg:
+    if isinstance(exc, FileNotFoundError) or _CONNECT_PAGE_HINT in msg:
         return "not_authenticated"
     if "organization config not installed" in msg or "app credentials not available" in msg:
         return "no_org_config"
@@ -1600,7 +1604,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             if not atlassian_org.get("client_id"):
                 raise JiraClientError("Atlassian organization config not installed")
             if not atlassian_token:
-                raise JiraClientError("Jira is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+                raise JiraClientError("Jira is not authenticated. Connect Jira on the Connect page (/connect).")
             jira_client = JiraClient(
                 config=atlassian_config,
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
@@ -1625,7 +1629,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             if not atlassian_org.get("client_id"):
                 raise ConfluenceClientError("Atlassian organization config not installed")
             if not atlassian_token:
-                raise ConfluenceClientError("Confluence is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+                raise ConfluenceClientError("Confluence is not authenticated. Connect Confluence on the Connect page (/connect).")
             confluence_client = ConfluenceClient(
                 config=atlassian_config,
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
@@ -1650,7 +1654,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             if not atlassian_org.get("client_id"):
                 raise AssetsClientError("Atlassian organization config not installed")
             if not atlassian_token:
-                raise AssetsClientError("Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+                raise AssetsClientError("Jira Assets is not authenticated. Connect Jira Assets on the Connect page (/connect).")
             assets_client = AssetsClient(
                 config={**atlassian_config, **assets_workspace_override(config)},
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
@@ -1682,7 +1686,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             session_file = _resolve_path(TOKEN_FILES["telegram"])
             if not os.path.exists(session_file) and not os.path.exists(session_file + ".session"):
                 raise TelegramClientError(
-                    "Telegram is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                    "Telegram is not authenticated. Connect Telegram on the Connect page (/connect)."
                 )
             tg_client = TelegramPrivacyFenceClient(
                 api_id=api_id,

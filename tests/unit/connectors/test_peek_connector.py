@@ -309,7 +309,7 @@ def fake_local_files(monkeypatch):
     state = SimpleNamespace(required=[], read=[], committed=0, data=b"<p>file</p>")
     lf = peek_module.local_files
 
-    def require(paths, *, max_total_bytes):
+    def require(paths):
         state.required.append(list(paths))
 
     def read(path):

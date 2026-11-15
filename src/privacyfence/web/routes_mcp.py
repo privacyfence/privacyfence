@@ -87,9 +87,9 @@ SERVER_INSTRUCTIONS = (
     "request. Call privacyfence_status before the first PrivacyFence-governed action in a "
     "conversation, or whenever the user asks why a connector isn't available: it reports the "
     "real setup state and, if nothing is authenticated yet, what to tell the user to do about it. "
+    "It is the one tool guaranteed to exist even when every other tool is missing. "
     "If PrivacyFence needs the person to sign in or connect a service, tell them to open the "
-    "PrivacyFence server's Connect page, or to ask their administrator. It is the one tool "
-    "guaranteed to exist even when every other tool is missing.\n\n"
+    "PrivacyFence server's Connect page, or to ask their administrator.\n\n"
     "Most conversations have nothing to do with PrivacyFence and should not call any "
     "privacyfence_* tool at all."
 )

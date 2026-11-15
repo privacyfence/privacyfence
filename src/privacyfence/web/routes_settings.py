@@ -267,20 +267,10 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         "  if (action === 'upload_connector_config') { connectorInput.click(); return; }"
         "  if (action === 'export_audit_log') { window.location = '/api/settings/audit_log/download'; return; }"
         "  var url = ENDPOINT + '/' + encodeURIComponent(action);"
-        # The two AI client token actions (ADR 0104) have routes of their
-        # own; rotating asks first, the same way quit_app does.
-        "  var tokenAction = (action === 'copy_mcp_token' || action === 'rotate_mcp_token');"
-        "  if (action === 'copy_mcp_token') { url = '/api/settings/mcp_token/copy'; }"
-        "  if (action === 'rotate_mcp_token') {"
-        "    if (!window.confirm('Rotate the AI client token? Every AI client using the current token stops working until you give it the new one.')) { return; }"
-        "    url = '/api/settings/mcp_token/rotate'; rest.confirmed = true;"
-        "  }"
         # The scoped token actions (ADR 0164) have routes of their own and
         # answer with no page state: the page is rebuilt from the server.
-        "  var orgPage = !!(window.__pfCapabilities && window.__pfCapabilities.mode === 'org');"
-        "  var scopedRoutes = {create_scoped_token: ['create', orgPage ? 'Create this token? It is shown once "
-        "and cannot be shown again.' : 'Create this token? It is copied to your "
-        "clipboard once and cannot be shown again.'], revoke_scoped_token: ['revoke', 'Revoke this token? "
+        "  var scopedRoutes = {create_scoped_token: ['create', 'Create this token? It is shown once "
+        "and cannot be shown again.'], revoke_scoped_token: ['revoke', 'Revoke this token? "
         "Clients using it stop working at once.'], rename_scoped_token: ['rename', null], extend_scoped_token: ['extend', null], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
         "scoped tokens?'], create_proposed_scoped_token: ['create_from_proposal', null], "
         "decline_scoped_token_proposal: ['decline_proposal', 'Decline this token proposal?']};"
@@ -343,7 +333,7 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         "      window.__pfShowScopedSecret(res.state.secret, function(){ window.location.reload(); }); "
         "    } else if (res.ok && scopedAction) { window.location.reload(); } "
         "else if (res.ok && window.__pfRender) { window.__pfRender(res.state); } "
-        "else if (!res.ok && (tokenAction || scopedAction) && res.state && res.state.error) { window.alert(res.state.error); } "
+        "else if (!res.ok && scopedAction && res.state && res.state.error) { window.alert(res.state.error); } "
         "else if (!res.ok && res.state && typeof res.state.error === 'string' && window.__pfShowError) { window.__pfShowError(res.state.error); } "
         "else if (!res.ok) { console.error('PrivacyFence action failed:', action, res.state); } });"
         "}};"

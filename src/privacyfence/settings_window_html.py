@@ -1339,9 +1339,7 @@ _JS = r"""
     var html = '<div class="pf-page">';
     html += '<h1 class="pf-page-title">Scoped tokens</h1>';
     html += '<div class="pf-page-subtitle">A scoped token lets one AI client use only the tools and rules you pick, for a limited time. ' +
-      (SCOPED.delivery === 'once'
-        ? 'A new token is shown once and cannot be shown again.'
-        : 'A new token is copied to your clipboard once and cannot be shown again.') + '</div>';
+      'A new token is shown once and cannot be shown again.</div>';
     html += '<div class="pf-chips">' + showIdsToggleHtml() + '</div>' + invalidLegendHtml(SCOPED.rules);
 
     html += '<h2 class="pf-group-title">Your tokens</h2><div class="card pf-card">';

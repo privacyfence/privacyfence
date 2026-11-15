@@ -1167,7 +1167,7 @@ class TestImportCsv:
         client.add_records.return_value = [3]
         store, token, upload_id, principal = new_slot(b"Name\nAda\n")
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": upload_id})
 
         assert result["added"] == 1
@@ -1193,12 +1193,12 @@ class TestImportCsv:
         store, token, upload_id, principal = new_slot(b"Name\nAda\n")
         args = {**CSV_ARGS, "upload_id": upload_id}
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(ApprovalPending):
+        with local_files.call_context(), pytest.raises(ApprovalPending):
             await connector.call("grist_import_csv", args)
         client.add_records.assert_not_called()
         assert store.peek(token, principal.id) is not None
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call("grist_import_csv", args)
 
         assert result["added"] == 1
@@ -1215,9 +1215,9 @@ class TestImportCsv:
         _, _, upload_id, _ = new_slot(b"Name\nAda\n")
         args = {**CSV_ARGS, "upload_id": upload_id}
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             await connector.call("grist_import_csv", args)
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             LocalFileAccessError, match="expired or was already used",
         ):
             await connector.call("grist_import_csv", args)
@@ -1661,12 +1661,12 @@ class TestUpdateCsv:
         store, token, upload_id, principal = new_slot(b"Name,Score\nAda,2\n")
         args = {**self.ARGS, "upload_id": upload_id}
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(ApprovalPending):
+        with local_files.call_context(), pytest.raises(ApprovalPending):
             await connector.call("grist_update_csv", args)
         client.update_records.assert_not_called()
         assert store.peek(token, principal.id) is not None
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call("grist_update_csv", args)
 
         assert result["updated"] == 1
@@ -1683,10 +1683,10 @@ class TestUpdateCsv:
         store, token, upload_id, principal = new_slot(b"Name,Score\nAda,2\n")
         args = {**self.ARGS, "upload_id": upload_id}
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             await connector.call("grist_update_csv", args)
         assert store.peek(token, principal.id) is None
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             LocalFileAccessError, match="expired or was already used",
         ):
             await connector.call("grist_update_csv", args)

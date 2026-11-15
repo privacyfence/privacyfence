@@ -1203,7 +1203,7 @@ class GristConnector(Connector):
                 "Upload the CSV with privacyfence_create_upload_slot and pass its upload_id."
             )
         path = f"{local_files.UPLOAD_REF_PREFIX}{upload_id}"
-        local_files.require_local_files([path], max_total_bytes=_CSV_MAX_BYTES)
+        local_files.require_local_files([path])
         if local_files.local_file_size(path) > _CSV_MAX_BYTES:
             raise ValueError("The CSV file is larger than 50 MB.")
         data = local_files.read_local_file(path)

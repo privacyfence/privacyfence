@@ -463,7 +463,7 @@ class TestRefresh:
         with pytest.raises(GristClientError) as err:
             self.refresh(net, answer)
         assert str(err.value) == (
-            "Your Grist sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again."
+            "Your Grist sign-in has expired or was revoked. Connect Grist on the Connect page (/connect) to sign in again."
         )
 
     def test_other_4xx_with_a_body(self, net):
@@ -582,9 +582,9 @@ class TestTokenFile:
         with pytest.raises(GristClientError, match="must start with https://"):
             grist_auth.load_token_file(str(path))
 
-    NOT_AUTH = "Grist is not authenticated. Use Authenticate… in PrivacyFence Settings."
+    NOT_AUTH = "Grist is not authenticated. Connect Grist on the Connect page (/connect)."
     UNREADABLE = (
-        "Grist's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect again."
+        "Grist's saved sign-in could not be read. Connect Grist on the Connect page (/connect) to connect again."
     )
 
     def test_missing_file(self, tmp_path):
@@ -631,7 +631,7 @@ class TestResolveCredential:
     PINNED_BUNDLE = GristBundle(SERVER, None)
     DIFFERENT = (
         "Grist was connected to a different server than your organization uses. "
-        "Use Authenticate… in PrivacyFence Settings to connect again."
+        "Connect Grist on the Connect page (/connect) to connect again."
     )
 
     def test_oauth_bundle_and_oauth_record(self):
@@ -643,7 +643,7 @@ class TestResolveCredential:
         with pytest.raises(GristClientError) as err:
             grist_auth.resolve_credential(self.OAUTH_BUNDLE, key_record(), "tok.json")
         assert str(err.value) == (
-            "Your organization connects to Grist with OAuth. Use Authenticate… in PrivacyFence Settings."
+            "Your organization connects to Grist with OAuth. Connect Grist on the Connect page (/connect)."
         )
         assert_no_secret(str(err.value))
 
@@ -655,7 +655,7 @@ class TestResolveCredential:
     def test_no_oauth_and_oauth_record(self):
         with pytest.raises(GristClientError) as err:
             grist_auth.resolve_credential(self.PLAIN_BUNDLE, oauth_record(), "t")
-        assert str(err.value) == "Grist is not authenticated. Use Authenticate… in PrivacyFence Settings."
+        assert str(err.value) == "Grist is not authenticated. Connect Grist on the Connect page (/connect)."
 
     def test_pinned_server_matching(self):
         server, _ = grist_auth.resolve_credential(self.PINNED_BUNDLE, key_record(), "t")

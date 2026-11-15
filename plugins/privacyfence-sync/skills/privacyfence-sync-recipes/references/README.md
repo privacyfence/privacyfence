@@ -243,7 +243,6 @@ Two kinds of reference use them:
 
 - `file_name` is required. It must be a plain file name ending in `.csv` or `.json`, which picks
   the format. The file lands in the work folder under that name.
-- Don't give `destination_dir`: `privacyfence-sync` sets it.
 - The PrivacyFence server hands out a one-time download link, which `privacyfence-sync` fetches at
   once (the link expires after 5 minutes). The file's SHA-256 is checked against what
   PrivacyFence reported, and the step fails if they differ.
@@ -279,10 +278,8 @@ check your load against them, add a `salesforce_run_report` step with `summary_o
 
 - `save_as` is required: the plain file name the download gets in the work folder, whatever the
   file is called in Drive.
-- Don't give `destination_dir`: `privacyfence-sync` sets it.
-- The file arrives like an export's (written in place, or by one-time link), or, on an
-  organization server, inside the tool result for a small file; `privacyfence-sync` handles all
-  three.
+- The file arrives like an export's, by one-time link, or inside the tool result for a small
+  file; `privacyfence-sync` handles both.
 
 ### Tool steps that save their result
 

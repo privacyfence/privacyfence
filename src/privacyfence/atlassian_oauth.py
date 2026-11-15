@@ -219,8 +219,8 @@ def load_token_file(token_file: str) -> dict[str, Any]:
     """Load a previously saved Atlassian token record, or raise AtlassianOAuthError."""
     if not os.path.exists(token_file):
         raise AtlassianOAuthError(
-            f"No Atlassian token found at '{token_file}'. Use Authenticate… in "
-            "PrivacyFence Settings to sign in."
+            f"No Atlassian token found at '{token_file}'. Connect Jira, Confluence or "
+            "Jira Assets on the Connect page (/connect) to sign in."
         )
     with open(token_file, encoding="utf-8") as fh:
         return json.load(fh)

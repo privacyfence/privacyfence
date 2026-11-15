@@ -138,7 +138,7 @@ def stack(tmp_path, monkeypatch):
 
     provider = OrgOAuthProvider(_idp(), idp_callback_url=f"{issuer_url}/oauth/idp/callback")
     registry = ConnectorRegistry(factory=lambda principal: upstream_mcp_runtime.connectors_for_principal())
-    dispatcher = McpDispatcher(lambda: registry.get(current_principal()).connectors, mode="org")
+    dispatcher = McpDispatcher(lambda: registry.get(current_principal()).connectors)
     org = OrgAuth(
         provider=provider, sessions=OrgSessionStore(), idp=_idp(), issuer_url=issuer_url, connector_registry=registry,
     )
