@@ -350,7 +350,7 @@ jobs:
           cp website/tools/connector-config/index.html release-assets/privacyfence-connector-config-tool.html
 
       # Only a stable tag also gets a public GitHub Release with attached files -- alpha/beta/rc
-      # stop at the private R2 upload (see scripts/r2_release.py's module docstring for why).
+      # stop at the private R2 upload (scripts/r2_release.py's module docstring).
       # One call, the complete file set -- see this job's own top comment.
       - name: Attach release assets (stable only)
         if: steps.release.outputs.channel == 'stable'
@@ -366,8 +366,8 @@ jobs:
           prerelease: false
 
       # The release entry itself (tag + notes, no files) still gets created for every channel,
-      # marked prerelease, so update_checker.py's beta update channel -- which reads exactly that
-      # flag off the releases list -- keeps working without any underlying binary being public.
+      # marked prerelease, so a pre-release is distinguishable from a stable one on the releases list
+      # without any underlying file being public.
       - name: Create GitHub Release notes (pre-release, no public assets)
         if: steps.release.outputs.channel != 'stable'
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4

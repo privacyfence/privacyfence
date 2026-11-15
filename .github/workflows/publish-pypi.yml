@@ -106,7 +106,7 @@ jobs:
           set -euo pipefail
           workflow_id="build.yml"
           poll_interval_s=30
-          # build.yml's `build` job alone (DMG + notarization + packaged smoke test) has run well past ten
+          # build.yml's `build-org-image` legs (image build plus smoke test) have run well past ten
           # minutes before; leave real headroom rather than risk a flaky timeout on release day.
           max_wait_s=$((60 * 60))
           start=$(date +%s)

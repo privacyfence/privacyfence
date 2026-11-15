@@ -12,8 +12,7 @@ Every tagged release (stable and pre-release alike) uploads its files here, laid
 "<version>" is __version__ as setuptools_scm resolves it from the git tag (see this repo's
 docs/releasing.md), e.g. "4.1.0" or "4.2.0b1" -- never the "v"-prefixed tag name
 itself. The channel directory is derived from that version's PEP 440 pre-release suffix (a/b/rc,
-same short spellings src/privacyfence/update_checker.py's _STAGE_RANK already uses to rank
-update-check results); a version with no suffix is "stable".
+the PEP 440 short spellings docs/releasing.md specifies); a version with no suffix is "stable".
 
 A release (ADR 0306) builds the organization image, privacyfence-sync and the SBOM only, so what
 lands here is the SBOM and the org admin tools (scripts/sync_room_directory.py,
@@ -24,7 +23,7 @@ Cloudflare R2's default (private, no public bucket policy or custom domain).
 Stdlib + boto3 only (`pip install boto3`) -- no PrivacyFence install required, matching the other
 release-time scripts in this directory (scripts/sync_room_directory.py). This script deliberately
 doesn't import the ``privacyfence`` package for the same reason: it carries its own copy of the
-version-parsing regex, mirroring update_checker.py's rather than importing it, so a CI job can run
+version-parsing regex rather than importing one, so a CI job can run
 it (e.g. the SBOM job in build.yml) without first installing the full package.
 
 Requires these environment variables (prefixed CF_RELEASES_ to keep them apart from other
@@ -54,12 +53,9 @@ import re
 import sys
 from pathlib import Path
 
-# Mirrors src/privacyfence/update_checker.py's _VERSION_RE / _STAGE_RANK -- see this module's
-# docstring for why this is a deliberate copy rather than an import. Unlike that module (which
-# also needs to parse a leading "v" and a trailing ".dev<n>+local" dev-build segment, for comparing
-# against a running dev build's own __version__), this script only ever sees a real resolved
-# version string, so the "v" and ".dev" pieces are still matched here -- just to reject them below
-# with a clear error, not to fall back to anything.
+# This module carries its own version-parsing regex -- see its docstring for why it doesn't import
+# one. It only ever sees a real resolved version string, so the "v" and ".dev" pieces are still
+# matched here -- just to reject them below with a clear error, not to fall back to anything.
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?(?:\.dev(\d+))?(?:\+.*)?$")
 _STAGE_TO_CHANNEL = {"a": "alpha", "b": "beta", "rc": "rc"}
 

@@ -39,7 +39,7 @@ this by hand is for checking a version number.
 Stdlib only, no PrivacyFence install required -- same as scripts/r2_release.py and
 scripts/changelog_section.py. Deliberately doesn't import either: this script carries its own copy
 of the version-parsing regexes rather than reaching across scripts/, matching r2_release.py's own
-stated reason for doing the same relative to src/privacyfence/update_checker.py.
+stated reason for doing the same.
 
 Examples:
     python3 scripts/tag_release.py 4.2.0a1
@@ -64,8 +64,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The scheme new tags must use -- docs/releasing.md: "a=alpha, b=beta,
 # rc=release-candidate (PEP 440 short form)". Same shape as
-# src/privacyfence/update_checker.py's _VERSION_RE / scripts/r2_release.py's _VERSION_RE, minus the
-# ".dev"/"+local" tail those two also match -- this script only ever writes a tag, never compares
+# scripts/r2_release.py's _VERSION_RE, minus the
+# ".dev"/"+local" tail it also matches -- this script only ever writes a tag, never compares
 # against a synthesized dev version.
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?$")
 

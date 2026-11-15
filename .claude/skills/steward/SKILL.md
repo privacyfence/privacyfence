@@ -25,8 +25,6 @@ be an exception. Hence `qa-record-fixture.yml` and `connector-live-check.yml` in
   no real account identifier, tenant URL, token or private content may enter the repository.
 - **`.github/workflows/qa-record-fixture.yml`'s own header** documents the "workflow must already be on
   `main`" limit.
-- Cross-platform `pytest` is not dispatched: `tests.yml` already runs `platform-windows` and
-  `platform-macos` on every PR; read the failing job's log instead of guessing.
 - To cut a release tag, see `/cut-release`; cutting for real is the maintainer's decision.
 
 ## Two things that look local-only but may not be, in this container
@@ -53,8 +51,7 @@ maintainer asks. A dependency bump is a supply-chain decision, and a fixture dif
   that the floor needs lowering.
 - A `bandit` finding that is genuinely a false positive gets `# nosec BXXX  # <reason>` at the call
   site — never a suppression in `pyproject.toml` (§2.7).
-- `scripts/check_graphical_session_coverage.py` states the rule: *"A second red run on the same commit
-  is real and must not be re-run away."*
+- A second red run on the same commit is real and must not be re-run away.
 
 ## Conventions worth restating because they are easy to get wrong
 

@@ -14,19 +14,10 @@ permissions:
 
 jobs:
   test:
-    # A prior refactor deleted the last
-    # AppKit-tainted code in this repo -- the native menu bar/approval
-    # dialogs/settings window -- so nothing here depends on real AppKit/
-    # PyObjC behavior any more, and the whole suite is platform-independent.
-    # rumps/pyobjc-framework-* aren't installed here or anywhere else --
-    # the macos-native extra that used to declare them was removed outright
-    # (the exact package set is preserved in docs/adr/0001-remove-macos-native-extra.md).
-    # Runs on ubuntu-latest for the same reason any other
-    # platform-independent Python project would: it's the cheaper, faster
-    # runner, and there's no longer a platform split to test across two
-    # jobs. Building/signing the actual macOS .app/.dmg is still
-    # macOS-only, and still covered separately by build.yml on a real
-    # macos-latest runner.
+    # PrivacyFence is organization mode and the Docker image only (ADR 0306), so nothing here
+    # depends on a desktop platform and the whole suite is platform-independent. It runs on
+    # ubuntu-latest, the cheaper and faster runner; the org image itself is built and tested
+    # per architecture by build.yml's `build-org-image` job.
     #
     # This is the full suite and runs on 3.13 only -- the version
     # pyproject.toml's [project.optional-dependencies].dev/build tooling
@@ -133,11 +124,7 @@ jobs:
       # under test-results/browser-smoke/) plus the generic CI-diagnostics
       # capture (tests/diagnostics.py, wired in via tests/conftest.py's
       # pytest_runtest_makereport) for any failing `packaged`/`system`-marked
-      # test this job's own full-suite run reaches (tests/system/
-      # test_local_mode_system.py, and any packaged-artifact test whose own
-      # skipif finds a built artifact -- none normally do here, since this
-      # job doesn't build one, but a stray leftover dist/ would still get
-      # exercised and diagnosed the same way). Only ever written locally to
+      # test this job's own full-suite run reaches. Only ever written locally to
       # the runner's own disk otherwise -- upload it so a CI failure is
       # diagnosable from the Actions run itself, not just the traceback.
       # `failure()`, not `always()`: a passing (or never-reached) run leaves

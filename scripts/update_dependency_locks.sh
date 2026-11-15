@@ -43,8 +43,7 @@ PYTHON_FLOOR="3.11.5"
 # invoking interpreter's own platform -- so a lock file compiled on Linux silently drops every
 # Windows-only transitive dependency, even though pyproject.toml never changed. That's exactly what
 # happened to mcp's `pywin32` dependency here: this script always ran on Linux, so
-# requirements/runtime.lock.txt never had a `pywin32` line at all, and build.yml's `build-windows`
-# job's `pip install --require-hashes -r requirements/runtime.lock.txt` step failed the first time
+# requirements/runtime.lock.txt never had a `pywin32` line at all, and a Windows CI job's `pip install --require-hashes -r requirements/runtime.lock.txt` step failed the first time
 # it ran, on the first tag build after that step was added -- pip's --require-hashes mode refuses
 # an unpinned transitive dependency it needs to install, and pywin32 wasn't in the file to pin.
 # `--universal` resolves for the union of supported platforms up front and marks each
