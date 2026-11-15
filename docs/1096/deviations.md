@@ -167,6 +167,13 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - scope: scope: tests/integration/test_pending_approval_releases_nothing.py
 - scope: scope: tests/unit/test_org_mode.py
 - retry: Sent back once: the first merge was undone locally (nothing pushed) because test_approved_download_is_audited_as_approved_under_one_request_id went red on the merged result. No tld CLI in the worker container; the orchestrator ran the checks, including the integration set and the coverage ratchet, which now passes (owner choice orch_roles); no roles are required for this diff.
+- scope: scope: tests/unit/connectors/test_assets_connector.py
+- scope: scope: tests/unit/connectors/test_jira_connector.py
+- scope: scope: tests/unit/connectors/test_salesforce_connector.py
+- scope: scope: tests/unit/test_confluence_client.py
+- scope: scope: tests/unit/test_gate.py
+- scope: scope: tests/unit/web/test_mcp_dispatch.py
+- scope: scope: tests/unit/web/test_routes_mcp.py
 
 ## p12d-live-qa
 
