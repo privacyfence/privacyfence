@@ -240,7 +240,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p15c-retire-endpoints
 
-- pending
+- worker: The cloudflare/downloads/package-lock.json entry was removed from hooks.protect_paths_allow in .tld/toolkit.yaml (orchestrator instruction, so no reference to the deleted Worker remains in .github or .tld); the deleted tests/unit/test_mcp_registry_server_json.py and the mcpb/shim allowlist entry had already gone in p15a.
+- review: After merge: dependabot.yml has six update blocks and its header says six; dependency-audit.yml keeps lockfile-freshness, pip-audit, floor-audit, npm-audit (n8n) and npm-audit-oauth-relay; all 16 workflow files parse and every needs reference resolves; .tld/toolkit.yaml passes tld profile validate; unit suite 19789 passed, 3 skipped; coverage ratchet passes. floor-audit is deleted by p24a.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff. The Cloudflare Worker, its route, D1 database and the downloads-worker environment still exist and need the owner step ma2 after the pull request merges.
 
 ## p16-ci-legs
 
