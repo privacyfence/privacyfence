@@ -1078,7 +1078,7 @@ class TestCreateDraftWithAttachments:
     def test_removed_download_mode_argument_is_not_accepted(self):
         with pytest.raises(TypeError):
             make_client(MagicMock()).create_draft_with_attachments(
-                to="a@x.com", subject="s", body="b", attachments=["upload:x"], download_mode="org",
+                to="a@x.com", subject="s", body="b", attachments=["upload:x"], **{"download_mode": "org"},
             )
 
     def test_upload_reference_is_attached_under_a_generic_name(self, tmp_path):

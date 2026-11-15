@@ -593,7 +593,7 @@ class TestUploadFile:
 
     def test_removed_local_path_argument_is_not_accepted(self):
         with pytest.raises(TypeError):
-            make_client(MagicMock()).upload_file(local_path="/tmp/f.txt")
+            make_client(MagicMock()).upload_file(**{"local_path": "/tmp/f.txt"})
 
     def test_uploads_from_content_base64(self, monkeypatch):
         fake_media = MagicMock()
