@@ -15,7 +15,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-release-workflows
 
-- pending
+- worker: Edited tld-release.yml directly, without tld guard allow-workflow-install, because the tld plugin is not installed in worker containers.
+- review: Diff is the deletion of release.yml and the one CHECK_SCRIPT line.
 
 ## p4-release-docs
 
