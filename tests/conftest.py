@@ -121,7 +121,6 @@ def _reset() -> None:
     # whats_new caches the parsed changelog for the life of the process.
     whats_new.load_changelog.cache_clear()
     local_files.configure_file_bridge()
-    local_files.force_bridge_for_tests(False)
     settings_state._main_dispatch = None
     daemon_main._bundle_adopted_this_start = False
     state_stream._loop = None
@@ -164,6 +163,48 @@ def _reset() -> None:
     # The relay registration state is process-wide.
     relay_client.reset_for_tests()
     data_format.reset_for_tests()
+
+
+@pytest.fixture
+def disk_backed_local_files(monkeypatch):
+    """For a test of logic that merely consumes a file's bytes (a CSV parse, a MIME build): the
+    file layer is replaced by a fake that reads the named path from the test's own tmp_path.
+    ``upload:`` references still go through the real upload store. The server itself never reads a
+    path from disk; this stands in for the upload slot a real call would have used."""
+    import os
+
+    from privacyfence import local_files
+
+    real_require, real_read, real_size = (
+        local_files.require_local_files, local_files.read_local_file, local_files.local_file_size,
+    )
+
+    def is_upload(path):
+        return path.startswith(local_files.UPLOAD_REF_PREFIX)
+
+    def require(paths, **kwargs):
+        uploads = [p for p in paths if is_upload(p)]
+        if uploads:
+            real_require(uploads, **kwargs)
+        for path in paths:
+            if not is_upload(path) and not os.path.isfile(os.path.expanduser(path)):
+                raise local_files.LocalFileAccessError(f"Could not read {path!r}: no such file")
+
+    def read(path, **kwargs):
+        if is_upload(path):
+            return real_read(path, **kwargs)
+        try:
+            with open(os.path.expanduser(path), "rb") as fh:
+                return fh.read()
+        except OSError as exc:
+            raise local_files.LocalFileAccessError(f"Could not read {path!r}: {exc.strerror or exc}") from exc
+
+    def size(path, **kwargs):
+        return real_size(path, **kwargs) if is_upload(path) else os.path.getsize(os.path.expanduser(path))
+
+    monkeypatch.setattr(local_files, "require_local_files", require)
+    monkeypatch.setattr(local_files, "read_local_file", read)
+    monkeypatch.setattr(local_files, "local_file_size", size)
 
 
 @pytest.fixture(autouse=True)

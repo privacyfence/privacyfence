@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import types
 import json
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -695,48 +694,7 @@ class TestDownloadFile:
     ordering.
     """
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="'Saved to'/path previews embed this test's '/tmp' destination_dir "
-        "verbatim via os.path.join(), which keeps the given POSIX-style root but appends "
-        "with a native (backslash) separator on Windows -- a genuine finding from "
-        "promoting this suite to Windows CI, not otherwise tracked",
-    )
-    async def test_download_file_preview_and_args(self, gated_call_spy):
-        connector, client = make_connector()
-        client.download_file.return_value = {"name": "Q3 Report.pdf", "path": "/tmp/Q3 Report.pdf", "size_bytes": 4096}
-        client.get_file_metadata.return_value = make_file(
-            name="Q3 Report.pdf", mime_type="application/pdf", size=4096,
-        )
-        client.get_file_content.return_value = DriveFileContent(file=make_file())
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        assert result == {"name": "Q3 Report.pdf", "path": "/tmp/Q3 Report.pdf", "size_bytes": 4096}
-        kwargs = gated_call_spy[0]
-        assert kwargs["gate"] == "review"
-        # Saved to / no-content-returned are new-on-approval facts, not
-        # already-known metadata -- see connectors/drive.py's comment.
-        assert kwargs["new_info"]["Saved to"] == "/tmp/Q3 Report.pdf"
-        assert "None" in kwargs["new_info"]["Content returned to {agent}"]
-        assert kwargs["preview"]["Size"] == "4,096 bytes"
-        assert kwargs["args"] == {"file_id": "f1", "destination_dir": "/tmp"}
-        assert kwargs["pii_scan_text"] == ""  # empty content, nothing to scan
-
-    async def test_metadata_is_fetched_and_gate_runs_before_any_bytes_are_downloaded(self, gated_call_spy):
-        """The preview must be buildable -- and the gate must run -- from
-        metadata alone, with DriveClient.download_file (the actual streaming
-        fetch/write) never invoked beforehand."""
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="Q3 Report.pdf", mime_type="application/pdf", size=4096,
-        )
-        client.download_file.return_value = {"name": "Q3 Report.pdf", "path": "/tmp/Q3 Report.pdf", "size_bytes": 4096}
-
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        client.get_file_metadata.assert_called_once_with("f1")
-        client.download_file.assert_called_once_with("f1", "/tmp")
 
     async def test_deny_leaves_the_file_undownloaded(self, monkeypatch):
         """A denied gated_call must propagate before DriveClient.download_file
@@ -756,90 +714,10 @@ class TestDownloadFile:
 
         client.download_file.assert_not_called()
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="'Saved to'/path previews embed this test's '/tmp' destination_dir "
-        "verbatim via os.path.join(), which keeps the given POSIX-style root but appends "
-        "with a native (backslash) separator on Windows -- a genuine finding from "
-        "promoting this suite to Windows CI, not otherwise tracked",
-    )
-    async def test_google_doc_preview_reflects_export_extension(self, gated_call_spy):
-        """The preview's save path must already carry the .txt/.csv extension
-        download_file will actually save under -- computed once via
-        resolve_download_name/resolve_download_destination and reused by
-        both, so the two can never disagree (see drive_client.py)."""
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="Q3 Report", mime_type="application/vnd.google-apps.document", size=0,
-        )
-        client.download_file.return_value = {"name": "Q3 Report.txt", "path": "/tmp/Q3 Report.txt", "size_bytes": 512}
 
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
 
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview"]["File"] == "Q3 Report.txt"
-        assert kwargs["new_info"]["Saved to"] == "/tmp/Q3 Report.txt"
 
-    async def test_thumbnail_link_present_fetches_a_preview(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="photo.jpg", mime_type="image/jpeg", size=2048,
-            thumbnail_link="https://signed.example/thumb",
-        )
-        client.fetch_thumbnail.return_value = {"data": b"\xff\xd8thumb", "mime_type": "image/jpeg"}
-        client.download_file.return_value = {"name": "photo.jpg", "path": "/tmp/photo.jpg", "size_bytes": 2048}
 
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b"\xff\xd8thumb"
-        assert kwargs["preview_mime_type"] == "image/jpeg"
-        client.fetch_thumbnail.assert_called_once_with("https://signed.example/thumb")
-
-    async def test_no_thumbnail_link_skips_the_fetch(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="report.pdf", mime_type="application/pdf", size=2048, thumbnail_link="",
-        )
-        client.download_file.return_value = {"name": "report.pdf", "path": "/tmp/report.pdf", "size_bytes": 2048}
-
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-        client.fetch_thumbnail.assert_not_called()
-
-    async def test_thumbnail_fetch_failure_degrades_gracefully(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="photo.jpg", mime_type="image/jpeg", size=2048,
-            thumbnail_link="https://signed.example/thumb",
-        )
-        client.fetch_thumbnail.side_effect = DriveClientError("link expired")
-        client.download_file.return_value = {"name": "photo.jpg", "path": "/tmp/photo.jpg", "size_bytes": 2048}
-
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-        assert result == {"name": "photo.jpg", "path": "/tmp/photo.jpg", "size_bytes": 2048}
-
-    async def test_text_content_becomes_pii_scan_text(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="notes.txt", mime_type="text/plain", size=64,
-        )
-        client.get_file_content.return_value = DriveFileContent(
-            file=make_file(), content_text="Please wire the deposit to DE89370400440532013000.",
-        )
-        client.download_file.return_value = {"name": "notes.txt", "path": "/tmp/notes.txt", "size_bytes": 64}
-
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["pii_scan_text"] == "Please wire the deposit to DE89370400440532013000."
 
     async def test_binary_content_is_extracted_for_pii_scan_text(self, gated_call_spy):
         connector, client = make_connector()
@@ -859,19 +737,6 @@ class TestDownloadFile:
         # to it at all, not that this specific fixture extracts real text.
         assert kwargs["pii_scan_text"] == ""
 
-    async def test_content_fetch_failure_degrades_to_no_scan_text(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="report.pdf", mime_type="application/pdf", size=2048,
-        )
-        client.get_file_content.side_effect = DriveClientError("quota exceeded")
-        client.download_file.return_value = {"name": "report.pdf", "path": "/tmp/report.pdf", "size_bytes": 2048}
-
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["pii_scan_text"] == ""
-        assert result == {"name": "report.pdf", "path": "/tmp/report.pdf", "size_bytes": 2048}
 
     async def test_no_thumbnail_link_and_unextractable_content_keeps_preview_bytes_empty(self, gated_call_spy):
         connector, client = make_connector()
@@ -937,74 +802,6 @@ class TestDownloadFile:
         assert kwargs["preview_bytes"] == b"\xff\xd8thumb"
 
 
-class TestFileBridgeDownload:
-    """ADR 0007: local mode, but privilege separation prevents a direct
-    write -- drive_download_file must route through local_files.
-    deliver_file() instead of DriveClient.download_file, reusing the
-    PII-scan prefetch's bytes when it has them and falling back to
-    download_file_bytes() when it doesn't (a file over the full-fetch PII
-    scan cap, or a non-text file whose prefetch failed)."""
-
-    @pytest.fixture(autouse=True)
-    def _isolated_data_dir(self, tmp_path, monkeypatch):
-        from privacyfence import paths
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-
-    @pytest.fixture(autouse=True)
-    def _force_bridge(self):
-        from privacyfence import local_files
-        local_files.force_bridge_for_tests(True)
-        yield
-        local_files.force_bridge_for_tests(False)
-
-    async def test_reuses_the_pii_scan_prefetch_bytes_for_delivery(self, gated_call_spy):
-        from privacyfence import local_files
-
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="report.pdf", mime_type="application/pdf", size=11,
-        )
-        client.get_file_content.return_value = DriveFileContent(
-            file=make_file(), content_bytes=b"pdf content", truncated=False,
-        )
-
-        # bridge_available=True is what the shim's own request header
-        # would set -- entered here exactly like routes_mcp.py's
-        # handle_call_tool enters it around every real dispatch.
-        with local_files.call_context(bridge_available=True, uploads={}):
-            result = await connector.call(
-                "drive_download_file", {"file_id": "f1", "destination_dir": "~/Downloads"},
-            )
-
-        assert result["delivery"] == "client_bridge"
-        # download_file_bytes must never be called -- the prefetch already
-        # had the (small, non-truncated) full bytes.
-        client.download_file_bytes.assert_not_called()
-        client.download_file.assert_not_called()
-        kwargs = gated_call_spy[0]
-        assert kwargs["delivery"] == "client_bridge"
-
-    async def test_fetches_full_bytes_when_nothing_was_prefetched(self, gated_call_spy):
-        from privacyfence import local_files
-
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(
-            name="huge.bin", mime_type="application/octet-stream", size=50_000_000,
-        )
-        client.get_file_content.return_value = DriveFileContent(file=make_file(), truncated=True)
-        client.download_file_bytes.return_value = {
-            "data": b"the full file", "name": "huge.bin", "mime_type": "application/octet-stream",
-            "size_bytes": 13,
-        }
-
-        with local_files.call_context(bridge_available=True, uploads={}):
-            result = await connector.call(
-                "drive_download_file", {"file_id": "f1", "destination_dir": "~/Downloads"},
-            )
-
-        assert result["delivery"] == "client_bridge"
-        client.download_file_bytes.assert_called_once_with("f1")
-        client.download_file.assert_not_called()
 
 
 class TestOrgModeDownloadDelivery:
@@ -1034,22 +831,6 @@ class TestOrgModeDownloadDelivery:
         connector.download_base_url = "https://pf.example.com"
         return connector, client
 
-    async def test_local_mode_return_shape_is_unchanged(self, gated_call_spy):
-        """Regression pin: local mode's drive_download_file must keep
-        calling DriveClient.download_file (the disk-writing path) and
-        returning exactly its dict shape -- connector.download_mode defaults
-        to "local" (make_connector's own default), so this is local mode's
-        behavior with no org-mode wiring involved at all."""
-        connector, client = make_connector()
-        client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=100)
-        client.download_file.return_value = {"name": "f.pdf", "path": "/tmp/f.pdf", "size_bytes": 100}
-
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        assert result == {"name": "f.pdf", "path": "/tmp/f.pdf", "size_bytes": 100}
-        client.download_file.assert_called_once_with("f1", "/tmp")
-        client.download_file_bytes.assert_not_called()
-        assert gated_call_spy[0]["delivery"] == "local_disk"
 
     async def test_small_file_is_delivered_inline(self, gated_call_spy):
         connector, client = self._org_connector(inline_max_bytes=1_000)
@@ -1642,23 +1423,6 @@ class TestUploadFile:
         ):
             await connector.call("drive_upload_file", {"upload_id": "not-a-real-slot", "name": "x"})
 
-    async def test_local_path_upload_computes_size_and_tracks_session_id(self, tmp_path, gated_call_spy):
-        connector, client = make_connector()
-        f = tmp_path / "photo.png"
-        f.write_bytes(b"x" * 1234)
-        # ADR 0007: local_path uploads go through upload_file_bytes (the
-        # file-bridge upload entry point), not upload_file -- see
-        # connectors/drive.py's _upload_file.
-        client.upload_file_bytes.return_value = {"id": "uploaded1"}
-
-        result = await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["gate"] == "popup"
-        assert kwargs["preview"]["File"] == "photo.png"
-        assert kwargs["preview"]["Size"] == "1,234 bytes"
-        assert result == {"id": "uploaded1"}
-        assert "uploaded1" in connector.session_created_ids
 
     async def test_content_base64_upload_computes_decoded_size(self, gated_call_spy):
         import base64
@@ -1684,72 +1448,9 @@ class TestUploadFile:
         kwargs = gated_call_spy[0]
         assert kwargs["preview"]["Size"] == "0 bytes"
 
-    async def test_local_path_image_under_cap_gets_a_preview(self, tmp_path, gated_call_spy):
-        connector, client = make_connector()
-        f = tmp_path / "photo.png"
-        f.write_bytes(b"\x89PNGfakebytes")
-        client.upload_file.return_value = {"id": "uploaded4"}
 
-        await connector.call("drive_upload_file", {"local_path": str(f)})
 
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b"\x89PNGfakebytes"
-        assert kwargs["preview_mime_type"] == "image/png"
 
-    async def test_local_path_non_image_gets_no_preview(self, tmp_path, gated_call_spy):
-        connector, client = make_connector()
-        f = tmp_path / "report.pdf"
-        f.write_bytes(b"%PDF-1.4 fake")
-        client.upload_file.return_value = {"id": "uploaded5"}
-
-        await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-
-    async def test_local_path_image_over_cap_gets_no_preview(self, tmp_path, monkeypatch, gated_call_spy):
-        connector, client = make_connector()
-        f = tmp_path / "huge.png"
-        f.write_bytes(b"x")
-        monkeypatch.setattr(drive_module, "_UPLOAD_PREVIEW_MAX_BYTES", 0)
-        client.upload_file.return_value = {"id": "uploaded6"}
-
-        await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-
-    async def test_local_path_read_failure_before_upload_raises(self, tmp_path, monkeypatch, gated_call_spy):
-        # ADR 0007: unlike the pre-bridge MediaFileUpload path (whose real
-        # read happened inside a fully-mocked client call, invisible to
-        # this test), a local_path upload now always reads real bytes for
-        # the actual upload (upload_file_bytes) -- so a file that's still
-        # unreadable when that second read happens now surfaces the
-        # failure instead of silently "succeeding" against a mock. The
-        # preview read still degrades gracefully first (no preview_bytes/
-        # PII scan), exactly as before.
-        connector, client = make_connector()
-        f = tmp_path / "photo.png"
-        f.write_bytes(b"\x89PNGfakebytes")
-        client.upload_file_bytes.return_value = {"id": "uploaded-read-fail"}
-
-        real_open = open
-
-        def flaky_open(path, *args, **kwargs):
-            if str(path) == str(f):
-                raise OSError("permission denied")
-            return real_open(path, *args, **kwargs)
-
-        monkeypatch.setattr("builtins.open", flaky_open)
-
-        with pytest.raises(LocalFileAccessError):
-            await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
 
     async def test_local_path_missing_file_raises_before_any_approval(self, tmp_path, gated_call_spy):
         # Reported before the human is ever asked to approve anything,
@@ -1801,41 +1502,8 @@ class TestUploadFile:
         assert kwargs["preview_bytes"] == b""
         assert kwargs["preview_mime_type"] == ""
 
-    async def test_local_path_text_file_populates_upload_pii_scan_text(self, tmp_path, gated_call_spy):
-        connector, client = make_connector()
-        f = tmp_path / "notes.txt"
-        f.write_bytes(b"Please wire the deposit to DE89370400440532013000.")
-        client.upload_file.return_value = {"id": "uploaded11"}
 
-        await connector.call("drive_upload_file", {"local_path": str(f)})
 
-        kwargs = gated_call_spy[0]
-        assert kwargs["upload_pii_scan_text"] == "Please wire the deposit to DE89370400440532013000."
-
-    async def test_local_path_image_has_no_scannable_text(self, tmp_path, gated_call_spy):
-        # No OCR -- an image still gets read (for the preview), but
-        # extract_text() returns "" for image mime types.
-        connector, client = make_connector()
-        f = tmp_path / "photo.png"
-        f.write_bytes(b"\x89PNGfakebytes")
-        client.upload_file.return_value = {"id": "uploaded12"}
-
-        await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["upload_pii_scan_text"] == ""
-
-    async def test_local_path_unrecognized_type_gets_no_scan_at_all(self, tmp_path, gated_call_spy):
-        connector, client = make_connector()
-        f = tmp_path / "archive.zip"
-        f.write_bytes(b"PK\x03\x04 not a real zip payload")
-        client.upload_file.return_value = {"id": "uploaded13"}
-
-        await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["upload_pii_scan_text"] == ""
-        assert kwargs["preview_bytes"] == b""
 
     async def test_content_base64_text_populates_upload_pii_scan_text(self, gated_call_spy):
         import base64
@@ -1859,51 +1527,8 @@ class TestUploadFile:
         kwargs = gated_call_spy[0]
         assert kwargs["upload_pii_scan_text"] == ""
 
-    async def test_local_path_no_extractable_content_keeps_preview_blocks_text_only(self, tmp_path, gated_call_spy):
-        connector, client = make_connector()
-        f = tmp_path / "report.pdf"
-        f.write_bytes(b"%PDF-1.4 fake")  # not a real, parseable PDF -- extracts ""
-        client.upload_file.return_value = {"id": "uploaded16"}
 
-        await connector.call("drive_upload_file", {"local_path": str(f)})
 
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_blocks"] == [{"type": "text", "text": kwargs["details_text"]}]
-
-    async def test_local_path_extracted_content_feeds_a_rich_markdown_preview_block(self, tmp_path, gated_call_spy):
-        # Replaces the old QuickLook-thumbnail fallback: a non-image local
-        # file's own extracted content (text_extraction.extract_text())
-        # becomes a "markdown" preview_blocks entry instead of a visual
-        # thumbnail -- see drive.py's _upload_file.
-        connector, client = make_connector()
-        f = tmp_path / "report.docx"
-        f.write_bytes(_make_docx_bytes("Please wire the deposit."))
-        client.upload_file.return_value = {"id": "uploaded17"}
-
-        await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["upload_pii_scan_text"] == "Please wire the deposit."
-        assert kwargs["preview_blocks"] == [
-            {"type": "text", "text": kwargs["details_text"]},
-            {"type": "markdown", "text": "Please wire the deposit."},
-        ]
-
-    async def test_local_path_image_only_gets_the_image_preview_no_markdown_block(self, tmp_path, gated_call_spy):
-        connector, client = make_connector()
-        f = tmp_path / "photo.png"
-        f.write_bytes(b"\x89PNGfakebytes")
-        client.upload_file.return_value = {"id": "uploaded18"}
-
-        await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b"\x89PNGfakebytes"
-        assert kwargs["preview_mime_type"] == "image/png"
-        # No OCR -- extract_text() contributes nothing for image/* content.
-        assert kwargs["preview_blocks"] == [{"type": "text", "text": kwargs["details_text"]}]
 
     async def test_content_base64_extracted_content_feeds_a_rich_markdown_preview_block(self, gated_call_spy):
         import base64
@@ -2858,7 +2483,9 @@ class TestEveryToolIsAudited:
         # MagicMock has no meaningful __format__ for that spec, so it needs a
         # real DriveFile back.
         client.get_file_metadata.return_value = make_file()
-        client.download_file.return_value = {"name": "f.txt", "path": "/tmp/f.txt", "size_bytes": 100}
+        client.download_file_bytes.return_value = {
+            "data": b"x" * 100, "name": "f.txt", "mime_type": "text/plain", "size_bytes": 100,
+        }
         client.get_revision_content.return_value = DriveFileContent(file=make_file(), content_text="v1")
         client.list_revisions.return_value = []
 

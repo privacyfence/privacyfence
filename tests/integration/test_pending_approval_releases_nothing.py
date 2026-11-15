@@ -14,8 +14,7 @@ drive.py discarded gated_call's returned pending result and delivered
 anyway. The tests below pin the fixed sequence instead.
 
 Driven through the real stack: a socket-bound single-user org ``WebServer``,
-the official ``mcp`` client over ``/mcp`` with a bearer token and no
-``X-PrivacyFence-File-Bridge`` header, the real connectors (only their
+the official ``mcp`` client over ``/mcp`` with a bearer token, the real connectors (only their
 Google clients are faked), the real ``gate.gated_call`` and the real
 ``PendingApprovalRegistry``. A short hold window stands in for a human who
 has not answered yet, exactly as ``test_deferred_approval_round_trip.py``
@@ -35,7 +34,7 @@ import pytest
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
-from privacyfence import approval_ui, local_files  # noqa: E402
+from privacyfence import approval_ui  # noqa: E402
 from privacyfence.approvals import PendingApprovalRegistry  # noqa: E402
 from privacyfence.connectors.calendar import CalendarConnector  # noqa: E402
 from privacyfence.connectors.drive import DriveConnector  # noqa: E402
@@ -66,11 +65,8 @@ def _fake_drive_client() -> MagicMock:
 
 @pytest.fixture
 def local_server(tmp_path):
-    # A privilege-separated local install: the daemon cannot write into the
-    # user's destination_dir, so the download goes through the file bridge,
-    # and with no shim header on the request, through a capability link.
-    local_files.force_bridge_for_tests(True)
-
+    # The daemon never writes into the user's destination_dir: a download comes back as a
+    # one-time capability link.
     drive = DriveConnector(_fake_drive_client())
     drive.my_email = "me@example.com"
     calendar_client = MagicMock()
@@ -88,7 +84,6 @@ def local_server(tmp_path):
             # the server can shut down.
             for approval in registry.list_pending():
                 registry.finalize(approval.id, "deny")
-            local_files.force_bridge_for_tests(False)
 
 
 async def _call(server: SingleUserOrgServer, tool: str, args: dict) -> dict:

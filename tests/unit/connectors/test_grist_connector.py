@@ -28,7 +28,7 @@ from ...helpers import (
     assert_tool_definitions_complete,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("disk_backed_local_files")]
 
 DOC_ID = "8CAN8gKdxY7zAbCdEfGh12"
 
@@ -1811,7 +1811,7 @@ class TestExportRecords:
 
         await connector.call("grist_export_records", EXPORT_ARGS)
 
-        assert gated_call_spy[0]["delivery"] == "local_disk"
+        assert gated_call_spy[0]["delivery"] == "client_bridge"
 
     async def test_approval_args_carry_sha256_and_options(self, gated_call_spy, delivered):
         import hashlib
@@ -2056,7 +2056,7 @@ class TestExportSql:
         assert call["args"]["sql"] == "SELECT id, Name FROM Contacts"
         assert call["args"]["args"] == '["x", 2]'
         assert call["args"]["file_name"] == "query.csv"
-        assert call["delivery"] == "local_disk"
+        assert call["delivery"] == "client_bridge"
 
     async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
         connector, _client = sql_connector()

@@ -13,7 +13,6 @@ Cowork preview.
 from __future__ import annotations
 
 import json
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -603,70 +602,7 @@ class TestDownloadAttachment:
         defaults.update(overrides)
         return ConfluenceAttachment(**defaults)
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="'Will save to' preview text embeds this test's '/tmp' destination_dir "
-        "verbatim via os.path.join(), which keeps the given POSIX-style root but appends "
-        "with a native (backslash) separator on Windows -- a genuine finding from "
-        "promoting this suite to Windows CI, not otherwise tracked",
-    )
-    async def test_preview_and_gate(self, gated_call_spy):
-        # application/octet-stream -- a type is_prefetch_worthy() doesn't
-        # recognize -- keeps this test's focus on the preview/gate fields
-        # themselves; see TestPiiScanWiring below for PDF/text prefetch behavior.
-        connector, client = make_connector()
-        client.get_page.return_value = make_page(title="Runbook", space_key="ENG", author="alice@example.com")
-        client.list_attachments.return_value = [self._attachment(media_type="application/octet-stream")]
-        client.download_attachment.return_value = {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
 
-        result = await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["gate"] == "review"
-        assert kwargs["preview"]["Title"] == "Runbook"
-        assert kwargs["preview"]["Space"] == "ENG"
-        assert kwargs["preview"]["Attachment"] == "report.pdf"
-        assert kwargs["preview"]["Type"] == "application/octet-stream"
-        assert kwargs["preview"]["Size"] == "1,024 bytes"
-        # Will save to / no-content-returned are new-on-approval facts, not
-        # already-known metadata -- see connectors/confluence.py's comment.
-        assert kwargs["new_info"]["Will save to"] == "/tmp/report.pdf"
-        assert "None" in kwargs["new_info"]["Content returned to {agent}"]
-        assert kwargs["details_text"] == "The attachment above will be downloaded to the destination shown."
-        assert kwargs["filtered_data"] is None
-        assert kwargs["args"] == {"page_id": "p1", "attachment_name": "report.pdf"}
-        # raw_data is the asdict()'d page (a dict, not a ConfluencePage
-        # instance) -- same shape confluence_get_page/get_page_by_title
-        # already pass, so the i_am_author/approved_space_keys Always-allow
-        # candidates (auto_accept._confluence_read_page_candidates) work
-        # identically for this tool.
-        assert kwargs["raw_data"]["space_key"] == "ENG"
-        assert kwargs["raw_data"]["author"] == "alice@example.com"
-        assert kwargs["sender"] == "alice@example.com"
-        assert result == {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
-        assert kwargs["pii_scan_text"] == ""  # unrecognized type, nothing prefetched to scan
-        assert kwargs["preview_blocks"] == [{"type": "text", "text": kwargs["details_text"]}]
-        client.download_attachment.assert_called_once_with("p1", "att-1", "report.pdf", "/tmp")
-
-    async def test_finds_attachment_past_the_50th(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [
-            self._attachment(name=f"f{i}.bin", media_type="application/octet-stream", attachment_id=f"a{i}")
-            for i in range(60)
-        ]
-        client.download_attachment.return_value = {"path": "/tmp/f55.bin", "name": "f55.bin", "size_bytes": 1}
-
-        await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "f55.bin", "destination_dir": "/tmp"},
-        )
-
-        client.list_attachments.assert_called_once_with("p1")
-        client.download_attachment.assert_called_once_with("p1", "a55", "f55.bin", "/tmp")
 
     async def test_unknown_attachment_name_raises_without_gating(self, gated_call_spy):
         connector, client = make_connector()
@@ -679,156 +615,12 @@ class TestDownloadAttachment:
             )
         assert gated_call_spy == []
 
-    async def test_client_error_after_approval_becomes_runtime_error(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [self._attachment(media_type="application/octet-stream")]
-        client.download_attachment.side_effect = ConfluenceClientError("disk full")
-
-        with pytest.raises(RuntimeError, match="disk full"):
-            await connector.call(
-                "confluence_download_attachment",
-                {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-            )
-
-    async def test_image_attachment_under_size_cap_gets_a_preview(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [
-            self._attachment(name="photo.png", media_type="image/png", size=1024, attachment_id="att-2"),
-        ]
-        client.fetch_attachment_bytes.return_value = b"\x89PNGfakebytes"
-        client.save_attachment_bytes.return_value = {
-            "path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 13,
-        }
-
-        result = await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "photo.png", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b"\x89PNGfakebytes"
-        assert kwargs["preview_mime_type"] == "image/png"
-        client.fetch_attachment_bytes.assert_called_once_with("p1", "att-2")
-        # Already fetched for the preview -- must reuse those bytes, not
-        # fetch the same attachment from Confluence a second time.
-        client.save_attachment_bytes.assert_called_once_with(b"\x89PNGfakebytes", "photo.png", "/tmp")
-        client.download_attachment.assert_not_called()
-        assert result == {"path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 13}
-
-    async def test_image_attachment_over_size_cap_gets_no_preview(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [
-            self._attachment(
-                name="huge.png", media_type="image/png",
-                size=confluence_module._ATTACHMENT_PREFETCH_MAX_BYTES + 1,
-            ),
-        ]
-        client.download_attachment.return_value = {
-            "path": "/tmp/huge.png", "name": "huge.png", "size_bytes": 1,
-        }
-
-        await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "huge.png", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-        client.fetch_attachment_bytes.assert_not_called()
-        client.download_attachment.assert_called_once()
-
-    async def test_unrecognized_binary_attachment_gets_no_prefetch_at_all(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [self._attachment(media_type="application/octet-stream")]
-        client.download_attachment.return_value = {
-            "path": "/tmp/report.bin", "name": "report.bin", "size_bytes": 1024,
-        }
-
-        await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-        assert kwargs["pii_scan_text"] == ""
-        client.fetch_attachment_bytes.assert_not_called()
-
-    async def test_preview_fetch_failure_degrades_gracefully(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [
-            self._attachment(name="photo.png", media_type="image/png", size=1024, attachment_id="att-2"),
-        ]
-        client.fetch_attachment_bytes.side_effect = ConfluenceClientError("expired token")
-        client.download_attachment.return_value = {
-            "path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 1024,
-        }
-
-        result = await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "photo.png", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-        # Falls back to the original single-call path since no preview bytes
-        # were actually obtained.
-        client.download_attachment.assert_called_once_with("p1", "att-2", "photo.png", "/tmp")
-        assert result == {"path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 1024}
 
 
-class TestFileBridgeDownloadAttachment:
-    """ADR 0007: local mode, but privilege separation prevents a direct
-    write -- confluence_download_attachment must route through
-    local_files.deliver_file() instead of ConfluenceClient.
-    save_attachment_bytes/download_attachment, fetching the full
-    attachment when nothing was already prefetched for the PII scan."""
 
-    def _attachment(self, **overrides):
-        defaults = dict(
-            name="report.pdf", media_type="application/octet-stream", size=1024, attachment_id="att-1",
-        )
-        defaults.update(overrides)
-        return ConfluenceAttachment(**defaults)
 
-    @pytest.fixture(autouse=True)
-    def _isolated_data_dir(self, tmp_path, monkeypatch):
-        from privacyfence import paths
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
-    @pytest.fixture(autouse=True)
-    def _force_bridge(self):
-        from privacyfence import local_files
-        local_files.force_bridge_for_tests(True)
-        yield
-        local_files.force_bridge_for_tests(False)
 
-    async def test_fetches_full_bytes_when_nothing_was_prefetched(self, gated_call_spy):
-        from privacyfence import local_files
-
-        connector, client = make_connector()
-        client.get_page.return_value = make_page(title="Runbook", space_key="ENG", author="alice@example.com")
-        client.list_attachments.return_value = [self._attachment()]
-        client.fetch_attachment_bytes.return_value = b"the full attachment"
-
-        with local_files.call_context(bridge_available=True, uploads={}):
-            result = await connector.call(
-                "confluence_download_attachment",
-                {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "~/Downloads"},
-            )
-
-        assert result["delivery"] == "client_bridge"
-        client.fetch_attachment_bytes.assert_called_once_with("p1", "att-1")
-        client.download_attachment.assert_not_called()
-        client.save_attachment_bytes.assert_not_called()
 
 
 class TestOrgModeDownloadDelivery:
@@ -862,20 +654,6 @@ class TestOrgModeDownloadDelivery:
         connector.download_base_url = "https://pf.example.com"
         return connector, client
 
-    async def test_local_mode_return_shape_is_unchanged(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [self._attachment()]
-        client.download_attachment.return_value = {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
-
-        result = await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        assert result == {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
-        client.download_attachment.assert_called_once_with("p1", "att-1", "report.pdf", "/tmp")
-        assert gated_call_spy[0]["delivery"] == "local_disk"
 
     async def test_small_attachment_is_delivered_inline(self, gated_call_spy):
         connector, client = self._org_connector(inline_max_bytes=1_000)
@@ -978,28 +756,6 @@ class TestAttachmentPiiScanWiring:
             {"type": "markdown", "text": "Please wire the deposit to DE89370400440532013000."},
         ]
 
-    async def test_reuses_fetched_bytes_for_the_save_even_without_a_preview(self, gated_call_spy):
-        # A PDF isn't an image -- no preview -- but the bytes fetched for the
-        # PII scan must still be reused for the actual save, not re-fetched.
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [
-            ConfluenceAttachment(name="report.pdf", media_type="application/pdf", size=1024, attachment_id="att-4"),
-        ]
-        client.fetch_attachment_bytes.return_value = b"%PDF-1.4 fake"
-        client.save_attachment_bytes.return_value = {
-            "path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024,
-        }
-
-        result = await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        client.fetch_attachment_bytes.assert_called_once_with("p1", "att-4")
-        client.save_attachment_bytes.assert_called_once_with(b"%PDF-1.4 fake", "report.pdf", "/tmp")
-        client.download_attachment.assert_not_called()
-        assert result == {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
 
     async def test_image_attachment_has_no_scannable_text(self, gated_call_spy):
         connector, client = make_connector()
@@ -1020,24 +776,6 @@ class TestAttachmentPiiScanWiring:
         kwargs = gated_call_spy[0]
         assert kwargs["pii_scan_text"] == ""
 
-    async def test_prefetch_failure_degrades_scan_text_to_empty(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_page.return_value = make_page()
-        client.list_attachments.return_value = [
-            ConfluenceAttachment(name="report.pdf", media_type="application/pdf", size=1024, attachment_id="att-report"),
-        ]
-        client.fetch_attachment_bytes.side_effect = ConfluenceClientError("expired token")
-        client.download_attachment.return_value = {
-            "path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024,
-        }
-
-        await connector.call(
-            "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["pii_scan_text"] == ""
 
 
 class TestCreatePage:
@@ -1200,6 +938,7 @@ class TestEveryToolIsAudited:
         client.list_attachments.return_value = [
             ConfluenceAttachment(name="stub", media_type="application/octet-stream", size=1, attachment_id="att-x"),
         ]
+        client.fetch_attachment_bytes.return_value = b"x"
 
         await assert_all_tools_leave_an_audit_trail(
             connector, confluence_module, monkeypatch, tmp_path,

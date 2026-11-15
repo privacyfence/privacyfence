@@ -709,6 +709,7 @@ class ConfluenceConnector(Connector):
             get_download_staging_store().stage, current_principal(), data, attachment.name, attachment.media_type,
             ttl_seconds=cfg.link_ttl_seconds,
         )
+        local_files.mark_staged_download()
         return cfg.link_result(attachment.name, size_bytes, f"{self.download_base_url}{cfg.staged_link_path(token)}")
 
     async def _create_page(

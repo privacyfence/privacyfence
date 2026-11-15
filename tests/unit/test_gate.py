@@ -3088,6 +3088,7 @@ class TestApprovalBinding:
         assert registry.list_pending() == []
         assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["approval_pending", "approved"]
 
+    @pytest.mark.usefixtures("disk_backed_local_files")
     async def test_identical_grist_import_reissue_collects_the_decision(self, monkeypatch, audit_dir, tmp_path):
         registry = self._registry(monkeypatch)
         client = MagicMock()

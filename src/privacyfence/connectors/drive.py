@@ -1533,6 +1533,7 @@ class DriveConnector(Connector):
             get_download_staging_store().stage, current_principal(), data, name, mime_type,
             ttl_seconds=cfg.link_ttl_seconds,
         )
+        local_files.mark_staged_download()
         return cfg.link_result(name, size_bytes, f"{self.download_base_url}{cfg.staged_link_path(token)}")
 
     # ------------------------------------------------------------------ #
@@ -1689,12 +1690,10 @@ class DriveConnector(Connector):
         effective_local_path = local_path if (local_path.strip() and not is_org_local_path) else upload_ref
 
         if effective_local_path:
-            # ADR 0007: raises immediately -- LocalFileAccessError if
-            # there's no way to reach this path at all, or LocalFilesNeeded
-            # to start the upload handshake -- rather than letting a plain
-            # os.path.getsize() report "0 bytes" for a file this process
-            # can't read and only failing once the human has already
-            # approved the upload.
+            # Raises immediately -- LocalFileAccessError if the path is not an upload
+            # reference -- rather than letting a plain os.path.getsize() report "0 bytes"
+            # for a file this process can't read and only failing once the human has
+            # already approved the upload.
             local_files.require_local_files(
                 [effective_local_path], max_total_bytes=_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
             )

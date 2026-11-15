@@ -36,6 +36,8 @@ from privacyfence.web import routes_mcp as rm
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
 
+from ...helpers import token_verifier
+
 TOKEN = "mcp-test-token"
 
 HOSTILE = "‮evil‬\x1b[31m<script>alert(1)</script>\n" + "x" * 200
@@ -99,7 +101,7 @@ async def _session(
     """A live, initialized ClientSession whose handshake claims ``client_name`` (None: the SDK's
     own default clientInfo)."""
     app, session_manager = build_mcp_asgi_app(
-        dispatcher, token=None if verifier else TOKEN, verifier=verifier, client_names=client_names,
+        dispatcher, verifier=verifier or token_verifier(TOKEN), client_names=client_names,
         overrides=overrides, attested_agents=attested_agents,
     )
     info = types.Implementation(name=client_name, version="9.9") if client_name is not None else None
@@ -154,7 +156,7 @@ class TestModernProtocolCapture:
     async def test_a_sessionless_request_attributes_from_its_own_envelope(self):
         # 2026-07-28: no initialize, no Mcp-Session-Id -- the client info rides the request's
         # own _meta, which the SDK surfaces through the same ctx.session.client_params.
-        app, session_manager = build_mcp_asgi_app(_dispatcher(AgentEchoConnector()), token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(_dispatcher(AgentEchoConnector()), verifier=token_verifier(TOKEN))
         body = {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {
