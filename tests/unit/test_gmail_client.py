@@ -10,10 +10,9 @@ GmailClient.__init__ does no I/O, so we construct it normally and set
 the thread-local service directly to skip the OAuth/credential-loading
 path entirely.
 
-The OAuth2 token lifecycle itself (authorize_interactive / _load_credentials
-/ _save_token) is exercised separately below, mocking at the google-auth
-library boundary (Credentials.from_authorized_user_file /
-google_oauth.authorize_local) rather than at _load_credentials
+The OAuth2 token lifecycle itself (_load_credentials / _save_token) is exercised separately below, mocking at the google-auth
+library boundary
+(Credentials.from_authorized_user_file) rather than at _load_credentials
 itself -- see test_tasks_client.py's module docstring for why.
 """
 from __future__ import annotations
@@ -33,7 +32,6 @@ import sys
 import pytest
 
 from privacyfence.gmail_client import (
-    SCOPES,
     Attachment,
     GmailClient,
     GmailClientError,
@@ -73,31 +71,6 @@ def http_error(status: int = 404, body: bytes = b'{"error": "nope"}') -> HttpErr
 
 def header_list(**kv) -> list[dict]:
     return [{"name": k, "value": v} for k, v in kv.items()]
-
-
-# ---------------------------------------------------------------------------- #
-# authorize_interactive
-# ---------------------------------------------------------------------------- #
-
-class TestAuthorizeInteractive:
-    def test_missing_client_config_raises(self, tmp_path):
-        client = GmailClient(client_config={}, token_file=str(tmp_path / "token.json"))
-        with pytest.raises(GmailClientError, match="No Google organization config installed"):
-            client.authorize_interactive()
-
-    def test_runs_local_authorization_and_persists_returned_credentials(self, tmp_path, monkeypatch):
-        token_file = tmp_path / "nested" / "token.json"
-        client = GmailClient(client_config={"installed": {"client_id": "cid"}}, token_file=str(token_file))
-
-        fake_creds = MagicMock()
-        fake_creds.to_json.return_value = '{"token": "abc"}'
-        mock_authorize_local = MagicMock(return_value=fake_creds)
-        monkeypatch.setattr("privacyfence.gmail_client.authorize_local", mock_authorize_local)
-
-        client.authorize_interactive()
-
-        mock_authorize_local.assert_called_once_with({"installed": {"client_id": "cid"}}, SCOPES)
-        assert token_file.read_text(encoding="utf-8") == '{"token": "abc"}'
 
 
 # ---------------------------------------------------------------------------- #

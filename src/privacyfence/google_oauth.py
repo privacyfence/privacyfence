@@ -1,22 +1,13 @@
-"""Shared Google OAuth 2.0 helper for both modes.
+"""Shared Google OAuth 2.0 helper for the organization sign-in flow.
 
-Org mode: ``web/routes_connect.py``'s routes call ``authorize_url``/
-``exchange_code`` directly, against a public redirect_uri, because a remote
-browser (a phone, say) can't have PrivacyFence open a local port and a local
-browser window on its own behalf -- see ``oauth_loopback.py``'s own module
-docstring for why that assumption breaks down.
-
-Local mode: every Google connector's ``authorize_interactive()`` calls
-``authorize_local()``, which drives the same two functions through
-``oauth_loopback.run_browser_oauth()`` -- so the authorize URL is opened by
-the companion app when one is running (ADR 0002 decision 5), exactly like
-Slack/Salesforce/Atlassian. ``InstalledAppFlow.run_local_server()``, used
-here before, calls ``webbrowser.open()`` from the daemon itself, which on a
-separated install reaches no desktop session and opens nothing.
+``web/routes_connect.py``'s routes call ``authorize_url``/``exchange_code``
+directly, against a public redirect_uri, because a remote browser (a phone,
+say) can't have PrivacyFence open a local port and a local browser window on
+its own behalf.
 
 ``google_auth_oauthlib.flow.Flow`` is the lower-level counterpart of
 ``InstalledAppFlow`` that takes an explicit ``redirect_uri`` instead of
-managing a loopback listener itself, which is what both modes need.
+managing a loopback listener itself, which is what the organization flow needs.
 ``Flow`` auto-generates
 its own PKCE ``code_verifier``/``code_challenge`` pair (see its own
 ``authorization_url()``), so unlike the Slack/Salesforce/Atlassian helpers
@@ -30,9 +21,7 @@ Google Cloud Console OAuth clients are typed at creation ("Desktop app" vs.
 HTTPS redirect URI registered against it. An org running ``mode: org``
 needs its connector config's "google" section to hold a *Web application*
 OAuth client's credentials (registered with ``{issuer_url}/oauth/callback/
-<service>`` for each Google connector), separate from whatever "Desktop
-app" client an install might otherwise use for local mode's loopback flow
--- ``_web_client_config`` below wraps the same flat "google" section
+<service>`` for each Google connector), -- ``web_client_config`` below wraps the same flat "google" section
 daemon_main.py's own ``_google_client_config`` reads, just under the "web"
 top-level key ``Flow.from_client_config`` needs instead of "installed".
 """
@@ -44,7 +33,6 @@ from typing import Any
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
-from .oauth_loopback import run_browser_oauth
 from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -103,7 +91,7 @@ def _accept_granted_superset(flow: Flow, exc: Warning, *, requested: list[str]) 
     wider grant an error. oauthlib refuses anyway unless the process-wide
     ``OAUTHLIB_RELAX_TOKEN_SCOPE`` is set -- and that env var is both a
     blunt instrument (it silences this for every OAuth exchange in the
-    process, local mode's included) and unsafe to toggle around a single
+    process) and unsafe to toggle around a single
     call, since two concurrent authorizations would race on it.
 
     So the check is done here instead, keeping the half of it that is
@@ -169,43 +157,16 @@ def exchange_code(
     return flow.credentials
 
 
-def authorize_local(client_config: dict[str, Any], scopes: list[str]) -> Credentials:
-    """Local mode's interactive authorization for every Google connector:
-    a loopback redirect on an OS-picked port (Desktop-app clients accept any),
-    with the browser opened through ``oauth_loopback``'s default opener -- see
-    the module docstring for why not ``InstalledAppFlow.run_local_server()``.
-    Raises ``OAuthLoopbackError`` if nobody completes sign-in in time, and
-    ``GoogleOAuthError`` if the code exchange fails."""
-
-    def build_authorize_url(redirect_uri: str, state: str, code_challenge: str) -> str:
-        # PKCE is run_browser_oauth's own pair, so Flow must not generate one.
-        flow = Flow.from_client_config(
-            client_config, scopes=scopes, redirect_uri=redirect_uri, autogenerate_code_verifier=False,
-        )
-        url, _ = flow.authorization_url(
-            access_type="offline", state=state,
-            code_challenge=code_challenge, code_challenge_method="S256",
-        )
-        return url
-
-    def exchange(code: str, redirect_uri: str, code_verifier: str) -> dict[str, Any]:
-        return {"credentials": exchange_code(client_config, scopes, redirect_uri, code, code_verifier)}
-
-    result = run_browser_oauth(build_authorize_url, exchange, port=0, path="/", redirect_host="localhost")
-    return result["credentials"]
-
-
 def save_credentials(token_file: str, creds: Credentials) -> None:
     """Same file format ``GmailClient._save_token``/etc. write and
     ``Credentials.from_authorized_user_file`` reads back -- a token
     obtained through this module's server-redirect flow is indistinguishable
-    on disk from one obtained through the local-mode loopback flow."""
+    on disk from one obtained any other way."""
     atomic_write_text(token_file, creds.to_json())
 
 
 __all__ = [
     "GoogleOAuthError",
-    "authorize_local",
     "authorize_url",
     "build_flow",
     "exchange_code",

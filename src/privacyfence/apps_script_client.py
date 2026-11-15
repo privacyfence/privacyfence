@@ -40,7 +40,6 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from .google_http import authorized_http
-from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -119,24 +118,6 @@ class AppsScriptClient:
     # ------------------------------------------------------------------ #
     # Authentication
     # ------------------------------------------------------------------ #
-
-    def authorize_interactive(self) -> None:
-        """Run the interactive OAuth flow and persist the token.
-
-        ``client_config`` comes from the organization config bundle (installed
-        via PrivacyFence Settings) -- the same Google OAuth client Drive/Gmail/etc.
-        already use, just with this connector's own scopes and its own
-        cached token file.
-        """
-        if not self._client_config:
-            raise AppsScriptClientError(
-                "No Google organization config installed. Install the configuration file on "
-                "Admin → Organization configuration in PrivacyFence Settings first."
-            )
-        logger.info("Starting Apps Script interactive OAuth flow")
-        creds = authorize_local(self._client_config, SCOPES)
-        self._save_token(creds)
-        logger.info("Apps Script OAuth token saved to '%s'", self._token_file)
 
     def _load_credentials(self) -> Credentials:
         # Guards concurrent refresh/save of the shared token file when
