@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from privacyfence.policy import scopes as scopes_module
 from privacyfence.policy.scopes import (
     NEW_SCOPE_SELECTORS,
     SCOPE_SELECTORS,
@@ -730,3 +731,38 @@ class TestGmailQuery:
         ctx = make_ctx(args={"matching_queries": ["in:inbox"]})
         assert self.selector.matches(None, ctx) is False
         assert self.selector.matches([], ctx) is False
+
+
+class TestUpstreamApprovedTool:
+    """``upstream.approved_tool`` is pinned to the operator's declaration digest (token-only)."""
+
+    @pytest.fixture(autouse=True)
+    def _table(self, monkeypatch):
+        monkeypatch.setattr(scopes_module, "UPSTREAM_DECLARATIONS", {"kh.propose_change": "a" * 32})
+
+    @staticmethod
+    def _matches(value):
+        return NEW_SCOPE_SELECTORS["upstream.approved_tool"].matches(value, make_ctx())
+
+    def test_the_selector_is_an_args_attribute_scope(self):
+        selector = NEW_SCOPE_SELECTORS["upstream.approved_tool"]
+        assert (selector.scope_type, selector.kind, selector.resolves_from) == (
+            "upstream.approved_tool", ScopeKind.ATTRIBUTE, ResolvesFrom.ARGS,
+        )
+        assert "upstream.approved_tool" in scopes_module.TOKEN_ONLY_PREDICATES
+
+    def test_selector_matches_only_the_current_digest(self):
+        assert self._matches("kh.propose_change@" + "a" * 32) is True
+        assert self._matches("kh.propose_change@" + "b" * 32) is False
+        assert self._matches("kh.other@" + "a" * 32) is False
+
+    def test_selector_fails_closed_with_an_empty_table(self, monkeypatch):
+        monkeypatch.setattr(scopes_module, "UPSTREAM_DECLARATIONS", {})
+        assert self._matches("kh.propose_change@" + "a" * 32) is False
+
+    @pytest.mark.parametrize("value", [
+        None, 5, [], ["kh.propose_change@" + "a" * 32], {"a": 1}, "", "kh.propose_change",
+        "kh.propose_change@", "@" + "a" * 32, "kh.propose_change@" + "a" * 32 + "@x",
+    ])
+    def test_selector_refuses_a_malformed_value(self, value):
+        assert self._matches(value) is False

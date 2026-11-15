@@ -145,3 +145,16 @@ def test_unregister_all_restores_everything():
     assert _snapshot() == before
     assert TOOL_REGISTRY is registry_object
     assert "kh.search" not in propose.ALL_OPERATIONS
+
+
+def test_register_fills_and_unregister_clears_the_declaration_table():
+    from privacyfence.policy import scopes
+    from privacyfence.upstream_mcp_config import declaration_digest
+
+    server = _kh()
+    assert scopes.UPSTREAM_DECLARATIONS == {}
+    upstream_mcp_registry.register([server])
+    assert set(scopes.UPSTREAM_DECLARATIONS) == {"kh.search", "kh.list_topics", "kh.propose_change"}
+    assert scopes.UPSTREAM_DECLARATIONS["kh.propose_change"] == declaration_digest(server, server.tools[2])
+    upstream_mcp_registry.unregister_all()
+    assert scopes.UPSTREAM_DECLARATIONS == {}

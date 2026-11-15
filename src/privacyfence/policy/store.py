@@ -36,6 +36,7 @@ import hashlib
 from typing import Any
 
 from .engine import PolicyRule
+from .scopes import TOKEN_ONLY_PREDICATES
 
 AUTO_ACCEPT_CONFIG_KEY = "auto_accept"
 SCHEMA_VERSION = 2
@@ -211,7 +212,7 @@ def compile_rules_from_config(cfg: dict[str, Any]) -> list[PolicyRule]:
     compiled: list[PolicyRule] = []
     for raw in raw_rules:
         rule = rule_from_dict(raw)
-        if rule is not None:
+        if rule is not None and rule.predicate not in TOKEN_ONLY_PREDICATES:
             compiled.append(rule)
     return compiled
 

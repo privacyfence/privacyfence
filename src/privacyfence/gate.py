@@ -160,6 +160,7 @@ from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_au
 from .auto_accept import (
     PERSONAL_DATA_READ_TOOLS,
     PERSONAL_DATA_RULE_TOOLS,
+    TOOL_TO_GATE,
     TOOL_TO_OPERATION,
     ReviewContext,
     add_policy_v2_rules,
@@ -179,6 +180,7 @@ from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .policy import propose as policy_propose
 from .policy import scope_rows as policy_scope_rows
+from .policy import scopes as policy_scopes
 from .principal import current_principal
 from .scoped_tokens import REVOKED_SCOPE, ScopedToken, current_store, current_token_scope
 from .pii_detector import (
@@ -729,7 +731,11 @@ def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]
     """Every cached rule for an unscoped call; under a scoped token only the token's own rules
     (ADR 0164, ADR 0236), never the person's Auto-accept rules."""
     if scope is None:
-        return get_policy_v2_store_rules()
+        # A token-only rule (an administrator's upstream approval) is never a person's rule.
+        return [
+            rule for rule in get_policy_v2_store_rules()
+            if rule.predicate not in policy_scopes.TOKEN_ONLY_PREDICATES
+        ]
     return scope.compiled_rules()
 
 
@@ -1771,6 +1777,35 @@ def audit_scoped_refusal(connector: str, tool: str, scope: ScopedToken, summary:
         created_at=time.time(), request_id=uuid.uuid4().hex[:12], connector=connector, tool=tool,
         tool_name="", summary=summary, sender="", decision="denied_scoped_token",
         auto_accept_rule="", pii_detected=False, claude_reason=current_reason(),
+    )
+
+
+def is_gated_upstream_tool(tool: str) -> bool:
+    """Whether ``tool`` is a declared upstream tool whose gate is ``review`` or ``popup`` -- decided
+    from the declaration table, never from a name prefix."""
+    operation = TOOL_TO_OPERATION.get(tool)
+    return (
+        operation is not None
+        and operation in policy_scopes.UPSTREAM_DECLARATIONS
+        and TOOL_TO_GATE.get(tool) in ("review", "popup")
+    )
+
+
+def check_scoped_upstream_approval(connector: str, tool: str, args: dict) -> None:
+    """Refuse, before anything is forwarded, a scoped-token call of a gated upstream tool that none
+    of the token's rules covers (no approval, or the operator's declaration changed since). Does
+    nothing for an unscoped call or any other tool. A revoked token fails closed."""
+    scope = current_token_scope()
+    if scope is None or not is_gated_upstream_tool(tool):
+        return
+    if scope is not REVOKED_SCOPE:
+        verdict = preflight_auto_accept(TOOL_TO_OPERATION[tool], args, tool=tool)[0]
+        if verdict == "auto_accept":
+            return
+    audit_scoped_refusal(connector, tool, scope, "No approval for this upstream tool in this token")
+    raise GateDeniedError(
+        f"Request denied: this token has no administrator approval for {tool}, "
+        "or the server's declaration of it changed after the token was created."
     )
 
 

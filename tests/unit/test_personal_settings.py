@@ -247,6 +247,14 @@ class TestPlanImportRows:
         assert item.status is ps.ItemStatus.SKIP
         assert item.reason == "Custom rules are not imported; add them again on the Auto-accept page."
 
+    def test_import_skips_a_token_only_row(self):
+        row = ScopeRow(
+            id="r-up", scope=None, value="kh.propose_change@" + "a" * 32, verbs=frozenset({Verb.UPDATE}),
+            operations=frozenset({"kh.propose_change"}), predicate="upstream.approved_tool",
+        )
+        item = _plan(_parse_rows([row])).items[0]
+        assert item.status is ps.ItemStatus.SKIP
+
     def test_a_hostile_custom_row_never_becomes_add(self):
         hostile = {
             "id": "r-evil", "predicate": "always_allow", "value": None, "verbs": ["read"],

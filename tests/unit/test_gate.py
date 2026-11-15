@@ -5142,3 +5142,97 @@ class TestTokenRows:
 
         assert gate._rules_in_scope(token) == before == scope_rows.compile_rows([row])
         assert gate._rules_in_scope(None) == scope_rows.compile_rows([widened]) != before
+
+
+class TestTokenOnlyPredicates:
+    """An administrator's upstream approval is a rule of one token (ADR 0236), never a person's."""
+
+    OPERATION = "kh.propose_change"
+
+    @pytest.fixture(autouse=True)
+    def _upstream(self):
+        from privacyfence import upstream_mcp_registry
+        from privacyfence.upstream_mcp_config import DeclaredTool, UpstreamServer
+
+        def tool(name, gate_, verb, effect=""):
+            return DeclaredTool(
+                name=name, exposed_name=f"kh_{name}", operation=f"kh.{name}", gate=gate_, verb=verb, effect=effect,
+            )
+
+        self.server = UpstreamServer(
+            id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
+            tools=(
+                tool("search", "auto", "search"), tool("get_doc", "review", "read"),
+                tool("propose_change", "popup", "update", "Proposes a change."),
+            ),
+        )
+        upstream_mcp_registry.register([self.server])
+        auto_accept.set_policy_v2_store_rules([])
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    def _approval_row(self, tool_index=2, digest=None):
+        from privacyfence.upstream_mcp_config import declaration_digest
+
+        declared = self.server.tools[tool_index]
+        digest = digest or declaration_digest(self.server, declared)
+        return scope_rows.ScopeRow(
+            id="r-approval", scope=None, value=f"{declared.operation}@{digest}",
+            verbs=frozenset({Verb(declared.verb)}), operations=frozenset({declared.operation}),
+            predicate="upstream.approved_tool",
+        )
+
+    def _token(self, *rows):
+        return dataclasses.replace(
+            _scoped_token(tools=("kh_propose_change", "kh_get_doc", "kh_search")), rules=tuple(rows),
+        )
+
+    def test_a_persons_own_rules_never_include_a_token_only_row(self):
+        (approval,) = scope_rows.compile_row(self._approval_row())
+        ok = _gmail_read_rule("r-ok")
+        auto_accept.set_policy_v2_store_rules([approval, ok])
+        assert gate._rules_in_scope(None) == [ok]
+
+    def test_a_scoped_call_keeps_token_only_rows(self):
+        row = self._approval_row()
+        assert gate._rules_in_scope(self._token(row)) == scope_rows.compile_rows([row])
+
+    async def test_a_scoped_call_without_an_approval_is_refused_before_forwarding(self, audit_dir):
+        with scoped_tokens.token_scope(self._token()):
+            with pytest.raises(gate.GateDeniedError, match="no administrator approval for kh_propose_change"):
+                gate.check_scoped_upstream_approval("kh", "kh_propose_change", {})
+        entry = read_audit_entries(audit_dir)[-1]
+        assert entry["decision"] == "denied_scoped_token"
+        assert entry["summary"] == "No approval for this upstream tool in this token"
+
+    async def test_a_changed_declaration_or_a_revoked_token_is_refused(self, audit_dir):
+        stale = self._token(self._approval_row(digest="0" * 32))
+        with scoped_tokens.token_scope(stale), pytest.raises(gate.GateDeniedError):
+            gate.check_scoped_upstream_approval("kh", "kh_propose_change", {})
+        with scoped_tokens.token_scope(scoped_tokens.REVOKED_SCOPE), pytest.raises(gate.GateDeniedError):
+            gate.check_scoped_upstream_approval("kh", "kh_propose_change", {})
+
+    def test_an_approved_scoped_call_passes_the_check(self):
+        with scoped_tokens.token_scope(self._token(self._approval_row())):
+            gate.check_scoped_upstream_approval("kh", "kh_propose_change", {})  # raises nothing
+
+    async def test_an_approval_of_another_tool_does_not_cover_this_one(self, audit_dir):
+        with scoped_tokens.token_scope(self._token(self._approval_row(tool_index=1))):
+            with pytest.raises(gate.GateDeniedError):
+                gate.check_scoped_upstream_approval("kh", "kh_propose_change", {})
+
+    def test_an_unscoped_call_is_never_checked(self):
+        gate.check_scoped_upstream_approval("kh", "kh_propose_change", {})  # raises nothing
+
+    def test_a_scoped_call_of_an_auto_upstream_tool_is_never_checked(self):
+        with scoped_tokens.token_scope(self._token()):
+            gate.check_scoped_upstream_approval("kh", "kh_search", {})
+
+    def test_a_built_in_tool_with_an_upstream_looking_name_is_not_gated_upstream(self):
+        assert gate.is_gated_upstream_tool("kh_propose_change") is True
+        assert gate.is_gated_upstream_tool("kh_get_doc") is True
+        assert gate.is_gated_upstream_tool("kh_search") is False
+        assert gate.is_gated_upstream_tool("gmail_send_message") is False
+        assert gate.is_gated_upstream_tool("kh_unknown") is False
+        with scoped_tokens.token_scope(self._token()):
+            gate.check_scoped_upstream_approval("gmail", "gmail_send_message", {})
