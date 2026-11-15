@@ -313,7 +313,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p20b-docs-org-guide
 
-- pending
+- scope: Orchestrator-approved extra: README.md, website/canonical-description.md and website/index.html description sentences rewritten for the Docker-only organization product (the three texts stay verbatim-identical; p18a/p20 own those files). org-guide systemd tests, the tests.yml systemd-analyze check and the guide's systemd/pip sections were removed as the brief says.
 
 ## p24a-pypi-workflow
 
