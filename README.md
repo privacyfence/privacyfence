@@ -58,8 +58,7 @@ write through, card by card.
 
 Tested with Claude Desktop and Claude Code on every install, with ChatGPT desktop on macOS, and
 with claude.ai, ChatGPT (Developer Mode) and Gemini Enterprise through an organization deployment; any
-MCP-compatible client can connect. See
-[Platform support](https://privacyfence.eu/docs/platform-support/).
+MCP-compatible client can connect.
 
 ## Connectors
 
@@ -93,9 +92,7 @@ tool and its gate.
 5. Connect Claude Desktop with `PrivacyFence.mcpb`, or Claude Code with the `/mcp` endpoint.
 6. Ask your assistant for something, and approve it on the card.
 
-Step by step for each platform: [Getting started](https://privacyfence.eu/docs/getting-started/),
-then [macOS](https://privacyfence.eu/docs/install-macos/), [Windows](https://privacyfence.eu/docs/install-windows/)
-or [Linux](https://privacyfence.eu/docs/install-linux/). For claude.ai, ChatGPT or a whole team, see
+Step by step: [Getting started](https://privacyfence.eu/docs/getting-started/). For claude.ai, ChatGPT or a whole team, see
 [Organization deployment](https://privacyfence.eu/docs/org-mode-setup-guide/).
 
 ## Documentation

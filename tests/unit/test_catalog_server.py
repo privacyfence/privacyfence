@@ -101,7 +101,7 @@ def test_imports_nothing_from_the_daemon():
     assert loaded & daemon_only == set()
 
 
-def test_packaging_doc_names_the_catalog_command():
-    text = (REPO_ROOT / "docs" / "packaging.md").read_text(encoding="utf-8")
+def test_releasing_doc_names_the_catalog_command():
+    text = (REPO_ROOT / "docs" / "releasing.md").read_text(encoding="utf-8")
     assert "privacyfence.catalog_server" in text
     assert "mcp-proxy" in text

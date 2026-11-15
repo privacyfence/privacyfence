@@ -20,8 +20,8 @@ Install the extension that came with PrivacyFence:
 
 | Platform | Where the extension is | How to install it |
 |---|---|---|
-| macOS | `PrivacyFence.mcpb` on the DMG | Double-click it; see [Install on macOS](install-macos.md#connect-claude-desktop). |
-| Windows | `%ProgramFiles%\PrivacyFence\PrivacyFence-<version>.mcpb` | The installer's last page offers it; see [Install on Windows](install-windows.md#connect-claude-desktop). |
+| macOS | `PrivacyFence.mcpb` on the DMG | Double-click it; see Install on macOS. |
+| Windows | `%ProgramFiles%\PrivacyFence\PrivacyFence-<version>.mcpb` | The installer's last page offers it; see Install on Windows. |
 | Linux | none | Claude Desktop does not run on Linux. |
 
 Claude Desktop opens and offers to install the extension; accept. There is nothing to configure and
@@ -30,7 +30,7 @@ no token to copy. The extension:
 1. waits until the daemon's `/mcp` endpoint answers;
 2. asks the daemon for your MCP token over its local control channel;
 3. reads the `/mcp` URL from the file the daemon writes when it starts (`mcp_url` in the handoff
-   directory; see [Platform support](platform-support.md));
+   directory; see Platform support);
 4. relays MCP messages between Claude Desktop and `/mcp`, and reads and writes local files for the
    tools that need them (see [Files](#files)).
 
@@ -125,11 +125,11 @@ Claude, verified; otherwise its name stays a claim. See [Which AI system is aski
 | What you see | What to do |
 |---|---|
 | Claude Desktop reports no PrivacyFence server, or the extension's tools never appear | The daemon is stopped. Choose **Start PrivacyFence…** from the companion's menu; the extension picks it up by itself. |
-| Double-clicking `PrivacyFence.mcpb` does nothing on Windows | Drag the file onto Claude Desktop's **Settings → Extensions** page instead; see [Install on Windows](install-windows.md#connect-claude-desktop). |
+| Double-clicking `PrivacyFence.mcpb` does nothing on Windows | Drag the file onto Claude Desktop's **Settings → Extensions** page instead; see Install on Windows. |
 | Every tool appears twice | The extension and a custom connector are both installed. Remove one. |
 | Tools are listed but none of your services' tools | No service is connected yet. Ask Claude to call `privacyfence_status`; connect services in Settings (local mode) or at `/connect` (organization mode). See [Connecting a service](connecting-a-service.md). |
 | The custom connector's **Connect** fails | The URL must end in `/mcp` and be reachable over public HTTPS. Your administrator can check it with [the validation checklist](org-mode-setup-guide.md#validation-checklist). |
 | A call waits and nothing happens | It is waiting for your approval. Open Approvals from the companion, or `/approvals` in organization mode. |
 
-Platform-specific problems are on [macOS](install-macos.md#troubleshooting) and
-[Windows](install-windows.md#troubleshooting).
+Platform-specific problems are on Install on macOS and
+Install on Windows.

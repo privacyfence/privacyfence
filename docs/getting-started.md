@@ -6,7 +6,7 @@ what you need, which guide to follow, and what your first approval looks like.
 
 ## What you need
 
-- A supported computer: see the [support matrix](platform-support.md#support-matrix).
+- A supported computer: see the support matrix.
 - Administrator rights on it, for the install.
 - An MCP-compatible AI client. Claude Desktop and Claude Code are tested with every install, and
   ChatGPT desktop on macOS; claude.ai, ChatGPT on the web and Gemini Enterprise work through an
@@ -20,9 +20,9 @@ what you need, which guide to follow, and what your first approval looks like.
 
 ## Pick your platform
 
-- [Install on macOS](install-macos.md)
-- [Install on Windows](install-windows.md)
-- [Install on Linux](install-linux.md)
+- Install on macOS
+- Install on Windows
+- Install on Linux
 
 Each guide covers download and checksum, install, troubleshooting, uninstall and purge. Then
 connect your AI client: [Claude Desktop](connect-claude-desktop.md),
@@ -76,13 +76,13 @@ own apps. See [Connecting a service](connecting-a-service.md#the-admin-page).
 ## Troubleshooting on every platform
 
 Platform-specific problems are in each install guide. The `status` command below is the one for
-your platform in [Platform support](platform-support.md#start-stop-and-status).
+your platform in Platform support.
 
 | What you see | What it means and what to do |
 |---|---|
 | `status` shows `PENDING USER` | The install is separated, but no person has been added to its service group yet (it was installed as root, unattended, or by a management tool). The companion completes this at the first login, after asking for an administrator password; or an administrator runs `enable --for-user <name>` (`-ForUser` on Windows). Then log out and back in. |
 | `status` shows `PENDING SIGNOUT` (Windows) | You were added to `PrivacyFenceUsers` after this session started. Sign out and back in. |
-| Another person on the same computer wants to use PrivacyFence | An administrator runs `enable --for-user <name>` for them ([Adding a second account](platform-support.md#adding-a-second-account)). They get their own separate policy, approvals and passkeys; the install's owner stays the same. |
+| Another person on the same computer wants to use PrivacyFence | An administrator runs `enable --for-user <name>` for them (Adding a second account). They get their own separate policy, approvals and passkeys; the install's owner stays the same. |
 | The companion says the daemon is not running, or Claude Desktop reports no PrivacyFence server | Choose **Start PrivacyFence…** from the companion's menu (on Linux, the **Start PrivacyFence** action of the Applications-menu entry). The Claude Desktop extension never starts the daemon on a packaged install; it waits for it. |
 | The client can't reach PrivacyFence right after the install | You haven't logged out and back in since installing. |
 | The client lists only `privacyfence_*` tools | No service is connected yet. Ask the client to run `privacyfence_status`; it reports what is missing. |

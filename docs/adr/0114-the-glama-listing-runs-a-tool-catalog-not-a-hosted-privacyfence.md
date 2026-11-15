@@ -23,7 +23,7 @@ put Glama's gateway, which logs payloads, and Glama-held secrets in that path.
 The catalog server lists every tool from the live definitions (each connector's `tool_specs()` plus
 the `privacyfence_*` meta-tools) and refuses every call with a fixed message. It holds no
 credentials and does no I/O beyond stdio. Glama installs it from PyPI with the build spec in
-[`docs/packaging.md`](../packaging.md).
+[`docs/releasing.md`](../releasing.md).
 
 PrivacyFence is not offered, documented or advertised as a server hosted by Glama or any other
 third party.

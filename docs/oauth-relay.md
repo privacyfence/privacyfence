@@ -30,7 +30,7 @@ server that proved it controls its own domain.
 ## Provisioning
 
 Done once, in this order. The Cloudflare resources are listed in
-[`downloads-and-release-kpi.md`](downloads-and-release-kpi.md#cloudflare-resources).
+[`release-archive.md`](release-archive.md#cloudflare-resources).
 
 1. **Zone and account.** The relay lives in the same Cloudflare account and zone (`privacyfence.eu`)
    as the download Worker. `oauth.privacyfence.eu` must have no DNS record: the Worker's
@@ -39,7 +39,7 @@ Done once, in this order. The Cloudflare resources are listed in
    `/callback/*` and `/admin/*` on `oauth.privacyfence.eu`. Otherwise servers' register calls and
    the providers' redirects are challenged.
 3. **The deploy token.** An account-owned API token that can edit Workers scripts and routes, made
-   the way [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md#use-account-owned-api-tokens)
+   the way [`release-archive.md`](release-archive.md#use-account-owned-api-tokens)
    describes and verified before it is stored. It needs two permission policies: **Workers Scripts ·
    Edit** on the account, and **Workers Routes · Edit** plus **Zone · Read** on `privacyfence.eu`.
    The token form offers Workers Scripts under a zone policy too, but `wrangler deploy` calls

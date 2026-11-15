@@ -11,11 +11,6 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
 
 - [`getting-started.md`](getting-started.md) — what you need, which install fits, your first
   approval, and troubleshooting shared by every platform.
-- [`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md),
-  [`install-linux.md`](install-linux.md) — install, first start, troubleshoot, uninstall. One page
-  per platform.
-- [`platform-support.md`](platform-support.md) — supported OS versions and architectures, where
-  PrivacyFence keeps its data, logs, and start/stop commands.
 - [`connecting-a-service.md`](connecting-a-service.md) — the Admin page, connecting Gmail, Slack and
   the other services, and what each connector status means.
 - [`moving-to-organization-mode.md`](moving-to-organization-mode.md) — why desktop mode is deprecated,
@@ -106,14 +101,12 @@ privacyfence.eu.
   where.
 - [`release-testing.md`](release-testing.md) — the release gates and the manual checks every
   release still needs.
-- [`packaging.md`](packaging.md) — how the DMG, `.pkg`, `.mcpb`, Windows installer and `.deb` are
-  built, signed and installed.
 - [`connector-qa.md`](connector-qa.md) — QA accounts and seed data, the self-hosted live-check
   runner, recorded fixtures, and exploratory connector QA.
 - [`ai-client-qa.md`](ai-client-qa.md) — the manual check of each real AI client: the test
   organization deployment, the per-client script, the evidence to record, and the results table.
-- [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the
-  `downloads.privacyfence.eu` Worker, and how downloads are counted.
+- [`release-archive.md`](release-archive.md) — the R2 release archive, the Cloudflare resources and
+  the credentials that publish to it.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation
   screenshots are produced.
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: why things are the way they

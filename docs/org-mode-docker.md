@@ -34,6 +34,24 @@ file being `privacyfence.env`.
 | Health check | Probes the daemon's well-known endpoint from inside the container, on `PRIVACYFENCE_PORT` (8765 by default) |
 | With no identity provider | Starts in single-user mode on localhost ([below](#run-it-on-this-computer)). It does not refuse to start. |
 
+## How the image is built
+
+`scripts/build_org_image.sh --platform linux/amd64|linux/arm64 --tag NAME:TAG` builds the image. It
+requires exactly one `dist/privacyfence-*.whl`, stages it with `deploy/docker/Dockerfile`, the
+entrypoint, the health check and `requirements/runtime.lock.txt` into `build/org-image/`, and runs
+`docker buildx build` on that directory. The image installs the hash-pinned lock, then the wheel
+with `--no-deps`.
+
+- `build.yml`'s `build-org-image` job builds and tests the image on a native runner per architecture
+  (`ubuntu-24.04`, `ubuntu-24.04-arm`) and saves it as the `org-image-<arch>` workflow artifact; it
+  never pushes. `publish-org-image.yml` pushes those tested bytes on a stable tag.
+  `tests.yml`'s `org-docker-image` is the per-PR amd64 leg.
+- The stop signal is `SIGINT`: the daemon installs no SIGTERM handler, so as PID 1 it would ignore the
+  default and `docker stop` would wait out its timeout.
+- The entrypoint refuses to start (exit 78) when no organization bundle is installed, rather than
+  starting on the container's unreachable loopback.
+- The base image is pinned by digest; Dependabot's `docker` entry bumps the digest within Python 3.12.
+
 ## Run it on this computer
 
 This is PrivacyFence for one person, in a container, with its own built-in sign-in for Google, Slack,

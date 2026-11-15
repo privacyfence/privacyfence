@@ -193,7 +193,7 @@ On a real desktop Ubuntu, not a server or container.
 ## Platform artifacts
 
 Test the artifact that will ship — the pre-flight run's, from the commit being tagged — never a
-source checkout standing in for it. [`platform-support.md`](platform-support.md) describes each
+source checkout standing in for it. Platform support describes each
 platform's packaging and startup.
 
 ## Evidence

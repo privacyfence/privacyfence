@@ -169,7 +169,7 @@ applies:
 | **Disabled** | The connector is switched off. | Turn the switch on to use it. |
 | **Organization config missing** | No app is available for this provider (Google, Slack, Salesforce, Atlassian or Miro): the installed bundle has no section for it, or no bundle is installed. A desktop install has no built-in apps. | [Install the bundle](#install-the-organization-config-bundle-desktop-install), or ask your administrator to add the provider. Grist never shows this pill: a malformed Grist section shows a disabled Authenticate link with the error instead. |
 | **App credentials missing** | Telegram only: this build of PrivacyFence carries no Telegram app credentials. | See [telegram-setup.md](telegram-setup.md). |
-| **Not connected** | The provider is configured but the connector is not loaded: you never signed in, the credentials expired or were revoked, or the connector failed its check when PrivacyFence built it. | Click **Authenticate…**. If it keeps failing, check the log (see [platform-support.md](platform-support.md)). |
+| **Not connected** | The provider is configured but the connector is not loaded: you never signed in, the credentials expired or were revoked, or the connector failed its check when PrivacyFence built it. | Click **Authenticate…**. If it keeps failing, check the log (see Platform support). |
 
 Your AI client sees the same state through the `privacyfence_status` tool: each connector is
 reported as authenticated or not, with `no_org_config` (never configured), `not_authenticated`

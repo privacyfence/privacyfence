@@ -84,11 +84,11 @@ def test_description_and_content_group(path):
 
 
 def test_content_groups_follow_the_file():
-    assert build_site.content_group("install-macos") == "platform"
+    assert build_site.content_group("org-mode-docker") == "docs"
     assert build_site.content_group("slack-setup") == "connector"
     assert build_site.content_group("connect-claude-code") == "ai-agent"
     assert build_site.content_group("tools-reference") == "docs"
-    assert _meta(read_page("/docs/install-linux/"), "pf-content-group") == "platform"
+    assert _meta(read_page("/docs/org-mode-docker/"), "pf-content-group") == "docs"
     assert _meta(read_page("/docs/google-cloud-setup/"), "pf-content-group") == "connector"
     assert _meta(read_page("/docs/connect-claude-code/"), "pf-content-group") == "ai-agent"
 

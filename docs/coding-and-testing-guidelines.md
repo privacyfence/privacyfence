@@ -177,7 +177,7 @@ npm run build
 ```
 
 For changes under `cloudflare/downloads/` (the downloads.privacyfence.eu Worker,
-[`downloads-and-release-kpi.md`](downloads-and-release-kpi.md)), run:
+[`release-archive.md`](release-archive.md)), run:
 
 ```bash
 cd cloudflare/downloads
@@ -555,7 +555,7 @@ A release cut between the two never shows a half-built service. `PRIVACYFENCE_PR
 
 When changing PyInstaller specs, installers, Debian metadata, startup registration, MCPB contents,
 or release workflows, run the corresponding package/build checks and update
-[`platform-support.md`](platform-support.md) if user-visible behavior changes. The packaged-artifact
+Platform support if user-visible behavior changes. The packaged-artifact
 smoke tests (`pytest.mark.packaged`) run only inside `build.yml`, `tests.yml`'s `org-docker-image` and the three graphical-session
 workflows (`linux-`, `windows-` and `macos-graphical-session.yml`); dispatch them against the branch
 to exercise them before merging.

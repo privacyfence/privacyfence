@@ -641,7 +641,7 @@ See [Approvals and policy](approvals-and-policy.md) for the approval list, cards
   (default 300 seconds) ([ADR 0017](adr/0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md)).
 - **Client secrets** belong to the deployment, not a person. Rotate a leaked one with the provider.
 - **Supply chain:** each release build produces CycloneDX SBOMs, and installers are signed as
-  described in [Platform support](platform-support.md#signing). Release and QA-runner jobs install every build tool from hash-pinned locks
+  described in Platform support. Release and QA-runner jobs install every build tool from hash-pinned locks
   ([ADR 0182](adr/0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md)).
 - **Operations:** one daemon per data directory (a file lock enforces it); organization mode is not
   clustered. Back up and restore the data directory with its owners and permissions intact.

@@ -1,7 +1,7 @@
 # Releasing
 
-How a PrivacyFence release is versioned, cut, built, gated and published. For how each artifact is
-built and signed, see [`packaging.md`](packaging.md); for the release gates and the manual checks
+How a PrivacyFence release is versioned, cut, built, gated and published. For the
+organization image, see [`org-mode-docker.md`](org-mode-docker.md#how-the-image-is-built); for the release gates and the manual checks
 every release still needs, see [`release-testing.md`](release-testing.md).
 
 ## Versioning
@@ -90,7 +90,7 @@ retagging. A version that has already published artifacts stays published; cut t
 second one ADR 0087 added), and nothing else; the `.pkg` is never uploaded or attached on its
 own, so releasing the DMG releases all three. The one exception is the MCP registry below: a
 stable GitHub Release also carries that same `PrivacyFence.mcpb` on its own. How each artifact
-is built and signed is [`packaging.md`](packaging.md).
+is built is [`org-mode-docker.md`](org-mode-docker.md#how-the-image-is-built).
 
 A stable GitHub Release also attaches `privacyfence-sync-plugin.zip`, the recipe-writing skill as a Claude
 plugin: `finalize-release` runs `scripts/build_sync_plugin.py --version <version>`, which stamps the release
@@ -226,6 +226,39 @@ section a release PR writes is what organization users read on the What's new pa
 ([ADR 0238](adr/0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md)).
 A pre-release shows its `[Unreleased]` entries there.
 
+## What CI builds
+
+`build.yml` runs on a `v*` tag push and on `workflow_dispatch` (every upload, publish and release
+step is gated on a tag ref, so a dispatch against an untagged commit is the pre-flight described
+above). A release builds three things: the organization image, the SBOM, and, from
+`publish-pypi.yml`, `privacyfence-sync` (ADR 0301). Each job first runs
+`scripts/r2_release.py check-tag` ([ADR 0022](adr/0022-one-release-tag-per-commit.md)).
+
+| Job | Runner | Builds | Tests |
+|---|---|---|---|
+| `build-org-image` | `ubuntu-24.04`, `ubuntu-24.04-arm` | the organization image per architecture, saved as a workflow artifact | the image's own smoke tests, before anything is uploaded |
+| `sbom` | `ubuntu-latest` | CycloneDX SBOM for the Python lock file | — |
+| `finalize-release` | `ubuntu-latest` | needs both; attaches files, renders `CHANGELOG.md` notes, uploads the org admin tools to R2 | — |
+
+`publish-org-image.yml` pushes the tested image bytes on a stable tag, and `publish-pypi.yml`
+publishes `privacyfence-sync`. All tests live in `tests/integration/`. Layer definitions are in
+[`testing-policy.md`](testing-policy.md#the-seven-layers).
+
+## The Glama listing
+
+Glama starts `python -m privacyfence.catalog_server` to read PrivacyFence's tool list. That module
+is a catalog, not a way to run PrivacyFence: it lists every tool from the same definitions the
+daemon's `/mcp` endpoint serves, holds no credentials, does no I/O beyond stdio, and answers every
+tool call with an error that says to install PrivacyFence
+([ADR 0114](adr/0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md)). No
+console script is installed for it.
+
+The listing's build spec is set in the listing's own settings on Glama, not in this repository. It
+installs the catalog server from this repository's tag, not from PyPI, so a change to the catalog
+reaches Glama only when the listing is rebuilt from a new tag. The command arguments are
+`["mcp-proxy", "--", "/opt/privacyfence/bin/python", "-m", "privacyfence.catalog_server"]`, with no
+environment variables. `uv` and `mcp-proxy` come from Glama's build image, not from this repository.
+
 ## Packaged-artifact release gating
 
 Every published DMG/installer/`.deb` is started and exercised, automatically, before it (or
@@ -332,28 +365,19 @@ repository `privacyfence`, workflow `publish-n8n-node.yml`, environment `npm`), 
 
 Every tag push — stable and pre-release alike — also uploads that release's artifacts to the
 private Cloudflare R2 bucket `privacyfence-releases`, under `releases/<channel>/<version>/`. R2 is
-the one archive that has *everything*; PyPI and the GitHub Release carry only a stable tag's files.
-The facts live in [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md):
+the one archive that has *everything*; the GitHub Release carries a stable tag's files only.
+The facts live in [`release-archive.md`](release-archive.md):
 
-- layout, channels, which job uploads what, which channel reaches which public index, and what the
-  private bucket does and does not buy — [Release archive (R2)](downloads-and-release-kpi.md#release-archive-r2);
-- `scripts/r2_release.py`'s subcommands (`channel`, `check-tag`, `upload`, `finalize`, `verify`,
-  `promote`), which every upload step calls — same section;
+- layout, channels, which job uploads what, and what the private bucket does and does not buy —
+  [Release archive (R2)](release-archive.md#release-archive-r2);
+- `scripts/r2_release.py`'s subcommands (`channel`, `check-tag`, `upload`), which every upload step
+  calls — same section;
 - the secrets and variables (`CF_RELEASES_R2_ACCESS_KEY_ID`, `CF_RELEASES_R2_SECRET_ACCESS_KEY`,
   and the `CF_RELEASES_R2_ENDPOINT` variable) and the rule that every Cloudflare token is
   **account-owned**, never minted from a personal profile —
-  [Credentials](downloads-and-release-kpi.md#credentials).
+  [Credentials](release-archive.md#credentials).
 
-The process rule that belongs here: a pre-release tag never reaches PyPI/TestPyPI and its GitHub
-Release entry (still created, marked prerelease, because `update_checker.py`'s beta channel reads
-exactly that flag) carries no files — its artifacts are reachable only through the download
-Worker.
-
-## Who can download a pre-release
-
-Anyone, through the Worker — decided 2026-09-13, and deliberately kept. A tester needs no
-credential, just the link or the "Want to test the next version?" section on
-`privacyfence.eu/download/`. Every pre-release download still goes through the Worker, so it is
-counted, and R2 stays unreachable except through it. The reasoning, and the exact steps to reverse
-it (Worker routes and website together, never one without the other), are in
-[ADR 0024](adr/0024-pre-releases-are-publicly-downloadable.md).
+The process rule that belongs here: a pre-release tag's GitHub Release entry (still created, marked
+prerelease, because `update_checker.py`'s beta channel reads exactly that flag) carries no files;
+its artifacts are only in the archive, which is private
+([ADR 0300](adr/0300-the-download-page-and-worker-are-retired.md)).

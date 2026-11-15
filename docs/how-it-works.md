@@ -29,7 +29,7 @@ whether the service is running), **Service Details…**, **Copy AI Client Token*
 On a packaged install the daemon runs under its own service account, so the AI system (which runs
 as you) cannot read PrivacyFence's credentials, rules or audit log, or approve its own requests. The
 layout and the reasons are in [Security and compliance](security-and-compliance.md). Where each
-file lives on each platform is in [Platform support](platform-support.md).
+file lives on each platform is in Platform support.
 
 ### Opening PrivacyFence opens Approvals
 

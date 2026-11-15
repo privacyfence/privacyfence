@@ -44,7 +44,7 @@ can get it rate-limited or blocked for every user of the build.
 | Org redirect | None |
 | Scopes | None — the session has your account's full access; PrivacyFence's tools and approvals decide what is used |
 | Switch | **Admin → Services → Telegram** (offer or stop offering it). The old bundle flag `--enable-telegram` is refused. |
-| Where the session is stored | `credentials/telegram.session` in PrivacyFence's data folder (see [platform-support.md](platform-support.md)); on an organization server, in each user's own folder on the server |
+| Where the session is stored | `credentials/telegram.session` in PrivacyFence's data folder (see Platform support); on an organization server, in each user's own folder on the server |
 
 ## Offer Telegram
 
@@ -94,7 +94,7 @@ to get a new code.
 
 **`PHONE_NUMBER_BANNED` or `AUTH_KEY_UNREGISTERED`** — Telegram invalidated the session. Sign in
 again; if that fails on a desktop install, delete `credentials/telegram.session` from PrivacyFence's
-data folder (see [platform-support.md](platform-support.md); on a privilege-separated install that
+data folder (see Platform support; on a privilege-separated install that
 needs administrator rights) and click **Authenticate…**. On an organization server, ask an
 administrator to delete your session file on the server.
 
