@@ -13,10 +13,7 @@ still go green. This script is the gate: it reads the `coverage.json` report
     combined metric pytest-cov's own summary line reports) drops below
     OVERALL_FLOOR, or
   * any module in MODULE_FLOORS drops below its own, individually higher,
-    floor, or
-  * with `--platform windows` (the platform-windows job), any module in
-    WINDOWS_MODULE_FLOORS drops below its Windows floor. That mode checks
-    only those modules: not the overall floor, not MODULE_FLOORS.
+    floor.
 
 MODULE_FLOORS exists because a single overall floor doesn't protect any one
 file -- gate.py is ~2% of this package's statements, so a regression there
@@ -41,11 +38,6 @@ scripts/pre_release_check.py):
 
     pytest --cov=src/privacyfence --cov-branch --cov-report=json:coverage.json
     python scripts/check_coverage_floor.py coverage.json
-
-and, on the platform-windows job (its coverage.json uses backslash paths, which
-`_load_totals` normalises):
-
-    python scripts/check_coverage_floor.py --platform windows coverage.json
 """
 from __future__ import annotations
 
@@ -174,16 +166,6 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/web/state_stream.py": 99.0,
 }
 
-# The platform-windows job's floors, kept apart from MODULE_FLOORS because the same modules read
-# differently on Windows: the pywin32 and named-pipe code that the Linux run cannot execute is
-# covered there, and the POSIX half is not. These numbers gate only `--platform windows`.
-# Whole-percent, rounded down, measured on the platform-windows job on 2026-10-17
-# (windows_service.py 32.00%).
-WINDOWS_MODULE_FLOORS: dict[str, float] = {
-    "src/privacyfence/windows_service.py": 32.0,
-}
-
-
 # How far above its floor a number may sit before the run says the floor should be raised. A
 # warning only: a PR that merely adds tests must never be blocked by it.
 STALE_MODULE_MARGIN = 1.0
@@ -196,8 +178,7 @@ def _stale_warning(name: str, actual: float, floor: float) -> str:
 
 def _load_totals(cov_json: dict) -> tuple[float, dict[str, float]]:
     overall = cov_json["totals"]["percent_covered"]
-    # coverage writes `src\\privacyfence\\...` keys on Windows.
-    per_file = {path.replace("\\", "/"): data["summary"]["percent_covered"] for path, data in cov_json["files"].items()}
+    per_file = {path: data["summary"]["percent_covered"] for path, data in cov_json["files"].items()}
     return overall, per_file
 
 
@@ -233,12 +214,6 @@ def main(argv: list[str] | None = None) -> int:
         default="coverage.json",
         help="Path to the coverage.json report from `--cov-report=json:...` (default: coverage.json)",
     )
-    parser.add_argument(
-        "--platform",
-        choices=("linux", "windows"),
-        default="linux",
-        help="linux (default): overall floor and MODULE_FLOORS; windows: only WINDOWS_MODULE_FLOORS",
-    )
     args = parser.parse_args(argv)
 
     cov_path = Path(args.coverage_json)
@@ -255,18 +230,14 @@ def main(argv: list[str] | None = None) -> int:
 
     failures: list[str] = []
 
-    if args.platform == "windows":
-        print("Windows module floors:")
-        _check_module_floors(WINDOWS_MODULE_FLOORS, per_file, cov_path, "WINDOWS_MODULE_FLOORS", failures)
-    else:
-        print(f"Overall coverage: {overall:.2f}% (floor {OVERALL_FLOOR:.1f}%)")
-        if overall < OVERALL_FLOOR:
-            failures.append(f"overall coverage {overall:.2f}% is below the {OVERALL_FLOOR:.1f}% floor")
-        elif overall > OVERALL_FLOOR + STALE_OVERALL_MARGIN:
-            print(_stale_warning("overall", overall, OVERALL_FLOOR))
+    print(f"Overall coverage: {overall:.2f}% (floor {OVERALL_FLOOR:.1f}%)")
+    if overall < OVERALL_FLOOR:
+        failures.append(f"overall coverage {overall:.2f}% is below the {OVERALL_FLOOR:.1f}% floor")
+    elif overall > OVERALL_FLOOR + STALE_OVERALL_MARGIN:
+        print(_stale_warning("overall", overall, OVERALL_FLOOR))
 
-        print("\nSecurity-critical module floors:")
-        _check_module_floors(MODULE_FLOORS, per_file, cov_path, "MODULE_FLOORS", failures)
+    print("\nSecurity-critical module floors:")
+    _check_module_floors(MODULE_FLOORS, per_file, cov_path, "MODULE_FLOORS", failures)
 
     if failures:
         print("\nCoverage ratchet failed:")
