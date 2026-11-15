@@ -169,7 +169,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p12d-live-qa
 
-- pending
+- worker: The orchestrator told the worker to redispatch the Assets live QA once after its first failure (run 43668237309); the retry (run 43668856231) failed the same way, with a 400 from the Atlassian Assets objectschema/list call during check_connection. assets_client.py is identical to main and the plan changed no call on that path, so the failure looks QA-side (token scope, workspace id or an Atlassian API change).
+- worker: Seven connectors recorded and succeeded (gmail 43667657275, drive 43667797773, confluence 43667952062, jira 43668092442, salesforce 43668387216, grist 43668526748, peek 43668660171); six fixture files changed (drive/get_file_metadata, gmail/get_message, grist/list_documents, peek/get_comments, peek/list_pages, salesforce/get_record). The orchestrator decoded the base64 bodies and checked every address and URL: only example.com placeholders and synthetic QA text.
+- retry: The owner answered merge_without_assets: the phase merged without a successful Assets live run; the Assets live check is a manual item for the pull request (re-run qa-record-fixture.yml for assets once the QA workspace is fixed).
+- gate: Owner decision on the board (ask a-de4f90bded6a0e1a): merge_without_assets.
 
 ## p13-privilege-separation
 
