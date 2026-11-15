@@ -246,13 +246,10 @@ is required for settings changes, changing this needs one too. See ADR 0091.
 
 ## Desktop configuration bundle (org_bundle.json)
 
-A desktop install reads one signed file with the app credentials for the services it connects. An
-administrator builds it with `scripts/build_org_bundle.py` (Python standard library only;
-`--sign-key` and `--generate-signing-key` also need the `cryptography` package), and people install
-it from **Admin → Organization configuration** (or it is placed in the `org/` directory by hand).
-An organization server does not take a bundle: see
-[Organization server settings](#organization-server-settings). Pass only the options for the
-services you have registered: a connector is offered only if its section is in the bundle.
+A desktop install read one signed file with the app credentials for the services it connected; the
+script that built it is no longer shipped. An organization server does not take a bundle: see
+[Organization server settings](#organization-server-settings). A legacy `org/org_bundle.json` is
+still read, as described below and under [Legacy bundle](#legacy-bundle-orgorg_bundlejson).
 Per-service registration steps are in [Google Cloud setup](google-cloud-setup.md),
 [Slack setup](slack-setup.md), [Salesforce setup](salesforce-setup.md),
 [Atlassian setup](atlassian-setup.md), [Grist setup](grist-setup.md) and
@@ -272,67 +269,8 @@ How the daemon treats the file:
   first start after an upgrade the daemon copies it (and its two pin files) to the new names and
   leaves the originals untouched, and a later change to `org_config.json` is ignored with a warning.
 - **Operational settings in an older bundle** (services offered, file delivery, step-up and the
-  others listed under [Refused options](#refused-options)) are imported once into
-  `org/admin_config.json` and afterwards ignored; every later start logs a warning naming them, and
-  `build_org_bundle.py --merge` drops them.
-
-### Build options
-
-| Option | Default | Writes | Notes |
-|---|---|---|---|
-| `--org-name NAME` | none | `org_name` | Shown to people after they install the bundle. |
-| `-o`, `--output PATH` | `org_bundle.json` | | Written with mode `0600`. |
-| `--merge` | off | | Update the bundle already at `--output` instead of starting from empty. Any existing signature is dropped; pass `--sign-key` again. Refuses an organization bundle, and drops operational keys an older bundle still carries. |
-| `--mode {local,org}` | `local` | | `local` is the only mode the script builds; leaving it out is the same. `org` is refused. |
-| `--google-client-secret PATH` | none | `google` | The OAuth client JSON downloaded from Google Cloud: a *Desktop app* client. The inner block is stored as-is. Covers Gmail, Drive, Calendar, Contacts, Tasks and Apps Script. |
-| `--slack-client-id`, `--slack-client-secret` | none | `slack.client_id`, `slack.client_secret` | Give both or neither. |
-| `--slack-scopes SCOPE …` | built-in list | `slack.user_scopes` | Override the Slack user-token scopes. Usually left unset. |
-| `--salesforce-consumer-key`, `--salesforce-consumer-secret` | none | `salesforce.consumer_key`, `salesforce.consumer_secret` | Give both or neither. |
-| `--salesforce-login-url URL` | `https://login.salesforce.com` | `salesforce.login_url` | `https://test.salesforce.com` for a sandbox. |
-| `--atlassian-client-id`, `--atlassian-client-secret` | none | `atlassian.client_id`, `atlassian.client_secret` | Jira and Confluence. Give both or neither. |
-| `--grist-server-url URL` | none | `grist.server_url` | The Grist server the OAuth app belongs to; needed with `--grist-client-id` and `--grist-client-secret`. |
-| `--grist-client-id`, `--grist-client-secret` | none | `grist.client_id`, `grist.client_secret` | A Grist OAuth app; with it people sign in with OAuth, without it they paste an API key. Give both or neither. |
-| `--grist-auth-server-url URL` | the server URL | `grist.auth_server_url` | Where Grist's sign-in discovery document is served, when the server itself does not serve it. |
-| `--miro-client-id`, `--miro-client-secret` | none | `miro.client_id`, `miro.client_secret` | The Miro app people sign in with. Give both or neither. |
-| `--generate-signing-key PATH` | | | Write a new Ed25519 private key to `PATH` (mode `0600`), print its public key, and exit without building a bundle. Keep the key; losing it means installs that pinned it cannot accept a new bundle until the pin is deleted by hand. |
-| `--sign-key PATH` | none | `signing_public_key`, `signature` | Sign the bundle. Recommended: an install that has pinned a key refuses an unsigned bundle. |
-| `--serial N` | current Unix time | `serial` | Serial signed into the bundle; needs `--sign-key`. Installs refuse a bundle whose serial is lower than the highest they have accepted. |
-
-### Refused options
-
-Every option that wrote an operational setting, and every option that described an organization
-server, is hidden from `--help` and refused with a message that says where the setting went; nothing
-is written. They are listed here because older runbooks and scripts still pass them.
-
-| Refused options | Where the setting is now |
-|---|---|
-| `--mode org`, `--server-issuer-url`, `--server-bind-host`, `--server-port`, `--server-tls-cert`, `--server-tls-key`, `--server-trusted-proxy` | Environment variables on the server: `PRIVACYFENCE_MODE`, `PRIVACYFENCE_ISSUER_URL`, `PRIVACYFENCE_BIND_HOST`, `PRIVACYFENCE_PORT`, `PRIVACYFENCE_TRUSTED_PROXIES` ([below](#environment-variables)). TLS in the daemon has no environment variable: terminate TLS in the reverse proxy. |
-| `--idp-issuer`, `--idp-client-id`, `--idp-client-secret`, `--idp-admin-group-claim`, `--idp-admin-group-value`, `--idp-step-up-acr-value` | `PRIVACYFENCE_IDP_ISSUER`, `PRIVACYFENCE_IDP_CLIENT_ID`, `PRIVACYFENCE_IDP_CLIENT_SECRET` or `_FILE`, `PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM`, `PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES`, `PRIVACYFENCE_IDP_STEP_UP_ACR_VALUES`; administrators can also be named by email with `PRIVACYFENCE_ADMIN_EMAILS`. |
-| `--enable-telegram`, `--enable-peek`, `--enable-grist`, `--peek-base-url` | Admin → Services (offer or stop offering a service) and, for Peek and Grist, the server address in Admin → Features or `PRIVACYFENCE_PEEK_BASE_URL` / `PRIVACYFENCE_GRIST_SERVER_URL`. |
-| `--atlassian-assets`, `--atlassian-assets-workspace-id` | Admin → Features, Jira Assets (`services.atlassian.assets`, `assets_workspace_id`). |
-| `--authz-allowed-domain`, `--authz-groups-claim`, `--authz-required-group` | Admin → Sign-in (`authz`). |
-| `--step-up-enabled`, `--step-up-disabled`, `--step-up-scope`, `--step-up-require-passkey`, `--step-up-no-require-passkey` | Admin → Step-up (`step_up`). Only stricter choices are offered there. |
-| `--step-up-rp-id`, `--step-up-rp-name` | `step_up.rp_id` and `step_up.rp_name` in `org/admin_config.json`, edited by hand, then restart. There is no Admin control for them, nor for `step_up.batch`. |
-| `--enable-unattended-sessions`, `--disable-unattended-sessions` | Admin → Features (`unattended_sessions.enabled`). |
-| `--enable-scoped-tokens`, `--disable-scoped-tokens`, `--scoped-token-max-days`, `--enable-scoped-token-proposals`, `--disable-scoped-token-proposals` | Admin → Scoped tokens (`scoped_tokens.enabled`, `max_days`, `allow_ai_proposals`). `max_days` is the longest lifetime of a new token and the most a person can extend one by. `PRIVACYFENCE_N8N_DELIVERY=true` locks `enabled` and `allow_ai_proposals` on Admin. |
-| `--downloads-inline-max-bytes`, `--downloads-link-ttl-seconds`, `--downloads-disable-staging`, `--agent-links`, `--no-agent-links`, `--exports`, `--no-exports` | Admin → File delivery (`download_delivery`). |
-| `--web-push`, `--no-web-push` | Admin → Features (`web_push.enabled`). |
-| `--enable-audit-forwarding`, `--disable-audit-forwarding`, `--audit-forwarding-kind`, `--audit-forwarding-syslog-host`, `--audit-forwarding-syslog-port`, `--audit-forwarding-syslog-protocol`, `--audit-forwarding-http-url`, `--audit-forwarding-http-bearer-token-env` | Admin → Audit forwarding (`audit_forwarding`). The page shows the bearer-token variable's name read-only; set `audit_forwarding.http.bearer_token_env` in `org/admin_config.json` by hand and put the token itself in that environment variable. |
-| `--peek-auto-provision`, `--no-peek-auto-provision`, `--peek-provisioning-key-env`, `--peek-trust-unverified-email`, `--grist-auto-provision`, `--no-grist-auto-provision`, `--grist-provisioner-url`, `--grist-provisioning-key-env`, `--grist-trust-unverified-email` | Admin → Services (`services.peek.auto_provision`, `services.grist.auto_provision`), plus `PRIVACYFENCE_GRIST_PROVISIONER_URL` and the provisioning key variables ([below](#environment-variables)). |
-
-### Bundle keys not written by build_org_bundle.py
-
-| Key | Written by | What it does |
-|---|---|---|
-| `version` | always `1` | Bundle format version. |
-| `generated_at` | build time, UTC | When the bundle was built. |
-| `rooms`, `rooms_synced_at` | older `scripts/sync_room_directory.py` | The meeting-room list. It is imported into `org/admin_config.json` on the first start; `sync_room_directory.py --output rooms.json` writes a file you upload on Admin → Features instead. |
-
-A bundle that still carries `mcp.tool_annotations` (only 5.0.0a1's `build_org_bundle.py` wrote it)
-stops the daemon from starting, with a message naming the key: PrivacyFence always tells AI clients
-truthfully which tools read and which write, and the option to say otherwise was removed. Rebuild
-the bundle; `--merge` drops the key. See
-[ADR 0089](adr/0089-tool-annotations-are-always-truthful.md).
+  others listed in the legacy bundle) are imported once into
+  `org/admin_config.json` and afterwards ignored; every later start logs a warning naming them.
 
 ## Organization server settings
 

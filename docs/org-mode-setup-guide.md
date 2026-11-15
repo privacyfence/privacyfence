@@ -477,8 +477,6 @@ An organization server needs no bundle. Three things configure it:
 
 ([ADR 0269](adr/0269-organization-servers-use-signed-connector-configs-instead-of-a-bundle.md) and
 [ADR 0264](adr/0264-an-organization-server-can-start-from-environment-variables.md) give the reasons.)
-`build_org_bundle.py` builds desktop bundles only and refuses every organization option
-([configuration reference](configuration-reference.md#refused-options)).
 
 ### The environment file
 

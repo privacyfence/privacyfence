@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Publish release artifacts to the Cloudflare R2 release archive.
+"""Publish release files to the Cloudflare R2 release archive.
 
-Every tagged release (stable and pre-release alike) uploads its artifacts here, laid out as:
+Every tagged release (stable and pre-release alike) uploads its files here, laid out as:
 
     releases/
       stable/<version>/...
@@ -15,28 +15,20 @@ itself. The channel directory is derived from that version's PEP 440 pre-release
 same short spellings src/privacyfence/update_checker.py's _STAGE_RANK already uses to rank
 update-check results); a version with no suffix is "stable".
 
-This bucket is where alpha/beta/rc artifacts live *instead of* going anywhere public: unlike
-stable, which also reaches PyPI and a public GitHub Release, pre-release tags stop at R2 --
-see .github/workflows/publish-pypi.yml and build.yml for exactly which channels reach which public
-index. The bucket itself is left at Cloudflare R2's default (private, no public bucket policy or
-custom domain) -- but that privacy doesn't gate who can download a pre-release. Decided
-2026-09-13 (see docs/releasing.md's "Who can download a pre-release" section): anyone can,
-unauthenticated, through cloudflare/downloads/src/index.ts's `/download/<channel>/<artifact>`
-route, and website/download/download.js advertises whichever pre-release channel has a build to
-every visitor. What the bucket's privacy actually buys is making that Worker route the only public
-path to any artifact -- nothing can enumerate the bucket or fetch a release without passing
-through the route that counts it -- not access control over pre-releases.
+A release (ADR 0301) builds the organization image, privacyfence-sync and the SBOM only, so what
+lands here is the SBOM and the org admin tools (scripts/sync_room_directory.py,
+scripts/sign_connector_config.py and the connector config signing page). The archive keeps these
+uploads and nothing else: there is no manifest and no `latest` pointer. The bucket is left at
+Cloudflare R2's default (private, no public bucket policy or custom domain).
 
 Stdlib + boto3 only (`pip install boto3`) -- no PrivacyFence install required, matching the other
-release-time scripts in this directory (scripts/build_org_bundle.py, scripts/sync_room_directory.py).
-This script deliberately doesn't import the ``privacyfence`` package for the same reason: it
-carries its own copy of the version-parsing regex, mirroring update_checker.py's rather than
-importing it, so a CI job can run it (e.g. the SBOM job in build.yml) without first installing the
-full package.
+release-time scripts in this directory (scripts/sync_room_directory.py). This script deliberately
+doesn't import the ``privacyfence`` package for the same reason: it carries its own copy of the
+version-parsing regex, mirroring update_checker.py's rather than importing it, so a CI job can run
+it (e.g. the SBOM job in build.yml) without first installing the full package.
 
-Requires these environment variables (prefixed CF_RELEASES_ to keep them apart from the download
-Worker's own CLOUDFLARE_* deploy credentials -- see docs/downloads-and-release-kpi.md's
-"Credentials" section):
+Requires these environment variables (prefixed CF_RELEASES_ to keep them apart from other
+Cloudflare credentials):
     CF_RELEASES_R2_ACCESS_KEY_ID, CF_RELEASES_R2_SECRET_ACCESS_KEY  -- R2 API token
     CF_RELEASES_R2_ENDPOINT                                         -- R2 S3-compatible endpoint URL
     R2_BUCKET                                                       -- defaults to "privacyfence-releases"
@@ -49,36 +41,17 @@ Examples:
         -> exits 0; exits 1 if the build resolved a version the tag doesn't name
 
     python3 scripts/r2_release.py upload --version 4.1.0 \\
-        dist/PrivacyFence-4.1.0.dmg scripts/build_org_bundle.py scripts/sync_room_directory.py
+        sbom-python.cdx.json scripts/sync_room_directory.py
         -> uploads each to releases/stable/4.1.0/<basename> in R2
-
-    python3 scripts/r2_release.py finalize --version 4.1.0
-        -> writes releases/stable/4.1.0/manifest.json, verifies it, then points
-           releases/stable/latest.json at it -- in that order
-
-    python3 scripts/r2_release.py verify --version 4.1.0
-    python3 scripts/r2_release.py promote --version 4.1.0
-
-Publication is transactional from a downloader's point of view. `upload` puts objects in the
-bucket but publishes nothing; only `finalize` moves the channel's latest.json, and only after
-confirming every artifact the manifest references is really there with the right size and digest.
-An incomplete release can therefore exist in R2 without ever being the one the Worker serves.
-
-Only installers (DMG / -setup.exe / .deb) enter the manifest -- see _INSTALLERS for why SBOMs,
-the org-config scripts and the sdist/wheel are uploaded here but deliberately left out of it, and
-why the macOS `.pkg` isn't one of the three (it ships *inside* the DMG now, so it is never
-uploaded on its own -- scripts/build_dmg.sh's own header has the reasoning).
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Mirrors src/privacyfence/update_checker.py's _VERSION_RE / _STAGE_RANK -- see this module's
@@ -115,49 +88,11 @@ _TAG_STAGE_ALIASES = {
 
 DEFAULT_BUCKET = "privacyfence-releases"
 
-# Schema version of the manifest this script writes. Consumed by cloudflare/downloads/src/
-# manifest.ts, whose `Manifest`/`ManifestArtifact` interfaces are the real contract -- the
-# Worker's tests read hand-written fixtures of this exact shape, so changing anything here means
-# changing the Worker and its fixtures in the same PR.
-MANIFEST_SCHEMA = 1
-
-# SHA-256 is recorded as S3 user metadata at upload time rather than recomputed later, because
-# `finalize` runs in its own job on a fresh runner: the DMG/installer/.deb were each built and
-# uploaded by a *different* job (build, build-windows, build-deb), so none of those files exist
-# on disk by the time the manifest is assembled. Reading the digest back from head_object() keeps
-# both `finalize` and the immutability guard to one metadata call per object instead of
-# re-downloading release binaries just to hash them. (The ETag is no substitute: boto3 switches to
-# a multipart upload above its threshold, and a multipart ETag is not the object's MD5.)
+# SHA-256 is recorded as S3 user metadata at upload time, so the immutability guard in `upload`
+# needs one metadata call per object instead of re-downloading release files just to hash them.
+# (The ETag is no substitute: boto3 switches to a multipart upload above its threshold, and a
+# multipart ETag is not the object's MD5.)
 _SHA256_METADATA_KEY = "sha256"
-
-# Installer filename -> manifest identity. **Installers only**: SBOMs, the org-config scripts and
-# the sdist/wheel are uploaded to the same prefix but deliberately never enter the manifest, so
-# the Worker cannot serve them from /download/ and cannot count them. That keeps the KPI
-# definition ("SBOMs, checksums, org-admin scripts, metadata requests, source archives ... never
-# count as downloads") true by construction rather than by a filter someone has to remember to
-# apply -- cloudflare/downloads/src/index.ts counts every artifact it serves, and queryStats() sums
-# every row without filtering on artifact_kind.
-#
-# The `id` is the URL segment: /download/<channel>/<id> resolves against it via the Worker's
-# findArtifact(). These three match the runners in build.yml that produce them (macos-latest is
-# arm64, windows-latest x64, ubuntu-latest amd64) and the fixtures in
-# cloudflare/downloads/test/fixtures/.
-#
-# One installer per platform, and deliberately no entry for the macOS `.pkg`: it is
-# not a downloadable artifact of its own any more -- scripts/build_dmg.sh puts it *inside* the
-# DMG, next to the `.mcpb`, so "macos-arm64" is the whole macOS story again. It used to have its
-# own `macos-arm64-pkg` id here, and its own opt-out from the "required" set below, precisely
-# because it was a second, optional macOS download; nothing is optional now that there is nothing
-# to be optional about.
-_INSTALLERS: tuple[tuple[re.Pattern[str], str, str, str], ...] = (
-    (re.compile(r"^PrivacyFence-[^/]*\.dmg$"), "macos-arm64", "macos", "arm64"),
-    (re.compile(r"^PrivacyFence-[^/]*-setup\.exe$"), "windows-x64", "windows", "x64"),
-    (re.compile(r"^privacyfence_[^/]*_amd64\.deb$"), "linux-x64", "linux", "x64"),
-)
-
-# Every one of these must be present before a release may become "latest". A release missing any
-# installer can still exist in R2 -- it just never gets a latest.json pointing at it.
-REQUIRED_ARTIFACT_IDS = frozenset(spec[1] for spec in _INSTALLERS)
 
 
 def channel_for_version(version: str) -> str:
@@ -256,15 +191,6 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def classify_installer(filename: str) -> tuple[str, str, str] | None:
-    """Maps an installer filename to its (id, platform, architecture), or None for anything
-    that is not an installer -- SBOMs, org-config scripts, sdist/wheel. See _INSTALLERS."""
-    for pattern, artifact_id, platform, architecture in _INSTALLERS:
-        if pattern.match(filename):
-            return artifact_id, platform, architecture
-    return None
-
-
 def _bucket_name(bucket: str | None) -> str:
     return bucket or os.environ.get("R2_BUCKET", DEFAULT_BUCKET)
 
@@ -323,172 +249,6 @@ def upload(version: str, files: list[str], *, bucket: str | None = None) -> None
         print(f"uploaded s3://{bucket}/{key} ({result['ContentLength']} bytes, sha256 {digest})")
 
 
-def _list_release_objects(s3, bucket: str, prefix: str) -> dict[str, dict]:
-    """Every object under a release's prefix, keyed by filename (the part after the prefix)."""
-    objects: dict[str, dict] = {}
-    paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for entry in page.get("Contents", []):
-            filename = entry["Key"][len(prefix) :]
-            if filename and "/" not in filename:
-                objects[filename] = entry
-    return objects
-
-
-def build_manifest(version: str, channel: str, artifacts: list[dict], *, published_at: str) -> dict:
-    return {
-        "schema": MANIFEST_SCHEMA,
-        "version": version,
-        "channel": channel,
-        "published_at": published_at,
-        # Sorted by id so a re-run produces a byte-identical manifest rather than one that merely
-        # means the same thing -- makes a diff between two finalize runs actually readable.
-        "artifacts": sorted(artifacts, key=lambda artifact: artifact["id"]),
-    }
-
-
-def _load_manifest(s3, bucket: str, channel: str, version: str) -> dict:
-    key = f"{_release_prefix(channel, version)}manifest.json"
-    try:
-        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-    except Exception as exc:
-        if getattr(exc, "response", {}).get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
-            raise SystemExit(f"no manifest at s3://{bucket}/{key} -- run `finalize` first") from exc
-        raise
-    return json.loads(body)
-
-
-def verify(version: str, *, bucket: str | None = None) -> dict:
-    """Checks every object the manifest references actually exists, with matching size and
-    SHA-256. Returns the manifest so `finalize` can reuse it. Raises SystemExit on any mismatch."""
-    channel = channel_for_version(version)
-    bucket = _bucket_name(bucket)
-    s3 = _r2_client()
-    manifest = _load_manifest(s3, bucket, channel, version)
-
-    problems: list[str] = []
-    for artifact in manifest.get("artifacts", []):
-        key = artifact["key"]
-        head = _head(s3, bucket, key)
-        if head is None:
-            problems.append(f"{artifact['id']}: missing from storage ({key})")
-            continue
-        if head["ContentLength"] != artifact["size"]:
-            problems.append(
-                f"{artifact['id']}: size mismatch -- manifest {artifact['size']}, stored {head['ContentLength']}"
-            )
-        stored = _stored_sha256(head)
-        if stored is None:
-            problems.append(f"{artifact['id']}: object has no recorded sha256 -- re-upload it with this script")
-        elif stored != artifact["sha256"]:
-            problems.append(f"{artifact['id']}: sha256 mismatch -- manifest {artifact['sha256']}, stored {stored}")
-
-    if problems:
-        raise SystemExit("manifest verification failed:\n  " + "\n  ".join(problems))
-
-    print(f"verified {len(manifest.get('artifacts', []))} artifact(s) for {version} ({channel})")
-    return manifest
-
-
-def promote(version: str, *, bucket: str | None = None) -> None:
-    """Points the channel's latest.json at this version. Separated from `finalize` so a release
-    can be re-promoted by hand without rebuilding its manifest."""
-    channel = channel_for_version(version)
-    bucket = _bucket_name(bucket)
-    s3 = _r2_client()
-
-    # Refuse to point a whole channel at a manifest that isn't there. `finalize` always writes the
-    # manifest first so this never fires on its path, but this command exists to be run by hand --
-    # and by hand is exactly when a typo'd version would otherwise leave every downloader on this
-    # channel resolving latest.json to a 404 with nothing to roll back to.
-    manifest_key = f"{_release_prefix(channel, version)}manifest.json"
-    if _head(s3, bucket, manifest_key) is None:
-        raise SystemExit(
-            f"refusing to promote {version} ({channel}): no manifest at s3://{bucket}/{manifest_key}.\n"
-            "Run `finalize` for this version first."
-        )
-
-    key = f"releases/{channel}/latest.json"
-    pointer = {"version": version, "manifest": f"{_release_prefix(channel, version)}manifest.json"}
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=json.dumps(pointer, indent=2).encode() + b"\n",
-        ContentType="application/json",
-    )
-    print(f"promoted {channel} latest -> {version}")
-
-
-def finalize(version: str, *, bucket: str | None = None, now: datetime | None = None) -> dict:
-    """Assembles and publishes a release's manifest, then -- only if verification passes -- moves
-    the channel's latest.json onto it.
-
-    The ordering is the whole point: artifacts and manifest.json land first, verification runs
-    against what is actually stored, and latest.json is written last. An incomplete or corrupt
-    release can therefore exist in R2 without ever becoming visible to the Worker, which reaches
-    every release through latest.json (or an explicit version).
-    """
-    channel = channel_for_version(version)
-    bucket = _bucket_name(bucket)
-    s3 = _r2_client()
-    prefix = _release_prefix(channel, version)
-
-    stored = _list_release_objects(s3, bucket, prefix)
-    artifacts: list[dict] = []
-    missing_digests: list[str] = []
-    for filename, entry in sorted(stored.items()):
-        identity = classify_installer(filename)
-        if identity is None:
-            continue  # not an installer -- stays in R2, never enters the manifest
-        artifact_id, platform, architecture = identity
-        head = _head(s3, bucket, entry["Key"])
-        digest = _stored_sha256(head) if head else None
-        if digest is None:
-            missing_digests.append(filename)
-            continue
-        artifacts.append(
-            {
-                "id": artifact_id,
-                "kind": "installer",
-                "platform": platform,
-                "architecture": architecture,
-                "filename": filename,
-                "key": entry["Key"],
-                "size": entry["Size"],
-                "sha256": digest,
-            }
-        )
-
-    if missing_digests:
-        raise SystemExit(
-            "these objects have no recorded sha256 and were probably uploaded before this script "
-            "recorded one -- re-upload them:\n  " + "\n  ".join(sorted(missing_digests))
-        )
-
-    found_ids = {artifact["id"] for artifact in artifacts}
-    absent = REQUIRED_ARTIFACT_IDS - found_ids
-    if absent:
-        raise SystemExit(
-            f"cannot finalize {version} ({channel}): missing mandatory installer(s) "
-            f"{', '.join(sorted(absent))}.\n"
-            f"latest.json is left untouched, so this incomplete release is not published."
-        )
-
-    published_at = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    manifest = build_manifest(version, channel, artifacts, published_at=published_at)
-    s3.put_object(
-        Bucket=bucket,
-        Key=f"{prefix}manifest.json",
-        Body=json.dumps(manifest, indent=2).encode() + b"\n",
-        ContentType="application/json",
-    )
-    print(f"wrote s3://{bucket}/{prefix}manifest.json ({len(artifacts)} artifacts)")
-
-    verify(version, bucket=bucket)
-    promote(version, bucket=bucket)
-    return manifest
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -506,15 +266,6 @@ def main(argv: list[str] | None = None) -> int:
     upload_parser.add_argument("--version", required=True, help="Resolved release version, e.g. 4.2.0b1")
     upload_parser.add_argument("--bucket", default=None, help=f"R2 bucket (default: {DEFAULT_BUCKET})")
     upload_parser.add_argument("files", nargs="+", help="Local files to upload")
-
-    for name, help_text in (
-        ("finalize", "Build and publish this release's manifest, then move the channel's latest.json"),
-        ("verify", "Check every object the manifest references exists with matching size/sha256"),
-        ("promote", "Point the channel's latest.json at this version (without rebuilding the manifest)"),
-    ):
-        sub = subparsers.add_parser(name, help=help_text)
-        sub.add_argument("--version", required=True, help="Resolved release version, e.g. 4.2.0b1")
-        sub.add_argument("--bucket", default=None, help=f"R2 bucket (default: {DEFAULT_BUCKET})")
 
     args = parser.parse_args(argv)
 
@@ -537,9 +288,6 @@ def main(argv: list[str] | None = None) -> int:
 
     handlers = {
         "upload": lambda: upload(args.version, args.files, bucket=args.bucket),
-        "finalize": lambda: finalize(args.version, bucket=args.bucket),
-        "verify": lambda: verify(args.version, bucket=args.bucket),
-        "promote": lambda: promote(args.version, bucket=args.bucket),
     }
     if args.command in handlers:
         try:

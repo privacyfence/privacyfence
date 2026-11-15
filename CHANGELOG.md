@@ -53,6 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A release builds the organization image, privacyfence-sync and the SBOM only.** It no longer builds or attaches the macOS, Windows or Linux installers or the Claude extension; the release archive keeps its uploads and writes no manifest or `latest` pointer ([ADR 0301](docs/adr/0301-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md)).
 - **A configuration with `mode: local` refuses to start; no mode means organization mode.** `PRIVACYFENCE_MODE=local` or `"mode": "local"` in `org_bundle.json` stops the start with a message that points to [Moving to organization mode](docs/moving-to-organization-mode.md); any other value but `org` is refused too ([ADR 0298](docs/adr/0298-the-mode-setting-accepts-only-org.md)).
 - **The AI agent pages describe the custom-connector and Docker path.** The Claude Desktop, Claude Code, ChatGPT and overview pages no longer describe the extension, desktop mode or the companion app; they connect to the Docker image or an organization server and link the install page.
 - **The website describes PrivacyFence as the Docker image or an organization server.** The enterprise, FAQ, security, privacy, GDPR, how-it-works and Telegram pages and the architecture diagram no longer describe the desktop installers, the extension or the companion app, and the install page names the Docker guide for a reverse proxy.
