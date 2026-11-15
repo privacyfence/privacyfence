@@ -253,15 +253,11 @@ def _peek_section(
 
 
 def _grist_section(
-    bundle: dict[str, Any],
     admin_service: dict[str, Any],
     env: dict[str, str],
     *,
     single_user: bool,
 ) -> dict[str, Any] | None:
-    bundled = _section(bundle, "grist")
-    if bundled.get("client_id"):
-        return copy.deepcopy(bundled)
     server_url = env.get("grist") or admin_service.get("server_url", "")
     if not server_url:
         return None
@@ -367,7 +363,7 @@ def effective_org_config(
         own_app = connectors.get("grist")
         grist = (
             own_app.section() if own_app is not None
-            else _grist_section(cleaned, service_config("grist"), env, single_user=single_user)
+            else _grist_section(service_config("grist"), env, single_user=single_user)
         )
         if grist is None:
             result.pop("grist", None)
