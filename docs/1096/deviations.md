@@ -118,7 +118,27 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p11-file-bridge
 
-- pending
+- worker: Outside touches in src: connectors/gmail.py, connectors/drive.py and connectors/confluence.py got local_files.mark_staged_download() on the organization staging paths (the plan section on staged_download), and a drive.py comment was reworded; these files are otherwise removed or edited by the connector phases p12a and p12c.
+- worker: Outside touches in tests (one-line or helper repoints, each because a test failed on the deletion): tests/helpers.py, tests/unit/test_gate.py, tests/unit/test_gmail_client.py, tests/unit/test_upload_staging.py, tests/unit/abuse/test_abuse_mcp_error_taxonomy.py, tests/unit/connectors/test_assets_connector.py, test_grist_connector.py, test_jira_connector.py, test_salesforce_connector.py, tests/unit/web/test_routes_mcp_agent_identity.py, test_routes_mcp_principal.py, test_tool_schema_portability.py
+- review: The dispatcher filter drops every argument the tool does not declare (tools with a verbatim input_schema are left alone); its test came first. The status tool lost deprecation and next_step; the server instructions no longer mention the companion; docs/tools-reference.md was regenerated. After merge the five stripped modules meet their coverage floors; the only ratchet failure is org_mode.py (99.23% vs 100%), left for p14b.
+- scope: scope: src/privacyfence/connectors/confluence.py
+- scope: scope: src/privacyfence/connectors/drive.py
+- scope: scope: src/privacyfence/connectors/gmail.py
+- scope: scope: tests/helpers.py
+- scope: scope: tests/integration/test_pending_approval_releases_nothing.py
+- scope: scope: tests/unit/abuse/test_abuse_mcp_error_taxonomy.py
+- scope: scope: tests/unit/connectors/test_assets_connector.py
+- scope: scope: tests/unit/connectors/test_grist_connector.py
+- scope: scope: tests/unit/connectors/test_jira_connector.py
+- scope: scope: tests/unit/connectors/test_salesforce_connector.py
+- scope: scope: tests/unit/test_gate.py
+- scope: scope: tests/unit/test_gmail_client.py
+- scope: scope: tests/unit/test_upload_staging.py
+- scope: scope: tests/unit/web/test_routes_mcp_agent_identity.py
+- scope: scope: tests/unit/web/test_routes_mcp_principal.py
+- scope: scope: tests/unit/web/test_tool_schema_portability.py
+- conflict: tests/unit/test_gmail_client.py auto-merged with the earlier loopback phase; no manual resolution needed.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p12a-google-connectors
 
