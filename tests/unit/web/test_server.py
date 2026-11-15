@@ -991,6 +991,30 @@ class TestScopedTokenPageData:
         assert not {"kh_propose_change", "kh_search"} & (listed | set(data["auto_tools"]))
         assert data["upstreams"][0]["tools"] == ["kh_list_topics"]
 
+    def test_a_tool_whose_operation_belongs_to_another_upstream_is_not_offered(self, tmp_path, monkeypatch):
+        alice, _store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
+        # Named with this upstream's prefix, but declared for another operation: never offered for kh.
+        monkeypatch.setitem(auto_accept.TOOL_TO_GATE, "kh_shadow", "popup")
+        monkeypatch.setitem(auto_accept.TOOL_TO_OPERATION, "kh_shadow", "wiki.shadow")
+        monkeypatch.setitem(scopes.UPSTREAM_DECLARATIONS, "wiki.shadow", "d")
+        data = self._page(alice, policy, auto_accept, tmp_path)
+        assert [t["name"] for t in data["upstreams"][0]["gated_tools"]] == ["kh_propose_change", "kh_search"]
+
+    def test_an_approval_of_a_tool_no_longer_declared_lists_nothing(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_registry
+
+        alice, store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
+        store.create(
+            alice, label="kh", days=30, rules=[], tools=["kh_propose_change"], policy=policy, is_admin=True,
+            upstream_approvals=[
+                {"tool": "kh_propose_change", "digest": scopes.UPSTREAM_DECLARATIONS["kh.propose_change"]},
+            ],
+        )
+        upstream_mcp_registry.unregister_all()
+        (token,) = self._page(alice, policy, auto_accept, tmp_path)["tokens"]
+        assert token["rules"] == []
+        assert token["approved_upstream_tools"] == []
+
     def test_approval_rows_are_left_out_of_a_tokens_rules(self, tmp_path, monkeypatch):
         alice, store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
         store.create(
