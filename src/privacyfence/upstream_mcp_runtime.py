@@ -113,6 +113,16 @@ def audiences_for_email(upstream_id: str, email: str, verified: bool) -> frozens
     return _runtime.resolver.audiences_for(address, _runtime.groups.group_audiences(upstream_id))
 
 
+def approved_groups_for_email(email: str, verified: bool) -> tuple[str, ...]:
+    """The groups ``email`` holds with every restricted audience approved; empty unless verified and configured."""
+    if _runtime is None or not verified or not email:
+        return ()
+    address = group_membership.lookup_email(email)
+    if address is None:
+        return ()
+    return tuple(sorted(_runtime.resolver.groups_for(address, all_group_audiences())))
+
+
 def all_group_audiences() -> dict[str, frozenset[str]]:
     """Group name to audiences, merged over every upstream (the same group in two upstreams unions its audiences)."""
     if _runtime is None:
