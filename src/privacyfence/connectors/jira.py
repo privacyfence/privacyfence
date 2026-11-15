@@ -334,7 +334,7 @@ class JiraConnector(Connector):
         return "jira"
 
     def tool_specs(self) -> list[ToolSpec]:
-        return export_files.visible_specs(self._all_tool_specs(), "org", self.download_config)
+        return export_files.visible_specs(self._all_tool_specs(), self.download_config)
 
     def _all_tool_specs(self) -> list[ToolSpec]:
         return [
@@ -619,7 +619,7 @@ class JiraConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
-        export_files.refuse_if_exports_off(tool, "org", self.download_config)
+        export_files.refuse_if_exports_off(tool, self.download_config)
         if tool == "jira_list_projects":
             return await self._list_projects(**args)
         if tool == "jira_search_issues":
@@ -742,7 +742,7 @@ class JiraConnector(Connector):
         refs = _parse_field_refs(fields, "jira_export_issues", required=False)
         file_name, fmt = export_files.export_file_name(file_name, "jira-issues")
         export_files.refuse_org_without_staging(
-            "jira_export_issues", "org",
+            "jira_export_issues",
             (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
             "jira_search_issues_with_fields",
         )
@@ -765,7 +765,7 @@ class JiraConnector(Connector):
         data = await asyncio.to_thread(export_files.render, columns, rows, fmt, spreadsheet_safe=True)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = export_files.saved_to("", file_name, "org")
+        saved_to = export_files.ORG_SAVED_TO
         preview = {"JQL": jql, "Fields": ", ".join(names) or "standard fields only"}
         await gated_call(
             connector=self.name,
@@ -798,7 +798,7 @@ class JiraConnector(Connector):
             },
         )
         delivered = local_files.deliver_export(
-            "", file_name, data, export_files.MIME_TYPES[fmt],
+            file_name, data, export_files.MIME_TYPES[fmt],
             download_config=self.download_config,
             download_base_url=self.download_base_url,
         )

@@ -1,6 +1,6 @@
 """Pure helpers the export tools share: the file name and format, CSV and JSON
 rendering, the card's sample table and details, and the result summary. No
-I/O; local_files.deliver_file writes the file."""
+I/O; local_files.deliver_export hands the file back."""
 from __future__ import annotations
 
 import csv
@@ -17,7 +17,6 @@ _SAMPLE_CELL_CHARS = 200
 _MAX_NAME_CHARS = 200
 
 FILE_NAME_ERROR = "file_name must be a plain file name ending in .csv or .json, such as Contacts.csv."
-DESTINATION_ERROR = "destination_dir must be a folder path, absolute or starting with ~/."
 MIME_TYPES = {"csv": "text/csv", "json": "application/json"}
 
 
@@ -35,18 +34,7 @@ def export_file_name(file_name: str, default_stem: str) -> tuple[str, str]:
     return name, suffix
 
 
-def check_destination(destination_dir: str) -> str:
-    stripped = destination_dir.strip()
-    if not stripped:
-        raise ValueError(DESTINATION_ERROR)
-    return stripped
-
-
-ORG_SAVED_TO = "A one-time download link (destination_dir is ignored on an organization-managed install)"
-ORG_DELIVERY_SENTENCE = (
-    "On an organization-managed install nothing is saved to destination_dir: the result carries "
-    "a one-time download_url instead."
-)
+ORG_SAVED_TO = "A one-time download link"
 
 
 EXPORT_TOOLS = frozenset({
@@ -55,20 +43,20 @@ EXPORT_TOOLS = frozenset({
 })
 
 
-def _exports_off(download_mode: str, download_config: Any) -> bool:
-    return download_mode == "org" and download_config is not None and not download_config.allow_exports
+def _exports_off(download_config: Any) -> bool:
+    return download_config is not None and not download_config.allow_exports
 
 
-def visible_specs(specs: list[Any], download_mode: str, download_config: Any) -> list[Any]:
+def visible_specs(specs: list[Any], download_config: Any) -> list[Any]:
     """``specs`` without the export tools when the organization turned them off
     (``download_delivery.allow_exports``)."""
-    if not _exports_off(download_mode, download_config):
+    if not _exports_off(download_config):
         return specs
     return [spec for spec in specs if spec.name not in EXPORT_TOOLS]
 
 
-def refuse_if_exports_off(tool: str, download_mode: str, download_config: Any) -> None:
-    if tool in EXPORT_TOOLS and _exports_off(download_mode, download_config):
+def refuse_if_exports_off(tool: str, download_config: Any) -> None:
+    if tool in EXPORT_TOOLS and _exports_off(download_config):
         raise ValueError(
             f"{tool} is not available: this organization turned off the export tools "
             "(download_delivery.allow_exports)."
@@ -76,20 +64,14 @@ def refuse_if_exports_off(tool: str, download_mode: str, download_config: Any) -
 
 
 def refuse_org_without_staging(
-    tool: str, download_mode: str, allow_disk_staging: bool, alternative: str,
+    tool: str, allow_disk_staging: bool, alternative: str,
 ) -> None:
-    if download_mode == "org" and not allow_disk_staging:
+    if not allow_disk_staging:
         raise ValueError(
             f"{tool} delivers its file through a one-time download link on an organization-managed "
             "install, and this organization has turned off staging files on the server "
             f"(download_delivery.allow_disk_staging). Use {alternative} instead."
         )
-
-
-def saved_to(destination_dir: str, file_name: str, download_mode: str) -> str:
-    if download_mode == "org":
-        return ORG_SAVED_TO
-    return f"{destination_dir.rstrip('/')}/{file_name}"
 
 
 def csv_cell(value: Any) -> str:

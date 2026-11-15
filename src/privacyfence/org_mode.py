@@ -475,9 +475,9 @@ DEFAULT_LINK_TTL_SECONDS = 300.0
 
 
 # What a staged download's tool result tells the AI client. Nothing is on
-# any disk the client or the human can see: destination_dir was ignored.
+# any disk the client or the human can see.
 LINK_RESULT_NOTE = (
-    "Nothing was saved to a file: on an organization-managed install destination_dir is ignored. "
+    "Nothing was saved to a file. "
     "The file is only at download_url, a one-time link that expires at expires_at. "
     "Fetch it yourself if you can reach this server; otherwise give the link to the user "
     "to open in their own browser. Don't refer to it as a local path."
@@ -495,13 +495,7 @@ class DownloadDeliveryConfig:
     for the rationale and the inline/staging split). Lives in
     ``org_bundle.json``'s ``download_delivery`` section, org-mode-only for
     the same reason ``ServerConfig`` is -- local mode never reads this
-    class. That doesn't mean local mode still writes straight to
-    ``destination_dir`` unchanged: since ADR 0007, a privilege-separated
-    local-mode daemon can't write to the user's directories either, so it
-    hands the file to the ``.mcpb`` shim instead, or, with no shim in the
-    request path, returns a single-use capability link of its own (ADR
-    0028) -- a separate delivery path with its own config, not this one.
-    """
+    class.     """
 
     inline_max_bytes: int = DEFAULT_INLINE_MAX_BYTES
     link_ttl_seconds: float = DEFAULT_LINK_TTL_SECONDS
@@ -550,11 +544,9 @@ class DownloadDeliveryConfig:
         """The tool result for a download staged behind ``download_url``,
         shared by the three connectors that deliver files this way.
 
-        ``note`` says in plain words that nothing was saved to a path. The
-        tools' ``destination_dir`` is required (local mode needs it) and
-        ignored here, and a remote client that passed ``~/Downloads``
-        otherwise goes on to treat that path as the file's location
-        (Gemini Enterprise did, trying to upload the "saved" file)."""
+        ``note`` says in plain words that nothing was saved to a path, so a
+        remote client does not treat a path it made up as the file's
+        location (Gemini Enterprise once tried to upload the "saved" file)."""
         return {
             "delivery": "link",
             "name": name,

@@ -418,7 +418,6 @@ class TestDownloadDeliveryConfigLinkResult:
 
     def test_the_note_says_no_path_was_written(self):
         assert "Nothing was saved to a file" in org_mode.LINK_RESULT_NOTE
-        assert "destination_dir is ignored" in org_mode.LINK_RESULT_NOTE
 
 
 class TestDownloadDeliveryConfigStagedLinkPath:
@@ -662,6 +661,12 @@ class TestPeekProvisioningConfigFromOrgConfig:
             )
         assert str(exc.value) == "org_bundle.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\""
 
+    def test_enabled_outside_organization_mode_raises(self, monkeypatch):
+        monkeypatch.setattr(org_mode, "resolve_mode", lambda org_config: "other")
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.PeekProvisioningConfig.from_org_config(self._cfg(enabled=True))
+        assert str(exc.value) == "org_bundle.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\""
+
     def test_unusable_base_url_raises(self):
         cfg = self._cfg(enabled=True)
         cfg["peek"]["base_url"] = "http://peek.example.com"
@@ -736,6 +741,12 @@ class TestGristProvisioningConfigFromOrgConfig:
             {"mode": "local", "grist": {"auto_provision": {"enabled": False, "provisioner_url": "http://x"}}}
         )
         assert config == org_mode.GristProvisioningConfig(enabled=False)
+
+    def test_enabled_outside_organization_mode_raises(self, monkeypatch):
+        monkeypatch.setattr(org_mode, "resolve_mode", lambda org_config: "other")
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            org_mode.GristProvisioningConfig.from_org_config(self._org(**self._enabled()))
+        assert str(exc.value) == 'org_bundle.json\'s "grist"."auto_provision" needs "mode": "org"'
 
     def test_enabled_without_server_url(self):
         org = self._org(**self._enabled())

@@ -1400,27 +1400,18 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
 
     google_client_config = _google_client_config(org_config)
 
-    # Computed once, not
-    # per connector -- Drive/Gmail/Confluence's own _download_file/
-    # _download_attachment methods branch on connector.download_mode, and
-    # (in org mode only) build a fully-qualified download_url from
-    # connector.download_base_url. Local mode's own connector.download_mode
-    # stays "local" and connector.download_config/download_base_url stay
-    # unset, exactly the original shape.
-    download_mode = org_mode.resolve_mode(org_config)
-    download_config = None
-    download_base_url = ""
-    if download_mode == "org":
-        download_config = org_mode.DownloadDeliveryConfig.from_org_config(org_config)
-        # ServerConfig.from_org_config already ran (and would have raised
-        # org_mode.ConfigurationError) before build_connectors was ever
-        # reached in a real org-mode boot -- see _start_org_web_server,
-        # which computes its own server_config first. Re-deriving it here
-        # keeps build_connectors self-contained (safe to call from a test
-        # or from ConnectorRegistry's own per-principal factory with no
-        # other org-mode wiring already in scope) at the cost of one cheap
-        # re-parse of the organization config's own "server" section.
-        download_base_url = org_mode.ServerConfig.from_org_config(org_config).issuer_url.rstrip("/")
+    # Computed once, not per connector: the download-delivery settings and the
+    # base URL every connector builds its one-time download_url from.
+    download_config = org_mode.DownloadDeliveryConfig.from_org_config(org_config)
+    # ServerConfig.from_org_config already ran (and would have raised
+    # org_mode.ConfigurationError) before build_connectors was ever
+    # reached in a real boot -- see _start_org_web_server, which computes
+    # its own server_config first. Re-deriving it here keeps build_connectors
+    # self-contained (safe to call from a test or from ConnectorRegistry's
+    # own per-principal factory with no other wiring already in scope) at the
+    # cost of one cheap re-parse of the organization config's own "server"
+    # section.
+    download_base_url = org_mode.ServerConfig.from_org_config(org_config).issuer_url.rstrip("/")
 
     # Gmail
     if enabled("gmail"):
@@ -1644,7 +1635,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             confluence_connector = ConfluenceConnector(confluence_client)
             confluence_connector.my_email = atlassian_token.get("account_email", "")
             confluence_connector.my_account_id = confluence_client.account_id
-            confluence_connector.download_mode = download_mode
             confluence_connector.download_config = download_config
             confluence_connector.download_base_url = download_base_url
             connectors.append(confluence_connector)
@@ -1718,12 +1708,12 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not org_mode.connector_enabled_by_org(org_config, "peek"):
                 raise PeekClientError("Peek organization config not installed")
-            pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=download_mode == "org")
+            pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=True)
             record = load_peek_token(_resolve_path(TOKEN_FILES["peek"]))
             client = PeekClient(peek_resolve_server(pinned, record), record["token"])
             client.check_connection()
             logger.info("Peek connector ready for %s", client.host)
-            connectors.append(PeekConnector(client, download_mode=download_mode))
+            connectors.append(PeekConnector(client))
         except PeekClientError as exc:
             logger.warning("Peek connector disabled: %s", exc)
             failures["peek"] = _classify_connector_failure(exc)
@@ -1733,13 +1723,12 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not org_mode.connector_enabled_by_org(org_config, "grist"):
                 raise GristClientError("Grist organization config not installed")
-            grist_bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=download_mode == "org")
+            grist_bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=True)
             token_path = _resolve_path(TOKEN_FILES["grist"])
             server_url, credential = grist_resolve_credential(grist_bundle, load_grist_token(token_path), token_path)
             grist_client = GristClient(server_url, credential)
             grist_client.check_connection()
             grist_connector = GristConnector(grist_client)
-            grist_connector.download_mode = download_mode
             grist_connector.download_config = download_config
             grist_connector.download_base_url = download_base_url
             connectors.append(grist_connector)

@@ -367,7 +367,7 @@ class SalesforceConnector(Connector):
         return "salesforce"
 
     def tool_specs(self) -> list[ToolSpec]:
-        return export_files.visible_specs(self._all_tool_specs(), "org", self.download_config)
+        return export_files.visible_specs(self._all_tool_specs(), self.download_config)
 
     def _all_tool_specs(self) -> list[ToolSpec]:
         return [
@@ -605,7 +605,7 @@ class SalesforceConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
-        export_files.refuse_if_exports_off(tool, "org", self.download_config)
+        export_files.refuse_if_exports_off(tool, self.download_config)
         if tool == "salesforce_list_reports":
             return await self._list_reports()
         if tool == "salesforce_get_record":
@@ -821,7 +821,7 @@ class SalesforceConnector(Connector):
             raise ValueError("cell_format must be value, label or both.")
         file_name, fmt = export_files.export_file_name(file_name, report_id)
         export_files.refuse_org_without_staging(
-            "salesforce_export_report", "org",
+            "salesforce_export_report",
             (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
             "salesforce_run_report",
         )
@@ -873,7 +873,7 @@ class SalesforceConnector(Connector):
         data = await asyncio.to_thread(export_files.render, names, rows, fmt, spreadsheet_safe=True)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = export_files.saved_to("", file_name, "org")
+        saved_to = export_files.ORG_SAVED_TO
         preview = {"Report": str(report_name), "Report ID": report_id}
         if column_list:
             preview["Columns"] = ", ".join(column_list)
@@ -915,7 +915,7 @@ class SalesforceConnector(Connector):
             },
         )
         delivered = local_files.deliver_export(
-            "", file_name, data, export_files.MIME_TYPES[fmt],
+            file_name, data, export_files.MIME_TYPES[fmt],
             download_config=self.download_config,
             download_base_url=self.download_base_url,
         )

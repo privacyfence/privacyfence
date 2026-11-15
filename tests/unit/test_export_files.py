@@ -25,34 +25,18 @@ class TestExportFileName:
             export_files.export_file_name(name, "x")
 
 
-class TestCheckDestination:
-    def test_returns_stripped(self):
-        assert export_files.check_destination("  ~/Downloads ") == "~/Downloads"
-
-    def test_rejects_empty(self):
-        with pytest.raises(ValueError, match="destination_dir"):
-            export_files.check_destination("   ")
-
-
 class TestRefuseOrgWithoutStaging:
-    def test_raises_only_in_org_mode_with_staging_off(self):
+    def test_raises_with_staging_off(self):
         with pytest.raises(ValueError, match="tool_x delivers its file.*Use other_tool instead"):
-            export_files.refuse_org_without_staging("tool_x", "org", False, "other_tool")
+            export_files.refuse_org_without_staging("tool_x", False, "other_tool")
 
-    def test_org_mode_with_staging_on_passes(self):
-        export_files.refuse_org_without_staging("tool_x", "org", True, "other_tool")
-
-    def test_local_mode_never_raises(self):
-        export_files.refuse_org_without_staging("tool_x", "local", False, "other_tool")
-        export_files.refuse_org_without_staging("tool_x", "local", True, "other_tool")
+    def test_with_staging_on_passes(self):
+        export_files.refuse_org_without_staging("tool_x", True, "other_tool")
 
 
 class TestSavedTo:
-    def test_local_joins_the_path(self):
-        assert export_files.saved_to("~/out/", "a.csv", "local") == "~/out/a.csv"
-
-    def test_org_says_one_time_link(self):
-        assert export_files.saved_to("~/out", "a.csv", "org") == export_files.ORG_SAVED_TO
+    def test_says_one_time_link(self):
+        assert export_files.ORG_SAVED_TO == "A one-time download link"
 
 
 class TestCsvCell:
@@ -150,19 +134,19 @@ class TestExportsOff:
         from privacyfence.org_mode import DownloadDeliveryConfig
         return DownloadDeliveryConfig(allow_exports=allow_exports)
 
-    def test_specs_lose_only_export_tools_in_org_mode_when_off(self):
+    def test_specs_lose_only_export_tools_when_off(self):
         specs = [_Spec("grist_get_records"), _Spec("grist_export_sql"), _Spec("jira_export_issues")]
-        kept = export_files.visible_specs(specs, "org", self._cfg(False))
+        kept = export_files.visible_specs(specs, self._cfg(False))
         assert [s.name for s in kept] == ["grist_get_records"]
 
-    @pytest.mark.parametrize("mode,cfg", [("org", True), ("local", False), ("org", None)])
-    def test_specs_untouched_otherwise(self, mode, cfg):
+    @pytest.mark.parametrize("cfg", [True, None])
+    def test_specs_untouched_otherwise(self, cfg):
         specs = [_Spec("grist_export_sql")]
         config = None if cfg is None else self._cfg(cfg)
-        assert export_files.visible_specs(specs, mode, config) == specs
+        assert export_files.visible_specs(specs, config) == specs
 
     def test_call_refused_when_off(self):
         with pytest.raises(ValueError, match="allow_exports"):
-            export_files.refuse_if_exports_off("assets_export_objects", "org", self._cfg(False))
-        export_files.refuse_if_exports_off("assets_get_object", "org", self._cfg(False))
-        export_files.refuse_if_exports_off("assets_export_objects", "org", self._cfg(True))
+            export_files.refuse_if_exports_off("assets_export_objects", self._cfg(False))
+        export_files.refuse_if_exports_off("assets_get_object", self._cfg(False))
+        export_files.refuse_if_exports_off("assets_export_objects", self._cfg(True))

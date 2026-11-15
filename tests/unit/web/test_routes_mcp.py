@@ -487,7 +487,7 @@ class TestFilesOverTheWire:
     async def test_a_path_that_is_not_an_upload_reference_reaches_the_model_as_the_upload_slot_message(self):
         class ReadsAPathConnector(EchoConnector):
             async def call(self, tool: str, args: dict) -> object:
-                local_files.require_local_files(["~/a.pdf"], max_total_bytes=1000, download_mode="org")
+                local_files.require_local_files(["~/a.pdf"], max_total_bytes=1000)
                 return {}
 
         dispatcher = _dispatcher({"echo": ReadsAPathConnector()})
