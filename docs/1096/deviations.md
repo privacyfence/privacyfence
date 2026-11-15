@@ -84,7 +84,12 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p08b-routes-approvals-security
 
-- pending
+- worker: tests/unit/web/test_routes_org_approvals.py (outside touches): renamed the _org_bridge_shim helper to _org_decide_shim, because the acceptance grep matches _bridge_shim as a substring of the organization function name.
+- worker: routes_approvals.py: also deleted the human_session_guard parameter, _no_human_session_guard and the sensitive_confirm variable (they only fed the local human-session check, and as dead code kept the file below its coverage floor). state_stream.py: removed push_settings, the receives_settings parameter and the settings_snapshot constructor argument, which leaves only the approvals event.
+- worker: New organization tests for behaviour only deleted tests covered: no Recent sign-ins section or warning on /security, a register/verify CSRF refusal, an audit-write failure that does not fail the request, the plain page when nav_items is None, an unrepresentable credential creation time, a close that wakes a waiting stream subscription, a delivered broadcast event and a non-JSON batch body. Coverage: routes_approvals 100% (floor 98), routes_security 100% (floor 97), state_stream 100% (floor 99).
+- worker: Stale comments naming _bridge_shim (routes_settings.py lines 481 and 504) and StateStream.push_settings (line 969) remain in a file p08a owned.
+- scope: scope: tests/unit/web/test_routes_org_approvals.py
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p09-controller-channel
 
