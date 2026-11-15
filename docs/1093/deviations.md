@@ -24,7 +24,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-rulesets-in-policy
 
-- pending
+- worker: tld ops repo-admin validate-policy was run by the orchestrator, not the worker, because the tld plugin is not installed in worker containers; it passed.
+- review: Diff matches section 3.6; ten required checks, merge-method settings and check_script added.
 
 ## p6-tld-lifecycle-docs
 
