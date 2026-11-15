@@ -207,7 +207,16 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p14c-mode-parameters
 
-- pending
+- worker: src/privacyfence/org_mode.py (outside touches, 4 lines): the Mode type was deleted as the last step, as the orchestrator told the worker (deferred from p14b).
+- worker: Outside touches: tests/unit/test_daemon_main.py, tests/unit/web/test_mcp_dispatch.py, test_routes_admin.py, test_routes_mcp.py and test_server_org_mode.py got one-line repoints to the new signatures.
+- scope: scope: src/privacyfence/org_mode.py
+- scope: scope: tests/unit/test_daemon_main.py
+- scope: scope: tests/unit/web/test_mcp_dispatch.py
+- scope: scope: tests/unit/web/test_routes_admin.py
+- scope: scope: tests/unit/web/test_routes_mcp.py
+- scope: scope: tests/unit/web/test_server_org_mode.py
+- review: After merge: unit suite 19789 passed, 3 skipped; integration set 12 passed, 1 skipped; coverage ratchet passes; scripts/qa_fixture_recorder.py compiles and answers --help.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p14d-mode-leftovers
 
