@@ -20,7 +20,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-wire-groups
 
-- pending
+- review: Worker reported no deviations and ran ruff, mypy and pytest by hand because the toolkit was unavailable. Orchestrator ran the dod commands after the merge as the owner chose (ask gate-handling); required roles were empty. Unit suite, daemon tests, the manifest pytest line, mypy, strict mypy, bandit and ruff pass.
 
 ## p5-reference-docs
 
