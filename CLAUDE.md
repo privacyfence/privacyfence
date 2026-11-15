@@ -3,8 +3,7 @@
 Notes for Claude Code sessions on PrivacyFence. Everything a human contributor also needs lives in
 the ordinary docs, not here:
 
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — branch naming, pull requests, `releases/*` integration
-  branches, and the plan/ADR lifecycle.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — branch naming, pull requests, and the plan/ADR lifecycle.
 - [`docs/releasing.md`](docs/releasing.md) — versioning, cutting a tag, release notes, gating,
   publishing `privacyfence-sync` to PyPI and the R2 archive.
 - [`docs/coding-and-testing-guidelines.md`](docs/coding-and-testing-guidelines.md) — code and test
