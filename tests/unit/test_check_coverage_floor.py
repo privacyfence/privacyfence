@@ -104,7 +104,6 @@ _WINDOWS_MODULE = next(iter(check_coverage_floor.WINDOWS_MODULE_FLOORS))
 # Floors are 0.0 until measured, so tests pin their own values rather than depend on them.
 _WINDOWS_FLOORS = {
     "src/privacyfence/windows_service.py": 50.0,
-    "src/privacyfence/windows_acl.py": 80.0,
 }
 
 

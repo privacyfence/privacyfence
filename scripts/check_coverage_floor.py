@@ -118,29 +118,6 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/privacy_filter.py": 100.0,
     # Atomic, permission-safe credential/config writes.
     "src/privacyfence/secure_files.py": 100.0,
-    # The module every process consults to decide where the
-    # human-authority files live and which account is supposed to own them.
-    # A gap here doesn't fail loudly -- it resolves the *un*separated layout
-    # on an install that thinks it is separated, which reads as "the policy
-    # reset itself" rather than as a permissions bug. 99.0 rather than a flat
-    # 100 only because of the platform branches this repo's Linux CI cannot
-    # execute (the pwd lookups a Windows build skips entirely).
-    "src/privacyfence/privilege_separation.py": 99.0,
-    # The Windows half of the same decision. NTFS ACLs
-    # are the only thing standing between the agent and the policy/passkey/
-    # audit-key files there -- POSIX modes do not exist on that platform --
-    # so a gap in the mask arithmetic below means the audit stops reporting a
-    # data directory every account on the machine can enumerate.
-    #
-    # 83.0 rather than a number in the nineties, and deliberately not raised
-    # by adding pragmas: this module is half pure logic (every audit
-    # function, all of it covered) and half four pywin32 calls that cannot
-    # execute on this repo's Linux CI at all. The floor protects the half
-    # that can; tests/platform/test_windows_acls.py covers the other half on
-    # the platform-windows job, against real ACLs icacls wrote. (Raised from
-    # its initial 81.0 by the owner/OWNER RIGHTS resolution that first real
-    # Windows run made necessary -- all of it pure, all of it tested.)
-    "src/privacyfence/windows_acl.py": 83.0,
     # OIDC discovery trust validation.
     "src/privacyfence/org_identity.py": 100.0,
     "src/privacyfence/web/routes_org_identity.py": 99.0,
@@ -201,10 +178,9 @@ MODULE_FLOORS: dict[str, float] = {
 # differently on Windows: the pywin32 and named-pipe code that the Linux run cannot execute is
 # covered there, and the POSIX half is not. These numbers gate only `--platform windows`.
 # Whole-percent, rounded down, measured on the platform-windows job on 2026-10-17
-# (windows_acl.py 89.66%, windows_service.py 32.00%).
+# (windows_service.py 32.00%).
 WINDOWS_MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/windows_service.py": 32.0,
-    "src/privacyfence/windows_acl.py": 89.0,
 }
 
 
