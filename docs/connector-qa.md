@@ -356,6 +356,12 @@ the shape into the new frame and the sticky note out of its frame. The client ha
       body)` means Atlassian sent no reason. Compare `assets.workspace_id` in the runner's
       `qa_environment.yaml` with the id the workspace URL above shows, and check that the site still
       has Jira Service Management with Assets.
+      The report row then also lists `probes:` (the workspace lookup, `objectschema/list` without
+      params, with `maxResults` 25 and 1, and an unknown workspace id as a control) and a `verdict:`:
+      intermittent (all three reads answer now), wrong id (the lookup shows another id), no
+      workspace (Assets is not enabled), `maxResults=1` rejected (follow up in `check_connection`),
+      or id behaves like an unknown one (wrong id or changed site), else undetermined. A
+      scope-refused lookup is normal and then one dispatch cannot tell a wrong id from a changed site.
 - [ ] Set `assets.schema_key` (default `PFQA`), `assets.seed_object_label` (default
       `PrivacyFence QA seed contract [QATEST]`) and optionally `assets.seed_object_key` (blank to
       resolve by label inside the schema).
