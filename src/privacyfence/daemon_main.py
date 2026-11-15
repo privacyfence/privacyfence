@@ -1438,7 +1438,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             gmail_connector.append_signature = bool(
                 (config.get("gmail", {}) or {}).get("append_signature_to_drafts", False)
             )
-            gmail_connector.download_mode = download_mode
             gmail_connector.download_config = download_config
             gmail_connector.download_base_url = download_base_url
             connectors.append(gmail_connector)
@@ -1459,7 +1458,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Drive connector ready for %s", email)
             drive_connector = DriveConnector(drive_client)
             drive_connector.my_email = email
-            drive_connector.download_mode = download_mode
             drive_connector.download_config = download_config
             drive_connector.download_base_url = download_base_url
             connectors.append(drive_connector)

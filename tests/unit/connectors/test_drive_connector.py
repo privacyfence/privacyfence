@@ -684,11 +684,12 @@ class TestPdfViewEmbed:
         assert gated_call_spy[0]["pdf_bytes"] == b""
 
 
+_DOWNLOAD_BYTES = {"data": b"x", "name": "f.bin", "mime_type": "application/octet-stream", "size_bytes": 1}
+
+
 class TestDownloadFile:
-    """drive_download_file must gate before calling
-    DriveClient.download_file (which streams the full file straight to its
-    final destination) -- otherwise a Deny would still leave the file on
-    disk. The gate runs first, using only cheap metadata (name/size/owner/
+    """drive_download_file must gate before fetching or delivering any bytes
+    -- otherwise a Deny would still hand the file out. The gate runs first, using only cheap metadata (name/size/owner/
     modified, all already available from get_file_metadata) for the
     preview, mirroring gmail.py's _download_attachment. These tests pin that
     ordering.
@@ -697,8 +698,8 @@ class TestDownloadFile:
 
 
     async def test_deny_leaves_the_file_undownloaded(self, monkeypatch):
-        """A denied gated_call must propagate before DriveClient.download_file
-        (the call that actually writes bytes to disk) is ever reached."""
+        """A denied gated_call must propagate before DriveClient.download_file_bytes
+        (the call that actually fetches the file) is ever reached."""
         connector, client = make_connector()
         client.get_file_metadata.return_value = make_file(
             name="Q3 Report.pdf", mime_type="application/pdf", size=4096,
@@ -710,9 +711,7 @@ class TestDownloadFile:
         monkeypatch.setattr(drive_module, "gated_call", deny)
 
         with pytest.raises(RuntimeError, match="denied"):
-            await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
-
-        client.download_file.assert_not_called()
+            await connector.call("drive_download_file", {"file_id": "f1"})
 
 
 
@@ -721,15 +720,15 @@ class TestDownloadFile:
 
     async def test_binary_content_is_extracted_for_pii_scan_text(self, gated_call_spy):
         connector, client = make_connector()
+        client.download_file_bytes.return_value = _DOWNLOAD_BYTES
         client.get_file_metadata.return_value = make_file(
             name="report.pdf", mime_type="application/pdf", size=2048,
         )
         client.get_file_content.return_value = DriveFileContent(
             file=make_file(), content_bytes=b"not actually a valid pdf",
         )
-        client.download_file.return_value = {"name": "report.pdf", "path": "/tmp/report.pdf", "size_bytes": 2048}
 
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        await connector.call("drive_download_file", {"file_id": "f1"})
 
         kwargs = gated_call_spy[0]
         # Garbage bytes don't parse as a real PDF -- extract_text degrades to
@@ -740,15 +739,15 @@ class TestDownloadFile:
 
     async def test_no_thumbnail_link_and_unextractable_content_keeps_preview_bytes_empty(self, gated_call_spy):
         connector, client = make_connector()
+        client.download_file_bytes.return_value = _DOWNLOAD_BYTES
         client.get_file_metadata.return_value = make_file(
             name="video.mp4", mime_type="video/mp4", size=2048, thumbnail_link="",
         )
         client.get_file_content.return_value = DriveFileContent(
             file=make_file(), content_bytes=b"\x00\x01binary junk",
         )
-        client.download_file.return_value = {"name": "video.mp4", "path": "/tmp/video.mp4", "size_bytes": 2048}
 
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        await connector.call("drive_download_file", {"file_id": "f1"})
 
         kwargs = gated_call_spy[0]
         assert kwargs["preview_bytes"] == b""
@@ -764,6 +763,7 @@ class TestDownloadFile:
         # rendered as a "markdown" preview_blocks entry instead of a visual
         # thumbnail -- see drive.py's _download_file.
         connector, client = make_connector()
+        client.download_file_bytes.return_value = _DOWNLOAD_BYTES
         client.get_file_metadata.return_value = make_file(
             name="report.docx",
             mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -772,9 +772,8 @@ class TestDownloadFile:
         client.get_file_content.return_value = DriveFileContent(
             file=make_file(), content_bytes=_make_docx_bytes("Please wire the deposit."),
         )
-        client.download_file.return_value = {"name": "report.docx", "path": "/tmp/report.docx", "size_bytes": 2048}
 
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        await connector.call("drive_download_file", {"file_id": "f1"})
 
         kwargs = gated_call_spy[0]
         assert kwargs["preview_bytes"] == b""
@@ -786,6 +785,7 @@ class TestDownloadFile:
 
     async def test_thumbnail_link_success_takes_priority_over_extracted_content(self, gated_call_spy):
         connector, client = make_connector()
+        client.download_file_bytes.return_value = _DOWNLOAD_BYTES
         client.get_file_metadata.return_value = make_file(
             name="photo.jpg", mime_type="image/jpeg", size=2048,
             thumbnail_link="https://signed.example/thumb",
@@ -794,9 +794,8 @@ class TestDownloadFile:
         client.get_file_content.return_value = DriveFileContent(
             file=make_file(), content_bytes=b"\xff\xd8realfilebytes",
         )
-        client.download_file.return_value = {"name": "photo.jpg", "path": "/tmp/photo.jpg", "size_bytes": 2048}
 
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        await connector.call("drive_download_file", {"file_id": "f1"})
 
         kwargs = gated_call_spy[0]
         assert kwargs["preview_bytes"] == b"\xff\xd8thumb"
@@ -823,7 +822,6 @@ class TestOrgModeDownloadDelivery:
         from privacyfence.org_mode import DownloadDeliveryConfig
 
         connector, client = make_connector()
-        connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(
             inline_max_bytes=inline_max_bytes, allow_disk_staging=allow_disk_staging,
             link_ttl_seconds=link_ttl_seconds, agent_links=agent_links,
@@ -839,7 +837,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"hello file bytes", "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 16,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert result["delivery"] == "inline"
         assert result["name"] == "f.pdf"
@@ -847,7 +845,6 @@ class TestOrgModeDownloadDelivery:
         assert result["size_bytes"] == 16
         import base64
         assert base64.b64decode(result["content_base64"]) == b"hello file bytes"
-        client.download_file.assert_not_called()
         # Nothing staged to disk for an inline delivery.
         from privacyfence.download_staging import get_download_staging_store
         assert get_download_staging_store().pending_count == 0
@@ -866,7 +863,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"x" * 5000, "name": "big.bin", "mime_type": "application/octet-stream", "size_bytes": 5000,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert result["delivery"] == "link"
         assert result["name"] == "big.bin"
@@ -891,7 +888,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"hello file bytes", "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 16,
         }
 
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert gated_call_spy[0]["content_reaches_result"] is True
 
@@ -902,7 +899,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"x" * 5000, "name": "big.bin", "mime_type": "application/octet-stream", "size_bytes": 5000,
         }
 
-        await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert gated_call_spy[0]["content_reaches_result"] is False
 
@@ -913,7 +910,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"tiny", "name": "f.bin", "mime_type": "application/octet-stream", "size_bytes": 4,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert gated_call_spy[0]["content_reaches_result"] is False
         assert result["delivery"] == "link"
@@ -930,7 +927,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"x" * 5000, "name": "big.bin", "mime_type": "application/octet-stream", "size_bytes": 5000,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert result["delivery"] == "link"
         assert result["download_url"].startswith("https://pf.example.com/downloads/")
@@ -941,7 +938,7 @@ class TestOrgModeDownloadDelivery:
         client.get_file_metadata.return_value = make_file(name="big.bin", mime_type="application/octet-stream", size=5_000)
 
         with pytest.raises(RuntimeError, match="disk staging is disabled"):
-            await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+            await connector.call("drive_download_file", {"file_id": "f1"})
 
         client.download_file_bytes.assert_not_called()
 
@@ -952,7 +949,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"ok", "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 2,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
         assert result["delivery"] == "inline"
 
     async def test_inline_max_bytes_zero_always_stages(self, gated_call_spy):
@@ -962,7 +959,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"", "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 0,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
         assert result["delivery"] == "link"
 
     @staticmethod
@@ -987,7 +984,6 @@ class TestOrgModeDownloadDelivery:
         from privacyfence.org_mode import DEFAULT_INLINE_MAX_BYTES, DownloadDeliveryConfig
 
         connector, client = make_connector()
-        connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig()
         connector.download_base_url = "https://pf.example.com"
         size = self._largest_inline_size("f.pdf", "application/pdf", DEFAULT_INLINE_MAX_BYTES) + offset
@@ -996,7 +992,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"x" * size, "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": size,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert result["delivery"] == expected
         assert gated_call_spy[0]["delivery"] == ("inline_base64" if expected == "inline" else "staged_link")
@@ -1012,7 +1008,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"x" * 900, "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 900,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert result["delivery"] == "link"
         assert gated_call_spy[0]["delivery"] == "staged_link"
@@ -1027,7 +1023,7 @@ class TestOrgModeDownloadDelivery:
             "data": b"x" * 2_000, "name": "f.pdf", "mime_type": "application/pdf", "size_bytes": 2_000,
         }
 
-        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+        result = await connector.call("drive_download_file", {"file_id": "f1"})
 
         assert gated_call_spy[0]["delivery"] == "inline_base64"
         assert result["delivery"] == "link"
@@ -1037,7 +1033,7 @@ class TestOrgModeDownloadDelivery:
         client.get_file_metadata.return_value = make_file(name="f.pdf", mime_type="application/pdf", size=900)
 
         with pytest.raises(RuntimeError, match=r"900 bytes \(1,200 once base64-encoded"):
-            await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+            await connector.call("drive_download_file", {"file_id": "f1"})
 
         client.download_file_bytes.assert_not_called()
 
@@ -1049,7 +1045,7 @@ class TestOrgModeDownloadDelivery:
         }
 
         with pytest.raises(RuntimeError, match=r"\"f.pdf\" is 2,000 bytes"):
-            await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+            await connector.call("drive_download_file", {"file_id": "f1"})
 
 
 class TestWriteToolsGateAndPreview:
@@ -1220,55 +1216,37 @@ class TestWriteToolsGateAndPreview:
         assert kwargs["details_text"] == "Looks good"
 
 
-class TestOrgModeUpload:
-    """ADR 0007 is Claude-Desktop-only: org mode's local_path upload keeps
-    reading directly from wherever the org daemon's own filesystem is --
-    see _upload_file's own is_org_local_path branch."""
-
-    async def test_local_path_upload_preview_and_dispatch_are_unchanged_in_org_mode(
-        self, tmp_path, gated_call_spy,
-    ):
-        connector, client = make_connector()
-        connector.download_mode = "org"
-        f = tmp_path / "photo.png"
-        f.write_bytes(b"\x89PNGfakebytes")
-        client.upload_file.return_value = {"id": "uploaded-org"}
-
-        result = await connector.call("drive_upload_file", {"local_path": str(f)})
-
-        assert result == {"id": "uploaded-org"}
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview"]["Size"] == "13 bytes"
-        assert kwargs["preview_bytes"] == b"\x89PNGfakebytes"
-        # org mode never routes through the bridge -- upload_file_bytes
-        # (the bridge's own upload entry point) is never called.
-        client.upload_file_bytes.assert_not_called()
-        client.upload_file.assert_called_once_with(str(f), "", "", "")
-
-
 class TestUploadFile:
     @pytest.fixture(autouse=True)
     def _isolated_data_dir(self, tmp_path, monkeypatch):
         from privacyfence import paths
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
-    async def test_requires_exactly_one_of_local_path_or_content_base64(self):
+    async def test_requires_exactly_one_of_content_base64_or_upload_id(self):
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="exactly one"):
             await connector.call("drive_upload_file", {})
         with pytest.raises(ValueError, match="exactly one"):
             await connector.call(
-                "drive_upload_file", {"local_path": "/tmp/x.txt", "content_base64": "aGk="}
+                "drive_upload_file", {"content_base64": "aGk=", "upload_id": "abc"}
             )
-        with pytest.raises(ValueError, match="exactly one"):
-            await connector.call(
-                "drive_upload_file", {"local_path": "/tmp/x.txt", "upload_id": "abc"}
-            )
-        with pytest.raises(ValueError, match="exactly one"):
-            await connector.call(
-                "drive_upload_file",
-                {"local_path": "/tmp/x.txt", "content_base64": "aGk=", "upload_id": "abc"},
-            )
+
+    async def test_an_upload_id_that_names_no_staged_slot_is_refused_before_any_approval(self, gated_call_spy):
+        from privacyfence import local_files
+
+        connector, client = make_connector()
+
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(LocalFileAccessError):
+            await connector.call("drive_upload_file", {"upload_id": "/etc/passwd", "name": "x"})
+
+        assert gated_call_spy == []
+        client.upload_file_bytes.assert_not_called()
+
+    def test_the_tool_declares_no_path_parameter(self):
+        spec = next(t for t in make_connector()[0].tool_specs() if t.name == "drive_upload_file")
+        assert {p.name for p in spec.params} == {
+            "content_base64", "upload_id", "name", "parent_folder_id", "reason",
+        }
 
     async def test_upload_id_claims_the_staged_bytes(self, gated_call_spy):
         from privacyfence import local_files
@@ -1293,17 +1271,14 @@ class TestUploadFile:
         assert kwargs["preview"]["Size"] == f"{len(b'uploaded bytes'):,} bytes"
         assert kwargs["preview"]["Source"] == "uploaded via privacyfence_create_upload_slot"
 
-    async def test_upload_id_works_in_org_mode_too(self, gated_call_spy):
-        """The point of capability uploads (ADR 0028): org mode has no
-        filesystem to read a local_path from, but an upload_id claim needs
-        neither can_access_user_files() nor a bridge -- see
-        local_files.require_local_files' own ``upload:`` handling."""
+    async def test_upload_id_claim_needs_no_filesystem(self, gated_call_spy):
+        """An upload_id claim needs only the slot's own token -- see
+        local_files.require_local_files' own ``upload:`` handling (ADR 0299)."""
         from privacyfence import local_files
         from privacyfence.principal import LOCAL_PRINCIPAL
         from privacyfence.upload_staging import get_upload_staging_store
 
         connector, client = make_connector()
-        connector.download_mode = "org"
         client.upload_file_bytes.return_value = {"id": "uploaded-via-slot-org"}
         store = get_upload_staging_store()
         token = store.create_slot(LOCAL_PRINCIPAL, "report.pdf", max_bytes=1000)
@@ -1334,7 +1309,6 @@ class TestUploadFile:
 
         monkeypatch.setattr(drive_module, "gated_call", fake_gated_call)
         connector, client = make_connector()
-        connector.download_mode = "org"
         client.upload_file_bytes.return_value = {"id": "uploaded-after-approval"}
         store = get_upload_staging_store()
         token = store.create_slot(LOCAL_PRINCIPAL, "report.pdf", max_bytes=1000)
@@ -1451,18 +1425,6 @@ class TestUploadFile:
 
 
 
-
-    async def test_local_path_missing_file_raises_before_any_approval(self, tmp_path, gated_call_spy):
-        # Reported before the human is ever asked to approve anything,
-        # rather than gating a "0 bytes" upload of a file that is not there.
-        connector, client = make_connector()
-        client.upload_file.return_value = {"id": "uploaded7"}
-
-        with pytest.raises(LocalFileAccessError):
-            await connector.call(
-                "drive_upload_file", {"local_path": str(tmp_path / "does-not-exist.png")}
-            )
-        assert gated_call_spy == []
 
     async def test_content_base64_image_gets_a_preview(self, gated_call_spy):
         import base64
@@ -2492,7 +2454,7 @@ class TestEveryToolIsAudited:
         await assert_all_tools_leave_an_audit_trail(
             connector, drive_module, monkeypatch, tmp_path,
             arg_overrides={
-                # Must supply exactly one of local_path/content_base64.
+                # Must supply exactly one of content_base64/upload_id.
                 "drive_upload_file": {"content_base64": "aGVsbG8=", "name": "greeting.txt"},
                 # values must be a JSON 2D array for _parse_json_2d_list to accept.
                 "drive_sheets_write_range": {"values": '[["a", "b"]]'},

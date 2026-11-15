@@ -119,7 +119,7 @@ def _current_state() -> "_CallState | None":
     return _state_ctx.get()
 
 
-def can_access_user_files(download_mode: str) -> bool:
+def can_access_user_files(download_mode: str = "org") -> bool:
     """Always ``False``: the server never reads or writes a path on a user's disk. Connectors
     still call it until their own phases drop it, and still pass ``download_mode``."""
     return False
@@ -205,7 +205,7 @@ def commit_uploads() -> None:
             )
 
 
-def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode: str) -> None:
+def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode: str = "org") -> None:
     """Called by a connector at the very top of its tool method, before any
     preview/PII-scan/gate work, so a missing or unreadable file is reported
     before the human is ever asked to approve anything.
@@ -275,7 +275,7 @@ def build_upload_slot(
     }
 
 
-def read_local_file(path: str, *, download_mode: str) -> bytes:
+def read_local_file(path: str, *, download_mode: str = "org") -> bytes:
     """``path``'s bytes, from the per-call upload cache. Only valid to call after
     ``require_local_files([path], ...)`` has already succeeded for this path in this call."""
     state = _current_state()
@@ -284,7 +284,7 @@ def read_local_file(path: str, *, download_mode: str) -> bytes:
     raise LocalFileAccessError(NO_BRIDGE_UPLOAD_MESSAGE)
 
 
-def local_file_size(path: str, *, download_mode: str) -> int:
+def local_file_size(path: str, *, download_mode: str = "org") -> int:
     """The size of ``path``'s upload, with the same resolution as ``read_local_file``."""
     state = _current_state()
     if state is not None and path in state.resolved:
@@ -306,7 +306,7 @@ def check_delivery_size(size: int) -> None:
 
 
 def deliver_file(
-    dest_dir: str, name: str, data: bytes, mime_type: str, *, download_mode: str,
+    dest_dir: str, name: str, data: bytes, mime_type: str, *, download_mode: str = "org",
 ) -> dict[str, Any]:
     """Hands ``data`` back as a one-time capability link: stages it in ``DownloadStagingStore``
     for ``current_principal()`` and returns a ``download_url`` the caller can ``curl`` directly
@@ -321,7 +321,7 @@ def deliver_file(
 
 def deliver_export(
     dest_dir: str, name: str, data: bytes, mime_type: str, *,
-    download_mode: str, download_config: DownloadDeliveryConfig | None, download_base_url: str,
+    download_mode: str = "org", download_config: DownloadDeliveryConfig | None, download_base_url: str,
 ) -> dict[str, Any]:
     """Where an export's file goes after its approval (ADR 0160): ``deliver_file`` outside organization mode;
     on an organization-managed install, a one-time staged link like a large Drive download's."""
