@@ -33,6 +33,8 @@ from privacyfence.web import mcp_tools
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
 
+from ...helpers import token_verifier
+
 
 # --------------------------------------------------------------------------- #
 # Tool schema assertions -- ToolSpec -> JSON Schema / mcp.types.Tool
@@ -327,7 +329,7 @@ TOKEN = "mcp-tools-test-token"
 
 @contextlib.asynccontextmanager
 async def _connected_session(dispatcher: McpDispatcher, *, token: str = TOKEN):
-    app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
+    app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(token))
     transport = httpx2.ASGITransport(app=app)
     async with mcp_lifespan(session_manager):
         async with httpx2.AsyncClient(
@@ -373,10 +375,10 @@ class TestStatusOverRealTransport:
     """End to end through the real /mcp Streamable HTTP transport -- what the
     retired sign-in-link tool's own transport test used to cover here, now
     asserting the thing that replaced it: an un-onboarded install tells the
-    model to send the human to the companion, and hands over no credential."""
+    model to send the human to their administrator, and hands over no credential."""
 
-    async def test_an_un_onboarded_install_points_at_the_companion(self):
-        dispatcher = _dispatcher({})
+    async def test_an_un_onboarded_install_points_at_the_administrator(self):
+        dispatcher = _dispatcher({}, mode="org")
         dispatcher.set_connectors_state_provider(lambda: [
             {"name": "gmail", "enabled": True, "authenticated": False, "blocked_by": "not_authenticated"},
         ])
@@ -384,7 +386,8 @@ class TestStatusOverRealTransport:
             result = await session.call_tool("privacyfence_status", {"reason": "checking setup"})
 
         assert result.is_error is False
-        assert result.structured_content["next_step"] == "open_privacyfence_companion"
+        assert result.structured_content["next_step"] == "contact_your_administrator"
+        assert "deprecation" not in result.structured_content
         assert result.structured_content["sign_in_url"] is None
 
     async def test_the_retired_tool_is_not_callable_at_all(self):

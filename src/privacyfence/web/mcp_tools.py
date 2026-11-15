@@ -263,13 +263,11 @@ PRIVACYFENCE_STATUS_TOOL = types.Tool(
         "PrivacyFence-governed action in a conversation, or when asked why a connector (gmail_*, "
         "...) is missing. An empty or partial tool list means connectors aren't authenticated yet, "
         "NOT that PrivacyFence is irrelevant -- this tool exists even when every other is missing. "
-        "Returns {mode ('local'/'org'), setup_complete (any connector authenticated), connectors "
+        "Returns {mode, setup_complete (any connector authenticated), connectors "
         "[{name, enabled, authenticated, blocked_by: null, 'no_org_config', 'not_authenticated' or "
-        "a reason}], next_step, message, sign_in_url (always null), deprecation (local mode: a "
-        "notice to relay once)}. If setup isn't complete, relay message "
-        "as-is. next_step 'open_privacyfence_companion' (local): the human opens PrivacyFence's "
-        "companion app (menu-bar, tray or applications menu) and chooses Open Settings; "
-        "you have no link. 'contact_your_administrator' (org): sign-in is via the org's IdP. Only "
+        "a reason}], next_step, message, sign_in_url (always null)}. If setup isn't complete, relay "
+        "message as-is. next_step 'contact_your_administrator': sign-in is via the PrivacyFence "
+        "server's Connect page or the org's IdP; you have no link. Only "
         "side effect: an audit entry. reason: one sentence on why you're checking now (logged)."
     ),
     input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},

@@ -1,9 +1,12 @@
 """Test-only helpers shared across the unit test suite."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
 
+from mcp.server.auth.provider import AccessToken, TokenVerifier
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.auto_accept import TOOL_TO_GATE, ReviewContext
 from privacyfence.connector import Connector, ToolSpec
@@ -170,3 +173,19 @@ def assert_no_placeholder_fields(
     """
     blank = {k: v for k, v in preview.items() if v in placeholders}
     assert not blank, f"Preview fields fell back to a placeholder: {blank}"
+
+
+class _FixedTokenVerifier(TokenVerifier):
+    def __init__(self, token: str, principal_id: str) -> None:
+        self._digest = hashlib.sha256(token.encode("utf-8")).digest()
+        self._principal_id = principal_id
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not token or not hmac.compare_digest(hashlib.sha256(token.encode("utf-8")).digest(), self._digest):
+            return None
+        return AccessToken(token=token, client_id="local", scopes=[], subject=self._principal_id)
+
+
+def token_verifier(token: str, principal_id: str = "local") -> TokenVerifier:
+    """A verifier accepting exactly one fixed bearer token, for a test that drives ``/mcp``."""
+    return _FixedTokenVerifier(token, principal_id)

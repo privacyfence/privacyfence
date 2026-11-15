@@ -1788,7 +1788,7 @@ class TestExportReport:
 
         await connector.call("salesforce_export_report", EXPORT_ARGS)
 
-        assert gated_call_spy[0]["delivery"] == "local_disk"
+        assert gated_call_spy[0]["delivery"] == "client_bridge"
 
     async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
         connector, _client = export_connector()

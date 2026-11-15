@@ -57,7 +57,7 @@ from ..gate import audit_scoped_refusal, reason_scope
 from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
 from . import mcp_tools
-from .mcp_auth import principal_from_access_token, scope_from_access_token, single_token_verifier
+from .mcp_auth import principal_from_access_token, scope_from_access_token
 from .mcp_dispatch import SESSIONLESS_SESSION_KEY, McpDispatcher
 from . import org_session
 from .csp import nonce_for
@@ -68,12 +68,6 @@ from .single_user_auth import SINGLE_USER_PRINCIPAL
 logger = logging.getLogger(__name__)
 
 MCP_PATH = "/mcp"
-
-# ADR 0007's file-bridge capability header, on every request a bridge-
-# capable shim sends (SS1.1). The vendor _meta namespace itself is
-# local_files.META_KEY -- the single source of truth for that string, not
-# redefined here.
-_FILE_BRIDGE_HEADER = "x-privacyfence-file-bridge"
 
 # Server instructions returned in the `initialize` result
 # (Server.instructions -> InitializationOptions.instructions -- no Server
@@ -92,10 +86,10 @@ SERVER_INSTRUCTIONS = (
     "authenticated yet -- it does NOT mean PrivacyFence has nothing to do with the current "
     "request. Call privacyfence_status before the first PrivacyFence-governed action in a "
     "conversation, or whenever the user asks why a connector isn't available: it reports the "
-    "real setup state and, if nothing is authenticated yet, what to tell the user to do about it "
-    "-- which is to open PrivacyFence's own companion app, not to ask you for a link: "
-    "PrivacyFence does not issue sign-in links to this client. It is the one tool guaranteed to "
-    "exist even when every other tool is missing.\n\n"
+    "real setup state and, if nothing is authenticated yet, what to tell the user to do about it. "
+    "If PrivacyFence needs the person to sign in or connect a service, tell them to open the "
+    "PrivacyFence server's Connect page, or to ask their administrator. It is the one tool "
+    "guaranteed to exist even when every other tool is missing.\n\n"
     "Most conversations have nothing to do with PrivacyFence and should not call any "
     "privacyfence_* tool at all."
 )
@@ -281,33 +275,6 @@ def _session_key(ctx: ServerRequestContext) -> str:
         return header
     connection = _connection_of(ctx)
     return getattr(connection, "session_id", None) or _SESSIONLESS_KEY
-
-
-def _request_header(ctx: ServerRequestContext, name: str) -> str | None:
-    request = ctx.request
-    return request.headers.get(name) if request is not None else None
-
-
-def _file_bridge_uploads(params: types.CallToolRequestParams) -> dict[str, str]:
-    """The ``{declared_path: slot}`` map a bridge-capable shim resends on
-    the second round of the upload handshake (ADR 0007 SS1.1 step 4) --
-    empty on every first-round call, including every call from a client
-    that never does the handshake at all."""
-    meta = params.meta or {}
-    bridge_meta = meta.get(local_files.META_KEY)
-    if not isinstance(bridge_meta, dict):
-        return {}
-    uploads = bridge_meta.get("uploads")
-    return dict(uploads) if isinstance(uploads, dict) else {}
-
-
-def _need_uploads_result(principal: Any, needed: local_files.LocalFilesNeeded) -> types.CallToolResult:
-    files = local_files.build_need_uploads_files(principal, needed)
-    names = ", ".join(f["path"] for f in files)
-    text = f"PrivacyFence needs the file(s) below uploaded by the PrivacyFence extension: {names}"
-    result = types.CallToolResult(content=[types.TextContent(type="text", text=text)])
-    result.meta = {local_files.META_KEY: {"v": 1, "op": "need_uploads", "files": files}}
-    return result
 
 
 class _PrivacyFenceServer(MCPServer):
@@ -507,14 +474,10 @@ def build_mcp_server(
             agent = UNKNOWN_AGENT if is_meta_tool and name not in _ATTRIBUTED_META_TOOLS else _resolve_agent(
                 ctx, access_token, client_names, attested_agents=attested_agents, overrides=overrides,
             )
-        bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
-        uploads = _file_bridge_uploads(params)
         base_url = str(ctx.request.base_url) if ctx.request is not None else ""
         with (
             principal_scope(principal), agent_scope(agent), scoped_tokens.token_scope(scope),
-            local_files.call_context(
-                bridge_available=bridge_available, uploads=uploads, base_url=base_url,
-            ) as call_state,
+            local_files.call_context(base_url=base_url),
         ):
             if scope is not None and not _scoped_token_allows(scope, name, is_meta_tool=is_meta_tool):
                 with reason_scope(str(arguments.get("reason", ""))):
@@ -532,13 +495,6 @@ def build_mcp_server(
                     )
                 else:
                     result = await _dispatch_connector_tool(dispatcher, session_key, name, arguments)
-            except local_files.LocalFilesNeeded as needed:
-                # ADR 0007 SS1.1: not a failure -- the shim intercepts this
-                # response, fetches the listed paths from the user's own
-                # disk, and resends the same call with an uploads map. Logged
-                # at INFO, not as a tool-call failure.
-                logger.info("Tool call %s needs %d local file(s) via the file bridge", name, len(needed.paths))
-                return _need_uploads_result(principal, needed)
             except Exception as exc:  # noqa: BLE001 -- surfaced to the client as a tool error, not a
                 # transport-level failure, exactly like ipc_server.py's own
                 # `{"id": ..., "error": str(exc)}` response to a "call" request.
@@ -558,14 +514,6 @@ def build_mcp_server(
                 logger.info("Tool call %s failed: %s", name, exc)
                 return mcp_tools.error_result(public_message(exc))
             tool_result = mcp_tools.to_call_tool_result(result)
-            if call_state.pending_deliveries:
-                # SS1.1's "deliver" op: the shim intercepts this response,
-                # writes each staged file to the path the agent originally
-                # asked for, then rewrites the result before Claude ever
-                # sees it -- see mcpb/shim/src/fileBridge.ts.
-                tool_result.meta = {
-                    local_files.META_KEY: {"v": 1, "op": "deliver", "files": call_state.pending_deliveries},
-                }
         return tool_result
 
     return _PrivacyFenceServer(
@@ -905,7 +853,7 @@ class _RehomeStaleInitialize:
 
 
 def build_mcp_asgi_app(
-    dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
+    dispatcher: McpDispatcher, *, verifier: TokenVerifier,
     resource_metadata_url: AnyHttpUrl | None = None, client_names: ClientNameLookup | None = None,
     attested_agents: AttestedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> tuple[ASGIApp, StreamableHTTPSessionManager]:
@@ -936,10 +884,6 @@ def build_mcp_asgi_app(
     server = build_mcp_server(dispatcher, client_names=client_names, attested_agents=attested_agents, overrides=overrides)
     session_manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=False)
 
-    if verifier is None:
-        if token is None:
-            raise ValueError("build_mcp_asgi_app needs either token or verifier")
-        verifier = single_token_verifier(token)
     protected = RequireAuthMiddleware(
         _SessionIdOnlyOnSuccess(
             _RehomeStaleInitialize(_StreamableHTTPASGIApp(session_manager), session_manager),
@@ -952,7 +896,7 @@ def build_mcp_asgi_app(
 
 
 def mount_mcp(
-    dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
+    dispatcher: McpDispatcher, *, verifier: TokenVerifier,
     resource_metadata_url: AnyHttpUrl | None = None, client_names: ClientNameLookup | None = None,
     attested_agents: AttestedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> tuple[Route, StreamableHTTPSessionManager]:
@@ -963,7 +907,7 @@ def mount_mcp(
     sub-path routing underneath it.
     """
     app, session_manager = build_mcp_asgi_app(
-        dispatcher, token=token, verifier=verifier, resource_metadata_url=resource_metadata_url,
+        dispatcher, verifier=verifier, resource_metadata_url=resource_metadata_url,
         client_names=client_names, attested_agents=attested_agents, overrides=overrides,
     )
     return Route(MCP_PATH, endpoint=app), session_manager

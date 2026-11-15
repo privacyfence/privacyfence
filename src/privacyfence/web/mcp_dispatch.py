@@ -24,7 +24,6 @@ from ..auto_accept import (
     PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
 )
 from .. import agent_runtimes, audit_log, local_files, runtime_credentials, scoped_tokens
-from ..org_mode import LOCAL_MODE_DEPRECATION
 from ..connector import Connector
 from ..agent_identity import current_agent
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
@@ -38,7 +37,7 @@ from ..policy import propose as policy_propose
 from ..policy import scope_rows
 from ..policy import registry as policy_registry
 from ..policy.suggest import suggested_rules
-from ..principal import LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
+from ..principal import Principal, current_principal, principal_scope
 from ..scoped_token_proposals import REVIEW_PATH, get_registry, new_proposal, review_data
 from ..scoped_token_proposals import record as record_proposal
 from ..scoped_tokens import REVOKED_SCOPE, ScopedTokenPolicy, current_token_scope
@@ -261,6 +260,7 @@ class McpDispatcher:
         connector = self.connectors.get(connector_name)
         if connector is None:
             raise ValueError(f"Unknown connector: {connector_name!r}")
+        args = self._declared_args_only(connector, tool, args)
 
         # principal_id folds into both the dedupe key and the
         # last-write timestamp below.
@@ -338,12 +338,10 @@ class McpDispatcher:
             raise
         fut.set_result(result)
         if local_files.call_produced_deliveries():
-            # A result that staged a file-bridge download carries a
-            # single-use download_staging token in its _meta -- reusing it
-            # from the dedupe cache would hand a second caller a token the
-            # first claim (or the shim writing the first response to disk)
-            # already consumed. See local_files.call_produced_deliveries's
-            # own docstring.
+            # A result that staged a one-time download link carries a single-use
+            # download_staging token -- reusing it from the dedupe cache would hand a
+            # second caller a link whose token the first claim already consumed. See
+            # local_files.call_produced_deliveries's own docstring.
             self._inflight.pop(key, None)
         if not self._is_read_only(connector, tool):
             self._last_write_at[(principal_id, connector_name)] = time.time()
@@ -374,6 +372,20 @@ class McpDispatcher:
             f"{principal_id}:{scope_id}:{session_key}:{agent_id}:{connector_name}:{tool}:"
             f"{json.dumps(args, sort_keys=True, default=str)}"
         )
+
+    @staticmethod
+    def _declared_args_only(connector: Connector, tool: str, args: dict) -> dict:
+        """Drops every argument the tool does not declare, so an agent holding a cached schema that
+        still sends a parameter a later release removed is ignored instead of raising ``TypeError``
+        in the connector. A tool with a verbatim ``input_schema`` (an upstream MCP tool) or no spec
+        at all is left alone: its own schema, not a ``ToolParam`` list, says what it takes."""
+        for spec in connector.tool_specs():
+            if spec.name == tool:
+                if spec.input_schema is not None:
+                    return args
+                declared = {p.name for p in spec.params} | _CONNECTOR_COMPUTED_ARGS
+                return {k: v for k, v in args.items() if k in declared}
+        return args
 
     @staticmethod
     def _is_read_only(connector: Connector, tool: str) -> bool:
@@ -539,10 +551,6 @@ class McpDispatcher:
         proposal for a person to review in Settings and returns its link. Never mints a token."""
         if current_token_scope() is not None:
             raise GateDeniedError("Request denied: a scoped token cannot propose tokens.")
-        if self._mode == "local" and current_principal().id != LOCAL_PRINCIPAL.id:
-            raise ValueError(
-                "Token proposals are reviewed by this computer's owner; this account has no Scoped tokens page."
-            )
         policy = self._scoped_token_policy
         if policy is None or not self.scoped_token_proposals_enabled():
             raise ValueError(scoped_tokens.PROPOSALS_DISABLED_MESSAGE)
@@ -557,7 +565,7 @@ class McpDispatcher:
         credential_type = agent_runtimes.DEFAULT_CREDENTIAL_TYPE
         if "deliver_to" in params:
             runtime_config = self._agent_runtime
-            if self._mode == "local" or runtime_config is None or not agent_runtimes.delivery_available(runtime_config):
+            if runtime_config is None or not agent_runtimes.delivery_available(runtime_config):
                 raise ValueError(agent_runtimes.DELIVERY_UNAVAILABLE)
             delivery = agent_runtimes.parse_deliver_to(params["deliver_to"])
             mcp_url = agent_runtimes.mcp_url_for(runtime_config, base_url)
@@ -703,7 +711,6 @@ class McpDispatcher:
         setup_complete = any(c["authenticated"] for c in connectors)
         result: dict[str, Any] = {
             "mode": self._mode, "setup_complete": setup_complete, "connectors": connectors,
-            "deprecation": LOCAL_MODE_DEPRECATION if self._mode == "local" else None,
         }
 
         # ADR 0285: only when the operator configured upstream MCP servers.
@@ -722,34 +729,13 @@ class McpDispatcher:
             self._audit_status_check("status_checked", claude_reason)
             return result
 
-        if self._mode != "local":
-            result["next_step"] = "contact_your_administrator"
-            result["sign_in_url"] = None
-            result["message"] = (
-                "PrivacyFence is running in organization mode, but no connector is authenticated "
-                "for this account yet. There is no local sign-in link here -- organization mode "
-                "signs in through its own identity provider, so ask the human to check with their "
-                "administrator about getting connectors authorized for their account."
-            )
-            self._audit_status_check("status_checked", claude_reason)
-            return result
-
-        # Points at the companion rather than at anything reachable over
-        # /mcp: no MCP tool mints a sign-in credential (ADR 0013,
-        # docs/adr/0013-no-mcp-tool-mints-a-sign-in-credential.md), so what
-        # is left for an un-onboarded install is the one affordance that
-        # does not route through this process at all.
-        result["next_step"] = "open_privacyfence_companion"
+        result["next_step"] = "contact_your_administrator"
         result["sign_in_url"] = None
         result["message"] = (
-            "PrivacyFence is running, but nothing is authenticated yet -- an empty or partial "
-            "tool list means \"not set up\", not \"nothing to do here\". Ask the human to open "
-            "PrivacyFence's companion app -- the menu-bar icon on macOS, the tray icon on "
-            "Windows, the PrivacyFence entry in the applications menu on Linux -- and choose "
-            "Open Settings, then authenticate at least one connector (Gmail, Slack, etc.). "
-            "There is no link for you to hand them: a sign-in link is exactly the credential "
-            "that governs this process, so PrivacyFence never issues one to it. "
-            "PrivacyFence-governed tools stay unavailable until they finish."
+            "PrivacyFence is running in organization mode, but no connector is authenticated "
+            "for this account yet. There is no local sign-in link here -- organization mode "
+            "signs in through its own identity provider, so ask the human to check with their "
+            "administrator about getting connectors authorized for their account."
         )
         self._audit_status_check("status_checked", claude_reason)
         return result

@@ -40,6 +40,8 @@ from privacyfence.web.mcp_tools import META_TOOL_NAMES, RUNTIME_CREDENTIAL_STATU
 from privacyfence.web import routes_mcp as rm
 from privacyfence.web.routes_mcp import SERVER_INSTRUCTIONS, build_mcp_asgi_app, mcp_lifespan
 
+from ...helpers import token_verifier
+
 
 class EchoConnector(Connector):
     """A minimal real connector -- exercises manifest -> tool listing ->
@@ -105,7 +107,7 @@ async def _connected_session(
     if verifier is not None:
         app, session_manager = build_mcp_asgi_app(dispatcher, verifier=verifier)
     else:
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(token))
     transport = httpx2.ASGITransport(app=app)
 
     async with mcp_lifespan(session_manager):
@@ -122,7 +124,7 @@ async def _connected_session(
 
 
 def _raw_client(dispatcher: McpDispatcher, *, token: str = TOKEN) -> httpx.AsyncClient:
-    app, _session_manager = build_mcp_asgi_app(dispatcher, token=token)
+    app, _session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(token))
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
 
 
@@ -132,7 +134,7 @@ async def _raw_client_on_a_running_app(dispatcher: McpDispatcher, *, token: str 
     running -- needed by anything that drives a request far enough for a
     session to actually be opened for it (``_raw_client`` alone is only good
     for requests rejected before that, like the auth tests above)."""
-    app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
+    app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(token))
     async with mcp_lifespan(session_manager):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://testserver",
@@ -204,13 +206,6 @@ class TestAuth:
         async with _connected_session(_dispatcher()):
             pass  # ClientSession.initialize() succeeding is the assertion.
 
-    def test_build_mcp_asgi_app_requires_a_token_or_a_verifier(self):
-        # build_mcp_asgi_app takes an alternative to `token` (`verifier`,
-        # for web/oauth_provider.py's OrgOAuthProvider) -- calling it with
-        # neither is a caller bug, not a runtime condition to silently
-        # tolerate.
-        with pytest.raises(ValueError):
-            build_mcp_asgi_app(_dispatcher())
 
 
 # --------------------------------------------------------------------------- #
@@ -221,7 +216,7 @@ class TestAuth:
 class TestServerInstructions:
     async def test_initialize_result_carries_the_instructions(self):
         dispatcher = _dispatcher()
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         async with mcp_lifespan(session_manager):
             async with httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -233,6 +228,8 @@ class TestServerInstructions:
                     async with ClientSession(read, write) as session:
                         result = await session.initialize()
         assert result.instructions == SERVER_INSTRUCTIONS
+        assert "companion" not in SERVER_INSTRUCTIONS
+        assert "Connect page" in SERVER_INSTRUCTIONS
         # Named concretely, per the status tool's own docstring -- the
         # instructions are what tells a client the tool exists and why to
         # call it, not just that an empty tool list means "not set up".
@@ -249,7 +246,7 @@ class TestToolsListChangedCapability:
 
     async def test_initialize_result_advertises_tools_list_changed(self):
         dispatcher = _dispatcher()
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         async with mcp_lifespan(session_manager):
             async with httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -271,7 +268,7 @@ class TestToolsListChangedCapability:
         # permanent no-op.
         dispatcher = _dispatcher()
         assert dispatcher._tools_changed_broadcaster is None
-        build_mcp_asgi_app(dispatcher, token=TOKEN)
+        build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         assert dispatcher._tools_changed_broadcaster is not None
 
     def test_broadcast_with_no_running_loop_is_a_silent_no_op(self):
@@ -280,7 +277,7 @@ class TestToolsListChangedCapability:
         # _broadcast_tools_changed's own comment) -- this is a plain, non-
         # async test specifically so there is no running loop here either.
         dispatcher = _dispatcher()
-        build_mcp_asgi_app(dispatcher, token=TOKEN)
+        build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         dispatcher.notify_tools_changed()  # must not raise
 
     async def test_broadcast_calls_send_tool_list_changed_on_the_captured_session(self, monkeypatch):
@@ -300,7 +297,7 @@ class TestToolsListChangedCapability:
         monkeypatch.setattr(Connection, "send_tool_list_changed", _record)
 
         dispatcher = _dispatcher()
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         async with mcp_lifespan(session_manager):
             async with httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -334,7 +331,7 @@ class TestToolsListChangedCapability:
         monkeypatch.setattr(Connection, "send_tool_list_changed", _raise)
 
         dispatcher = _dispatcher()
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         async with mcp_lifespan(session_manager):
             async with httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -483,62 +480,54 @@ class TestCallConnectorTool:
         assert len(connector.calls) == 1
 
 
-class TestFileBridgeOverTheWire:
-    """ADR 0007 SS1.1's wire protocol, driven in process. The Node shim contract test
-    (tests/integration/test_shim_mcp_contract.py) covers it end to end, but it skips
-    itself when the shim cannot be built, and this module is under a 100% floor -- so
-    the Python half must not depend on it."""
+class TestFilesOverTheWire:
+    """ADR 0299: files move by upload slot, inline bytes or a one-time link -- never by a
+    handshake carried in the result's ``_meta``."""
 
-    async def test_a_connector_needing_local_files_gets_a_need_uploads_result(self):
-        class NeedsFilesConnector(EchoConnector):
+    async def test_a_path_that_is_not_an_upload_reference_reaches_the_model_as_the_upload_slot_message(self):
+        class ReadsAPathConnector(EchoConnector):
             async def call(self, tool: str, args: dict) -> object:
-                raise local_files.LocalFilesNeeded(["~/a.pdf", "~/b.pdf"], max_bytes=1000)
-
-        dispatcher = _dispatcher({"echo": NeedsFilesConnector()})
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool("echo_say", {"message": "hi"})
-        assert result.is_error is False
-        assert "~/a.pdf, ~/b.pdf" in result.content[0].text
-        bridge = result.meta[local_files.META_KEY]
-        assert bridge["v"] == 1
-        assert bridge["op"] == "need_uploads"
-        assert [f["path"] for f in bridge["files"]] == ["~/a.pdf", "~/b.pdf"]
-        assert all(f["upload_path"] == f"/mcp-files/uploads/{f['slot']}" for f in bridge["files"])
-
-    async def test_a_staged_delivery_rides_back_in_the_result_meta(self):
-        delivery = {"dest_dir": "~/Downloads", "name": "report.pdf", "download_path": "/mcp-files/downloads/x"}
-
-        class DeliversConnector(EchoConnector):
-            async def call(self, tool: str, args: dict) -> object:
-                local_files._current_state().pending_deliveries.append(delivery)
-                return {"ok": True}
-
-        dispatcher = _dispatcher({"echo": DeliversConnector()})
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool("echo_say", {"message": "hi"})
-        assert result.structured_content == {"ok": True}
-        assert result.meta[local_files.META_KEY] == {"v": 1, "op": "deliver", "files": [delivery]}
-
-    async def test_the_second_round_uploads_map_reaches_the_connector(self):
-        seen: list[dict[str, str]] = []
-
-        class ReadsUploadsConnector(EchoConnector):
-            async def call(self, tool: str, args: dict) -> object:
-                seen.append(dict(local_files._current_state().uploads))
+                local_files.require_local_files(["~/a.pdf"], max_total_bytes=1000, download_mode="org")
                 return {}
 
-        dispatcher = _dispatcher({"echo": ReadsUploadsConnector()})
+        dispatcher = _dispatcher({"echo": ReadsAPathConnector()})
         async with _connected_session(dispatcher) as session:
-            await session.call_tool(
-                "echo_say", {"message": "one"}, meta={local_files.META_KEY: {"uploads": {"~/a.pdf": "slot-a"}}},
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.is_error is True
+        assert result.content[0].text == local_files.NO_BRIDGE_UPLOAD_MESSAGE
+        assert result.meta is None
+
+    async def test_a_staged_link_rides_in_the_structured_result_and_never_in_the_meta(self):
+        class LinksConnector(EchoConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                local_files.mark_staged_download()
+                return {"delivery": "link", "download_url": "https://pf.example/mcp-files/fetch/x"}
+
+        dispatcher = _dispatcher({"echo": LinksConnector()})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.structured_content["download_url"] == "https://pf.example/mcp-files/fetch/x"
+        assert result.meta is None
+
+    async def test_the_former_bridge_header_and_meta_are_ignored(self):
+        connector = EchoConnector()
+        dispatcher = _dispatcher({"echo": connector})
+        async with _connected_session(
+            dispatcher, headers={"X-PrivacyFence-File-Bridge": "1"},
+        ) as session:
+            result = await session.call_tool(
+                "echo_say", {"message": "hi"}, meta={"privacyfence.eu/file-bridge": {"uploads": {"~/a.pdf": "s"}}},
             )
-            # Malformed bridge metadata is ignored, never an error: a first-round call, or
-            # a client that does not do the handshake at all, behaves as if it were absent.
-            await session.call_tool("echo_say", {"message": "two"}, meta={local_files.META_KEY: "junk"})
-            await session.call_tool(
-                "echo_say", {"message": "three"}, meta={local_files.META_KEY: {"uploads": ["not", "a", "map"]}},
-            )
-        assert seen == [{"~/a.pdf": "slot-a"}, {}, {}]
+        assert result.is_error is False
+        assert result.meta is None
+
+    async def test_an_argument_the_tool_no_longer_declares_is_ignored(self):
+        connector = EchoConnector()
+        dispatcher = _dispatcher({"echo": connector})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("echo_say", {"message": "hi", "destination_dir": "~/Downloads"})
+        assert result.is_error is False
+        assert connector.calls == [("echo_say", {"message": "hi"})]
 
 
 # --------------------------------------------------------------------------- #
@@ -1009,7 +998,7 @@ class TestScopedTokens:
 class TestSessionCleanup:
     async def test_ending_the_session_clears_its_unattended_flag(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         transport = httpx2.ASGITransport(app=app)
 
         async with mcp_lifespan(session_manager):

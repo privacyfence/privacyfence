@@ -47,6 +47,8 @@ from privacyfence.gmail_client import (
 from privacyfence.local_files import LocalFileAccessError
 from googleapiclient.errors import HttpError
 
+pytestmark = pytest.mark.usefixtures("disk_backed_local_files")
+
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "gmail"
 
 

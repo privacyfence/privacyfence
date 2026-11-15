@@ -229,21 +229,3 @@ class TestScopedTokenPrincipals:
     def test_no_users_folder_yields_only_the_local_principal(self, tmp_path, monkeypatch):
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         assert list(mcp_auth.scoped_token_principals()) == [LOCAL_PRINCIPAL]
-
-
-class TestSingleTokenVerifier:
-    async def test_accepts_exactly_its_own_token(self):
-        verifier = mcp_auth.single_token_verifier("onlytoken", Principal(id="alice"))
-        accepted = await verifier.verify_token("onlytoken")
-        assert accepted is not None
-        assert accepted.subject == "alice"
-        assert accepted.client_id == "local"
-
-    async def test_refuses_any_other_token_and_the_empty_one(self):
-        verifier = mcp_auth.single_token_verifier("onlytoken")
-        assert await verifier.verify_token("othertoken") is None
-        assert await verifier.verify_token("") is None
-
-    async def test_defaults_to_the_local_principal(self):
-        accepted = await mcp_auth.single_token_verifier("t").verify_token("t")
-        assert accepted is not None and accepted.subject == LOCAL_PRINCIPAL.id

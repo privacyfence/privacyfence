@@ -39,7 +39,7 @@ from privacyfence.web import mcp_tools
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
 
-from ...helpers import assert_tool_definitions_complete
+from ...helpers import assert_tool_definitions_complete, token_verifier
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -77,7 +77,7 @@ def _walk(node: Any, path: str = "$"):
 
 @contextlib.asynccontextmanager
 async def _connected_session(dispatcher: McpDispatcher):
-    app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+    app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
     async with mcp_lifespan(session_manager):
         async with httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=app), base_url="http://testserver",

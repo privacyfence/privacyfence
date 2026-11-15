@@ -896,7 +896,7 @@ class TestExportObjects:
         assert call["args"]["sha256"] == hashlib.sha256(delivered[0]["data"]).hexdigest()
         assert call["new_info"]["Saved to"] == "~/out/assets-objects.csv"
         assert call["new_info"]["Rows"] == "2"
-        assert call["delivery"] == "local_disk"
+        assert call["delivery"] == "client_bridge"
         assert call["preview"] == {"AQL": "objectType = Contract",
                                    "Attributes": "Name, Tags, Account, Mail"}
         assert "ACME support contract" in call["pii_scan_text"]

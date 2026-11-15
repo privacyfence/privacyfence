@@ -12,8 +12,6 @@ in this codebase (ADR 0061).
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 from typing import Iterator
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
@@ -22,33 +20,10 @@ from .. import paths, scoped_tokens
 from ..principal import LOCAL_PRINCIPAL, Principal
 from ..scoped_tokens import ScopedToken
 
-MCP_TOKEN_FILE_NAME = "mcp_token"  # nosec B105  # a filename, not a credential value
-
 # The ``client_id`` prefix of an ``AccessToken`` that ``ScopedTokenVerifier``
 # issued (ADR 0164): ``scoped:<token id>``, so the SDK binds such a token's
 # stateful sessions apart from the person's other clients.
 SCOPED_CLIENT_PREFIX = "scoped:"
-
-
-class _SingleTokenVerifier(TokenVerifier):
-    """Verifies one fixed bearer token, compared in constant time."""
-
-    def __init__(self, token: str, principal_id: str) -> None:
-        self._digest = hashlib.sha256(token.encode("utf-8")).digest()
-        self._principal_id = principal_id
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        if not token:
-            return None
-        if not hmac.compare_digest(hashlib.sha256(token.encode("utf-8")).digest(), self._digest):
-            return None
-        return AccessToken(token=token, client_id="local", scopes=[], subject=self._principal_id)
-
-
-def single_token_verifier(token: str, principal: Principal = LOCAL_PRINCIPAL) -> TokenVerifier:
-    """A verifier that accepts exactly ``token`` -- for a direct, low-level call to
-    ``build_mcp_asgi_app(token=...)`` or ``build_file_bridge_asgi_app(token=...)``, or a test."""
-    return _SingleTokenVerifier(token, principal.id)
 
 
 def scoped_token_principals() -> Iterator[Principal]:
@@ -129,7 +104,7 @@ def principal_from_access_token(token: AccessToken | None) -> Principal:
     once per HTTP request, in exactly one place per surface) -- routes_mcp.py calls this once per
     tool call, wrapping dispatch in ``principal_scope(...)`` around it.
 
-    A fixed-token verifier (``single_token_verifier``) sets ``client_id="local"``
+    A fixed-token verifier sets ``client_id="local"``
     and ``subject=<the presenting principal's id>`` (ADR 0008) -- a
     ``subject`` of ``LOCAL_PRINCIPAL.id`` (the install's owner) resolves to
     ``LOCAL_PRINCIPAL`` itself rather than a freshly-built ``Principal``

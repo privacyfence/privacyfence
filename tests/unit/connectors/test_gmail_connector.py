@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import types
 import json
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -672,59 +671,7 @@ class TestDownloadAttachment:
             attachments=[Attachment(**defaults)],
         )
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="'Will save to' preview text embeds this test's '/tmp' destination_dir "
-        "verbatim via os.path.join(), which keeps the given POSIX-style root but appends "
-        "with a native (backslash) separator on Windows -- a genuine finding from "
-        "promoting this suite to Windows CI, not otherwise tracked",
-    )
-    async def test_preview_and_gate(self, gated_call_spy):
-        # application/octet-stream -- a type _worth_prefetching() doesn't
-        # recognize -- keeps this test's focus on the preview/gate fields
-        # themselves; see TestPiiScanWiring below for PDF/text prefetch behavior.
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment(
-            mime_type="application/octet-stream",
-        )
-        client.download_attachment.return_value = {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
 
-        result = await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["gate"] == "review"
-        assert kwargs["preview"]["Attachment"] == "report.pdf"
-        assert kwargs["preview"]["Type"] == "application/octet-stream"
-        assert kwargs["preview"]["Size"] == "1,024 bytes"
-        # Will save to / no-content-returned are new-on-approval facts, not
-        # already-known metadata -- see connectors/gmail.py's comment.
-        assert kwargs["new_info"]["Will save to"] == "/tmp/report.pdf"
-        assert "None" in kwargs["new_info"]["Content returned to {agent}"]
-        # MIME type used to only appear in details_text (duplicating the
-        # rest of the preview fields); it now lives in preview only.
-        assert kwargs["details_text"] == "The attachment above will be downloaded to the destination shown."
-        assert kwargs["filtered_data"] is None
-        assert kwargs["args"] == {"message_id": "m1", "attachment_name": "report.pdf"}
-        assert result == {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
-        assert kwargs["pii_scan_text"] == ""  # unrecognized type, nothing prefetched to scan
-        client.download_attachment.assert_called_once_with("m1", "att-1", "report.pdf", "/tmp")
-
-    async def test_destination_dir_forwarded_to_client(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment(
-            mime_type="application/octet-stream",
-        )
-        client.download_attachment.return_value = {"path": "/x/report.pdf", "name": "report.pdf", "size_bytes": 1024}
-
-        await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/x"},
-        )
-
-        client.download_attachment.assert_called_once_with("m1", "att-1", "report.pdf", "/x")
 
     async def test_unknown_attachment_name_raises_without_gating(self, gated_call_spy):
         connector, client = make_connector()
@@ -736,66 +683,8 @@ class TestDownloadAttachment:
             )
         assert gated_call_spy == []
 
-    async def test_client_error_after_approval_becomes_runtime_error(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment(
-            mime_type="application/octet-stream",
-        )
-        client.download_attachment.side_effect = GmailClientError("disk full")
 
-        with pytest.raises(RuntimeError, match="disk full"):
-            await connector.call(
-                "gmail_download_attachment",
-                {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-            )
 
-    async def test_image_attachment_under_size_cap_gets_a_preview(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment(
-            name="photo.png", mime_type="image/png", size=1024,
-        )
-        client.fetch_attachment_bytes.return_value = b"\x89PNGfakebytes"
-        client.save_attachment_bytes.return_value = {
-            "path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 13,
-        }
-
-        result = await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "photo.png", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b"\x89PNGfakebytes"
-        assert kwargs["preview_mime_type"] == "image/png"
-        client.fetch_attachment_bytes.assert_called_once_with("m1", "att-1")
-        # Already fetched for the preview -- must reuse those bytes, not
-        # fetch the same attachment from Gmail a second time.
-        client.save_attachment_bytes.assert_called_once_with(
-            b"\x89PNGfakebytes", "photo.png", "/tmp"
-        )
-        client.download_attachment.assert_not_called()
-        assert result == {"path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 13}
-
-    async def test_image_attachment_over_size_cap_gets_no_preview(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment(
-            name="huge.png", mime_type="image/png",
-            size=gmail_module._ATTACHMENT_PREFETCH_MAX_BYTES + 1,
-        )
-        client.download_attachment.return_value = {
-            "path": "/tmp/huge.png", "name": "huge.png", "size_bytes": 1,
-        }
-
-        await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "huge.png", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-        client.fetch_attachment_bytes.assert_not_called()
-        client.download_attachment.assert_called_once_with("m1", "att-1", "huge.png", "/tmp")
 
     async def test_pdf_attachment_gets_no_preview_bytes(self, gated_call_spy):
         # PDF is prefetch-worthy for the PII scan (TestPiiScanWiring below),
@@ -816,94 +705,9 @@ class TestDownloadAttachment:
         assert kwargs["preview_bytes"] == b""
         assert kwargs["preview_mime_type"] == ""
 
-    async def test_unrecognized_binary_attachment_gets_no_prefetch_at_all(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment(
-            mime_type="application/octet-stream",
-        )
-        client.download_attachment.return_value = {
-            "path": "/tmp/report.bin", "name": "report.bin", "size_bytes": 1024,
-        }
-
-        await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-        assert kwargs["pii_scan_text"] == ""
-        client.fetch_attachment_bytes.assert_not_called()
-
-    async def test_preview_fetch_failure_degrades_gracefully(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment(
-            name="photo.png", mime_type="image/png", size=1024,
-        )
-        client.fetch_attachment_bytes.side_effect = GmailClientError("expired token")
-        client.download_attachment.return_value = {
-            "path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 1024,
-        }
-
-        result = await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "photo.png", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview_bytes"] == b""
-        assert kwargs["preview_mime_type"] == ""
-        # Falls back to the original single-call path since no preview bytes
-        # were actually obtained.
-        client.download_attachment.assert_called_once_with("m1", "att-1", "photo.png", "/tmp")
-        assert result == {"path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 1024}
 
 
-class TestFileBridgeDownloadAttachment:
-    """ADR 0007: local mode, but privilege separation prevents a direct
-    write -- gmail_download_attachment must route through local_files.
-    deliver_file() instead of GmailClient.save_attachment_bytes/
-    download_attachment, fetching the full attachment when nothing was
-    already prefetched for the PII scan."""
 
-    def _message_with_attachment(self, **overrides):
-        defaults = dict(name="report.pdf", mime_type="application/octet-stream", size=1024, attachment_id="att-1")
-        defaults.update(overrides)
-        return GmailMessage(
-            id="m1", thread_id="t1", subject="Q3 numbers", sender="alice@example.com",
-            attachments=[Attachment(**defaults)],
-        )
-
-    @pytest.fixture(autouse=True)
-    def _isolated_data_dir(self, tmp_path, monkeypatch):
-        from privacyfence import paths
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-
-    @pytest.fixture(autouse=True)
-    def _force_bridge(self):
-        from privacyfence import local_files
-        local_files.force_bridge_for_tests(True)
-        yield
-        local_files.force_bridge_for_tests(False)
-
-    async def test_fetches_full_bytes_when_nothing_was_prefetched(self, gated_call_spy):
-        from privacyfence import local_files
-
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment()
-        client.fetch_attachment_bytes.return_value = b"the full attachment"
-
-        with local_files.call_context(bridge_available=True, uploads={}):
-            result = await connector.call(
-                "gmail_download_attachment",
-                {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "~/Downloads"},
-            )
-
-        assert result["delivery"] == "client_bridge"
-        client.fetch_attachment_bytes.assert_called_once_with("m1", "att-1")
-        client.download_attachment.assert_not_called()
-        client.save_attachment_bytes.assert_not_called()
 
 
 class TestOrgModeDownloadDelivery:
@@ -938,22 +742,6 @@ class TestOrgModeDownloadDelivery:
         connector.download_base_url = "https://pf.example.com"
         return connector, client
 
-    async def test_local_mode_return_shape_is_unchanged(self, gated_call_spy):
-        """Regression pin: local mode keeps calling GmailClient.
-        download_attachment and returning its dict shape unchanged --
-        connector.download_mode defaults to "local"."""
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment()
-        client.download_attachment.return_value = {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
-
-        result = await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        assert result == {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
-        client.download_attachment.assert_called_once_with("m1", "att-1", "report.pdf", "/tmp")
-        assert gated_call_spy[0]["delivery"] == "local_disk"
 
     async def test_small_attachment_is_delivered_inline_without_a_prior_prefetch(self, gated_call_spy):
         # application/octet-stream isn't prefetch-worthy, so no prefetch
@@ -1116,25 +904,6 @@ class TestPiiScanWiring:
         kwargs = gated_call_spy[0]
         assert kwargs["pii_scan_text"] == "Please wire the deposit to DE89370400440532013000."
 
-    async def test_reuses_fetched_bytes_for_the_save_even_without_a_preview(self, gated_call_spy):
-        # A PDF isn't an image -- no preview -- but the bytes fetched for the
-        # PII scan must still be reused for the actual save, not re-fetched.
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment()
-        client.fetch_attachment_bytes.return_value = b"%PDF-1.4 fake"
-        client.save_attachment_bytes.return_value = {
-            "path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024,
-        }
-
-        result = await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        client.fetch_attachment_bytes.assert_called_once_with("m1", "att-1")
-        client.save_attachment_bytes.assert_called_once_with(b"%PDF-1.4 fake", "report.pdf", "/tmp")
-        client.download_attachment.assert_not_called()
-        assert result == {"path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024}
 
     async def test_image_attachment_has_no_scannable_text(self, gated_call_spy):
         # No OCR -- an image attachment still gets fetched (for the preview)
@@ -1156,21 +925,6 @@ class TestPiiScanWiring:
         kwargs = gated_call_spy[0]
         assert kwargs["pii_scan_text"] == ""
 
-    async def test_prefetch_failure_degrades_scan_text_to_empty(self, gated_call_spy):
-        connector, client = make_connector()
-        client.get_message.return_value = self._message_with_attachment()
-        client.fetch_attachment_bytes.side_effect = GmailClientError("expired token")
-        client.download_attachment.return_value = {
-            "path": "/tmp/report.pdf", "name": "report.pdf", "size_bytes": 1024,
-        }
-
-        await connector.call(
-            "gmail_download_attachment",
-            {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["pii_scan_text"] == ""
 
 
 class TestMarkdownPreviewFallback:
@@ -1520,25 +1274,6 @@ class TestBodyMarkdownRichText:
         assert gated_call_spy == []
         client.create_draft_with_attachments.assert_not_called()
 
-    async def test_reply_draft_with_attachments_body_markdown_only(self, gated_call_spy, tmp_path):
-        connector, client = make_connector()
-        attachment = tmp_path / "f.txt"
-        attachment.write_bytes(b"x")
-        client.get_message.return_value = GmailMessage(
-            id="m1", thread_id="t1", subject="Re: hi", sender="alice@example.com",
-        )
-        client.create_reply_draft_with_attachments.return_value = {"draft_id": "d1"}
-
-        await connector.call(
-            "gmail_reply_draft_with_attachments",
-            {"message_id": "m1", "body_markdown": "see [report](https://x.com/r)", "attachments": json.dumps([str(attachment)])},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["details_text"] == "see [report](https://x.com/r)"
-        client.create_reply_draft_with_attachments.assert_called_once_with(
-            "m1", "", [str(attachment)], False, "me@example.com", "", "", "see [report](https://x.com/r)", "local",
-        )
 
 
 class TestWriteToolsWithAttachmentsGateAndPreview:
@@ -1550,57 +1285,8 @@ class TestWriteToolsWithAttachmentsGateAndPreview:
     content pre-approval.
     """
 
-    async def test_create_draft_with_attachments_preview_and_args(self, gated_call_spy, tmp_path):
-        connector, client = make_connector()
-        attachment = tmp_path / "report.pdf"
-        attachment.write_bytes(b"x" * 10)
-        client.create_draft_with_attachments.return_value = {"draft_id": "d1"}
 
-        await connector.call(
-            "gmail_create_draft_with_attachments",
-            {
-                "to": "alice@example.com", "subject": "Hi", "body": "Secret plan details",
-                "attachments": json.dumps([str(attachment)]), "cc": "bob@example.com",
-            },
-        )
 
-        kwargs = gated_call_spy[0]
-        assert kwargs["gate"] == "popup"
-        assert "Secret plan details" not in str(kwargs["preview"])
-        assert kwargs["details_text"] == "Secret plan details"
-        assert kwargs["preview"]["To"] == "alice@example.com"
-        assert kwargs["preview"]["Cc"] == "bob@example.com"
-        assert kwargs["preview"]["Subject"] == "Hi"
-        assert kwargs["preview"]["Attachments"] == "report.pdf (10 bytes)"
-        assert kwargs["args"] == {"to": "alice@example.com", "subject": "Hi"}
-        client.create_draft_with_attachments.assert_called_once_with(
-            "alice@example.com", "Hi", "Secret plan details", [str(attachment)], "bob@example.com", "", "", "local",
-        )
-
-    async def test_create_draft_with_attachments_bcc_included_when_provided(self, gated_call_spy, tmp_path):
-        connector, client = make_connector()
-        attachment = tmp_path / "f.txt"
-        attachment.write_bytes(b"x")
-        client.create_draft_with_attachments.return_value = {"draft_id": "d1"}
-
-        await connector.call(
-            "gmail_create_draft_with_attachments",
-            {
-                "to": "a@x.com", "subject": "s", "body": "b",
-                "attachments": json.dumps([str(attachment)]), "bcc": "hidden@x.com",
-            },
-        )
-
-        assert gated_call_spy[0]["preview"]["Bcc"] == "hidden@x.com"
-
-    async def test_create_draft_with_attachments_missing_file_denied_before_gate(self, gated_call_spy):
-        connector, _client = make_connector()
-        with pytest.raises(ValueError, match="no such file"):
-            await connector.call(
-                "gmail_create_draft_with_attachments",
-                {"to": "a@x.com", "subject": "s", "body": "b", "attachments": json.dumps(["/no/such/file"])},
-            )
-        assert gated_call_spy == []
 
     async def test_create_draft_with_attachments_invalid_json_denied_before_gate(self, gated_call_spy):
         connector, _client = make_connector()
@@ -1638,54 +1324,7 @@ class TestWriteToolsWithAttachmentsGateAndPreview:
             )
         assert gated_call_spy == []
 
-    async def test_reply_draft_with_attachments_args_to_is_original_sender_only(self, gated_call_spy, tmp_path):
-        connector, client = make_connector()
-        attachment = tmp_path / "f.txt"
-        attachment.write_bytes(b"hi")
-        client.get_message.return_value = GmailMessage(
-            id="m1", thread_id="t1", subject="Re: hi", sender="alice@example.com",
-        )
-        client.create_reply_draft_with_attachments.return_value = {"draft_id": "d2"}
 
-        await connector.call(
-            "gmail_reply_draft_with_attachments",
-            {"message_id": "m1", "body": "ok", "attachments": json.dumps([str(attachment)])},
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["gate"] == "popup"
-        assert kwargs["args"] == {"message_id": "m1", "to": "alice@example.com"}
-        assert kwargs["preview"]["Attachments"] == "f.txt (2 bytes)"
-        client.create_reply_draft_with_attachments.assert_called_once_with(
-            "m1", "ok", [str(attachment)], False, "me@example.com", "", "", "", "local",
-        )
-
-    async def test_reply_all_draft_with_attachments_expands_recipients_excluding_self(self, gated_call_spy, tmp_path):
-        connector, client = make_connector(my_email="me@example.com")
-        attachment = tmp_path / "f.txt"
-        attachment.write_bytes(b"hi")
-        client.get_message.return_value = GmailMessage(
-            id="m1", thread_id="t1", subject="Re: hi", sender="alice@example.com",
-            recipients=["me@example.com", "bob@example.com"],
-        )
-        client.create_reply_draft_with_attachments.return_value = {"draft_id": "d3"}
-
-        await connector.call(
-            "gmail_reply_all_draft_with_attachments",
-            {
-                "message_id": "m1", "body": "ok", "attachments": json.dumps([str(attachment)]),
-                "cc": "eve@example.com",
-            },
-        )
-
-        kwargs = gated_call_spy[0]
-        assert kwargs["gate"] == "popup"
-        assert set(kwargs["args"]["to"]) == {"alice@example.com", "bob@example.com", "eve@example.com"}
-        assert "me@example.com" not in kwargs["args"]["to"]
-        assert "Also to" in kwargs["preview"]
-        client.create_reply_draft_with_attachments.assert_called_once_with(
-            "m1", "ok", [str(attachment)], True, "me@example.com", "eve@example.com", "", "", "local",
-        )
 
     async def test_org_mode_stats_the_attachment_directly_without_the_bridge(self, gated_call_spy, tmp_path):
         # ADR 0007 is Claude-Desktop-only -- org mode's _stat_attachments
@@ -1756,44 +1395,7 @@ class TestDraftSignatureAndSendAs:
         assert "signature" in params["include_signature"].description
         assert params["send_as"].required is False
 
-    @pytest.mark.parametrize("tool,method,is_reply,has_attachments", _DRAFT_TOOLS)
-    async def test_include_signature_shows_and_saves_the_same_signature(
-        self, gated_call_spy, tmp_path, tool, method, is_reply, has_attachments,
-    ):
-        connector, client = _signature_connector()
 
-        await connector.call(tool, _draft_args(is_reply, has_attachments, tmp_path, include_signature=True))
-
-        client.resolve_send_as.assert_called_once_with("")
-        kwargs = gated_call_spy[0]
-        assert kwargs["details_text"] == "See you then." + signature_plain_text(_SIGNATURE_HTML)
-        assert kwargs["preview"]["Signature"] == "Appended (me@example.com)"
-        assert "From" not in kwargs["preview"]
-        assert "Ada Lovelace" not in str(kwargs["preview"])
-        # The user's own signature isn't what the write-content scan is for.
-        assert kwargs["write_content_scan_text"] == "See you then."
-        assert kwargs["raw_data"]["include_signature"] is True
-        assert getattr(client, method).call_args.kwargs == {"signature_html": _SIGNATURE_HTML}
-
-    @pytest.mark.parametrize("tool,method,is_reply,has_attachments", _DRAFT_TOOLS)
-    async def test_send_as_sets_from_and_uses_that_aliases_signature(
-        self, gated_call_spy, tmp_path, tool, method, is_reply, has_attachments,
-    ):
-        alias = SendAsAlias("team@example.com", "Team", "<b>Team sig</b>")
-        connector, client = _signature_connector(alias)
-
-        await connector.call(
-            tool, _draft_args(is_reply, has_attachments, tmp_path, include_signature=True, send_as="team@example.com"),
-        )
-
-        client.resolve_send_as.assert_called_once_with("team@example.com")
-        kwargs = gated_call_spy[0]
-        assert next(iter(kwargs["preview"])) == "From"
-        assert kwargs["preview"]["From"] == "team@example.com"
-        assert kwargs["details_text"].endswith("-- \nTeam sig")
-        assert getattr(client, method).call_args.kwargs == {
-            "signature_html": "<b>Team sig</b>", "from_header": "Team <team@example.com>",
-        }
 
     async def test_send_as_without_signature_only_sets_from(self, gated_call_spy):
         connector, client = _signature_connector(SendAsAlias("team@example.com", "", "<b>sig</b>"))
@@ -1896,23 +1498,6 @@ _LINKEDIN = InlineImage("linkedin", "image/png", b"I")
 
 
 class TestDraftSignatureCidImages:
-    @pytest.mark.parametrize("tool,method,is_reply,has_attachments", _DRAFT_TOOLS)
-    async def test_rich_draft_gets_the_images_found_in_sent_mail(
-        self, gated_call_spy, tmp_path, tool, method, is_reply, has_attachments,
-    ):
-        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=_CID_SIGNATURE))
-        client.find_signature_images.return_value = {"linkedin": _LINKEDIN, "logo": _LOGO}
-        args = _draft_args(is_reply, has_attachments, tmp_path, include_signature=True, body_markdown="Hi")
-
-        await connector.call(tool, args)
-
-        client.find_signature_images.assert_called_once_with(["logo", "linkedin"])
-        kwargs = gated_call_spy[0]
-        assert kwargs["preview"]["Signature"] == "Appended (me@example.com; 2 image(s) copied from your sent mail)"
-        assert "[image: ExampleCo] (https://example.com/)" in kwargs["details_text"]
-        assert getattr(client, method).call_args.kwargs == {
-            "signature_html": _CID_SIGNATURE, "signature_images": (_LOGO, _LINKEDIN),
-        }
 
     async def test_images_not_found_fall_back_to_alt_text_and_are_disclosed(self, gated_call_spy):
         connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=_CID_SIGNATURE))
@@ -2175,9 +1760,12 @@ class TestEveryToolIsAudited:
         # The *_with_attachments tools stat their attachments before gating,
         # so the generic "stub" string arg (not valid JSON) needs overriding
         # with a JSON array pointing at a real file.
-        stub_attachment = tmp_path / "stub-attachment.txt"
-        stub_attachment.write_text("stub")
-        attachments_arg = json.dumps([str(stub_attachment)])
+        client.fetch_attachment_bytes.return_value = b"stub"
+        # Files arrive as upload references; stand one in with a fixed in-memory file.
+        monkeypatch.setattr(gmail_module.local_files, "require_local_files", lambda *a, **k: None)
+        monkeypatch.setattr(gmail_module.local_files, "read_local_file", lambda *a, **k: b"stub")
+        monkeypatch.setattr(gmail_module.local_files, "local_file_size", lambda *a, **k: 4)
+        attachments_arg = json.dumps(["upload:stub"])
 
         # body is now optional (so body_markdown alone can satisfy a rich
         # draft) -- the generic stub omits both, which the 6 draft tools
@@ -2276,7 +1864,7 @@ class TestGmailQueryArgs:
             attachments=[Attachment(name="r.pdf", mime_type="application/pdf", size=10, attachment_id="att-1")],
         )
         client.messages_matching.return_value = {"m1"}
-        client.download_attachment.return_value = {"path": "/tmp/r.pdf", "name": "r.pdf", "size_bytes": 10}
+        client.fetch_attachment_bytes.return_value = b"0123456789"
 
         await connector.call(
             "gmail_download_attachment",

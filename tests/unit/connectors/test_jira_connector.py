@@ -1722,7 +1722,7 @@ class TestExportIssues:
         assert call["args"]["sha256"] == hashlib.sha256(delivered[0]["data"]).hexdigest()
         assert call["new_info"]["Saved to"] == "~/out/jira-issues.csv"
         assert call["new_info"]["Rows"] == "2"
-        assert call["delivery"] == "local_disk"
+        assert call["delivery"] == "client_bridge"
         assert call["preview"]["Fields"] == "standard fields only"
 
     async def test_formula_leading_cells_are_written_as_text(self, gated_call_spy, delivered):
