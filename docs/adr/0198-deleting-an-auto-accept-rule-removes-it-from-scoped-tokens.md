@@ -64,5 +64,5 @@ longer exists".
 
 ## Related
 
-- [`scoped_tokens.py`](../../src/privacyfence/scoped_tokens.py), [`auto_accept.py`](../../src/privacyfence/auto_accept.py), [`gate.py`](../../src/privacyfence/gate.py), [`settings_controller.py`](../../src/privacyfence/settings_controller.py)
+- [`scoped_tokens.py`](../../src/privacyfence/scoped_tokens.py), [`auto_accept.py`](../../src/privacyfence/auto_accept.py), [`gate.py`](../../src/privacyfence/gate.py), `settings_controller.py`
 - ADR [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md), ADR [0172](0172-one-stored-auto-accept-rule-per-scope.md)
