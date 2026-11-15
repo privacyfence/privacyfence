@@ -43,4 +43,5 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Finishing
 
-- pending
+- scope: Scope disposition: the five out-of-scope paths (one test file each in p2 and p5, three ADR Amended-by lines in p6) are still in the final diff, so all are accepted.
+- final: Definition of done run by the orchestrator on the feature branch: ruff, mypy, strict mypy, bandit, mcpb/shim tests and typecheck, the full pytest run with the coverage floor (22624 passed), and the 29 browser tests with the Chromium path override all pass. The tld roles and the dod playbook could not run in the worker containers (plugin absent).
