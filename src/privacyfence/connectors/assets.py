@@ -24,9 +24,6 @@ _SENDER = "Jira Assets"
 _MAX_CARD_ATTRIBUTES = 8
 _MAX_CELL_CHARS = 120
 
-_DESTINATION_DIR = (
-    "Folder on the user's computer to write the file to, absolute or starting with ~/."
-)
 
 _EXPORT_COLUMNS = ["id", "key", "label", "type"]
 
@@ -72,11 +69,16 @@ def _details_line(obj: AssetsObject) -> str:
     )
 
 
+_DELIVERY_SENTENCE = (
+    "The file is delivered as a one-time download_url in the result (or inline when small): fetch "
+    "that address directly, no auth header needed."
+)
+
+
 class AssetsConnector(Connector):
     def __init__(self, client: AssetsClient) -> None:
         self._assets = client
         self.my_email: str = ""
-        self.download_mode: str = "local"
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
 
@@ -89,7 +91,7 @@ class AssetsConnector(Connector):
         return "assets"
 
     def tool_specs(self) -> list[ToolSpec]:
-        return export_files.visible_specs(self._all_tool_specs(), self.download_mode, self.download_config)
+        return export_files.visible_specs(self._all_tool_specs(), "org", self.download_config)
 
     def _all_tool_specs(self) -> list[ToolSpec]:
         return [
@@ -148,8 +150,8 @@ class AssetsConnector(Connector):
                     "Search Jira Assets objects with an AQL query and return them with their "
                     "attribute values. Returns a list of {id, key, label, type, type_id, schema_id, "
                     "created, updated, attributes, references}, at most max_results entries. "
-                    "Use assets_get_object to read one object by id, assets_export_objects to write "
-                    "a large result to a file, and assets_list_attributes to see which attributes a "
+                    "Use assets_get_object to read one object by id, assets_export_objects to export "
+                    "a large result as a file, and assets_list_attributes to see which attributes a "
                     "type has. Requires user approval."
                 ),
                 params=[
@@ -223,19 +225,18 @@ class AssetsConnector(Connector):
             ToolSpec(
                 name="assets_export_objects",
                 description=(
-                    "Write every Jira Assets object an AQL query matches, up to 10,000, to a CSV or "
-                    "JSON file on the user's computer, in one approval. Columns: id, key, label, type, "
+                    "Export every Jira Assets object an AQL query matches, up to 10,000, as a CSV or "
+                    "JSON file, in one approval. Columns: id, key, label, type, "
                     "then every attribute name; a multi-value cell joins its values with \"; \". "
-                    "Returns {rows, columns, sha256, path, name, size_bytes, delivery}, never the "
+                    "Returns {rows, columns, sha256, name, size_bytes, delivery, download_url}, never the "
                     "objects. A query matching no object writes no file and returns rows 0. "
                     "Use assets_search_objects to read a few objects in the reply. "
-                    + export_files.ORG_DELIVERY_SENTENCE + " Requires user approval."
+                    + _DELIVERY_SENTENCE + " Requires user approval."
                 ),
                 params=[
                     ToolParam("aql", "str",
                               description="AQL query selecting the objects to export, for example: "
                                           "objectType = \"Contract\". At most 4000 characters."),
-                    ToolParam("destination_dir", "str", description=_DESTINATION_DIR),
                     ToolParam("file_name", "str", required=False, default="",
                               description="File name ending in .csv or .json, which picks the format. "
                                           "Empty means assets-objects.csv."),
@@ -246,7 +247,7 @@ class AssetsConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
-        export_files.refuse_if_exports_off(tool, self.download_mode, self.download_config)
+        export_files.refuse_if_exports_off(tool, "org", self.download_config)
         if tool == "assets_list_schemas":
             return await self._list_schemas(**args)
         if tool == "assets_list_object_types":
@@ -501,13 +502,12 @@ class AssetsConnector(Connector):
         )
 
     async def _export_objects(
-        self, aql: str, destination_dir: str, file_name: str = "",
+        self, aql: str, file_name: str = "",
     ) -> Any:
         t0 = time.time()
-        destination_dir = export_files.check_destination(destination_dir)
         file_name, fmt = export_files.export_file_name(file_name, "assets-objects")
         export_files.refuse_org_without_staging(
-            "assets_export_objects", self.download_mode,
+            "assets_export_objects", "org",
             (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
             "assets_search_objects",
         )
@@ -532,7 +532,7 @@ class AssetsConnector(Connector):
         data = await asyncio.to_thread(export_files.render, columns, rows, fmt)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
+        saved_to = export_files.saved_to("", file_name, "org")
         preview = {"AQL": aql[:200], "Attributes": ", ".join(names) or "none"}
         await gated_call(
             connector=self.name,
@@ -556,18 +556,16 @@ class AssetsConnector(Connector):
                 "Saved to": saved_to,
             },
             details_text=export_files.card_details(preview, len(rows), columns, saved_to, sha256),
-            delivery="staged_link" if self.download_mode == "org"
-            else "local_disk" if local_files.can_access_user_files(self.download_mode)
-            else "client_bridge",
+            delivery="staged_link",
             my_email=self.my_email,
             args={
-                "aql": aql, "destination_dir": destination_dir,
+                "aql": aql,
                 "file_name": file_name, "sha256": sha256,
             },
         )
         delivered = local_files.deliver_export(
-            destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
-            download_mode=self.download_mode, download_config=self.download_config,
+            "", file_name, data, export_files.MIME_TYPES[fmt],
+            download_config=self.download_config,
             download_base_url=self.download_base_url,
         )
         return export_files.export_summary(columns, rows, sha256, delivered)
