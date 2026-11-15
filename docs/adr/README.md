@@ -5,14 +5,14 @@ decision: the situation that forced it, what was decided, what was rejected and 
 follows from it. ADRs answer the question a standing reference doc cannot: *why is it this way,
 and why didn't we just…?*
 
-This directory is the only place that question gets answered. Plans come and go, reference docs
+This directory is the only place that question gets answered. Plans record one change as it was planned, reference docs
 describe whatever the code does today, and neither keeps a rejected alternative around for long.
 
 ## Where each kind of document lives
 
 | Kind | Answers | Home | Lifecycle |
 |---|---|---|---|
-| **Plan** | What are we about to do, and in what order? | A GitHub issue (preferred), or a `docs/*-plan.md` while its work is open | Temporary. Deleted when its work lands, **after** its decisions have been extracted here |
+| **Plan** | What are we about to do, and in what order? | A GitHub issue, or `docs/<issue>/plan.md` with `deviations.md`, written on the feature branch | Kept. Reaches `main` with the feature PR and stays as the record of the change; not edited after that. Its decisions are extracted here **before** it merges |
 | **ADR** | Why is it this way, and what was rejected? | `docs/adr/NNNN-*.md` | Permanent. Never deleted (the one exception: the parked plugin ADRs, see the Index); after acceptance only its Status changes |
 | **Reference** | How does it work, or how do I do X, today? | `docs/*.md`, `CONTRIBUTING.md`, code docstrings | Living. Edited in the same PR as the behavior. Links here for the *why* instead of retelling it |
 
@@ -41,11 +41,12 @@ a 40-line ADR is fine.
    `Supersedes NNNN` (or `Amends NNNN`); the old one's Status gains one line pointing forward.
    This holds even when a plan says "amend ADR NNNN in place": the plan predates the rule or is
    wrong about it. (ADRs 0026–0028 were extracted from exactly such in-place amendments.)
-4. **Link only to things that last.** Issues, PRs, commit SHAs, source files, and other ADRs. Never
-   link a plan document: it will be deleted. To cite a plan that is already gone, give the commit
-   that deleted it and the path, e.g. `git show 96cd5af4^:docs/https-connector-refactor-plan.md`.
-5. **Retiring a plan is gated on this directory.** The PR that deletes a plan either adds or amends
-   the ADRs for every decision the plan contained, or states in its description that the plan
+4. **Link only to things that last.** Issues, PRs, commit SHAs, source files, other ADRs, and a plan under
+   `docs/<issue>/`. A top-level `docs/*-plan.md` from before plans were kept was deleted when its work
+   landed: to cite one, give the commit that deleted it and the path, e.g.
+   `git show 96cd5af4^:docs/https-connector-refactor-plan.md`.
+5. **A plan reaching `main` is gated on this directory.** The PR that brings a plan to `main` either adds or
+   amends the ADRs for every decision the plan contained, or states in its description that the plan
    contained none. This is part of the definition of done
    ([`coding-and-testing-guidelines.md` §2.7](../coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo)).
 6. **Numbers are never reused.** Take the next free number when you open the PR; if a parallel
@@ -130,7 +131,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Deprecated: ADR 0301 removed desktop mode |
 | [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive); amended by 0181 |
 | [0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md) | PyPI/TestPyPI publishing uses OIDC Trusted Publisher only | Accepted (retroactive); amended by 0309 |
-| [0021](0021-release-tag-push-never-uses-github-token.md) | The release tag is never pushed with `GITHUB_TOKEN` | Accepted (retroactive); amended by 0185 |
+| [0021](0021-release-tag-push-never-uses-github-token.md) | The release tag is never pushed with `GITHUB_TOKEN` | Accepted (retroactive); amended by 0185; amended by 0312 |
 | [0022](0022-one-release-tag-per-commit.md) | One release tag per commit; a stuck release is fixed forward | Accepted (retroactive) |
 | [0023](0023-changelog-is-the-only-source-of-release-notes.md) | `CHANGELOG.md` is the only source of stable release notes, and rendering fails loudly | Accepted (retroactive) |
 | [0024](0024-pre-releases-are-publicly-downloadable.md) | Pre-releases are publicly downloadable through the download Worker | Superseded by 0305 |
@@ -229,7 +230,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted; amended by 0202 |
 | [0118](0118-an-approver-sees-atlassians-name-for-every-mentioned-or-assigned-account.md) | An approver sees Atlassian's name for every mentioned or assigned account | Accepted |
 | [0119](0119-atlassian-find-users-is-auto-approved-and-returns-no-email.md) | `jira_find_users` and `confluence_find_users` are auto-approved and return no email | Accepted |
-| [0132](0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) | Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project | Accepted |
+| [0132](0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md) | Claude Code workflow commands come from the devflow toolkit plugins in the Claude Project | Superseded by 0313 |
 | [0133](0133-salesforce-reports-page-by-a-unique-key-column.md) | Salesforce reports page by a unique key column | Accepted |
 | [0134](0134-extra-jira-fields-go-through-a-reviewed-search.md) | Extra Jira fields are read through a separate reviewed search with no scope | Accepted |
 | [0135](0135-the-jira-field-list-is-auto-approved.md) | The Jira field list is auto-approved | Accepted |
@@ -276,7 +277,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md) | Every tool a release or QA-runner job installs comes from a hash-pinned lock or an exact npm pin | Accepted; extends 0085; amended by 0309 |
 | [0183](0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md) | Under pkexec the privilege-separation script accepts only the companion's own requests | Deprecated: ADR 0301 removed desktop mode |
 | [0184](0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md) | The macOS pkg runs its own copy of the privilege-separation script, and only over a root-owned app bundle | Deprecated: ADR 0301 removed desktop mode |
-| [0185](0185-a-release-tag-is-created-only-by-release-yml.md) | A release tag is created only by `release.yml`; a tag ruleset refuses `v*` tags from other accounts | Accepted; amends 0021 |
+| [0185](0185-a-release-tag-is-created-only-by-release-yml.md) | A release tag is created only by `release.yml`; a tag ruleset refuses `v*` tags from other accounts | Superseded by 0312 |
 | [0186](0186-the-download-worker-keeps-no-request-logs.md) | The download Worker keeps no request logs | Deprecated: ADR 0305 retired the download Worker |
 | [0187](0187-the-shim-trusts-only-service-account-owned-handoff-entries.md) | The `.mcpb` shim trusts only handoff entries the service account owns; the daemon replaces a foreign control socket | Deprecated: ADR 0301 removed desktop mode |
 | [0188](0188-jira-assets-is-a-separate-read-only-connector-whose-atlassian-scopes-are-requested-only-when-switched-on.md) | Jira Assets is a separate read-only connector whose Atlassian scopes are requested only when it is switched on | Accepted |
@@ -403,3 +404,8 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0309](0309-the-organization-image-is-the-only-distribution.md) | The organization image is the only distribution | Accepted; amends 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255; relates to 0295 |
 | [0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md) | `email` is an opt-in visibility input of the identity claim | Accepted; amends 0297; relates to 0298 |
 | [0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md) | The OIDC provider sends approved group membership to apps that opt in | Accepted; amends 0273, 0299; relates to 0298 |
+| [0312](0312-a-release-tag-is-created-only-by-tld-release-yml.md) | A release tag is created only by `tld-release.yml` | Accepted; supersedes 0185, amends 0021; relates to 0023, 0030 |
+| [0313](0313-workflow-commands-come-from-the-tld-plugin.md) | Workflow commands come from the tld plugin | Accepted; supersedes 0132 |
+| [0314](0314-plans-stay-on-main-as-the-record-of-their-change.md) | Plans stay on `main` as the record of their change | Accepted |
+| [0315](0315-rulesets-and-required-checks-live-in-the-admin-policy.md) | Rulesets and required checks live in the admin policy | Accepted |
+| [0316](0316-the-releases-integration-branch-convention-is-retired.md) | The `releases/*` integration-branch convention is retired | Accepted |

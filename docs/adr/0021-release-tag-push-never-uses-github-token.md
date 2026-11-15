@@ -8,6 +8,8 @@ release.yml and the three slash commands that drive P0's routing", merged in
 
 Amended by [ADR 0185](0185-a-release-tag-is-created-only-by-release-yml.md): `release.yml` is the only way to cut a release, and a tag ruleset enforces it.
 
+Amended by [ADR 0312](0312-a-release-tag-is-created-only-by-tld-release-yml.md): the tag is created by `tld-release.yml` with `TLD_RELEASE_TOKEN`.
+
 ## Context
 
 A release is a tag, not a commit: pushing a `v*` tag is what starts both `build.yml` and

@@ -48,7 +48,7 @@ logs) under `test-results/`, which CI uploads as an artifact of the failed job.
 
 ## Layers 1–4: every PR
 
-`.github/workflows/tests.yml` runs on every pull request, every push to `main` or `releases/**`,
+`.github/workflows/tests.yml` runs on every pull request, every push to `main`,
 and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout-minutes` (45), so a hung run fails instead of holding a runner.
 
 | Job | Runs |
@@ -83,13 +83,13 @@ that raises its coverage; lowering one is a regression, not a config edit. A mod
 point above its floor, or overall coverage more than 0.5 above, prints a `stale coverage floor`
 warning (never a failure) as a prompt to raise it. 
 
-**Required checks.** `REQUIRED_STATUS_CHECKS` in `scripts/update_branch_protection.py` is the
-reviewed list: `test`, the three `Test (Python 3.x, core
-suite)` checks, `static-analysis`, `org-mode-smoke`, the two `Sync client (Python 3.x)` checks, `website-build` (`website-build.yml`'s
-job, which also runs on every PR) and `n8n-node`. Update it in the PR that adds, renames or removes one of those
-jobs. It is applied to the live repository ruleset by hand (`... apply`, and
-`--branch "releases/**" apply` for the release branches) — no CI job does it; `... show` compares
-intent with what is live.
+**Required checks.** `rulesets.default_branch.required_status_checks` in `.tld/admin-policy.yaml` is the
+reviewed list: `test`, the three `Test (Python 3.x, core suite)` checks, `static-analysis`, `org-mode-smoke`, the two
+`Sync client (Python 3.x)` checks, `website-build` (`website-build.yml`'s job, which also runs on every PR) and
+`n8n-node`. Update it in the PR that adds, renames or removes one of those jobs;
+`tests/unit/test_required_checks.py` fails when the list and the workflows disagree. The owner applies it to the live
+`tld-main` ruleset with `tld ops repo-admin apply` after the PR merges; no CI job does it, and
+`tld ops repo-admin audit` shows what differs.
 
 Key modules in the suite:
 
@@ -137,7 +137,7 @@ variable removed: these tests need no vendor account or credential, and must kee
 
 ### Other workflows that gate a PR
 
-- **`dependency-audit.yml`** — on a PR or a push to `main`/`releases/**` that touches
+- **`dependency-audit.yml`** — on a PR or a push to `main` that touches
   `pyproject.toml`, `requirements/*.lock.txt` or any `package.json`/`package-lock.json`, weekly
   (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a lock file is out of step with
   `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`,
@@ -148,7 +148,7 @@ variable removed: these tests need no vendor account or credential, and must kee
   because `privacyfence-sync` and the image's wheel resolve from the ranges in `pyproject.toml`; `npm-audit` blocks on high/critical in the n8n node's
   runtime dependencies (`--omit=dev`; its `n8n-workflow` peer is a pinned devDependency, so its tree
   is dev-only, and the whole n8n tree is reported informationally, ADR 0296).
-- **`website-build.yml`** — on every PR and every push to `main`/`releases/**`: builds
+- **`website-build.yml`** — on every PR and every push to `main`: builds
   privacyfence.eu with `scripts/build_site.py` three ways (the newest stable tag, as `pages.yml`
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
@@ -274,7 +274,7 @@ Manual release checks, and the rule for what may stay manual, are in
 
 ## Running the gate yourself
 
-- **`/dod`** (from the devflow toolkit; its rows are `verify` in `.tld/toolkit.yaml`) — runs the blocking gate of
+- **`/tld:dod`** (from the tld plugin; its rows are `verify` in `.tld/toolkit.yaml`) — runs the blocking gate of
   [`coding-and-testing-guidelines.md` §2.7](coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo)
   (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy src/privacyfence`/`mypy_strict_modules.py`), then checks the diff for the conditional items (live `--check` report,
   contract tests, lock files, `CHANGELOG.md`) and reports a pass/fail table. Given a path, it narrows

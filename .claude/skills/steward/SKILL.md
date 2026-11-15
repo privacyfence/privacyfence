@@ -1,11 +1,11 @@
 ---
 name: steward
-description: PrivacyFence-specific policy for an agent session — container facts that matter here, which pull requests not to follow, and the repo conventions that are easy to get wrong. The generic policy (dispatching to CI instead of skipping, how to treat a red check) is the devflow `pr-steward` skill; the table of dispatchable workflows is `ci.dispatchable` in `.tld/toolkit.yaml`. Read before acting on a CI failure or a review comment.
+description: PrivacyFence-specific policy for an agent session — container facts that matter here, which pull requests not to follow, and the repo conventions that are easy to get wrong. The generic policy (dispatching to CI instead of skipping, how to treat a red check) is the tld plugin's pr-steward policy; the table of dispatchable workflows is `ci.dispatchable` in `.tld/toolkit.yaml`. Read before acting on a CI failure or a review comment.
 ---
 
 # Stewarding a PrivacyFence pull request
 
-This is repo-specific policy and sits on top of the `pr-steward` skill. It sits alongside
+This is repo-specific policy and sits on top of the tld plugin's pr-steward policy. It sits alongside
 `CONTRIBUTING.md` and `docs/releasing.md` (branch hygiene and release mechanics),
 `docs/coding-and-testing-guidelines.md` (code and test conventions, and §2.7's definition of done) and
 `docs/testing-policy.md` (which tier runs where) — none of which it replaces.
@@ -63,7 +63,6 @@ maintainer asks. A dependency bump is a supply-chain decision, and a fixture dif
 - **Branch names.** `CONTRIBUTING.md` specifies `<type>/<kebab-case-description>` (`feature/`, `fix/`,
   `chore/`, `tests/` — never `feat/`). A Claude Code on the web session is assigned a
   `claude/<generated-name>` branch it cannot rename; use it and put the `<type>` in the PR title.
-- **`releases/*` is protected like `main`.** If work is targeting one, branch from it and PR back into it.
 - **Pushing a release tag directly is not possible here** — the container can push branches but not
   `refs/tags/*`. A failed push can leave a local tag behind that makes `tag_release.py`'s later checks
-  lie. Dispatch `release.yml` (dry run first) instead.
+  lie. Use `/cut-release`, which dispatches `tld-release.yml` (dry run first).

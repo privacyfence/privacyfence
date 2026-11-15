@@ -22,7 +22,7 @@ connector combination. Do not rerun the automated suite by hand because a releas
 
 ## Gates, in order
 
-1. **CI green on the commit to tag.** `origin/main`'s tip (or the `releases/*` branch being merged)
+1. **CI green on the commit to tag.** `origin/main`'s tip
    with every required check passing. For a release that touched connectors, the latest
    `connector-live-check.yml` run is green and no `chore/connector-live-fixture-drift` PR is open
    unreviewed.
@@ -37,11 +37,12 @@ connector combination. Do not rerun the automated suite by hand because a releas
    fixed on `main` and the pre-flight re-run.
 4. **Human checks** below, against this run's image artifacts (`org-image-amd64`, `org-image-arm64`)
    — builds of the commit that will be tagged, carrying a dev version.
-5. **`release.yml` dry run.** Dispatch with `version` and `dry_run: true` (the default). It resolves
-   the channel, renders the stable release notes with `changelog_section.py`, and runs
-   `tag_release.py`'s checks, creating the tag on the runner without pushing it. It builds nothing.
-6. **Cut.** Re-dispatch with `dry_run: false`. The workflow fails if `build.yml` does not start for
-   the tagged commit.
+5. **`tld-release.yml` dry run.** Dispatch it on `main` with `version` and `dry_run: true` (the
+   default) and approve the `tld-release` environment. It checks that every check on the commit is
+   green, runs `scripts/release_check.py` (the channel, the stable release notes, `tag_release.py`'s
+   checks without creating a tag) and shows the notes. It builds and tags nothing.
+6. **Cut.** Re-dispatch with `dry_run: false` and approve again. Then confirm that `build.yml` and
+   `publish-pypi.yml` started for the tagged commit; the workflow does not check this itself.
 
 ## Human checks
 
@@ -97,6 +98,6 @@ starts.
 
 Record in the release PR or discussion, not in this document:
 
-1. the commit, the `build.yml` pre-flight run and the `release.yml` dry-run URL;
+1. the commit, the `build.yml` pre-flight run and the `tld-release.yml` dry-run URL;
 2. which human checks applied to this release's changes, and their results;
 3. any provider drift, image, sign-in or startup issue seen.

@@ -8,11 +8,11 @@ gained a row. This checks that every command §2.7 names also appears in each co
 
 from __future__ import annotations
 
-import importlib.util
 import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 pytestmark = pytest.mark.unit
 
@@ -70,11 +70,8 @@ def test_every_section_2_7_command_appears_in_the_toolkit_profile(command):
 
 
 def _required_status_checks() -> list[str]:
-    path = REPO_ROOT / "scripts" / "update_branch_protection.py"
-    spec = importlib.util.spec_from_file_location("update_branch_protection", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return list(module.REQUIRED_STATUS_CHECKS)
+    policy = yaml.safe_load((REPO_ROOT / ".tld" / "admin-policy.yaml").read_text(encoding="utf-8"))
+    return list(policy["rulesets"]["default_branch"]["required_status_checks"])
 
 
 @pytest.mark.parametrize("check", _required_status_checks())
@@ -83,6 +80,6 @@ def test_every_required_check_is_named_in_the_testing_policy(check):
     # job, not each leg, so the stem before " (" is what must appear.
     stem = check.split(" (")[0]
     assert stem in TESTING_POLICY.read_text(encoding="utf-8"), (
-        f"REQUIRED_STATUS_CHECKS lists {check!r}, but {TESTING_POLICY.relative_to(REPO_ROOT)} "
+        f"the required checks list {check!r}, but {TESTING_POLICY.relative_to(REPO_ROOT)} "
         f"never names {stem!r}"
     )

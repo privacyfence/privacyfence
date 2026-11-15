@@ -1,7 +1,7 @@
 name: Website build
 
-# Builds privacyfence.eu with scripts/build_site.py on every pull request and on pushes to main and
-# releases/**, without deploying anything (pages.yml deploys, from main only). It proves both ways
+# Builds privacyfence.eu with scripts/build_site.py on every pull request and on pushes to main,
+# without deploying anything (pages.yml deploys, from main only). It proves both ways
 # /docs/ can come out of the build, whatever the newest stable tag is at the time:
 #
 # - "as deployed now": the newest stable tag, exactly what pages.yml would publish today;
@@ -15,7 +15,7 @@ name: Website build
 on:
   pull_request:
   push:
-    branches: [main, "releases/**"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   build:
-    # The check's name, and so what scripts/update_branch_protection.py requires. Unique on purpose:
+    # The check's name, and so what .tld/admin-policy.yaml requires. Unique on purpose:
     # build.yml and publish-pypi.yml also have a job called `build`, and a required check matches by
     # name alone.
     name: website-build

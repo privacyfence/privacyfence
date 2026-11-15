@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Create a release tag safely -- the checks this repo's release history says a human keeps missing.
 
-Cutting a release is "tag `main`'s tip and push the tag", which `release.yml` does by running this
-script (docs/releasing.md, ADR 0185) -- there's no version-bump commit and no build step to catch a
-mistake before it's live.
+Cutting a release is "tag `main`'s tip and push the tag", which `.github/workflows/tld-release.yml`
+does after running these checks through `scripts/release_check.py` (docs/releasing.md, ADR 0312) --
+there's no version-bump commit and no build step to catch a mistake before it's live.
 This script runs the checks that step has no other gate for, before creating the tag locally:
 
   1. **Top of main.** The checkout is on `main`, the working tree is clean, and local `main` is
@@ -33,8 +33,8 @@ missing or unmerged `[Unreleased]` section fails loudly there rather than being 
 
 Only creates the tag locally by default -- pushing it starts `build.yml` and `publish-pypi.yml`
 immediately (docs/releasing.md), which is not something this script does without `--push` being
-passed explicitly. `release.yml` is the only documented way to cut a release (ADR 0185); running
-this by hand is for checking a version number.
+passed explicitly. `tld-release.yml` is the only documented way to cut a release (ADR 0312) and
+creates the tag itself; running this by hand is for checking a version number.
 
 Stdlib only, no PrivacyFence install required -- same as scripts/r2_release.py and
 scripts/changelog_section.py. Deliberately doesn't import either: this script carries its own copy
@@ -46,7 +46,10 @@ Examples:
         -> checks pass -> creates local tag v4.2.0a1 -> prints the `git push` command
 
     python3 scripts/tag_release.py 4.2.0 --push
-        -> checks pass -> creates and pushes v4.2.0 (what `release.yml` runs)
+        -> checks pass -> creates and pushes v4.2.0 (a by-hand cut; not the procedure)
+
+    python3 scripts/tag_release.py 4.2.0 --no-fetch --check-only
+        -> checks pass -> no tag (what scripts/release_check.py runs)
 
     python3 scripts/tag_release.py 4.2.0a3
         -> error: next a-release for 4.2.0 must be a2 (got a3) if only 4.2.0a1 exists
@@ -268,9 +271,14 @@ def main(argv: list[str] | None = None) -> int:
         "--no-fetch", action="store_true",
         help="Skip 'git fetch' before checking that main is up to date -- only if you already fetched",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--push", action="store_true",
         help="Also push the tag once created -- starts build.yml/publish-pypi.yml immediately",
+    )
+    mode.add_argument(
+        "--check-only", action="store_true",
+        help="Run every check but create no tag -- what scripts/release_check.py runs inside tld-release.yml",
     )
     args = parser.parse_args(argv)
 
@@ -285,6 +293,11 @@ def main(argv: list[str] | None = None) -> int:
             raise TagError(f"{name} already exists")
 
         check_sequential(identity, known_identities(args.repo))
+
+        if args.check_only:
+            head = _git(["rev-parse", "--short", "HEAD"], cwd=args.repo)
+            print(f"checks passed for {name} at {head}; no tag created (--check-only)")
+            return 0
 
         create_tag(args.repo, name)
         head = _git(["rev-parse", "--short", "HEAD"], cwd=args.repo)

@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-09. Implemented: `.tld/toolkit.yaml`.
 
+Superseded by [ADR 0313](0313-workflow-commands-come-from-the-tld-plugin.md).
+
 ## Context
 
 `/make-plan`, `/implement` and `/dod` lived in `.claude/commands/` and mixed a generic plan →
