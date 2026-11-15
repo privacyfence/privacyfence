@@ -107,9 +107,12 @@ def mock_idp():
 
 
 def _install_bundle(volume: str, payload: bytes | str) -> None:
+    """Put a configuration bundle on the volume as a prepared (7.x-marked) install has it: a volume
+    that already holds organization data carries the data-format marker, or start-up refuses it."""
+    marker = '{"format": 7, "written_by": "test"}'
     _docker(
         "run", "--rm", "-i", "-v", f"{volume}:{DATA_DIR}", "--entrypoint", "sh", IMAGE,
-        "-c", f"umask 077 && cat > {DATA_DIR}/org/org_config.json",
+        "-c", f"umask 077 && echo '{marker}' > {DATA_DIR}/data_format.json && cat > {DATA_DIR}/org/org_config.json",
         input=payload.decode() if isinstance(payload, bytes) else payload,
     )
 
