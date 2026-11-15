@@ -73,5 +73,5 @@ consent, and a release must not enlarge it.
 
 ## Related
 
-- [`policy/outdated.py`](../../src/privacyfence/policy/outdated.py), [`settings_controller.py`](../../src/privacyfence/settings_controller.py)
+- [`policy/outdated.py`](../../src/privacyfence/policy/outdated.py), `settings_controller.py`
 - ADR [0074](0074-auto-accept-rules-are-identified-by-a-content-derived-id.md), ADR [0148](0148-grist-bulk-writes-take-a-csv-file-and-are-reviewed-as-counts-and-a-sample.md), ADR [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)

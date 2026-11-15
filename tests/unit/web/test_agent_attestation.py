@@ -31,7 +31,7 @@ from privacyfence.agent_identity import (
 )
 from privacyfence.audit_log import AuditEntry, current_week, get_audit_logger
 from privacyfence.principal import Principal, principal_scope
-from privacyfence.settings_controller import audit_rows
+from privacyfence.settings_state import audit_rows
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session
 from privacyfence.web import oauth_provider as op

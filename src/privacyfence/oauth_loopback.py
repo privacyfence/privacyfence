@@ -111,21 +111,8 @@ class OAuthLoopbackError(Exception):
 
 
 def _default_open_browser(url: str) -> bool:
-    """The default ``open_browser`` behind ``run_browser_oauth()`` below --
-    ADR 0002 decision 5: try asking a running companion app to open ``url``
-    first (the only way that works on Windows, where a
-    service-hosted daemon can't reach the user's desktop session to open a
-    browser itself), and fall back to opening it directly when no companion
-    is running -- always the case on Linux, which has no
-    persistent companion process to ask (see companion.py's own module
-    docstring). Both imports are deferred: this module is imported broadly
-    (every local-mode connector's ``authorize_interactive``), so it
-    shouldn't pull in web/control_channel.py's own import graph at module
-    load time for installs that never authorize a connector at all."""
-    from .web.control_channel import request_open_url
-
-    if request_open_url(url):
-        return True
+    """The default ``open_browser`` behind ``run_browser_oauth()`` below: opens ``url`` in the
+    system browser and returns whether one accepted it."""
     import webbrowser
 
     return webbrowser.open(url)

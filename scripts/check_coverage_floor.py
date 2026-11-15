@@ -105,16 +105,6 @@ MODULE_FLOORS: dict[str, float] = {
     # provisioning addresses that may receive a key.
     "src/privacyfence/oauth_apps.py": 100.0,
     "src/privacyfence/relay_client.py": 100.0,
-    # 91.0, not the ~93.2% the rest of this module would suggest: whether
-    # coverage sees _resolve_names_async()'s done() callback body (fired
-    # from a background thread started by _run_async(), not on the test's
-    # own thread) depends on that thread's scheduling relative to the test
-    # finishing -- observed at both 93.18% (this floor's laptop/local runs)
-    # and 92.87% (CI, same commit) across otherwise-identical runs. A real
-    # fix is a deterministic wait on that thread rather than a wider floor;
-    # until then
-    # this floor carries enough headroom not to flake red on that one line.
-    "src/privacyfence/settings_controller.py": 93.0,
     # Bootstrap flow, session and token lifetimes.
     "src/privacyfence/web/oauth_provider.py": 99.0,
     "src/privacyfence/web/org_session.py": 100.0,
@@ -179,24 +169,6 @@ MODULE_FLOORS: dict[str, float] = {
     # the recorded live fixtures) and the connector builds the review cards from what it parses.
     "src/privacyfence/assets_client.py": 100.0,
     "src/privacyfence/connectors/assets.py": 100.0,
-    # The daemon's own session-minting interface (MINT/QUIT) and
-    # the companion's OPEN channel share this module's accept-loop plumbing,
-    # including the peer-uid gate. 61.0, not a number in the
-    # nineties like the rest of this file's IPC-adjacent modules, because
-    # most of what's uncovered here is the Windows named-pipe half of
-    # _LineProtocolServer -- exercised for real by the platform-windows job
-    # (tests/platform/test_control_channel_windows.py), not by this Linux-only run, the same split
-    # windows_acl.py's own floor documents above. Without a floor at all, a
-    # regression in the POSIX half this CI run *does* exercise -- the
-    # peer-uid check included -- was invisible to the gate. Raised from 61.0
-    # by the CONFIRM ENROLL command and the three platform dialogs
-    # behind it: the POSIX-reachable half of all of that is tested, so the
-    # ratchet should hold it. Raised again from 66.0 by the ENROLLMENT/
-    # RECOVERY/SHOW RECOVERY commands and the attested mints -- MINT
-    # COMPANION/MINT CONSOLE, their CONFIRM MINT/CONFIRM SIGNIN call-backs,
-    # SHOW, and the client helpers for all of them -- every one of which this
-    # run drives against real servers on both sides.
-    "src/privacyfence/web/control_channel.py": 77.0,
     # decide() -- the module's actual authorization surface -- and the SSE
     # stream's event_source are both covered; only a few edge branches remain.
     "src/privacyfence/web/routes_approvals.py": 98.0,
@@ -229,11 +201,10 @@ MODULE_FLOORS: dict[str, float] = {
 # differently on Windows: the pywin32 and named-pipe code that the Linux run cannot execute is
 # covered there, and the POSIX half is not. These numbers gate only `--platform windows`.
 # Whole-percent, rounded down, measured on the platform-windows job on 2026-10-17
-# (control_channel.py 35.81%, windows_acl.py 89.66%, windows_service.py 32.00%).
+# (windows_acl.py 89.66%, windows_service.py 32.00%).
 WINDOWS_MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/windows_service.py": 32.0,
     "src/privacyfence/windows_acl.py": 89.0,
-    "src/privacyfence/web/control_channel.py": 35.0,
 }
 
 

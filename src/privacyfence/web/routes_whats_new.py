@@ -20,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import update_checker, web_shell, whats_new
+from .. import web_shell, whats_new
 from ..markdown_to_html import markdown_to_html
 from ..principal import Principal
 from . import org_session
@@ -56,7 +56,7 @@ def _page_notes(principal: Principal) -> tuple[list[whats_new.ReleaseNotes], str
     last = whats_new.read_last_seen(principal)
     sections = whats_new.load_changelog()
     notes: list[whats_new.ReleaseNotes] = []
-    if last is not None and update_checker.is_newer(running, last):
+    if last is not None and whats_new.is_newer(running, last):
         notes = whats_new.notes_since(sections, last, running)
     if not notes:
         notes = whats_new.notes_since(sections, None, running)[:1]

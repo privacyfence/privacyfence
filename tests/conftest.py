@@ -54,7 +54,7 @@ from privacyfence import (
     web_approval_ui,
     whats_new,
 )
-from privacyfence.web import control_channel, state_stream
+from privacyfence.web import state_stream
 from tests.diagnostics import capture_failure_diagnostics, suite_name_for
 
 
@@ -125,7 +125,6 @@ def _reset() -> None:
     settings_state._main_dispatch = None
     daemon_main._bundle_adopted_this_start = False
     state_stream._loop = None
-    control_channel._mint_nonces.clear()
     # privilege_separation caches the parsed marker file for
     # the life of the process (it can't change under a running daemon), so a
     # test that provisions a fake separated layout would otherwise leave that
@@ -250,10 +249,8 @@ def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
 # as ``rep_<phase>`` -- the standard pytest pattern for "did the test body
 # itself fail?" from inside a fixture's teardown code. It lives in this
 # repo-wide conftest.py rather than tests/integration/conftest.py so that
-# both test_browser_smoke.py's ``_capture_failure_artifacts`` and
-# tests/system/test_local_mode_system.py (outside tests/integration/) can use
-# ``request.node.rep_call``, without a second, near-duplicate hookimpl in a
-# tests/system/conftest.py.
+# test_browser_smoke.py's ``_capture_failure_artifacts`` can use ``request.node.rep_call``
+# without a second, near-duplicate hookimpl in a tests/integration/conftest.py.
 #
 # Also where the CI-diagnostics capture (docs/testing-policy.md,
 # tests/diagnostics.py) hooks in: on a failing

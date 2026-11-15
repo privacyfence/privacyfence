@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 import pytest
 
-from privacyfence import __version__, paths, secure_files, update_checker, whats_new
+from privacyfence import __version__, paths, secure_files, whats_new
 from privacyfence.principal import Principal
 from privacyfence.whats_new import ReleaseNotes
 from privacyfence.whats_new import state_path as REAL_STATE_PATH
@@ -338,8 +339,97 @@ def test_load_changelog_logs_and_returns_nothing_when_the_read_fails(monkeypatch
 def test_load_changelog_parses_the_repositorys_changelog():
     parsed = whats_new.load_changelog()
     first_released = next(s for s in parsed if s.version != whats_new.UNRELEASED)
-    assert update_checker.parse_version(first_released.version) is not None
+    assert whats_new.parse_version(first_released.version) is not None
 
 
 def test_running_version_is_the_package_version():
     assert whats_new.running_version() == __version__
+
+
+class TestParseVersion:
+    def test_plain_stable_tag(self):
+        assert whats_new.parse_version("2.1.0") == (2, 1, 0, whats_new.STABLE_RANK, 0, math.inf)
+
+    def test_v_prefixed_stable_tag(self):
+        assert whats_new.parse_version("v2.1.0") == (2, 1, 0, whats_new.STABLE_RANK, 0, math.inf)
+
+    def test_alpha_suffix(self):
+        assert whats_new.parse_version("2.1.0a3") == (2, 1, 0, 1, 3, math.inf)
+
+    def test_beta_suffix_with_number(self):
+        assert whats_new.parse_version("v2.1.0b2") == (2, 1, 0, 2, 2, math.inf)
+
+    def test_rc_suffix_with_number(self):
+        assert whats_new.parse_version("v2.1.0rc1") == (2, 1, 0, 3, 1, math.inf)
+
+    def test_between_tags_dev_build_guessing_next_patch(self):
+        # setuptools_scm's own shape for "N commits past the last tag" -- see this module's
+        # docstring. No <stage><n> component: it's guessing at a plain next stable patch release.
+        assert whats_new.parse_version("2.1.1.dev3+gabc1234") == (2, 1, 1, whats_new.STABLE_RANK, 0, 3)
+
+    def test_between_tags_dev_build_guessing_next_prerelease(self):
+        assert whats_new.parse_version("2.1.0rc2.dev1+gabc1234") == (2, 1, 0, 3, 2, 1)
+
+    def test_dirty_worktree_suffix_ignored(self):
+        assert whats_new.parse_version("2.1.1.dev3+gabc1234.d20260904") == (2, 1, 1, whats_new.STABLE_RANK, 0, 3)
+
+    def test_unrecognized_suffix_returns_none(self):
+        # The old dashed/spelled-out scheme ("-nightly", "-beta.1", ...) no longer matches at all --
+        # every real tag or __version__ this module ever sees now comes from setuptools_scm or a
+        # human tagging in this exact scheme, so "unparseable" is no longer conflated with "stable".
+        assert whats_new.parse_version("v2.1.0-nightly") is None
+
+    def test_garbage_returns_none(self):
+        assert whats_new.parse_version("not-a-version") is None
+
+    def test_stage_rank_ordering(self):
+        assert (
+            whats_new.parse_version("2.1.0a1")
+            < whats_new.parse_version("2.1.0b1")
+            < whats_new.parse_version("2.1.0rc1")
+            < whats_new.parse_version("2.1.0")
+        )
+
+    def test_dev_build_ranks_below_the_release_it_is_guessing_at(self):
+        assert whats_new.parse_version("2.1.0rc2.dev1+gabc1234") < whats_new.parse_version("2.1.0rc2")
+
+
+class TestIsNewer:
+    def test_remote_newer_stable(self):
+        assert whats_new.is_newer("v2.2.0", local_version="2.1.0") is True
+
+    def test_remote_equal(self):
+        assert whats_new.is_newer("v2.1.0", local_version="2.1.0") is False
+
+    def test_remote_older(self):
+        assert whats_new.is_newer("v2.0.0", local_version="2.1.0") is False
+
+    def test_local_dev_build_vs_the_release_it_is_guessing_at_is_older(self):
+        assert whats_new.is_newer("2.1.1", local_version="2.1.1.dev3+gabc1234") is True
+
+    def test_local_dev_build_still_newer_than_older_stable_release(self):
+        assert whats_new.is_newer("v2.1.0", local_version="2.1.1.dev3+gabc1234") is False
+
+    def test_unparseable_remote_returns_false(self):
+        assert whats_new.is_newer("garbage", local_version="2.1.0") is False
+
+    def test_unparseable_local_returns_false(self):
+        assert whats_new.is_newer("2.1.0", local_version="garbage") is False
+
+    def test_beta_newer_than_earlier_beta(self):
+        assert whats_new.is_newer("v2.2.0b2", local_version="2.2.0b1") is True
+
+    def test_stable_newer_than_rc_of_same_number(self):
+        assert whats_new.is_newer("v2.2.0", local_version="2.2.0rc1") is True
+
+    def test_rc_newer_than_beta_of_same_number(self):
+        assert whats_new.is_newer("v2.2.0rc1", local_version="2.2.0b1") is True
+
+    def test_local_beta_not_newer_than_same_remote_beta(self):
+        assert whats_new.is_newer("v2.2.0b1", local_version="2.2.0b1") is False
+
+    def test_local_beta_older_than_remote_stable_of_same_number(self):
+        assert whats_new.is_newer("v2.2.0", local_version="2.2.0b1") is True
+
+    def test_local_beta_older_than_remote_rc_of_same_number(self):
+        assert whats_new.is_newer("v2.2.0rc1", local_version="2.2.0b1") is True
