@@ -5,6 +5,8 @@
 Accepted — 2026-10-15. The documentation change is in the repository; the ruleset is a repository setting.
 Amends [ADR 0021](0021-release-tag-push-never-uses-github-token.md).
 
+Superseded by [ADR 0312](0312-a-release-tag-is-created-only-by-tld-release-yml.md).
+
 ## Context
 
 [ADR 0021](0021-release-tag-push-never-uses-github-token.md) makes `release.yml` push the tag with

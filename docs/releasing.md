@@ -23,7 +23,7 @@ form: `v4.0.0` stable, `v4.0.0a13` pre-release (a=alpha, b=beta, rc=release-cand
 `version` explicitly, and never pass `skip_checks`. `prerelease` has no effect here: the workflow
 creates no GitHub Release (`create_release` is false), and `build.yml` decides the channel from the tag.
 
-`tld-release.yml` is the only way to cut a release (ADR 0310). It runs in the `tld-release`
+`tld-release.yml` is the only way to cut a release ([ADR 0312](adr/0312-a-release-tag-is-created-only-by-tld-release-yml.md)). It runs in the `tld-release`
 environment, which admits only `main`, and the owner approves every run. It creates an annotated tag
 through the REST API with `TLD_RELEASE_TOKEN`, an owner token stored as that environment's secret.
 The `tld-tags` ruleset (`rulesets.tags` in `.tld/admin-policy.yaml`) lets no workflow token create a
