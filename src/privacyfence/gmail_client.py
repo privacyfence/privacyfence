@@ -69,106 +69,46 @@ class GmailClientError(Exception):
 _UNFOLDED_POLICY = email.policy.compat32.clone(max_line_length=None)
 
 
-def resolve_attachment_destination(filename: str, destination_dir: str = "") -> str:
-    """Compute where an attachment will be saved, without touching disk.
-
-    ``destination_dir`` is mandatory -- there is no default. Callers must
-    deliberately choose between a location the user will find (e.g.
-    ~/Downloads) and Claude's own working/scratch directory, rather than a
-    file silently landing in Downloads just because nobody thought about it.
-    ``filename`` comes from the sender's MIME headers and is untrusted, so
-    only its basename is kept - this is what stops a crafted name like
-    "../../.ssh/authorized_keys" from writing outside ``destination_dir``.
-    Used both to preview the save path before download approval and by
-    ``download_attachment`` to actually write the file, so the two never
-    disagree.
-    """
-    if not destination_dir.strip():
-        raise GmailClientError(
-            "download_attachment requires a non-empty destination_dir -- "
-            "there is no default. Pass ~/Downloads (or another location the "
-            "user asked for) if this attachment is a deliverable the user "
-            "should find afterward, or your own working/scratch directory "
-            "if you're only downloading it to read or process it yourself."
-        )
-    dest_dir = os.path.expanduser(destination_dir.strip())
-    safe_name = os.path.basename(filename) or "attachment"
-    return os.path.join(dest_dir, safe_name)
-
-
 # Gmail's own draft/message size cap is ~25MB, which has to cover the raw
 # attachment bytes *plus* base64 encoding overhead (~33%) plus headers --
 # capping the raw bytes we'll read well under that leaves margin for both.
 _MAX_TOTAL_ATTACHMENT_BYTES = 18_000_000
 
 
-def _read_local_attachment(path: str, *, download_mode: str) -> tuple[str, bytes]:
-    """Read one local attachment file, sanitizing only its own name.
+def _read_attachment(path: str) -> tuple[str, bytes]:
+    """Read one attachment from an upload slot (ADR 0299).
 
-    Unlike ``resolve_attachment_destination`` (an inbound filename from a
-    remote sender, untrusted), ``path`` here is a location Claude was told to
-    read by the caller -- but the resulting attachment name still shouldn't
-    leak the full local path into the outgoing message, so only the basename
-    is kept, same reasoning as the inbound case.
-
-    ADR 0007 is Claude-Desktop-only: org mode's daemon runs on a different
-    machine than the user entirely, and a local attachment path there has
-    always meant "read from PrivacyFence's own server filesystem" --
-    the file bridge does not apply, same reasoning as connectors/drive.py's
-    _upload_file ``is_org_local_path`` branch. Only local mode routes
-    through the file bridge.
-
-    Capability uploads (ADR 0028): a ``local_files.
-    UPLOAD_REF_PREFIX``-prefixed path is never a filesystem path, in *any*
-    mode -- it's bytes already staged by privacyfence_create_upload_slot,
-    claimed via local_files.read_local_file() exactly like a bridge-fetched
-    path (see that module's own ``require_local_files`` docstring), org
-    mode included, since a capability slot needs neither
-    can_access_user_files() nor a shim.
+    ``path`` must be a ``local_files.UPLOAD_REF_PREFIX`` reference: bytes already staged by
+    privacyfence_create_upload_slot and claimed via ``local_files.read_local_file()``. Anything
+    else raises ``LocalFileAccessError`` with ``NO_BRIDGE_UPLOAD_MESSAGE``. That is a
+    ValueError subclass, already safe to show the model verbatim (see
+    safe_errors.public_message()), so it propagates as-is rather than wrapped in
+    ``GmailClientError``, which connectors/gmail.py's _fetch() would flatten into a generic
+    message.
     """
     if not path or not path.strip():
         raise GmailClientError("attachments: empty file path")
-    if download_mode == "org" and not path.startswith(local_files.UPLOAD_REF_PREFIX):
-        expanded = os.path.expanduser(path.strip())
-        if not os.path.isfile(expanded):
-            raise GmailClientError(f"attachments: no such file: {path!r}")
-        with open(expanded, "rb") as fh:
-            data = fh.read()
-        return os.path.basename(expanded), data
-    # ADR 0007: connectors/gmail.py's three *_with_attachments call sites
-    # already ran local_files.require_local_files() on every path before
-    # gating, so reachability is already resolved here -- bridge-fetched
-    # bytes, an upload-slot claim, or a direct read, whichever applies.
-    # LocalFileAccessError is a ValueError subclass, already safe to show
-    # the model verbatim (see safe_errors.public_message()) -- let it
-    # propagate as-is rather than wrap it in GmailClientError, which
-    # connectors/gmail.py's _fetch() would otherwise flatten into a
-    # generic RuntimeError message.
-    data = local_files.read_local_file(path, download_mode=download_mode)
-    if path.startswith(local_files.UPLOAD_REF_PREFIX):
-        # An upload_id carries no filename of its own (privacyfence_create_
-        # upload_slot's own ``filename`` argument is for the human-facing
-        # approval popup only, not threaded back through the claim) -- a
-        # generic name, same fallback resolve_attachment_destination()
-        # already uses for an inbound attachment with none.
-        return "attachment", data
-    return os.path.basename(path.strip()), data
+    if not path.startswith(local_files.UPLOAD_REF_PREFIX):
+        raise local_files.LocalFileAccessError(local_files.NO_BRIDGE_UPLOAD_MESSAGE)
+    data = local_files.read_local_file(path)
+    # An upload slot carries no filename of its own, so the part gets a generic name.
+    return "attachment", data
 
 
-def _attach_files(msg, attachments: list[str], *, download_mode: str) -> None:
+def _attach_files(msg, attachments: list[str]) -> None:
     """Read each attachment and attach it as a MIME part of ``msg``.
 
     Raises ``GmailClientError`` if a file is missing or the running total
     exceeds Gmail's draft size cap -- see ``_MAX_TOTAL_ATTACHMENT_BYTES``.
-    ``local_files.LocalFileAccessError`` (from a non-org, no-bridge local
-    read) propagates through unwrapped -- see ``_read_local_attachment``.
+    ``local_files.LocalFileAccessError`` (a path that is not an ``upload:`` reference)
+    propagates through unwrapped -- see ``_read_attachment``.
     """
     import email.encoders
     import email.mime.base
 
     total_bytes = 0
     for path in attachments:
-        name, data = _read_local_attachment(path, download_mode=download_mode)
+        name, data = _read_attachment(path)
         total_bytes += len(data)
         if total_bytes > _MAX_TOTAL_ATTACHMENT_BYTES:
             raise GmailClientError(
@@ -634,12 +574,8 @@ class GmailClient:
         return summaries
 
     def fetch_attachment_bytes(self, message_id: str, attachment_id: str) -> bytes:
-        """Fetch and decode an attachment's raw bytes, without writing anything to disk.
-
-        Factored out of ``download_attachment`` so a caller can fetch bytes
-        once for a pre-approval preview and reuse them for the actual save on
-        approval, via ``save_attachment_bytes``, instead of fetching twice.
-        """
+        """Fetch and decode an attachment's raw bytes; nothing is written to disk. A caller
+        fetches once for the pre-approval preview and reuses the bytes for delivery."""
         if not message_id or not attachment_id:
             raise GmailClientError(
                 "fetch_attachment_bytes requires a non-empty message_id and attachment_id"
@@ -658,45 +594,6 @@ class GmailClient:
                 f"fetch_attachment_bytes({message_id}, {attachment_id}) failed: {exc}"
             ) from exc
         return base64.urlsafe_b64decode(raw.get("data", "").encode("utf-8"))
-
-    def save_attachment_bytes(
-        self, data: bytes, filename: str, destination_dir: str = ""
-    ) -> dict:
-        """Save already-fetched attachment bytes to a local directory.
-
-        ``destination_dir`` is mandatory -- see ``resolve_attachment_destination``.
-        Returns a dict with ``path``, ``name``, and ``size_bytes``.
-        """
-        dest_path = resolve_attachment_destination(filename, destination_dir)
-        try:
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            with open(dest_path, "wb") as fh:
-                fh.write(data)
-        except OSError as exc:
-            raise GmailClientError(
-                f"save_attachment_bytes: could not write to {dest_path!r}: {exc}. "
-                "Choose a different destination_dir."
-            ) from exc
-
-        name = os.path.basename(dest_path)
-        logger.info(
-            "save_attachment_bytes: name=%s size=%d", name, len(data),
-        )
-        return {"path": dest_path, "name": name, "size_bytes": len(data)}
-
-    def download_attachment(
-        self, message_id: str, attachment_id: str, filename: str, destination_dir: str = ""
-    ) -> dict:
-        """Fetch an attachment's bytes and save it to a local directory.
-
-        ``destination_dir`` is mandatory -- see ``resolve_attachment_destination``.
-        Returns a dict with ``path``, ``name``, and ``size_bytes``. See
-        ``fetch_attachment_bytes``/``save_attachment_bytes`` if the caller
-        already fetched the bytes for a preview and wants to avoid fetching
-        them twice.
-        """
-        data = self.fetch_attachment_bytes(message_id, attachment_id)
-        return self.save_attachment_bytes(data, filename or attachment_id, destination_dir)
 
     def list_send_as(self) -> list[SendAsAlias]:
         """The account's send-as aliases, cached for
@@ -883,7 +780,6 @@ class GmailClient:
         cc: str = "",
         bcc: str = "",
         body_markdown: str = "",
-        download_mode: str = "local",
         *,
         signature_html: str = "",
         from_header: str = "",
@@ -913,7 +809,7 @@ class GmailClient:
         msg.attach(_build_body_part(
             body, body_markdown, signature_html=signature_html, signature_images=signature_images,
         ))
-        _attach_files(msg, attachments, download_mode=download_mode)
+        _attach_files(msg, attachments)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
         service = self._get_service()
@@ -1014,7 +910,6 @@ class GmailClient:
         cc: str = "",
         bcc: str = "",
         body_markdown: str = "",
-        download_mode: str = "local",
         *,
         signature_html: str = "",
         from_header: str = "",
@@ -1050,7 +945,7 @@ class GmailClient:
         msg.attach(_build_body_part(
             body, body_markdown, signature_html=signature_html, signature_images=signature_images,
         ))
-        _attach_files(msg, attachments, download_mode=download_mode)
+        _attach_files(msg, attachments)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
         message_body: dict[str, Any] = {"raw": raw}

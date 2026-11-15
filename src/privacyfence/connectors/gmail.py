@@ -5,7 +5,6 @@ import asyncio
 import dataclasses
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -24,7 +23,6 @@ from ..gmail_client import (
     GmailMessage,
     InlineImage,
     drop_unresolved_cid_images,
-    resolve_attachment_destination,
     signature_cid_refs,
     signature_has_content,
     signature_plain_text,
@@ -47,22 +45,17 @@ MAX_QUERY_RULES_PER_CALL = 10
 # human has decided anything.
 _ATTACHMENT_PREFETCH_MAX_BYTES = 5_000_000
 
-# ADR 0007: per-path ceiling passed to local_files.require_local_files() for
-# the three *_with_attachments tools' attachment paths -- the file bridge
-# buffers each upload entirely in memory (upload_staging.UploadStagingStore.
-# fill()), unlike the old direct open()/read(), so this is a real per-file
-# memory cap, not just a preview-read cap like _ATTACHMENT_PREFETCH_MAX_BYTES
-# above (which only bounds the pre-approval preview/PII-scan read, not the
-# actual attach). Reuses gmail_client's own outgoing-message cap
-# (_MAX_TOTAL_ATTACHMENT_BYTES) as the natural ceiling for any single
-# attachment: no one attachment can usefully exceed the whole draft's own
-# size limit anyway, and gmail_client._attach_files() still enforces the
-# true cross-attachment running total once the bytes are actually read.
+# Per-attachment ceiling passed to local_files.require_local_files() for the three
+# *_with_attachments tools: an upload slot is buffered entirely in memory, so this is a real
+# per-file memory cap, not just a preview-read cap like _ATTACHMENT_PREFETCH_MAX_BYTES above.
+# Reuses gmail_client's own outgoing-message cap (_MAX_TOTAL_ATTACHMENT_BYTES) as the natural
+# ceiling for any single attachment; gmail_client._attach_files() still enforces the true
+# cross-attachment running total once the bytes are actually read.
 _ATTACHMENT_UPLOAD_MAX_BYTES = 18_000_000
 
 
 def _parse_attachment_paths(value: str) -> list[str]:
-    """Parse the ``attachments`` tool argument: a JSON array of local file paths.
+    """Parse the ``attachments`` tool argument: a JSON array of ``upload:<id>`` references.
 
     Raises ``ValueError`` (rather than drive.py's ``_parse_json_str_list``
     silent-None-on-invalid-input pattern) because an empty or malformed
@@ -72,16 +65,16 @@ def _parse_attachment_paths(value: str) -> list[str]:
     """
     if not value or not value.strip():
         raise ValueError(
-            'attachments: provide a JSON array of local file paths, e.g. ["/path/to/file.pdf"]'
+            'attachments: provide a JSON array of upload references, e.g. ["upload:<upload_id>"]'
         )
     try:
         parsed = json.loads(value)
     except (json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"attachments: invalid JSON array: {exc}") from exc
     if not isinstance(parsed, list) or not all(isinstance(v, str) for v in parsed):
-        raise ValueError("attachments: must be a JSON array of strings (local file paths)")
+        raise ValueError("attachments: must be a JSON array of strings (upload references)")
     if not parsed:
-        raise ValueError("attachments: at least one file path is required")
+        raise ValueError("attachments: at least one upload reference is required")
     return parsed
 
 
@@ -216,20 +209,10 @@ def _attachments_param() -> ToolParam:
     return ToolParam(
         "attachments", "str",
         description=(
-            'JSON array of local file paths to attach, e.g. '
-            '["/path/to/report.pdf"] -- each either a path on the '
-            "user's computer (where Claude Desktop runs: absolute, or "
-            "starting with ~/. Claude's own working or outputs directory "
-            "is fine) or 'upload:<upload_id>', the id "
-            "privacyfence_create_upload_slot returned after you PUT the "
-            "file's bytes to its upload_url -- use that form if a plain "
-            "path fails with an error about PrivacyFence being unable to "
-            "read files in your home folder directly (e.g. no "
-            "PrivacyFence extension is installed, or this is an "
-            "organization-managed install: a plain path there is read "
-            "from wherever PrivacyFence's own server runs, not the "
-            "user's machine -- prefer 'upload:<upload_id>'). At least one "
-            "required."
+            'JSON array of upload references to attach, e.g. ["upload:<upload_id>"]. '
+            "Each is 'upload:' followed by the id privacyfence_create_upload_slot returned "
+            "after you PUT the file's bytes to its upload_url; a file path is refused. At least "
+            "one required."
         ),
     )
 
@@ -321,8 +304,6 @@ class GmailConnector(Connector):
     def __init__(self, client: GmailClient) -> None:
         self._gmail = client
         self.my_email: str = ""
-        # See connectors/drive.py's own DriveConnector.__init__ comment.
-        self.download_mode: str = "local"
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
         # settings.yaml's gmail.append_signature_to_drafts -- the default
@@ -454,16 +435,10 @@ class GmailConnector(Connector):
                     "Download a Gmail attachment's content. Identify the "
                     "attachment by the name returned from "
                     "gmail_list_message_attachments. "
-                    "Local install: saved to destination_dir (required, no default): pass "
-                    "~/Downloads, or a path the user asked for, if they should find the file "
-                    "afterward, or your own scratch directory if it is only for you to read. "
-                    "Organization-managed install: destination_dir is ignored; a small attachment "
-                    "comes back inline in the result, a larger one as a one-time link the human "
-                    "opens in their own signed-in browser. "
-                    "Returns {path, name, size_bytes} for a file saved on a local install (a save "
-                    "through the file bridge returns {path, delivery} instead), the file content "
-                    "inline, or {delivery: 'link', name, size_bytes, download_url, expires_at, "
-                    "note}. "
+                    "Returns {delivery: 'inline', name, mime_type, size_bytes, "
+                    "content_base64} for a small attachment, or {delivery: 'link', name, "
+                    "size_bytes, download_url, expires_at, note} for a larger one: a "
+                    "one-time link the human opens in their own signed-in browser. "
                     "Requires user approval."
                 ),
                 params=[
@@ -473,20 +448,6 @@ class GmailConnector(Connector):
                                   "File name of the attachment, exactly as gmail_list_message_attachments "
                                   "returns it in its name field; a name that matches none fails."
                               )),
-                    ToolParam(
-                        "destination_dir",
-                        "str",
-                        required=True,
-                        description=(
-                            "Local install only: where to save the attachment -- required, no default. "
-                            "On an organization-managed install it is ignored and nothing is "
-                            "saved to it; any value will do. "
-                            "Use ~/Downloads (or a path the user specified) if the "
-                            "user should find this file afterward; use your own "
-                            "working/scratch directory if it's only for you to read "
-                            "or process."
-                        ),
-                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -1086,9 +1047,7 @@ class GmailConnector(Connector):
             args={"thread_id": thread_id, **({"matching_queries": matching_queries} if matching_queries else {})},
         )
 
-    async def _download_attachment(
-        self, message_id: str, attachment_name: str, destination_dir: str = ""
-    ) -> Any:
+    async def _download_attachment(self, message_id: str, attachment_name: str) -> Any:
         message = await self._fetch(self._gmail.get_message, message_id)
         matching_queries = await self._matching_queries("gmail_download_attachment", [message])
         attachment = next(
@@ -1098,29 +1057,12 @@ class GmailConnector(Connector):
             raise RuntimeError(
                 f"No attachment named {attachment_name!r} on message {message_id}"
             )
-        dest_path = resolve_attachment_destination(attachment.name, destination_dir)
-        name = os.path.basename(dest_path)
-        # ADR 0007: shown to the human, and handed to local_files.
-        # deliver_file(), exactly as the agent typed destination_dir --
-        # never the daemon-expanded dest_path above, which mixes in this
-        # process's own idea of "~" and is meaningless to a shim writing
-        # the file as a different, real user. See connectors/drive.py's
-        # _download_file's own displayed_dest.
-        displayed_dest = f"{destination_dir.strip().rstrip('/')}/{name}" if destination_dir.strip() else dest_path
         cfg = self.download_config or DownloadDeliveryConfig()
-        # ADR 0007: whether this download can still write straight to this
-        # process's own filesystem (a dev checkout or an unseparated pip/
-        # pipx install, where the daemon *is* the user) or needs the file
-        # bridge instead -- see local_files.can_access_user_files's own
-        # docstring.
-        direct_write = local_files.can_access_user_files(self.download_mode)
-        # Audit trail -- see connectors/drive.py's own `delivery`
-        # comment for the reasoning; attachment.size here is exact (not an
-        # export-size approximation), so this estimate and the eventual
-        # actual delivery can only disagree if the prefetch itself failed.
+        # Audit trail -- see connectors/drive.py's own `delivery` comment for the reasoning;
+        # attachment.size here is exact (not an export-size approximation), so this estimate
+        # and the eventual actual delivery can only disagree if the prefetch itself failed.
         delivery = (
-            ("local_disk" if direct_write else "client_bridge") if self.download_mode != "org"
-            else "inline_base64" if cfg.fits_inline(attachment.size, attachment.name, attachment.mime_type)
+            "inline_base64" if cfg.fits_inline(attachment.size, attachment.name, attachment.mime_type)
             else "staged_link"
         )
         # Every one of these is already known for free by the time this
@@ -1138,32 +1080,22 @@ class GmailConnector(Connector):
             "Type": attachment.mime_type,
             "Size": f"{attachment.size:,} bytes",
         }
-        if self.download_mode == "org":
-            if cfg.fits_inline(attachment.size, attachment.name, attachment.mime_type):
-                new_info = {
-                    "Content returned to {agent}": (
-                        f"Yes — file bytes are included in the tool result (attachment is "
-                        f"{attachment.size:,} bytes, {base64_length(attachment.size):,} once "
-                        f"base64-encoded, within this org's {cfg.inline_max_bytes:,}-byte "
-                        "inline-delivery limit)"
-                    ),
-                }
-            else:
-                new_info = {
-                    "Content returned to {agent}": (
-                        "None — a one-time link is generated for you to open in your own browser"
-                    ),
-                }
+        if cfg.fits_inline(attachment.size, attachment.name, attachment.mime_type):
+            new_info = {
+                "Content returned to {agent}": (
+                    f"Yes — file bytes are included in the tool result (attachment is "
+                    f"{attachment.size:,} bytes, {base64_length(attachment.size):,} once "
+                    f"base64-encoded, within this org's {cfg.inline_max_bytes:,}-byte "
+                    "inline-delivery limit)"
+                ),
+            }
         else:
             new_info = {
-                "Content returned to {agent}": "None — file bytes are never sent",
-                "Will save to": displayed_dest,
+                "Content returned to {agent}": (
+                    "None — a one-time link is generated for you to open in your own browser"
+                ),
             }
-        details = (
-            "The attachment above will be delivered as described above."
-            if self.download_mode == "org"
-            else "The attachment above will be downloaded to the destination shown."
-        )
+        details = "The attachment above will be delivered as described above."
 
         # Gmail's attachments().get() has no partial/range fetch -- previewing
         # or PII-scanning means fully fetching the attachment before the
@@ -1198,8 +1130,8 @@ class GmailConnector(Connector):
                 # gated_call below) instead of a visual thumbnail.
                 pii_scan_text = await asyncio.to_thread(extract_text, fetched_bytes, attachment.mime_type)
 
-        # Gate before touching disk: gated_call raises on denial, and only a
-        # decision made here should ever cause the attachment to be written.
+        # Gate before any delivery: gated_call raises on denial, and only a decision made here
+        # should ever cause the attachment to be handed out.
         await gated_call(
             connector=self.name,
             tool="gmail_download_attachment",
@@ -1224,36 +1156,8 @@ class GmailConnector(Connector):
             },
             delivery=delivery,
         )
-        if self.download_mode == "org":
-            return await self._deliver_org_attachment(
-                message_id, attachment, fetched_bytes, cfg,
-            )
-        if direct_write:
-            # Unseparated install -- unchanged from before ADR 0007. Reuses
-            # the PII-scan prefetch exactly as it always did.
-            if fetched_bytes is not None:
-                return await self._fetch(
-                    self._gmail.save_attachment_bytes, fetched_bytes, attachment.name, destination_dir,
-                )
-            return await self._fetch(
-                self._gmail.download_attachment,
-                message_id, attachment.attachment_id, attachment.name, destination_dir,
-            )
-        # ADR 0007: privilege separation means this process cannot write
-        # into the real user's destination_dir -- reuse the bytes the PII
-        # scan/preview above already fetched when it had them (prefetch-
-        # worthy type, under _ATTACHMENT_PREFETCH_MAX_BYTES), otherwise
-        # fetch the full attachment now. local_files.deliver_file stages it
-        # for the shim (or, with no bridge-capable client, a one-time link
-        # -- ADR 0007 SS1.4). Mirrors connectors/drive.py's _download_file.
-        data = fetched_bytes
-        mime_type = attachment.mime_type or "application/octet-stream"
-        if data is None:
-            data = await self._fetch(
-                self._gmail.fetch_attachment_bytes, message_id, attachment.attachment_id,
-            )
-        return local_files.deliver_file(
-            destination_dir, name, data, mime_type, download_mode=self.download_mode,
+        return await self._deliver_org_attachment(
+            message_id, attachment, fetched_bytes, cfg,
         )
 
     async def _deliver_org_attachment(
@@ -1444,9 +1348,6 @@ class GmailConnector(Connector):
     ) -> Any:
         _require_body(body, body_markdown, "gmail_create_draft_with_attachments")
         paths = _parse_attachment_paths(attachments)
-        # ADR 0007 and ADR 0028: see _require_attachment_paths' own
-        # docstring for why this differs by mode and by an ``upload:``
-        # reference's own path shape.
         self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
         sender = await self._resolve_draft_sender(include_signature, send_as, body_markdown)
@@ -1480,7 +1381,7 @@ class GmailConnector(Connector):
         local_files.commit_uploads()
         return await self._fetch(
             self._gmail.create_draft_with_attachments,
-            to, subject, body, paths, cc, bcc, body_markdown, self.download_mode,
+            to, subject, body, paths, cc, bcc, body_markdown,
             **sender.client_kwargs(),
         )
 
@@ -1525,7 +1426,7 @@ class GmailConnector(Connector):
         local_files.commit_uploads()
         return await self._fetch(
             self._gmail.create_reply_draft_with_attachments,
-            message_id, body, paths, False, self.my_email, cc, bcc, body_markdown, self.download_mode,
+            message_id, body, paths, False, self.my_email, cc, bcc, body_markdown,
             **sender.client_kwargs(),
         )
 
@@ -1570,7 +1471,7 @@ class GmailConnector(Connector):
         local_files.commit_uploads()
         return await self._fetch(
             self._gmail.create_reply_draft_with_attachments,
-            message_id, body, paths, True, self.my_email, cc, bcc, body_markdown, self.download_mode,
+            message_id, body, paths, True, self.my_email, cc, bcc, body_markdown,
             **sender.client_kwargs(),
         )
 
@@ -1622,63 +1523,19 @@ class GmailConnector(Connector):
         return message, preview, expanded_to or [message.sender or ""]
 
     def _require_attachment_paths(self, paths: list[str]) -> None:
-        """Runs local_files.require_local_files() on ``paths`` before
-        gating -- see ADR 0007 for why local mode always needs this (the
-        bridge handshake) and org mode's own literal filesystem paths never
-        do (its daemon runs on a different machine than the user entirely).
-        Capability-slot ``upload:`` references (ADR 0028) are the one path
-        shape that needs this in *every* mode, org included -- a capability
-        slot claim, not a filesystem read, so it's filtered out here rather
-        than skipped along with the rest of org mode's paths.
-        """
-        if self.download_mode != "org":
-            local_files.require_local_files(
-                paths, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
-            )
-            return
-        upload_refs = [p for p in paths if p.startswith(local_files.UPLOAD_REF_PREFIX)]
-        if upload_refs:
-            local_files.require_local_files(
-                upload_refs, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
-            )
+        """Claims every ``upload:<id>`` reference before gating (ADR 0299), so a missing,
+        expired or already-used upload is reported before the human is asked to approve
+        anything. A path that is not an upload reference raises ``LocalFileAccessError``
+        with ``NO_BRIDGE_UPLOAD_MESSAGE``."""
+        local_files.require_local_files(paths, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES)
 
     def _stat_attachments(self, paths: list[str]) -> list[dict[str, Any]]:
-        """Stat each attachment path so the approval popup shows real
-        filenames/sizes before gating -- doesn't read file content, which
-        only happens in GmailClient after approval, when the draft is
-        actually built.
-
-        ADR 0007: each of this method's three call sites already calls
-        local_files.require_local_files() first for local mode, which
-        raises before this ever runs if a path can't be reached at all --
-        so no os.path.isfile check is needed here, only
-        local_files.local_file_size(). Not a ``@staticmethod``, since
-        bridge-awareness needs ``self.download_mode``.
-
-        Org mode never goes through require_local_files above for a plain
-        filesystem path (its daemon runs on a different machine than the
-        user entirely -- the file bridge doesn't apply there, same
-        reasoning as connectors/drive.py's _upload_file is_org_local_path
-        branch), so it keeps a direct stat here too. A capability-slot
-        ``upload:`` reference is never a filesystem path in any mode
-        though -- require_local_files() already claimed it above (see this
-        method's three call sites), so it always takes the local_files
-        branch here, org mode included.
-        """
-        info = []
-        for path in paths:
-            if self.download_mode == "org" and not path.startswith(local_files.UPLOAD_REF_PREFIX):
-                expanded = os.path.expanduser(path.strip())
-                if not os.path.isfile(expanded):
-                    raise ValueError(f"attachments: no such file: {path!r}")
-                info.append({"name": os.path.basename(expanded), "size_bytes": os.path.getsize(expanded)})
-            elif path.startswith(local_files.UPLOAD_REF_PREFIX):
-                size_bytes = local_files.local_file_size(path, download_mode=self.download_mode)
-                info.append({"name": "attachment", "size_bytes": size_bytes})
-            else:
-                size_bytes = local_files.local_file_size(path, download_mode=self.download_mode)
-                info.append({"name": os.path.basename(path.strip()), "size_bytes": size_bytes})
-        return info
+        """Name and size of each claimed upload, so the approval popup shows real sizes
+        before gating. Every path was already claimed by ``_require_attachment_paths``."""
+        return [
+            {"name": "attachment", "size_bytes": local_files.local_file_size(path)}
+            for path in paths
+        ]
 
     @staticmethod
     def _format_attachment_preview(attachment_info: list[dict[str, Any]]) -> str:

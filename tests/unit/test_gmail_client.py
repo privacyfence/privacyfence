@@ -39,15 +39,36 @@ from privacyfence.gmail_client import (
     InlineImage,
     SendAsAlias,
     drop_unresolved_cid_images,
-    resolve_attachment_destination,
     signature_cid_refs,
     signature_has_content,
     signature_plain_text,
 )
-from privacyfence.local_files import LocalFileAccessError
+from privacyfence.local_files import NO_BRIDGE_UPLOAD_MESSAGE, LocalFileAccessError
 from googleapiclient.errors import HttpError
 
-pytestmark = pytest.mark.usefixtures("disk_backed_local_files")
+_STAGED_UPLOADS: dict[str, bytes] = {}
+
+
+@pytest.fixture(autouse=True)
+def _staged_uploads(monkeypatch):
+    """Stands in for the claimed upload slots a real call would have: an ``upload:<name>``
+    reference resolves to the bytes registered through ``_ref``."""
+    from privacyfence import local_files
+
+    _STAGED_UPLOADS.clear()
+    monkeypatch.setattr(
+        local_files, "read_local_file",
+        lambda path, **kwargs: _STAGED_UPLOADS[path] if path in _STAGED_UPLOADS else (_ for _ in ()).throw(
+            LocalFileAccessError(f"Could not read {path!r}")
+        ),
+    )
+
+
+def _ref(path) -> str:
+    """Registers the bytes of the file at ``path`` as a claimed upload; returns its reference."""
+    ref = f"upload:{path.name}"
+    _STAGED_UPLOADS[ref] = path.read_bytes()
+    return ref
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "gmail"
 
@@ -1025,7 +1046,7 @@ class TestCreateDraftWithAttachments:
         client = make_client(service)
 
         result = client.create_draft_with_attachments(
-            to="a@x.com", subject="Hi", body="body text", attachments=[str(attachment)],
+            to="a@x.com", subject="Hi", body="body text", attachments=[_ref(attachment)],
         )
 
         assert result == {"draft_id": "d1", "to": "a@x.com", "subject": "Hi"}
@@ -1036,15 +1057,31 @@ class TestCreateDraftWithAttachments:
         assert parsed["subject"] == "Hi"
         text_parts = [p for p in parsed.walk() if p.get_content_type() == "text/plain" and p.get_filename() is None]
         assert text_parts[0].get_payload(decode=True) == b"body text"
-        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "report.txt"]
+        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "attachment"]
         assert len(attachment_parts) == 1
         assert attachment_parts[0].get_payload(decode=True) == b"attachment file contents"
 
-    def test_org_mode_reads_the_attachment_directly_without_the_bridge(self, tmp_path):
-        # ADR 0007 is Claude-Desktop-only -- org mode keeps reading the
-        # attachment straight off whatever filesystem the org daemon runs
-        # on, exactly as before this phase. See _read_local_attachment's
-        # own docstring.
+    def test_non_upload_path_is_refused_with_the_upload_slot_message(self, tmp_path):
+        attachment = tmp_path / "report.txt"
+        attachment.write_bytes(b"attachment file contents")
+        service = MagicMock()
+        client = make_client(service)
+
+        with pytest.raises(LocalFileAccessError) as excinfo:
+            client.create_draft_with_attachments(
+                to="a@x.com", subject="Hi", body="body", attachments=[str(attachment)],
+            )
+
+        assert str(excinfo.value) == NO_BRIDGE_UPLOAD_MESSAGE
+        service.users.return_value.drafts.return_value.create.assert_not_called()
+
+    def test_removed_download_mode_argument_is_not_accepted(self):
+        with pytest.raises(TypeError):
+            make_client(MagicMock()).create_draft_with_attachments(
+                to="a@x.com", subject="s", body="b", attachments=["upload:x"], download_mode="org",
+            )
+
+    def test_upload_reference_is_attached_under_a_generic_name(self, tmp_path):
         attachment = tmp_path / "report.txt"
         attachment.write_bytes(b"attachment file contents")
         service = MagicMock()
@@ -1052,13 +1089,13 @@ class TestCreateDraftWithAttachments:
         client = make_client(service)
 
         result = client.create_draft_with_attachments(
-            to="a@x.com", subject="Hi", body="body", attachments=[str(attachment)], download_mode="org",
+            to="a@x.com", subject="Hi", body="body", attachments=[_ref(attachment)],
         )
 
         assert result == {"draft_id": "d-org", "to": "a@x.com", "subject": "Hi"}
         raw = service.users.return_value.drafts.return_value.create.call_args.kwargs["body"]["message"]["raw"]
         parsed, _raw_bytes = _extract_parts(raw)
-        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "report.txt"]
+        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "attachment"]
         assert attachment_parts[0].get_payload(decode=True) == b"attachment file contents"
 
     def test_multiple_attachments_all_present(self, tmp_path):
@@ -1071,13 +1108,13 @@ class TestCreateDraftWithAttachments:
         client = make_client(service)
 
         client.create_draft_with_attachments(
-            to="a@x.com", subject="s", body="b", attachments=[str(first), str(second)],
+            to="a@x.com", subject="s", body="b", attachments=[_ref(first), _ref(second)],
         )
 
         raw = service.users.return_value.drafts.return_value.create.call_args.kwargs["body"]["message"]["raw"]
         parsed, _ = _extract_parts(raw)
         names = sorted(p.get_filename() for p in parsed.walk() if p.get_filename())
-        assert names == ["a.txt", "b.txt"]
+        assert names == ["attachment", "attachment"]
 
     def test_cc_and_bcc_included_when_provided(self, tmp_path):
         attachment = tmp_path / "f.txt"
@@ -1087,7 +1124,7 @@ class TestCreateDraftWithAttachments:
         client = make_client(service)
 
         client.create_draft_with_attachments(
-            to="a@x.com", subject="s", body="b", attachments=[str(attachment)],
+            to="a@x.com", subject="s", body="b", attachments=[_ref(attachment)],
             cc="c@x.com", bcc="d@x.com",
         )
 
@@ -1102,7 +1139,7 @@ class TestCreateDraftWithAttachments:
         # shown to the model verbatim by safe_errors.py) rather than
         # GmailClientError -- see _read_local_attachment's own docstring.
         client = make_client(MagicMock())
-        with pytest.raises(LocalFileAccessError, match="No such file"):
+        with pytest.raises(LocalFileAccessError, match="upload slot"):
             client.create_draft_with_attachments(
                 to="a@x.com", subject="s", body="b", attachments=["/no/such/file.pdf"],
             )
@@ -1116,7 +1153,7 @@ class TestCreateDraftWithAttachments:
         client = make_client(MagicMock())
         with pytest.raises(GmailClientError, match="exceeds the"):
             client.create_draft_with_attachments(
-                to="a@x.com", subject="s", body="b", attachments=[str(attachment)],
+                to="a@x.com", subject="s", body="b", attachments=[_ref(attachment)],
             )
 
     def test_http_error_becomes_gmail_client_error(self, tmp_path):
@@ -1127,7 +1164,7 @@ class TestCreateDraftWithAttachments:
         client = make_client(service)
         with pytest.raises(GmailClientError, match="create_draft_with_attachments failed"):
             client.create_draft_with_attachments(
-                to="a@x.com", subject="s", body="b", attachments=[str(attachment)],
+                to="a@x.com", subject="s", body="b", attachments=[_ref(attachment)],
             )
 
 
@@ -1142,7 +1179,7 @@ class TestCreateDraftWithAttachmentsRichText:
         client = make_client(service)
 
         client.create_draft_with_attachments(
-            to="a@x.com", subject="Hi", body="", attachments=[str(attachment)],
+            to="a@x.com", subject="Hi", body="", attachments=[_ref(attachment)],
             body_markdown="**rich** body",
         )
 
@@ -1153,7 +1190,7 @@ class TestCreateDraftWithAttachmentsRichText:
         assert len(alt_parts) == 1
         html = next(p for p in parsed.walk() if p.get_content_type() == "text/html")
         assert "<b>rich</b>" in html.get_payload(decode=True).decode()
-        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "report.txt"]
+        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "attachment"]
         assert attachment_parts[0].get_payload(decode=True) == b"attachment file contents"
 
     def test_neither_body_nor_body_markdown_raises(self, tmp_path):
@@ -1162,7 +1199,7 @@ class TestCreateDraftWithAttachmentsRichText:
         client = make_client(MagicMock())
         with pytest.raises(GmailClientError, match="body and/or body_markdown"):
             client.create_draft_with_attachments(
-                to="a@x.com", subject="s", body="", attachments=[str(attachment)],
+                to="a@x.com", subject="s", body="", attachments=[_ref(attachment)],
             )
 
 
@@ -1177,7 +1214,7 @@ class TestCreateReplyDraftWithAttachments:
         attachment.write_bytes(b"x")
         client = make_client(MagicMock())
         with pytest.raises(GmailClientError, match="non-empty message_id"):
-            client.create_reply_draft_with_attachments("", body="b", attachments=[str(attachment)])
+            client.create_reply_draft_with_attachments("", body="b", attachments=[_ref(attachment)])
 
     def test_reply_to_original_sender_only_with_attachment(self, tmp_path):
         attachment = tmp_path / "f.txt"
@@ -1189,7 +1226,7 @@ class TestCreateReplyDraftWithAttachments:
         client = make_client(service)
 
         result = client.create_reply_draft_with_attachments(
-            "m1", body="reply body", attachments=[str(attachment)], my_email="me@x.com",
+            "m1", body="reply body", attachments=[_ref(attachment)], my_email="me@x.com",
         )
 
         assert result["to"] == "sender@x.com"
@@ -1199,7 +1236,7 @@ class TestCreateReplyDraftWithAttachments:
         parsed, _ = _extract_parts(raw)
         assert parsed.is_multipart()
         assert parsed["In-Reply-To"] == "<orig@x.com>"
-        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "f.txt"]
+        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "attachment"]
         assert attachment_parts[0].get_payload(decode=True) == b"attached"
 
     def test_reply_all_includes_to_and_cc_excluding_self_and_sender(self, tmp_path):
@@ -1212,7 +1249,7 @@ class TestCreateReplyDraftWithAttachments:
         client = make_client(service)
 
         result = client.create_reply_draft_with_attachments(
-            "m1", body="b", attachments=[str(attachment)], reply_all=True, my_email="me@x.com",
+            "m1", body="b", attachments=[_ref(attachment)], reply_all=True, my_email="me@x.com",
         )
 
         assert result["to"] == "sender@x.com"
@@ -1221,7 +1258,7 @@ class TestCreateReplyDraftWithAttachments:
     def test_missing_attachment_file_raises(self):
         service = make_reply_service({"Subject": "Original", "From": "sender@x.com"})
         client = make_client(service)
-        with pytest.raises(LocalFileAccessError, match="No such file"):
+        with pytest.raises(LocalFileAccessError, match="upload slot"):
             client.create_reply_draft_with_attachments(
                 "m1", body="b", attachments=["/no/such/file.pdf"], my_email="me@x.com",
             )
@@ -1232,7 +1269,7 @@ class TestCreateReplyDraftWithAttachments:
         service = make_reply_service({"Subject": "Original", "From": "sender@x.com"})
         client = make_client(service)
         client.create_reply_draft_with_attachments(
-            "m1", body="b", attachments=[str(attachment)], my_email="me@x.com", bcc="hidden@x.com",
+            "m1", body="b", attachments=[_ref(attachment)], my_email="me@x.com", bcc="hidden@x.com",
         )
 
         raw = service.users.return_value.drafts.return_value.create.call_args.kwargs["body"]["message"]["raw"]
@@ -1247,7 +1284,7 @@ class TestCreateReplyDraftWithAttachments:
         client = make_client(service)
         with pytest.raises(GmailClientError, match="create_reply_draft_with_attachments failed"):
             client.create_reply_draft_with_attachments(
-                "m1", body="b", attachments=[str(attachment)], my_email="me@x.com",
+                "m1", body="b", attachments=[_ref(attachment)], my_email="me@x.com",
             )
 
 
@@ -1259,7 +1296,7 @@ class TestCreateReplyDraftWithAttachmentsRichText:
         client = make_client(service)
 
         client.create_reply_draft_with_attachments(
-            "m1", body="", attachments=[str(attachment)], my_email="me@x.com",
+            "m1", body="", attachments=[_ref(attachment)], my_email="me@x.com",
             body_markdown="[see report](https://example.com/report)",
         )
 
@@ -1268,7 +1305,7 @@ class TestCreateReplyDraftWithAttachmentsRichText:
         assert parsed.get_content_type() == "multipart/mixed"
         html = next(p for p in parsed.walk() if p.get_content_type() == "text/html")
         assert 'href="https://example.com/report"' in html.get_payload(decode=True).decode()
-        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "f.txt"]
+        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "attachment"]
         assert attachment_parts[0].get_payload(decode=True) == b"attached"
 
     def test_neither_body_nor_body_markdown_raises(self, tmp_path):
@@ -1278,7 +1315,7 @@ class TestCreateReplyDraftWithAttachmentsRichText:
         client = make_client(service)
         with pytest.raises(GmailClientError, match="body and/or body_markdown"):
             client.create_reply_draft_with_attachments(
-                "m1", body="", attachments=[str(attachment)], my_email="me@x.com",
+                "m1", body="", attachments=[_ref(attachment)], my_email="me@x.com",
             )
 
 
@@ -1449,7 +1486,7 @@ class TestDraftSignature:
         attachment.write_bytes(b"x")
         service = _send_as_service([])
         make_client(service).create_draft_with_attachments(
-            to="a@x.com", subject="s", body="Hello", attachments=[str(attachment)],
+            to="a@x.com", subject="s", body="Hello", attachments=[_ref(attachment)],
             signature_html=_SIGNATURE_HTML, from_header="team@x.com",
         )
         parsed, parts = _draft_parts(service)
@@ -1461,7 +1498,7 @@ class TestDraftSignature:
         attachment.write_bytes(b"x")
         service = make_reply_service({"Subject": "Original", "From": "sender@x.com"})
         make_client(service).create_reply_draft_with_attachments(
-            "m1", body="", body_markdown="Thanks", attachments=[str(attachment)], my_email="me@x.com",
+            "m1", body="", body_markdown="Thanks", attachments=[_ref(attachment)], my_email="me@x.com",
             signature_html=_SIGNATURE_HTML, from_header="team@x.com",
         )
         parsed, parts = _draft_parts(service)
@@ -1577,11 +1614,11 @@ class TestSignatureInlineImages:
         attachment.write_bytes(b"x")
         service = _send_as_service([])
         make_client(service).create_draft_with_attachments(
-            to="a@x.com", subject="s", body="", body_markdown="Hi", attachments=[str(attachment)],
+            to="a@x.com", subject="s", body="", body_markdown="Hi", attachments=[_ref(attachment)],
             signature_html=_CID_SIGNATURE_HTML, signature_images=(_LOGO,),
         )
         parsed, _ = _draft_parts(service)
-        assert [p.get_content_type() for p in parsed.get_payload()] == ["multipart/related", "text/plain"]
+        assert [p.get_content_type() for p in parsed.get_payload()] == ["multipart/related", "application/octet-stream"]
 
     def test_reply_drafts_carry_the_images(self, tmp_path):
         attachment = tmp_path / "f.txt"
@@ -1596,7 +1633,7 @@ class TestSignatureInlineImages:
 
         service = make_reply_service(headers)
         make_client(service).create_reply_draft_with_attachments(
-            "m1", body="", body_markdown="Thanks", attachments=[str(attachment)], my_email="me@x.com",
+            "m1", body="", body_markdown="Thanks", attachments=[_ref(attachment)], my_email="me@x.com",
             signature_html=_CID_SIGNATURE_HTML, signature_images=(_LOGO,),
         )
         assert _draft_parts(service)[0].get_payload()[0].get_content_type() == "multipart/related"
@@ -2126,38 +2163,7 @@ class TestUpdateFilter:
 
 
 # ---------------------------------------------------------------------------- #
-# resolve_attachment_destination: path-traversal sanitization
-# ---------------------------------------------------------------------------- #
-
-class TestResolveAttachmentDestination:
-    def test_joins_basename_with_destination_dir(self, tmp_path):
-        result = resolve_attachment_destination("report.pdf", str(tmp_path))
-        assert result == str(tmp_path / "report.pdf")
-
-    def test_strips_directory_traversal_from_filename(self, tmp_path):
-        # A crafted filename from the sender's MIME headers must never be
-        # able to write outside destination_dir.
-        result = resolve_attachment_destination("../../.ssh/authorized_keys", str(tmp_path))
-        assert result == str(tmp_path / "authorized_keys")
-
-    def test_strips_absolute_path_prefix_from_filename(self, tmp_path):
-        result = resolve_attachment_destination("/etc/passwd", str(tmp_path))
-        assert result == str(tmp_path / "passwd")
-
-    def test_empty_filename_falls_back_to_generic_name(self, tmp_path):
-        assert resolve_attachment_destination("", str(tmp_path)) == str(tmp_path / "attachment")
-
-    def test_empty_destination_dir_raises(self):
-        with pytest.raises(GmailClientError, match="destination_dir"):
-            resolve_attachment_destination("report.pdf", "")
-
-    def test_whitespace_only_destination_dir_raises(self):
-        with pytest.raises(GmailClientError, match="destination_dir"):
-            resolve_attachment_destination("report.pdf", "   ")
-
-
-# ---------------------------------------------------------------------------- #
-# fetch_attachment_bytes / save_attachment_bytes
+# fetch_attachment_bytes
 # ---------------------------------------------------------------------------- #
 
 class TestFetchAttachmentBytes:
@@ -2189,111 +2195,6 @@ class TestFetchAttachmentBytes:
         client = make_client(service)
         with pytest.raises(GmailClientError, match="fetch_attachment_bytes"):
             client.fetch_attachment_bytes("m1", "att1")
-
-
-class TestSaveAttachmentBytes:
-    def test_sanitizes_filename_before_writing(self, tmp_path):
-        client = make_client(MagicMock())
-
-        result = client.save_attachment_bytes(b"data", "../../evil.txt", str(tmp_path))
-
-        assert result == {"path": str(tmp_path / "evil.txt"), "name": "evil.txt", "size_bytes": 4}
-        assert (tmp_path / "evil.txt").read_bytes() == b"data"
-
-    def test_creates_destination_directory_if_missing(self, tmp_path):
-        nested = tmp_path / "nested" / "dir"
-        client = make_client(MagicMock())
-
-        client.save_attachment_bytes(b"data", "f.txt", str(nested))
-
-        assert (nested / "f.txt").read_bytes() == b"data"
-
-    def test_unwritable_destination_becomes_gmail_client_error(self, tmp_path, monkeypatch):
-        # A disk-level failure (permission denied, a read-only/synthetic
-        # mount point that rejects mkdir, etc.) must surface as
-        # GmailClientError like every other failure in this method -- not a
-        # bare OSError, which coding-and-testing-guidelines.md §1.4 requires
-        # every *_client.py public method to never leak.
-        client = make_client(MagicMock())
-        monkeypatch.setattr(
-            "os.makedirs",
-            MagicMock(side_effect=OSError(45, "Operation not supported")),
-        )
-
-        with pytest.raises(GmailClientError, match="could not write"):
-            client.save_attachment_bytes(b"data", "f.txt", str(tmp_path))
-
-
-# ---------------------------------------------------------------------------- #
-# download_attachment
-# ---------------------------------------------------------------------------- #
-
-class TestDownloadAttachment:
-    def test_requires_message_id_and_attachment_id(self):
-        client = make_client(MagicMock())
-        with pytest.raises(GmailClientError, match="non-empty message_id and attachment_id"):
-            client.download_attachment("", "att1", "file.pdf")
-        with pytest.raises(GmailClientError, match="non-empty message_id and attachment_id"):
-            client.download_attachment("m1", "", "file.pdf")
-
-    def test_downloads_decodes_and_saves_content(self, tmp_path):
-        service = MagicMock()
-        service.users.return_value.messages.return_value.attachments.return_value.get.return_value.execute.return_value = {
-            "data": b64("file contents")
-        }
-        client = make_client(service)
-
-        result = client.download_attachment("m1", "att1", "report.pdf", str(tmp_path))
-
-        dest = tmp_path / "report.pdf"
-        assert dest.read_bytes() == b"file contents"
-        assert result == {"path": str(dest), "name": "report.pdf", "size_bytes": len(b"file contents")}
-        service.users.return_value.messages.return_value.attachments.return_value.get.assert_called_once_with(
-            userId="me", messageId="m1", id="att1"
-        )
-
-    def test_sanitizes_filename_before_writing(self, tmp_path):
-        service = MagicMock()
-        service.users.return_value.messages.return_value.attachments.return_value.get.return_value.execute.return_value = {
-            "data": b64("data")
-        }
-        client = make_client(service)
-
-        result = client.download_attachment("m1", "att1", "../../evil.txt", str(tmp_path))
-
-        assert result == {"path": str(tmp_path / "evil.txt"), "name": "evil.txt", "size_bytes": 4}
-
-    def test_empty_filename_falls_back_to_attachment_id(self, tmp_path):
-        service = MagicMock()
-        service.users.return_value.messages.return_value.attachments.return_value.get.return_value.execute.return_value = {
-            "data": b64("data")
-        }
-        client = make_client(service)
-
-        result = client.download_attachment("m1", "att1", "", str(tmp_path))
-
-        assert result["name"] == "att1"
-
-    def test_creates_destination_directory_if_missing(self, tmp_path):
-        nested = tmp_path / "nested" / "dir"
-        service = MagicMock()
-        service.users.return_value.messages.return_value.attachments.return_value.get.return_value.execute.return_value = {
-            "data": b64("data")
-        }
-        client = make_client(service)
-
-        client.download_attachment("m1", "att1", "f.txt", str(nested))
-
-        assert (nested / "f.txt").read_bytes() == b"data"
-
-    def test_http_error_becomes_gmail_client_error(self):
-        service = MagicMock()
-        service.users.return_value.messages.return_value.attachments.return_value.get.return_value.execute.side_effect = http_error(404)
-        client = make_client(service)
-        # download_attachment delegates the actual fetch to fetch_attachment_bytes
-        # (see its own test class below) -- the error originates there.
-        with pytest.raises(GmailClientError, match="fetch_attachment_bytes"):
-            client.download_attachment("m1", "att1", "f.txt")
 
 
 # ---------------------------------------------------------------------------- #
