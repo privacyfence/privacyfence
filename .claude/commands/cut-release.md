@@ -1,5 +1,5 @@
 ---
-description: Pre-flight and cut a release tag through the release workflow
+description: Pre-flight and cut a release tag through tld-release.yml
 argument-hint: "<version>  e.g. 4.2.0, or 4.2.0a1 / 4.2.0b2 / 4.2.0rc1"
 ---
 
@@ -9,7 +9,7 @@ If no version was given above, stop and ask. Never infer the next version from `
 `setuptools_scm` and the git tags are the only version source in this repo, and
 `scripts/changelog_section.py`'s own docstring forbids reading a version out of the changelog.
 
-This container cannot push `refs/tags/*`, so the tag is cut by `.github/workflows/release.yml`.
+This container cannot push `refs/tags/*`, so the tag is cut by `.github/workflows/tld-release.yml`.
 Do not try to `git tag && git push` from here; it will fail on the push and may leave a local tag
 behind that makes later checks lie.
 
@@ -27,7 +27,7 @@ behind that makes later checks lie.
   entries into the version's section, not a flag.
 
 **Then pre-flight `build.yml` itself against that same commit — do not skip this.**
-`release.yml`'s own dry run never installs the package or builds anything, so it cannot catch a
+`tld-release.yml`'s own dry run never installs the package or builds anything, so it cannot catch a
 regression in the org image build — that runs only inside `build.yml`'s `build-org-image` jobs, which
 otherwise trigger only on a real tag push. That gap is exactly how `v4.2.0` reached a pushed tag
 broken (see `CHANGELOG.md`'s `[4.2.1]` entry and
@@ -40,20 +40,33 @@ upload/publish/release step in `build.yml` — including `finalize-release` — 
 publishes nothing anywhere. Report the run URL and its outcome.
 
 If any of those jobs fail, including either `build-org-image` architecture, or if one never started: stop. Treat it as an ordinary CI failure on `main` — diagnose, fix,
-push, and re-run this same pre-flight against the fixed commit — before touching `release.yml` at
+push, and re-run this same pre-flight against the fixed commit — before touching `tld-release.yml` at
 all. Do not proceed to the dry run on a red pre-flight.
 
 **Also check the OAuth relay is up** (`docs/oauth-relay.md`): `curl -fsSI https://oauth.privacyfence.eu/health`
 must return 200. Report the result. A relay that is down does not block the release, but say so,
 because organization servers using the built-in apps cannot sign in through it until it is back.
 
-**Only once the `build.yml` pre-flight is green, dispatch `release.yml` against `main` with
-`dry_run: true`** and report the result. The dry run performs every check and creates the tag on
-the runner without pushing it, so a failure costs nothing.
+The pre-flight must have finished, not merely started: `tld-release.yml`'s green check refuses a
+commit with a running or failed check run.
 
-**Only cut for real once I have seen the dry run and said to.** Then re-dispatch with
-`dry_run: false`, and watch it: the workflow verifies that `build.yml` actually started for the
-tagged commit, and a failure there means the tag exists but the release did not start — tell me
-immediately if that happens, it needs the tag deleted and re-pushed, not a retry.
+**Dry run.** Only once the `build.yml` pre-flight is green, dispatch `tld-release.yml` on `main` with
+`version: <version>` and `dry_run: "true"`. Never leave `version` empty and never pass `skip_checks`.
+The owner approves the `tld-release` environment in GitHub before the job starts. Report the run URL.
+For a stable version, report the notes from the "Run the project's release check" step's summary; the
+"Show the release notes" step lists GitHub's generated notes, which do not ship. If "Check that the
+commit is green" fails, list the check runs it names and stop: a red or queued run on `main`'s tip is
+fixed or re-run, never skipped. If `tag_release.py` says local `main` is not `origin/main`, `main`
+moved while the run waited for approval: report it and dispatch the dry run again.
 
-After a real cut, report the tag, the `build.yml` run URL, and the `publish-pypi.yml` run URL.
+**Real run.** Only after the owner's yes on the tld board, which tld's pr-steward policy requires for
+any real release dispatch from a session. Ask with `tld board ask` (the session's tld runtime says how
+to post and wait): one `choice` question, id `cut`, titled `Release <version>: cut for real?`, its
+text the dry-run URL and the channel, options `real` (recommended) and `stop`. A yes typed in chat
+alone is not enough. On `real`: run `tld guard allow-release tld-release.yml`, dispatch with
+`dry_run: "false"`, then always run `tld guard end-allow`, also when the dispatch failed. The owner
+approves the environment again. On `stop`: report that nothing was cut.
+
+**After a real cut.** List `build.yml` and `publish-pypi.yml` runs. A `push` run on the tagged commit
+must appear for each within 5 minutes. If none does, tell the maintainer at once: the tag exists and
+the release did not start. Never dispatch again for the same version. Report the tag and both run URLs.
