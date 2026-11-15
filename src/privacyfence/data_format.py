@@ -100,6 +100,15 @@ def _present(path: Path) -> bool:
     return path.is_symlink() or path.exists()
 
 
+def _holds_data(path: Path) -> bool:
+    """Whether ``path`` holds anything: a file, a link (even a dangling one) or a non-empty
+    directory. The Docker image creates its data directories empty, and an empty one holds no
+    person data."""
+    if path.is_symlink() or path.is_file():
+        return True
+    return path.is_dir() and any(path.iterdir())
+
+
 def check_upgrade_source(root: Path) -> None:
     """Refuse a data directory 8.x cannot trust (ADR 0302); write the marker into a fresh one.
 
@@ -111,7 +120,7 @@ def check_upgrade_source(root: Path) -> None:
 
     try:
         traces = [name for name in DESKTOP_TRACES if _present(root / name) or _present(root / "authority" / name)]
-        has_person_data = any((root / name).exists() for name in PERSON_DATA)
+        has_person_data = any(_holds_data(root / name) for name in PERSON_DATA)
     except OSError as exc:
         raise ConfigurationError(f"The data directory ({root}) could not be inspected: {exc}") from exc
     if traces and not _says_org(root):

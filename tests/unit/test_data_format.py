@@ -117,6 +117,12 @@ class TestMarker:
         )
 
 
+def _person_data(root, name="users"):
+    """A person-data directory that holds something, as a 7.x install leaves it."""
+    (root / name).mkdir()
+    (root / name / "entry").write_text("x")
+
+
 class TestCheckUpgradeSource:
     DESKTOP = "belongs to a PrivacyFence desktop install"
     CHECKPOINT = "has not been prepared for PrivacyFence 8"
@@ -142,7 +148,7 @@ class TestCheckUpgradeSource:
         assert (tmp_path / "data_format.json").read_text() == first
 
     def test_person_data_without_a_marker_is_refused_with_the_checkpoint_text(self, tmp_path):
-        (tmp_path / "users").mkdir()
+        _person_data(tmp_path)
 
         with pytest.raises(ConfigurationError) as excinfo:
             data_format.check_upgrade_source(tmp_path)
@@ -154,15 +160,42 @@ class TestCheckUpgradeSource:
         )
         assert not (tmp_path / "data_format.json").exists()
 
+    @pytest.mark.parametrize("name", ["users", "org", "credentials", "authority"])
+    def test_empty_directories_the_docker_image_creates_are_a_fresh_directory(self, tmp_path, name):
+        (tmp_path / name).mkdir()
+
+        data_format.check_upgrade_source(tmp_path)
+
+        assert (tmp_path / "data_format.json").exists()
+
+    @pytest.mark.parametrize("name", ["users", "org", "credentials", "authority"])
+    def test_a_non_empty_person_data_directory_without_a_marker_is_refused(self, tmp_path, name):
+        _person_data(tmp_path, name)
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_dangling_symlink_as_person_data_is_refused(self, tmp_path):
+        (tmp_path / "users").symlink_to(tmp_path / "gone")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_file_as_person_data_is_refused(self, tmp_path):
+        (tmp_path / "credentials").write_text("x")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
     def test_an_older_marker_with_person_data_is_refused(self, tmp_path):
-        (tmp_path / "users").mkdir()
+        _person_data(tmp_path)
         self._marker(tmp_path, 6)
 
         with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
             data_format.check_upgrade_source(tmp_path)
 
     def test_the_current_marker_with_person_data_passes(self, tmp_path):
-        (tmp_path / "users").mkdir()
+        _person_data(tmp_path)
         self._marker(tmp_path, 7)
 
         data_format.check_upgrade_source(tmp_path)
