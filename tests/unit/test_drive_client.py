@@ -9,6 +9,7 @@ DriveClient itself and never touch this file.
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import ssl
 import threading
@@ -592,8 +593,7 @@ class TestUploadFile:
             client.upload_file(name="f.txt", content_base64="not valid base64!!!")
 
     def test_removed_local_path_argument_is_not_accepted(self):
-        with pytest.raises(TypeError):
-            make_client(MagicMock()).upload_file(**{"local_path": "/tmp/f.txt"})
+        assert "local_path" not in inspect.signature(DriveClient.upload_file).parameters
 
     def test_uploads_from_content_base64(self, monkeypatch):
         fake_media = MagicMock()

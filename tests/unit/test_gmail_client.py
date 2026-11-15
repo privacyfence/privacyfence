@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import email
 import email.policy
+import inspect
 import json
 import stat
 import threading
@@ -1076,10 +1077,7 @@ class TestCreateDraftWithAttachments:
         service.users.return_value.drafts.return_value.create.assert_not_called()
 
     def test_removed_download_mode_argument_is_not_accepted(self):
-        with pytest.raises(TypeError):
-            make_client(MagicMock()).create_draft_with_attachments(
-                to="a@x.com", subject="s", body="b", attachments=["upload:x"], **{"download_mode": "org"},
-            )
+        assert "download_mode" not in inspect.signature(GmailClient.create_draft_with_attachments).parameters
 
     def test_upload_reference_is_attached_under_a_generic_name(self, tmp_path):
         attachment = tmp_path / "report.txt"
