@@ -216,35 +216,80 @@ def _scrub(text: str) -> str:
     return _UUID_RE.sub("<id>", text)
 
 
-def _error_detail(response: Any) -> str:
-    """Atlassian's reason from an error response, one short line with no UUID, or ``no detail``."""
-    try:
-        body = response.json()
-    except ValueError:
-        text = (getattr(response, "text", "") or "").strip()
-        if not text or text.startswith("<"):
-            return "no detail"
-        reason = text
-    else:
-        parts: list[str] = []
-        if isinstance(body, dict):
-            messages = body.get("errorMessages")
-            if isinstance(messages, list):
-                parts.extend(m for m in messages if isinstance(m, str) and m)
-            errors = body.get("errors")
-            if isinstance(errors, dict):
-                parts.extend(f"{k}: {v}" for k, v in errors.items() if isinstance(v, str) and v)
-            for key in ("message", "error"):
-                value = body.get(key)
-                if isinstance(value, str) and value:
-                    parts.append(value)
-        if not parts:
-            return "no detail"
-        reason = "; ".join(parts)
-    reason = _scrub(" ".join(reason.split()).replace("|", "/"))
+_URL_RE = re.compile(r"https?://\S+")
+_ATLASSIAN_HOST_RE = re.compile(r"[\w.-]+\.atlassian\.(?:net|com)")
+_LIST_ERROR_KEYS = ("message", "detail", "title", "errorMessage")
+_TOP_LEVEL_REASON_KEYS = ("detail", "title", "errorMessage", "error_description", "reason")
+_WORKSPACE_LOOKUP_ROUTE = "servicedeskapi/assets/workspace"
+
+
+def _clean_detail(reason: str) -> str:
+    """One short line: no URL, Atlassian host, email or UUID, at most ``_DETAIL_MAX_CHARS``."""
+    reason = " ".join(reason.split()).replace("|", "/")
+    reason = _URL_RE.sub("<url>", reason)
+    reason = _ATLASSIAN_HOST_RE.sub("<host>", reason)
+    reason = _scrub(mask_emails(reason, ""))
     if len(reason) > _DETAIL_MAX_CHARS:
         reason = reason[: _DETAIL_MAX_CHARS - 1] + "…"
     return reason
+
+
+def _text_reasons(body: dict[str, Any]) -> list[str]:
+    """The readable reasons of a JSON error body, in a fixed order, without duplicates."""
+    parts: list[str] = []
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value and value not in parts:
+            parts.append(value)
+
+    messages = body.get("errorMessages")
+    if isinstance(messages, list):
+        for m in messages:
+            add(m)
+    errors = body.get("errors")
+    if isinstance(errors, dict):
+        for k, v in errors.items():
+            if isinstance(v, str) and v:
+                add(f"{k}: {v}")
+    elif isinstance(errors, list):
+        for item in errors:
+            if isinstance(item, dict):
+                item = next(
+                    (item[k] for k in _LIST_ERROR_KEYS
+                     if isinstance(item.get(k), str) and item[k]),
+                    None,
+                )
+            add(item)
+    for key in ("message", "error", *_TOP_LEVEL_REASON_KEYS):
+        add(body.get(key))
+    return parts
+
+
+def _error_detail(response: Any) -> str:
+    """Atlassian's reason from an error response, one short line with no UUID, URL, host or
+    email; else the reply text as it came; else ``no detail (HTML page)`` / ``(empty body)``."""
+    if response is None:
+        return "no detail"
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    parts = _text_reasons(body) if isinstance(body, dict) else []
+    if parts:
+        return _clean_detail("; ".join(parts))
+    text = (getattr(response, "text", "") or "").strip()
+    if text and not text.startswith("<"):
+        return _clean_detail(text)
+    return "no detail (HTML page)" if text else "no detail (empty body)"
+
+
+def _route_label(url: str) -> str:
+    """The Assets route of a request URL (no workspace id, no query), or ``""`` when unknown."""
+    if "/v1/" in url:
+        return url.split("/v1/", 1)[1].split("?", 1)[0]
+    if url.endswith(_WORKSPACE_LOOKUP_ROUTE):
+        return _WORKSPACE_LOOKUP_ROUTE
+    return ""
 
 
 def _guarded(fn: Callable[..., _T]) -> Callable[..., _T]:
@@ -261,8 +306,12 @@ def _guarded(fn: Callable[..., _T]) -> Callable[..., _T]:
             raise
         except requests.HTTPError as exc:
             status = getattr(exc.response, "status_code", None)
-            detail = _error_detail(exc.response) if exc.response is not None else "no detail"
-            raise AssetsClientError(f"{fn.__name__} failed: HTTP {status}: {detail}") from exc
+            detail = _error_detail(exc.response)
+            route = getattr(exc, "route", "")
+            suffix = f" ({route})" if route else ""
+            raise AssetsClientError(
+                f"{fn.__name__} failed: HTTP {status}: {detail}{suffix}"
+            ) from exc
         except Exception as exc:
             raise AssetsClientError(_scrub(f"{fn.__name__} failed: {exc}")) from exc
     return wrapper
@@ -405,7 +454,13 @@ class AssetsClient:
         response = self._session.request(
             method, url, params=params, json=json, timeout=_HTTP_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            label = _route_label(url)
+            if label:
+                exc.route = _scrub(f"{method} {label}")  # type: ignore[attr-defined]
+            raise
         return response.json()
 
     def _call(
