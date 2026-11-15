@@ -402,6 +402,8 @@ TOOL_TO_GATE: dict[str, str] = {
     "miro_create_connectors":          "popup",
     "miro_update_items":               "popup",
     "miro_update_board":               "popup",
+    # PrivacyFence administration
+    "privacyfence_update_group_membership": "auto",
 }
 
 # The tools a scoped token's allow_personal_data flag applies to (ADR 0173): each one's result carries no

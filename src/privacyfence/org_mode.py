@@ -1,5 +1,5 @@
 """The ``mode`` setting of ``org_bundle.json`` and ``PRIVACYFENCE_MODE``: organization mode is the
-only mode (ADR 0298). Absent, ``mode`` means ``org``; ``org`` is accepted; ``local`` and any other
+only mode (ADR 0303). Absent, ``mode`` means ``org``; ``org`` is accepted; ``local`` and any other
 value refuse the start (``validate_mode``).
 """
 from __future__ import annotations

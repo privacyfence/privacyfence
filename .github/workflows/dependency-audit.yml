@@ -24,6 +24,14 @@ name: Dependency audit
 #     audited too, but informationally -- they run in CI and on contributors'
 #     machines, never on an end user's, so a finding there is worth seeing
 #     but not worth blocking every unrelated PR over.
+#   - The n8n node (n8n/package.json) ships only dist/ and declares no
+#     runtime `dependencies`; `n8n-workflow` is a peer the n8n host
+#     provides, and is also a pinned devDependency so the lock file marks
+#     its tree dev-only. `npm audit --omit=dev` BLOCKS on high or critical,
+#     which guards against a runtime dependency being added later; the
+#     whole tree, dev included, is reported informationally. n8n's
+#     community-node lint forbids `overrides`, so an unpatched transitive
+#     finding in n8n's own pins waits for upstream -- see ADR 0296.
 #   - The OAuth relay Worker (cloudflare/oauth-relay/package.json) declares zero
 #     runtime `dependencies` -- everything, `wrangler` included, is a
 #     devDependency -- so an `--omit=dev` audit would cover an empty set and
@@ -174,13 +182,13 @@ jobs:
         run: npm ci
         working-directory: n8n
 
-      - name: Audit n8n node runtime dependencies (informational until n8n-workflow moves to a patched zod)
-        run: npm audit --omit=dev --audit-level=high || true
+      - name: Audit n8n node runtime dependencies (blocking - high/critical)
+        run: npm audit --omit=dev --audit-level=high
         working-directory: n8n
 
-      - name: Audit n8n node runtime dependencies (informational - full report)
+      - name: Audit n8n node dependencies (informational - full tree, dev included)
         if: always()
-        run: npm audit --omit=dev || true
+        run: npm audit || true
         working-directory: n8n
 
   npm-audit-oauth-relay:

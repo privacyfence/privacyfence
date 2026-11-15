@@ -5,7 +5,7 @@
 Accepted — 2026-10-11. Implemented.
 Amends ADR 0155. Its refusal of exports on an organization-managed install is replaced by a one-time link.
 
-Amended by [ADR 0299](0299-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md), 2026-11-15.
+Amended by [ADR 0304](0304-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md), 2026-11-15.
 
 ## Context
 

@@ -1,6 +1,6 @@
 """build.yml ships the connector config signing tools: to the R2 archive on every tag, and to the
 GitHub Release on a stable tag, next to the sync tools. A release builds the organization image,
-privacyfence-sync and the SBOM only (ADR 0301), so no installer is among the assets."""
+privacyfence-sync and the SBOM only (ADR 0306), so no installer is among the assets."""
 
 from __future__ import annotations
 

@@ -7,7 +7,7 @@ Accepted — 2026-09-25. Implemented in `installer/privacyfence.iss` (`Architect
 Extends [ADR 0039](0039-installers-refuse-an-os-below-the-support-matrix.md) to the Windows
 installer's CPU architecture, the way that ADR already covers the `.pkg`'s.
 
-**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
 
 ## Context
 

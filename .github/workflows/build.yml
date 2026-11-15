@@ -51,7 +51,7 @@ jobs:
   # exactly the bytes tested below. `finalize-release` does need this job, though, so a tag whose
   # image fails its test gets no GitHub Release either. The artifact names (`org-image-<arch>`)
   # deliberately do not match `finalize-release`'s `PrivacyFence-*` download pattern: the image is
-  # not a GitHub Release asset (ADR 0301).
+  # not a GitHub Release asset (ADR 0306).
   build-org-image:
     needs: dedupe
     if: needs.dedupe.outputs.duplicate != 'true'
@@ -268,7 +268,7 @@ jobs:
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             sbom-python.cdx.json
 
-  # The published release (ADR 0301). `sbom` and `build-org-image` each upload their own workflow
+  # The published release (ADR 0306). `sbom` and `build-org-image` each upload their own workflow
   # artifact and R2 objects independently; this job turns them into a GitHub Release only once
   # both have succeeded, so the release either gets the complete file set or (this job failing,
   # or one of its `needs` failing) is not touched at all. `build-org-image` produces no GitHub

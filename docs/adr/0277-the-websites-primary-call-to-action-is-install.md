@@ -4,7 +4,7 @@
 
 Accepted — 2026-11-01. Implemented: `scripts/build_site.py` (header defaults), `website/install/`.
 
-Amended by [ADR 0300](0300-the-download-page-and-worker-are-retired.md), 2026-11-15.
+Amended by [ADR 0305](0305-the-download-page-and-worker-are-retired.md), 2026-11-15.
 
 ## Context
 

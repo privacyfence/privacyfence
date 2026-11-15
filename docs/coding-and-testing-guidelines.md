@@ -234,7 +234,7 @@ layout rules — see [`testing-policy.md`](testing-policy.md#the-shared-design-s
   `browser`, `packaged`, or `live` (declared in `pyproject.toml`'s `markers`).
 - Run the smallest relevant test set while developing, then the affected unit/integration suite
   before opening/updating a PR. CI runs the full suite on Linux runners only (see
-  `testing-policy.md` and [ADR 0302](adr/0302-linux-is-the-only-ci-platform.md)); a 100% pass rate is required to merge.
+  `testing-policy.md` and [ADR 0307](adr/0307-linux-is-the-only-ci-platform.md)); a 100% pass rate is required to merge.
 - Keep ordinary unit/integration tests offline and deterministic. Do not add real connector
   credentials or unmocked provider calls to GitHub-hosted CI.
 

@@ -1,4 +1,4 @@
-# ADR 0297: 8.x refuses a data directory that is not ready for it
+# ADR 0302: 8.x refuses a data directory that is not ready for it
 
 ## Status
 
@@ -44,4 +44,4 @@ Checkpoint text, exactly:
 
 ## Related
 
-ADR 0262, 0296, 0298.
+ADR 0262, 0301, 0303.

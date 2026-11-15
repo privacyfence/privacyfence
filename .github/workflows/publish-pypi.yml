@@ -1,6 +1,6 @@
 name: Publish to PyPI
 
-# Publishes only `privacyfence-sync` (ADR 0304), to TestPyPI and then PyPI. The `privacyfence`
+# Publishes only `privacyfence-sync` (ADR 0309), to TestPyPI and then PyPI. The `privacyfence`
 # server is not published to a package index; its wheel is built only for the organization image
 # in build.yml's `build-org-image`. The file keeps its name because the trusted-publisher entries
 # on pypi.org and test.pypi.org are bound to it.
@@ -168,7 +168,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      # privacyfence-sync (sync/) is released with the same version, from the same tag (ADR 0304).
+      # privacyfence-sync (sync/) is released with the same version, from the same tag (ADR 0309).
       # The release lock supplies `build`, and setuptools_scm for the version step below.
       - name: Build privacyfence-sync
         run: |

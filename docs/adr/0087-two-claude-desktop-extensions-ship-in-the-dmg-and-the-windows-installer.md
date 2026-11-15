@@ -10,7 +10,7 @@ Accepted — 2026-09-27. Implemented. Builds on
 **Superseded by [ADR 0089](0089-tool-annotations-are-always-truthful.md), 2026-09-28:** the
 no-prompts extension is removed; the DMG and the Windows installer carry one `.mcpb` again.
 
-Amended by [ADR 0301](0301-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md), 2026-11-15.
+Amended by [ADR 0306](0306-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md), 2026-11-15.
 
 ## Context
 

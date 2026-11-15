@@ -25,6 +25,7 @@ from .catalogue import PolicyExtraScope
 from .engine import PolicyRule
 from .propose import ProposableScope
 from .registry import TOOL_REGISTRY, Verb
+from .scopes import TOKEN_ONLY_PREDICATES
 
 SCHEMA_VERSION = 3
 
@@ -235,12 +236,13 @@ def row_from_dict(data: Any) -> ScopeRow | None:
 
 
 def rows_from_section(section: Any) -> list[ScopeRow]:
-    """Every well-formed row of a version-3 ``auto_accept:`` section; a malformed entry is dropped."""
+    """Every well-formed row of a version-3 ``auto_accept:`` section; a malformed entry is dropped,
+    and so is a row with a token-only predicate (a person's own file never carries one)."""
     raw_rows = section.get("rules") if isinstance(section, dict) else None
     if not isinstance(raw_rows, list):
         return []
     rows = (row_from_dict(raw) for raw in raw_rows)
-    return [row for row in rows if row is not None]
+    return [row for row in rows if row is not None and row.predicate not in TOKEN_ONLY_PREDICATES]
 
 
 def rows_to_config(rows: Iterable[ScopeRow]) -> dict[str, Any]:
@@ -258,7 +260,9 @@ def rows_from_config(cfg: Any) -> list[ScopeRow]:
     if version == SCHEMA_VERSION:
         return rows_from_section(section)
     if version == 2 or (version is None and isinstance(section.get("rules"), list)):
-        return migrate_v2(section.get("rules")).rows
+        return [
+            row for row in migrate_v2(section.get("rules")).rows if row.predicate not in TOKEN_ONLY_PREDICATES
+        ]
     return []
 
 

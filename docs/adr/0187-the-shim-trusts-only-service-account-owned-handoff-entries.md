@@ -5,7 +5,7 @@
 Accepted — 2026-10-15. Implemented.
 Amends [ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md).
 
-**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
 
 ## Context
 

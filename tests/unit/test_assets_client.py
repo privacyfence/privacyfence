@@ -48,17 +48,33 @@ def fixture(name: str) -> Any:
 
 
 class FakeResponse:
-    def __init__(self, payload: Any = None, status: int = 200, text: str = "") -> None:
+    def __init__(self, payload: Any = None, status: int = 200, text: str = "",
+                 json_error: bool = False) -> None:
         self.status_code = status
         self._payload = payload
         self.text = text
+        self._json_error = json_error
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
             raise requests.HTTPError(f"{self.status_code} Error", response=self)  # type: ignore[arg-type]
 
     def json(self) -> Any:
+        if self._json_error:
+            raise ValueError("not json")
         return self._payload
+
+
+class UrlFakeResponse(FakeResponse):
+    """An error response whose HTTPError text carries the request URL, like requests' own."""
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise requests.HTTPError(
+                f"{self.status_code} Client Error: Bad Request for url: "
+                f"{API}/objectschema/list?startAt=0&maxResults=1",
+                response=self,  # type: ignore[arg-type]
+            )
 
 
 class FakeSession:
@@ -185,7 +201,7 @@ class TestWorkspace:
 
     def test_check_connection_fails_for_a_wrong_configured_id(self):
         client = make_client(lambda *a: FakeResponse({}, status=404), assets_workspace_id=WORKSPACE)
-        with pytest.raises(AssetsClientError, match=r"check_connection failed: 404 Error"):
+        with pytest.raises(AssetsClientError, match=r"check_connection failed: HTTP 404: no detail"):
             client.check_connection()
 
     @pytest.mark.parametrize("bad", ["../../rest/api/3/myself", "not-a-uuid", f"{WORKSPACE}/x"])
@@ -200,8 +216,96 @@ class TestWorkspace:
 
     def test_http_failure_is_wrapped(self):
         client = make_client(lambda *a: FakeResponse({}, status=500))
-        with pytest.raises(AssetsClientError, match=r"check_connection failed: 500 Error"):
+        with pytest.raises(AssetsClientError, match=r"check_connection failed: HTTP 500: no detail"):
             client.check_connection()
+
+    def _failing(self, response):
+        return make_client(lambda *a: response, assets_workspace_id=WORKSPACE)
+
+    def test_http_failure_carries_atlassians_error_messages(self):
+        client = self._failing(
+            FakeResponse({"errorMessages": ["Assets is not enabled on this site"]}, status=400))
+        with pytest.raises(
+            AssetsClientError,
+            match=r"^check_connection failed: HTTP 400: Assets is not enabled on this site$",
+        ):
+            client.check_connection()
+
+    def test_http_failure_joins_errors_and_message(self):
+        client = self._failing(FakeResponse(
+            {"errorMessages": ["a"], "errors": {"maxResults": "must be at least 10"},
+             "message": "b"}, status=400))
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        assert str(info.value) == (
+            "check_connection failed: HTTP 400: a; maxResults: must be at least 10; b")
+
+    def test_http_failure_with_a_plain_text_body(self):
+        client = self._failing(
+            FakeResponse(None, status=400, text="Bad  request\n", json_error=True))
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        assert str(info.value) == "check_connection failed: HTTP 400: Bad request"
+
+    @pytest.mark.parametrize("text", ["<html><body>Oops</body></html>", ""])
+    def test_http_failure_with_an_html_or_empty_body_says_no_detail(self, text):
+        client = self._failing(FakeResponse(None, status=502, text=text, json_error=True))
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        assert str(info.value) == "check_connection failed: HTTP 502: no detail"
+
+    def test_http_failure_never_carries_the_url_or_a_uuid(self):
+        client = self._failing(UrlFakeResponse(
+            {"errorMessages": [f"workspace {WORKSPACE} not found"]}, status=404))
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        message = str(info.value)
+        assert WORKSPACE not in message
+        assert "api.atlassian.com" not in message
+        assert "objectschema" not in message
+        assert "workspace <id> not found" in message
+
+    @pytest.mark.parametrize("payload", [
+        ["a list"], {"errorMessages": "not a list"}, {"errors": {"k": 5}}, {"message": ""},
+    ])
+    def test_http_failure_with_unreadable_fields_says_no_detail(self, payload):
+        client = self._failing(FakeResponse(payload, status=400))
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        assert str(info.value) == "check_connection failed: HTTP 400: no detail"
+
+    def test_http_failure_pipe_is_replaced(self):
+        client = self._failing(FakeResponse({"message": "a|b"}, status=400))
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        assert str(info.value) == "check_connection failed: HTTP 400: a/b"
+
+    def test_http_error_without_response(self):
+        def handler(*a):
+            raise requests.HTTPError("boom")
+        client = make_client(handler, assets_workspace_id=WORKSPACE)
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        assert str(info.value) == "check_connection failed: HTTP None: no detail"
+
+    def test_http_failure_detail_is_capped(self):
+        client = self._failing(FakeResponse({"message": "x" * 1000}, status=400))
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        detail = str(info.value).split("HTTP 400: ", 1)[1]
+        assert len(detail) == 300
+        assert detail.endswith("…")
+
+    def test_non_http_failure_is_scrubbed(self):
+        def handler(*a):
+            raise requests.ConnectionError(f"Max retries exceeded with url: {API}/objectschema/list")
+        client = make_client(handler, assets_workspace_id=WORKSPACE)
+        with pytest.raises(AssetsClientError) as info:
+            client.check_connection()
+        message = str(info.value)
+        assert message.startswith("check_connection failed: ")
+        assert WORKSPACE not in message
+        assert "<id>" in message
 
 
 # --------------------------------------------------------------------------- #
@@ -317,13 +421,13 @@ class TestRefresh:
     def test_401_with_failed_refresh_raises_the_original(self, monkeypatch):
         monkeypatch.setattr(assets_module, "atlassian_refresh", lambda *a: {})
         client = make_client(lambda *a: unauthorized())
-        with pytest.raises(AssetsClientError, match=r"check_connection failed: 401 Error"):
+        with pytest.raises(AssetsClientError, match=r"check_connection failed: HTTP 401: no detail"):
             client.check_connection()
 
     def test_other_errors_do_not_refresh(self, monkeypatch):
         monkeypatch.setattr(assets_module, "atlassian_refresh", lambda *a: pytest.fail("refreshed"))
         client = make_client(lambda *a: FakeResponse({}, status=403), assets_workspace_id=WORKSPACE)
-        with pytest.raises(AssetsClientError, match=r"check_connection failed: 403 Error"):
+        with pytest.raises(AssetsClientError, match=r"check_connection failed: HTTP 403: no detail"):
             client.check_connection()
 
     def test_request_returns_the_decoded_json(self):
@@ -431,7 +535,7 @@ class TestSchemas:
 
     def test_failure_is_wrapped_with_the_method_name(self):
         client = make_client(lambda m, p, q, b: FakeResponse({}, 500) if p != WORKSPACE_PATH else fixture("workspace.json"))
-        with pytest.raises(AssetsClientError, match=r"^list_schemas failed: 500 Error"):
+        with pytest.raises(AssetsClientError, match=r"^list_schemas failed: HTTP 500: no detail"):
             client.list_schemas()
 
 
@@ -652,7 +756,7 @@ class TestSearchObjects:
 
     def test_failure_is_wrapped(self):
         client = make_client(routed({"POST object/aql": FakeResponse({}, 400)}))
-        with pytest.raises(AssetsClientError, match=r"^search_objects failed: 400 Error"):
+        with pytest.raises(AssetsClientError, match=r"^search_objects failed: HTTP 400: no detail"):
             client.search_objects("bad aql")
 
 
@@ -863,7 +967,7 @@ class TestRelatedObjects:
         client = make_client(routed({
             "GET object/1": {"id": "1"}, "GET object/1/attributes": [], "POST object/aql": FakeResponse({}, 500),
         }))
-        with pytest.raises(AssetsClientError, match=r"^related_objects failed: 500 Error"):
+        with pytest.raises(AssetsClientError, match=r"^related_objects failed: HTTP 500: no detail"):
             client.related_objects("1", "inbound")
 
 

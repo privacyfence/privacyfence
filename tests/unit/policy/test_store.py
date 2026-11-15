@@ -253,6 +253,15 @@ class TestCompileRulesFromConfig:
         assert any(rule.predicate == "approved_folder" and rule.value == ["F1"] for rule in rules)
 
 
+    def test_compile_rules_from_config_skips_a_token_only_rule(self):
+        cfg = {"auto_accept": {"version": 2, "rules": [
+            {"id": "r-up", "predicate": "upstream.approved_tool", "value": "kh.t@" + "a" * 32,
+             "operations": ["kh.t"]},
+            {"id": "r-ok", "predicate": "always_allow", "operations": ["gmail.search_messages"]},
+        ]}}
+        assert [rule.id for rule in store.compile_rules_from_config(cfg)] == ["r-ok"]
+
+
 class TestRulesToConfig:
     def test_round_trips_through_compile_rules_from_config(self):
         rules = [_rule(id_="r-x", predicate="always_allow", value=None, operations=("op.a",))]

@@ -2,7 +2,7 @@
 
 How to run a development server next to a live one on the same machine without the two sharing
 state. PrivacyFence has one mode, organization mode, and a single-user install is that mode with no
-identity provider ([ADR 0296](adr/0296-desktop-mode-and-its-installers-are-removed-in-8.md)), so a
+identity provider ([ADR 0301](adr/0301-desktop-mode-and-its-installers-are-removed-in-8.md)), so a
 development server and a live one differ only in where they run and what they keep.
 
 ## Two servers, two data directories, two ports

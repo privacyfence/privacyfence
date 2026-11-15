@@ -3,7 +3,7 @@
 The server is a real ``WebServer`` in organization mode; the upstream is the p6 reference server on
 another port, verifying PrivacyFence's claims against the server's own ``/upstream-mcp/jwks``. The
 AI client is the official ``mcp`` client with a real access token for a verified person whose
-admin-config grants give them the ``general`` domain only.
+group maps give them the ``general`` audience only.
 """
 from __future__ import annotations
 
@@ -21,13 +21,16 @@ import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from privacyfence import auto_accept, scoped_tokens
 from privacyfence import gate as gate_module
 from privacyfence import org_identity as oi
-from privacyfence import upstream_claims, upstream_mcp_registry, upstream_mcp_runtime
+from privacyfence import identity_claim, upstream_mcp_registry, upstream_mcp_runtime
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.connectors import upstream_mcp as connector_module
+from privacyfence.policy import scopes
 from privacyfence.principal import Principal, current_principal
-from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+from privacyfence.group_membership import StaticFileResolver
+from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.org_session import OrgSessionStore
@@ -97,7 +100,10 @@ def stack(tmp_path, monkeypatch):
     issuer_url = f"http://localhost:{org_port}"
 
     (tmp_path / "admin_config.json").write_text(json.dumps({
-        "upstream_mcp": {"ref": {"grants": [{"match": "*", "domains": ["general"]}]}},
+        "upstream_mcp": {"ref": {"groups": {"everyone@example.com": ["general"]}}},
+    }), encoding="utf-8")
+    (tmp_path / "members.json").write_text(json.dumps({
+        "version": 1, "groups": {"everyone@example.com": ["ann@example.com"]},
     }), encoding="utf-8")
     upstreams = parse_upstreams({
         "version": 1,
@@ -107,6 +113,7 @@ def stack(tmp_path, monkeypatch):
             "tools": {
                 "search": {"gate": "auto", "verb": "search"},
                 "get_doc": {"gate": "auto", "verb": "read"},
+                "list_proposals": {"gate": "review", "verb": "read"},
                 "propose_change": {
                     "gate": "popup", "verb": "add", "effect": "Adds a change proposal to the reference upstream.",
                 },
@@ -115,13 +122,14 @@ def stack(tmp_path, monkeypatch):
     }, source="test")
     upstream_mcp_registry.register(upstreams)
     upstream_mcp_runtime.configure(
-        upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url),
-        grants=GrantStore(tmp_path / "admin_config.json", frozenset({"ref"})),
+        upstreams=upstreams, signer=identity_claim.load_signer(issuer_url, overlap_seconds=86400),
+        groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"ref"})),
+        resolver=StaticFileResolver(tmp_path / "members.json"),
     )
 
     # The upstream verifies against the organization server's own key set.
     counting = _CountingApp(reference.build_app(
-        audience=_AUDIENCE, issuer=f"{issuer_url}/upstream-mcp", jwks_url=f"{issuer_url}/upstream-mcp/jwks",
+        audience=_AUDIENCE, issuer=issuer_url, jwks_url=f"{issuer_url}/upstream-mcp/jwks",
     ))
     upstream_server = uvicorn.Server(uvicorn.Config(counting, host="127.0.0.1", port=ref_port, log_level="warning"))
     upstream_thread = threading.Thread(target=upstream_server.run, daemon=True)
@@ -172,12 +180,12 @@ async def test_a_person_with_the_general_grant_reads_only_general_documents(stac
         assert titles == {"Policy overview", "Office policy"}
 
         hidden = await session.call_tool("ref_get_doc", {"id": "3", "reason": "integration test"})
-        assert hidden.is_error is True  # the HR document is not in the person's domains
+        assert hidden.is_error is True  # the HR document is not in the person's audiences
 
         status = await session.call_tool("privacyfence_status", {})
         upstreams = status.structured_content["upstreams"]
         assert [(row["id"], row["state"], row["tools_exposed"], row["missing_tools"]) for row in upstreams] == [
-            ("ref", "ready", 3, []),
+            ("ref", "ready", 4, []),
         ]
 
 
@@ -198,3 +206,118 @@ async def test_a_denied_popup_write_never_reaches_the_upstream(stack, monkeypatc
         assert result.is_error is True
         assert "denied" in result.content[0].text.lower()
         assert counting.posts == before
+
+
+# --------------------------------------------------------------------------- #
+# Scoped tokens with a ticked upstream tool (plan 1121)
+# --------------------------------------------------------------------------- #
+
+_ADMIN = Principal(id="u1", email="ann@example.com", email_verified=True, is_admin=True)
+_POLICY = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+
+
+@pytest.fixture
+def token_stack(stack):
+    issuer_url, _token, counting = stack
+    store = scoped_tokens.get_store()
+    held = upstream_mcp_runtime.held_audiences(_ADMIN, True)
+
+    def make_token(tools, approved=()):
+        _record, secret = store.create(
+            _ADMIN, label="n8n workflow", days=30, rules=[], tools=list(tools), policy=_POLICY,
+            upstream_audiences={"ref": ["general"]}, held_audiences=held, principal_email_verified=True,
+            is_admin=True,
+            upstream_approvals=[
+                {"tool": tool, "digest": scopes.UPSTREAM_DECLARATIONS[auto_accept.TOOL_TO_OPERATION[tool]]}
+                for tool in approved
+            ],
+        )
+        return secret
+
+    return issuer_url, make_token, counting
+
+
+async def _call(issuer_url: str, secret: str, tool: str, args: dict):
+    http, transport = await _session(issuer_url, secret)
+    async with http, transport as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        return await session.call_tool(tool, {**args, "reason": "integration test"})
+
+
+_PROPOSE = {"id": "1", "text": "Change it"}
+
+
+def _forwarded_rows(tmp_path) -> list[dict]:
+    rows = []
+    for path in tmp_path.rglob("*.jsonl"):
+        rows += [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [row for row in rows if row.get("decision") == "upstream_forwarded"]
+
+
+async def test_a_token_with_a_ticked_popup_tool_can_call_it_unattended(token_stack):
+    issuer_url, make_token, counting = token_stack
+    secret = make_token(["ref_propose_change"], approved=["ref_propose_change"])
+    before = counting.posts
+    result = await _call(issuer_url, secret, "ref_propose_change", _PROPOSE)
+    assert result.is_error is not True, result.content
+    payload = json.loads(result.content[0].text)
+    assert payload["proposal"] == "accepted"
+    assert payload["by"].startswith("n8n-token:")
+    assert counting.posts > before
+
+
+async def test_a_token_without_the_tool_cannot_call_it(token_stack):
+    issuer_url, make_token, counting = token_stack
+    secret = make_token(["ref_search"])
+    before = counting.posts
+    result = await _call(issuer_url, secret, "ref_propose_change", _PROPOSE)
+    assert result.is_error is True
+    assert "this token may not call" in result.content[0].text
+    assert counting.posts == before
+
+
+def test_creating_a_token_with_a_gated_tool_and_no_approval_is_refused(token_stack):
+    _issuer_url, make_token, _counting = token_stack
+    with pytest.raises(scoped_tokens.ScopedTokenError):
+        make_token(["ref_propose_change"])
+
+
+async def test_each_call_writes_an_upstream_forwarded_entry_with_the_token(token_stack, tmp_path):
+    issuer_url, make_token, _counting = token_stack
+    secret = make_token(["ref_propose_change"], approved=["ref_propose_change"])
+    result = await _call(issuer_url, secret, "ref_propose_change", _PROPOSE)
+    assert result.is_error is not True, result.content
+    rows = [row for row in _forwarded_rows(tmp_path) if row["tool"] == "ref_propose_change"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["claim_principal_type"] == "n8n_workflow"
+    assert row["claim_jti"] and row["claim_req"]
+    assert row["metadata"]["token_id"]
+    assert row["metadata"]["gate"] == "popup"
+
+
+async def test_a_changed_declaration_voids_the_approval(token_stack, monkeypatch):
+    issuer_url, make_token, counting = token_stack
+    secret = make_token(["ref_propose_change"], approved=["ref_propose_change"])
+    monkeypatch.setitem(scopes.UPSTREAM_DECLARATIONS, "ref.propose_change", "0" * 32)
+    before = counting.posts
+    result = await _call(issuer_url, secret, "ref_propose_change", _PROPOSE)
+    assert result.is_error is True
+    assert "no administrator approval" in result.content[0].text
+    assert counting.posts == before
+
+
+async def test_a_review_result_with_personal_data_is_still_denied_for_a_token(token_stack):
+    issuer_url, make_token, _counting = token_stack
+    secret = make_token(["ref_list_proposals"], approved=["ref_list_proposals"])
+    result = await _call(issuer_url, secret, "ref_list_proposals", {})
+    assert result.is_error is True
+    assert "DE89370400440532013000" not in result.content[0].text
+
+
+async def test_an_auto_only_token_behaves_as_before(token_stack):
+    issuer_url, make_token, _counting = token_stack
+    secret = make_token(["ref_search"])
+    found = await _call(issuer_url, secret, "ref_search", {"query": "policy"})
+    assert found.is_error is not True, found.content
+    assert {doc["title"] for doc in json.loads(found.content[0].text)} == {"Policy overview", "Office policy"}

@@ -30,6 +30,10 @@ PII detection, the privacy filter and passkey step-up all act within these gates
 `review` and `popup` tool is listed in the
 [Always allow reference](always-allow-rules-reference.md).
 
+Tools of an upstream MCP server (declared by an operator, see [Upstream MCP servers](upstream-mcp.md)) are
+not listed here. Their gate is the one the operator declared, and an administrator can approve a
+`review` or `popup` one for a scoped token ([ADR 0300](adr/0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md)).
+
 **Direction** is what the tool itself declares: `read` tools change nothing in the connected
 service; `write` tools create, change or send something. A few `write` tools are `auto` because
 they create something empty and disclose nothing (for example `drive_create_blank_file`).
@@ -106,7 +110,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 12 | 2 | 3 | 7 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
-| **Total** | **171** | **59** | **39** | **73** |
+| [group membership sync](#privacyfence-administration) | 1 | 1 | 0 | 0 |
+| **Total** | **172** | **60** | **39** | **73** |
 
 ## Gmail
 
@@ -353,3 +358,9 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `miro_create_items` | write | `popup` | Add sticky notes, cards, texts, shapes or frames to one Miro board, up to 20 in one request. |
 | `miro_update_board` | write | `popup` | Rename a Miro board or change its description. |
 | `miro_update_items` | write | `popup` | Change existing items on one Miro board (text, color, position, size, or which frame they are in), up to 20 in one request. |
+
+## PrivacyFence administration
+
+| Tool | Direction | Gate | What it does |
+|---|---|---|---|
+| `privacyfence_update_group_membership` | write | `auto` | Send the full membership snapshot of every Workspace group PrivacyFence maps to audiences. |

@@ -20,9 +20,9 @@ What it does, in order:
    repository, and `BUILD_INPUTS` are read by this script and never copied.
    tests/unit/test_website_download_cta.py holds every file under `website/` to exactly one of
    those four lists (guardrail 7).
-2. **`/download/` is a stub.** The installers are gone with desktop mode (ADR 0296), so the page
+2. **`/download/` is a stub.** The installers are gone with desktop mode (ADR 0301), so the page
    only links to `/install/` and to the GitHub Releases page that keeps the installers of
-   PrivacyFence 7, and old links to it do not return 404 (ADR 0300).
+   PrivacyFence 7, and old links to it do not return 404 (ADR 0305).
 3. **`/docs/` from the latest stable release.** The docs are the ones at the newest stable tag
    (`vX.Y.Z`, the same channel rule as `scripts/r2_release.py`), not `main`: the site documents
    the version people can download. The published set, its order and its sections come from

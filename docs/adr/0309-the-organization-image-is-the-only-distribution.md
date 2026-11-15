@@ -1,4 +1,4 @@
-# ADR 0304: The organization image is the only distribution
+# ADR 0309: The organization image is the only distribution
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted — 2026-11-14. Amends [ADR 0020](0020-pypi-publishing-uses-oidc-truste
 
 ## Context
 
-PrivacyFence 8 is installed only as the organization Docker image ([ADR 0296](0296-desktop-mode-and-its-installers-are-removed-in-8.md)). The `privacyfence` PyPI project, which served `pip install privacyfence` and the desktop packages, has no installer left to serve. `privacyfence-sync` is a client installed on a person's own computer and still needs PyPI.
+PrivacyFence 8 is installed only as the organization Docker image ([ADR 0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md)). The `privacyfence` PyPI project, which served `pip install privacyfence` and the desktop packages, has no installer left to serve. `privacyfence-sync` is a client installed on a person's own computer and still needs PyPI.
 
 ## Decision
 
@@ -34,4 +34,4 @@ PrivacyFence 8 is installed only as the organization Docker image ([ADR 0296](02
 
 ## Related
 
-ADR 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255, 0295, 0296, 0301.
+ADR 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255, 0295, 0301, 0306.

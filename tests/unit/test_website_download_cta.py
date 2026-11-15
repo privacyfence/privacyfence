@@ -1,5 +1,5 @@
 """Guards that the homepage's primary Install CTAs point at the install page, and that
-page exists (ADR 0277, ADR 0300).
+page exists (ADR 0277, ADR 0305).
 
 Deliberately a static test rather than a browser one: the failure this module exists to catch is
 the one where the CTAs survive a revert of the page (or vice versa), leaving every "Install"

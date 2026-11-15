@@ -1,4 +1,4 @@
-# ADR 0300: The download page and the Worker are retired
+# ADR 0305: The download page and the Worker are retired
 
 ## Status
 
@@ -32,4 +32,4 @@ Accepted — 2026-11-14. Supersedes [ADR 0024](0024-pre-releases-are-publicly-do
 
 ## Related
 
-ADR 0024, 0277, 0296, 0301.
+ADR 0024, 0277, 0301, 0306.

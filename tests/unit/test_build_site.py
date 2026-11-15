@@ -189,7 +189,7 @@ def test_no_include_line_survives_the_build():
 
 
 def test_download_is_a_stub_that_links_to_install_and_github_releases():
-    # ADR 0300: no installers, no counter and no Worker; the old URL still answers.
+    # ADR 0305: no installers, no counter and no Worker; the old URL still answers.
     page = read_page("/download/")
     assert 'href="/install/"' in page
     assert 'href="https://github.com/privacyfence/privacyfence/releases"' in page
@@ -199,7 +199,7 @@ def test_download_is_a_stub_that_links_to_install_and_github_releases():
 
 
 def test_the_releases_page_and_the_download_counter_are_gone():
-    # ADR 0300.
+    # ADR 0305.
     assert "/releases/" not in build_site.PAGES
     assert not (WEBSITE / "releases").exists()
     assert not (WEBSITE / "stats.js").exists()

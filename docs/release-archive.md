@@ -12,7 +12,7 @@ A release is the GitHub Release (the SBOMs and the organization-bundle scripts),
 image on `ghcr.io` and `privacyfence-sync` on PyPI; every tag also archives its files in the private
 Cloudflare R2 bucket described below. The download Worker that once served the archive over
 `downloads.privacyfence.eu` is retired
-([ADR 0301](adr/0301-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md)).
+([ADR 0306](adr/0306-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md)).
 
 ## Release archive (R2)
 
@@ -63,7 +63,7 @@ A pre-release's files are stored only in R2.
 The bucket is left at R2's default: private, no public bucket policy, no Public Development URL,
 no Custom Domain. Nothing can enumerate the bucket or fetch an object without the credentials
 below; the archive is a maintainer's store, not a public download path
-([ADR 0300](adr/0300-the-download-page-and-worker-are-retired.md)).
+([ADR 0305](adr/0305-the-download-page-and-worker-are-retired.md)).
 
 ### Publication
 
@@ -98,7 +98,7 @@ repository.
 | Relay Durable Object class | `Registry` (SQLite-backed, binding `REGISTRY`) |
 
 The download Worker `privacyfence-downloads`, its `downloads.privacyfence.eu` domain and its D1
-database are retired ([ADR 0300](adr/0300-the-download-page-and-worker-are-retired.md)); remove
+database are retired ([ADR 0305](adr/0305-the-download-page-and-worker-are-retired.md)); remove
 them in the Cloudflare dashboard if they still exist. `workers_dev = false` and
 `[[routes]] custom_domain = true` are committed in the relay's `wrangler.toml` so a
 `wrangler deploy` cannot re-enable a `*.workers.dev` URL.

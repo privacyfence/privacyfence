@@ -1,4 +1,4 @@
-# ADR 0303: The MCP registry listing of the extension is no longer published
+# ADR 0308: The MCP registry listing of the extension is no longer published
 
 ## Status
 
@@ -29,4 +29,4 @@ No test covers this decision: its subject is a deleted workflow file.
 
 ## Related
 
-ADR 0112, 0114, 0296.
+ADR 0112, 0114, 0301.

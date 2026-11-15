@@ -9,7 +9,7 @@ config upload in `151d6994`, merged as [#557](https://github.com/privacyfence/pr
 Implemented. `docs/security-and-compliance.md`'s "Human and unattested sessions" section describes
 today's behavior.
 
-**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
 
 ## Context
 

@@ -1523,7 +1523,7 @@ class GmailConnector(Connector):
         return message, preview, expanded_to or [message.sender or ""]
 
     def _require_attachment_paths(self, paths: list[str]) -> None:
-        """Claims every ``upload:<id>`` reference before gating (ADR 0299), so a missing,
+        """Claims every ``upload:<id>`` reference before gating (ADR 0304), so a missing,
         expired or already-used upload is reported before the human is asked to approve
         anything. A path that is not an upload reference raises ``LocalFileAccessError``
         with ``NO_BRIDGE_UPLOAD_MESSAGE``."""

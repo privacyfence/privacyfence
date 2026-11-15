@@ -154,7 +154,7 @@ def _default_config() -> dict[str, Any]:
             "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
         },
         "audit_forwarding": {},
-        # Domain grants for upstream MCP servers (upstream_mcp_config.GrantStore reads them).
+        # Group-to-audience maps for upstream MCP servers (upstream_mcp_config.GroupMapStore reads them).
         "upstream_mcp": {},
     }
 
@@ -209,22 +209,6 @@ def mark_org_server() -> dict[str, Any]:
             config["org_server"] = True
             _write(config)
         return config
-
-
-def seed_upstream_grants(section: dict[str, dict[str, Any]]) -> list[str]:
-    """Add the ``upstream_mcp`` entries of ``section`` whose id is not in the file yet; returns the
-    seeded ids. An id already present (even with no grants) is never touched, and nothing is
-    removed: after the first start admin_config.json owns the grants (ADR 0288)."""
-    with _write_lock:
-        config = load() or _default_config()
-        seeded: list[str] = []
-        for upstream_id, entry in section.items():
-            if upstream_id not in config["upstream_mcp"]:
-                config["upstream_mcp"][upstream_id] = copy.deepcopy(entry)
-                seeded.append(upstream_id)
-        if seeded:
-            _write(config)
-        return seeded
 
 
 def _write(data: dict[str, Any]) -> None:

@@ -9,7 +9,7 @@ Accepted — 2026-09-24. Implemented in all three separation scripts' marker wri
 Amends [ADR 0008](0008-one-principal-per-os-user.md): it states the invariant that ADR's
 principal mapping already relied on.
 
-**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
 
 ## Context
 

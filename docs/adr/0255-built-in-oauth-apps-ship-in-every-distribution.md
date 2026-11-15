@@ -6,7 +6,7 @@ Accepted — 2026-10-30. Implemented: `scripts/builtin_apps.py`, `src/privacyfen
 `src/privacyfence/oauth_apps.py`.
 Relates to [ADR 0040](0040-telegram-app-credentials-ship-in-every-distribution.md): the same mechanism for more apps.
 
-Amended by [ADR 0304](0304-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
 
 ## Context
 

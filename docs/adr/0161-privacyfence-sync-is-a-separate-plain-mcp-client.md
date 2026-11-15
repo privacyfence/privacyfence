@@ -5,7 +5,7 @@
 Accepted — 2026-10-11. Implemented.
 Amended by [ADR 0207](0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md).
 
-Amended by [ADR 0304](0304-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
 
 ## Context
 

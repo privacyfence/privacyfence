@@ -7,7 +7,7 @@ Accepted — 2026-09-23; implemented in [#611](https://github.com/privacyfence/p
 cannot reach, and amends its no-bridge fallback. #611 first recorded this as D5/D6 inside ADR 0007;
 it was moved here when the ADR rules in [`README.md`](README.md) were adopted.
 
-Amended by [ADR 0299](0299-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md), 2026-11-15.
+Amended by [ADR 0304](0304-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md), 2026-11-15.
 
 ## Context
 

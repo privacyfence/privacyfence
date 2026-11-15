@@ -729,3 +729,27 @@ class TestRowsForRules:
         first = rules[0]
         narrowed = dataclasses.replace(first, operations=frozenset(sorted(first.operations)[1:]))
         check([narrowed, *rules[1:]] if narrowed.operations else rules[1:] or rules)
+
+
+def _token_only_dict():
+    return {
+        "id": "r-up", "predicate": "upstream.approved_tool", "value": "kh.propose_change@" + "a" * 32,
+        "operations": ["kh.propose_change"], "conditions": [],
+    }
+
+
+def test_rows_from_section_drops_a_token_only_row():
+    kept = {"id": "r-ok", "predicate": "always_allow", "value": None, "operations": ["gmail.search_messages"]}
+    section = {"version": 3, "rules": [_token_only_dict(), kept]}
+    assert [row.id for row in scope_rows.rows_from_section(section)] == ["r-ok"]
+    # tokens keep reading such a row through row_from_dict
+    assert scope_rows.row_from_dict(_token_only_dict()) is not None
+
+
+def test_rows_from_config_drops_a_token_only_row_from_a_v2_section():
+    rule = {
+        "id": "r-up", "predicate": "upstream.approved_tool", "value": "kh.propose_change@" + "a" * 32,
+        "operations": ["kh.propose_change"],
+    }
+    cfg = {"auto_accept": {"version": 2, "rules": [rule]}}
+    assert scope_rows.rows_from_config(cfg) == []

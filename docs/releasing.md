@@ -144,7 +144,7 @@ that's never a real shipped version. `.github/workflows/tests.yml` and `build.ym
 `fetch-depth: 0` to `actions/checkout` for exactly this reason; do the same in any new workflow that
 installs this package. The wheel that goes into the image is built inside `build-org-image` and is never published, attached to a
 release or uploaded to R2: the image is the only distribution of the `privacyfence` package
-([ADR 0304](adr/0304-the-organization-image-is-the-only-distribution.md)).
+([ADR 0309](adr/0309-the-organization-image-is-the-only-distribution.md)).
 
 ## Release notes come from CHANGELOG.md
 
@@ -202,7 +202,7 @@ A pre-release shows its `[Unreleased]` entries there.
 `build.yml` runs on a `v*` tag push and on `workflow_dispatch` (every upload, publish and release
 step is gated on a tag ref, so a dispatch against an untagged commit is the pre-flight described
 above). A release builds three things: the organization image, the SBOM, and, from
-`publish-pypi.yml`, `privacyfence-sync` ([ADR 0301](adr/0301-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md)). Each job first runs
+`publish-pypi.yml`, `privacyfence-sync` ([ADR 0306](adr/0306-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md)). Each job first runs
 `scripts/r2_release.py check-tag` ([ADR 0022](adr/0022-one-release-tag-per-commit.md)).
 
 | Job | Runner | Builds | Tests |
@@ -259,7 +259,7 @@ process guarantees are:
 same version as the root tag) and publishes it to **TestPyPI first, then PyPI**, gated in that order
 (`publish-pypi-sync`'s `needs: publish-testpypi-sync`) — a broken publish never reaches the real
 index. The `privacyfence` package itself is not published: its wheel is built only inside the image
-build and never leaves it ([ADR 0304](adr/0304-the-organization-image-is-the-only-distribution.md)).
+build and never leaves it ([ADR 0309](adr/0309-the-organization-image-is-the-only-distribution.md)).
 The workflow keeps its name because the Trusted Publisher entries below are bound to the workflow
 file name.
 
@@ -347,4 +347,4 @@ The facts live in [`release-archive.md`](release-archive.md):
 The process rule that belongs here: a pre-release tag's GitHub Release entry (still created, marked
 prerelease, because `update_checker.py`'s beta channel reads exactly that flag) carries no files;
 its artifacts are only in the archive, which is private
-([ADR 0300](adr/0300-the-download-page-and-worker-are-retired.md)).
+([ADR 0305](adr/0305-the-download-page-and-worker-are-retired.md)).

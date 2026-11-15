@@ -19,7 +19,7 @@ below; a new test module carries the marker for its layer.
 |---|---|---|---|---|
 | 1 | Unit | Python logic in isolation, offline | `unit` | `tests.yml`, every PR |
 | 2 | Integration | Real internal stack (sockets, servers, the daemon process), no external network; real AI-client CLIs against it | `integration` | `tests.yml`, every PR; `ai-client-canary.yml`, weekly (each client's `@latest`) |
-| 3 | System | Process, locking and daemon behavior; the full daemon → MCP → approval → audit scenario | `system` | `tests.yml`, every PR, on Linux only ([ADR 0302](adr/0302-linux-is-the-only-ci-platform.md)) |
+| 3 | System | Process, locking and daemon behavior; the full daemon → MCP → approval → audit scenario | `system` | `tests.yml`, every PR, on Linux only ([ADR 0307](adr/0307-linux-is-the-only-ci-platform.md)) |
 | 4 | Browser system | JS, CSP and rendering in real Chromium | `browser` | `tests.yml`, every PR; `qa_web_smoke.py` by hand |
 | 5 | Live connector | Provider API drift | `live` | `connector-live-check.yml`, self-hosted runner, weekly |
 | 6 | Packaged artifact | The Docker image and the Ubuntu release smoke test: the wheel as the image installs it, the container's user, data volume and health check | `packaged` | `build.yml`'s `build-org-image`, `tests.yml`'s `org-docker-image` and `org-mode-smoke` |
@@ -138,7 +138,7 @@ variable removed: these tests need no vendor account or credential, and must kee
 ### Other workflows that gate a PR
 
 - **`dependency-audit.yml`** — on a PR or a push to `main`/`releases/**` that touches
-  `pyproject.toml`, `requirements/*.lock.txt` or either `package.json`/`package-lock.json`, weekly
+  `pyproject.toml`, `requirements/*.lock.txt` or any `package.json`/`package-lock.json`, weekly
   (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a lock file is out of step with
   `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`,
   `docs.lock.txt` (the website's docs generator) and `release.lock.txt` (the hash-pinned `uv` and
@@ -146,7 +146,8 @@ variable removed: these tests need no vendor account or credential, and must kee
   `dev.lock.txt` informationally; `floor-audit` resolves `pyproject.toml` at the lowest version each
   range allows (`uv pip compile --resolution lowest-direct`) and blocks on any finding in that set,
   because `privacyfence-sync` and the image's wheel resolve from the ranges in `pyproject.toml`; `npm-audit` blocks on high/critical in the n8n node's
-  runtime dependencies (`--omit=dev`).
+  runtime dependencies (`--omit=dev`; its `n8n-workflow` peer is a pinned devDependency, so its tree
+  is dev-only, and the whole n8n tree is reported informationally, ADR 0296).
 - **`website-build.yml`** — on every PR and every push to `main`/`releases/**`: builds
   privacyfence.eu with `scripts/build_site.py` three ways (the newest stable tag, as `pages.yml`
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
@@ -257,7 +258,7 @@ email, name or account id means the redaction needs fixing before the commit.
 builds the artifact and before any upload. Every upload and publish step is gated on a tag ref, so a
 dispatched run builds and tests everything and publishes nothing — which is the pre-flight in
 [`release-testing.md`](release-testing.md). `publish-pypi.yml` publishes only `privacyfence-sync`
-([ADR 0304](adr/0304-the-organization-image-is-the-only-distribution.md)); its `wait_for_build` job
+([ADR 0309](adr/0309-the-organization-image-is-the-only-distribution.md)); its `wait_for_build` job
 blocks every publish until `build.yml`'s run for the same commit succeeds. The wheel is built only
 inside the image build and is never published.
 

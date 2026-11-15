@@ -11,12 +11,13 @@ from privacyfence import upstream_mcp_registry
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import upstream_mcp as module
 from privacyfence.connectors.upstream_mcp import (
+    UpstreamCallRefusedError,
     UpstreamMcpConnector,
     UpstreamToolError,
     UpstreamUnavailableError,
 )
 from privacyfence.safe_errors import public_message
-from privacyfence.upstream_claims import CallerClaim
+from privacyfence.identity_claim import CallerNotAllowedError, IdentityCaller
 from privacyfence.upstream_mcp_client import CallResult, UpstreamMcpClientError, UpstreamToolCatalog
 from privacyfence.upstream_mcp_config import DeclaredTool, UpstreamServer
 
@@ -24,9 +25,8 @@ from ...helpers import assert_all_tools_leave_an_audit_trail, assert_tool_defini
 
 pytestmark = pytest.mark.unit
 
-CALLER = CallerClaim(
-    sub="u1", email="a@b.example", email_verified=True, domains=("general",),
-    act={"type": "ai_client", "attested": False, "name": "", "claimed_name": ""},
+CALLER = IdentityCaller(
+    sub="u1", principal_type="claude_client", email="a@b.example", audiences=("general",), tools=("search",),
 )
 
 
@@ -129,12 +129,13 @@ class TestAutoTool:
         assert gated_call_spy == []
         client.call_tool.assert_awaited_once_with("search", {"query": "x"}, CALLER)
         caller.assert_called_once_with()
-        (row,) = _audit_rows(audit_dir)
-        assert row["connector"] == "kh"
-        assert row["tool"] == "kh_search"
-        assert row["tool_name"] == "Knowledge hub: search"
-        assert row["decision"] == "auto_accepted"
-        assert row["auto_accept_rule"] == "auto"
+        forwarded, policy = _audit_rows(audit_dir)
+        assert policy["connector"] == "kh"
+        assert policy["tool"] == "kh_search"
+        assert policy["tool_name"] == "Knowledge hub: search"
+        assert policy["decision"] == "auto_accepted"
+        assert policy["auto_accept_rule"] == "auto"
+        assert forwarded["decision"] == "upstream_forwarded"
 
     async def test_audit_failure_never_blocks_the_read(self, gated_call_spy, monkeypatch):
         connector, _, _ = make_connector()
@@ -144,6 +145,25 @@ class TestAutoTool:
     async def test_structured_result_wins_over_text(self, gated_call_spy, audit_dir):
         connector, _, _ = make_connector(CallResult(text="t", structured={"hits": 2}, dropped_blocks=0))
         assert await connector.call("kh_search", {"query": "x"}) == {"hits": 2}
+
+
+class TestReviewPiiScan:
+    async def test_the_scan_covers_structured_content(self, gated_call_spy):
+        connector, _, _ = make_connector(CallResult(text="visible", structured={"b": 2, "a": 1}, dropped_blocks=0))
+        await connector.call("kh_get_doc", {"query": "x"})
+        (call,) = gated_call_spy
+        assert call["pii_scan_text"] == 'visible\n{"a": 1, "b": 2}'
+        assert call["details_text"] == "visible"
+
+    async def test_the_scan_of_structured_only_is_the_json(self, gated_call_spy):
+        connector, _, _ = make_connector(CallResult(text="", structured={"a": 1}, dropped_blocks=0))
+        await connector.call("kh_get_doc", {"query": "x"})
+        assert gated_call_spy[0]["pii_scan_text"] == '{"a": 1}'
+
+    async def test_the_scan_of_text_only_is_unchanged(self, gated_call_spy):
+        connector, _, _ = make_connector()
+        await connector.call("kh_get_doc", {"query": "x"})
+        assert gated_call_spy[0]["pii_scan_text"] == "hello"
 
 
 class TestReviewTool:
@@ -170,12 +190,7 @@ class TestReviewTool:
         assert await connector.call("kh_get_doc", {"query": "x"}) == {"a": 1}
         (call,) = gated_call_spy
         assert call["raw_data"] == {"a": 1}
-        assert call["pii_scan_text"] == json.dumps({"a": 1}, indent=2, sort_keys=True)
-
-    async def test_text_is_scanned_when_both_text_and_structured_exist(self, gated_call_spy):
-        connector, _, _ = make_connector(CallResult(text="visible", structured={"a": 1}, dropped_blocks=0))
-        await connector.call("kh_get_doc", {"query": "x"})
-        assert gated_call_spy[0]["pii_scan_text"] == "visible"
+        assert call["pii_scan_text"] == '{"a": 1}'
 
     async def test_upstream_failure_never_reaches_the_gate(self, gated_call_spy):
         connector, client, _ = make_connector()
@@ -252,6 +267,8 @@ class TestErrors:
              "The Knowledge hub result is larger than 1 MB; ask for less."),
             (UpstreamMcpClientError("tool_error", "no such page"), UpstreamToolError,
              "The Knowledge hub server returned an error: no such page"),
+            (UpstreamMcpClientError("claim_failed"), UpstreamUnavailableError,
+             "The Knowledge hub call was not sent: PrivacyFence could not sign the caller claim."),
         ],
     )
     async def test_each_client_error_kind_maps_to_its_type_and_message(self, error, kind, message):
@@ -274,7 +291,32 @@ class TestErrors:
         assert len(detail) == 500
         assert not any(ord(char) < 32 for char in detail)
 
+    async def test_a_caller_type_that_is_not_allowed_is_refused_before_any_request(self):
+        connector, client, caller = make_connector()
+        caller.side_effect = CallerNotAllowedError("n8n_workflow")
+        with pytest.raises(UpstreamCallRefusedError) as excinfo:
+            await connector.call("kh_search", {"query": "x"})
+        assert str(excinfo.value) == "PrivacyFence does not allow this caller to use the Knowledge hub server."
+        assert public_message(excinfo.value) == str(excinfo.value)
+        client.call_tool.assert_not_called()
+
+    async def test_identity_claim_off_never_resolves_the_caller(self):
+        off = UpstreamServer(
+            id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
+            tools=UPSTREAM.tools, identity_claim="off",
+        )
+        catalog = UpstreamToolCatalog(off)
+        catalog.update([_listed(tool.name) for tool in off.tools])
+        client = MagicMock()
+        client.call_tool = AsyncMock(return_value=CallResult(text="hello", structured=None, dropped_blocks=0))
+        caller = MagicMock(return_value=CALLER)
+        connector = UpstreamMcpConnector(off, catalog, client, caller)
+        assert await connector.call("kh_search", {"query": "x"}) == "hello"
+        caller.assert_not_called()
+        assert client.call_tool.await_args.args[2] is None
+
     def test_error_types_are_named_runtime_errors(self):
+        assert issubclass(UpstreamCallRefusedError, RuntimeError)
         assert issubclass(UpstreamUnavailableError, RuntimeError)
         assert issubclass(UpstreamToolError, RuntimeError)
         assert UpstreamToolError is not RuntimeError
@@ -286,6 +328,131 @@ class TestEveryToolIsAudited:
         await assert_all_tools_leave_an_audit_trail(
             connector, module, monkeypatch, tmp_path, {"kh_search": {"query": "x"}},
         )
+
+
+def _forwarded(tmp_path) -> list[dict]:
+    return [row for row in _audit_rows(tmp_path) if row["decision"] == "upstream_forwarded"]
+
+
+SECRET_TOKEN = "eyJhbGciOiJFZERTQSJ9.payload-secret.sig-secret"
+SECRET_ARG = "needle-argument-value"
+
+
+class TestForwardedAudit:
+    @pytest.mark.parametrize(("tool", "gate"), [("kh_search", "auto"), ("kh_get_doc", "review"), ("kh_propose_change", "popup")])
+    async def test_the_gate_is_recorded_in_metadata(self, audit_dir, gated_call_spy, tool, gate):
+        connector, _, _ = make_connector()
+        await connector.call(tool, {"query": "x"})
+        (row,) = _forwarded(audit_dir)
+        assert row["metadata"]["gate"] == gate
+
+    async def test_ok(self, audit_dir):
+        connector, _, _ = make_connector(CallResult(text="hello", structured=None, dropped_blocks=0, jti="j1", req="r1"))
+        await connector.call("kh_search", {"query": "x"})
+        (row,) = _forwarded(audit_dir)
+        assert row["connector"] == "kh"
+        assert row["tool"] == "kh_search"
+        assert row["tool_name"] == "Knowledge hub: search"
+        assert row["summary"] == "Forwarded search to Knowledge hub"
+        assert row["sender"] == "Knowledge hub"
+        assert row["auto_accept_rule"] == ""
+        assert row["request_id"] == ""
+        assert row["upstream_status"] == "ok"
+        assert row["claim_jti"] == "j1"
+        assert row["claim_req"] == "r1"
+        assert row["claim_sub"] == "u1"
+        assert row["claim_principal_type"] == "claude_client"
+        assert row["claim_audiences"] == ["general"]
+        assert row["claim_act"] == {}
+        assert row["metadata"] == {"upstream": "kh", "claim_version": "1", "identity_claim": "required", "gate": "auto"}
+
+    @pytest.mark.parametrize(
+        ("kind", "status"),
+        [("tool_error", "tool_error"), ("unreachable", "unreachable"),
+         ("too_large", "too_large"), ("claim_failed", "claim_failed")],
+    )
+    async def test_client_error_kinds(self, kind, status, audit_dir):
+        connector, client, _ = make_connector()
+        client.call_tool.side_effect = UpstreamMcpClientError(kind, "detail")
+        with pytest.raises(RuntimeError):
+            await connector.call("kh_search", {"query": "x"})
+        (row,) = _forwarded(audit_dir)
+        assert row["upstream_status"] == status
+        assert row["claim_sub"] == "u1"
+        assert row["claim_jti"] == ""
+
+    async def test_refused_has_no_claim_fields(self, audit_dir):
+        connector, client, caller = make_connector()
+        caller.side_effect = CallerNotAllowedError("n8n_workflow")
+        with pytest.raises(UpstreamCallRefusedError):
+            await connector.call("kh_search", {"query": "x"})
+        (row,) = _forwarded(audit_dir)
+        assert row["upstream_status"] == "refused"
+        assert row["claim_sub"] == ""
+        assert row["claim_audiences"] == []
+        assert row["claim_act"] == {}
+
+    async def test_token_caller_fills_metadata_and_act(self, audit_dir):
+        connector, _, caller = make_connector()
+        caller.return_value = IdentityCaller(
+            sub="n8n-token:t1", principal_type="n8n_workflow", audiences=("kh",), tools=("search",),
+            approved_by="p1", token_id="t1", act={"sub": "client-1"},
+        )
+        await connector.call("kh_search", {"query": "x"})
+        (row,) = _forwarded(audit_dir)
+        assert row["metadata"]["token_id"] == "t1"
+        assert row["metadata"]["approved_by"] == "p1"
+        assert row["claim_act"] == {"sub": "client-1"}
+
+    async def test_identity_claim_off_records_empty_claim_fields(self, audit_dir):
+        off = UpstreamServer(
+            id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
+            tools=UPSTREAM.tools, identity_claim="off",
+        )
+        catalog = UpstreamToolCatalog(off)
+        catalog.update([_listed(tool.name) for tool in off.tools])
+        client = MagicMock()
+        client.call_tool = AsyncMock(return_value=CallResult(text="hello", structured=None, dropped_blocks=0))
+        connector = UpstreamMcpConnector(off, catalog, client, MagicMock(return_value=CALLER))
+        await connector.call("kh_search", {"query": "x"})
+        (row,) = _forwarded(audit_dir)
+        assert row["claim_sub"] == ""
+        assert row["metadata"]["identity_claim"] == "off"
+
+    async def test_review_and_popup_gates_write_the_forwarded_entry_too(self, gated_call_spy, audit_dir):
+        connector, _, _ = make_connector()
+        await connector.call("kh_get_doc", {"query": "x"})
+        await connector.call("kh_propose_change", {"query": "x"})
+        rows = _forwarded(audit_dir)
+        assert [row["tool"] for row in rows] == ["kh_get_doc", "kh_propose_change"]
+        assert [call["gate"] for call in gated_call_spy] == ["review", "popup"]
+
+    async def test_no_token_or_argument_value_reaches_the_log_or_audit(self, audit_dir, caplog):
+        connector, client, _ = make_connector()
+        seen: list[str] = []
+
+        async def fake_call(tool, args, caller):
+            seen.append(SECRET_TOKEN)  # the signed header the real client would send
+            raise UpstreamMcpClientError("tool_error", "upstream text")
+
+        client.call_tool.side_effect = fake_call
+        caplog.set_level("DEBUG")
+        with pytest.raises(UpstreamToolError):
+            await connector.call("kh_search", {"query": SECRET_ARG})
+        assert seen == [SECRET_TOKEN]
+        raw = "\n".join(path.read_text(encoding="utf-8") for path in audit_dir.glob("*.jsonl"))
+        logs = "\n".join(record.getMessage() for record in caplog.records)
+        for secret in (SECRET_TOKEN, SECRET_ARG, "upstream text"):
+            assert secret not in raw
+            assert secret not in logs
+
+    async def test_an_audit_write_that_raises_changes_nothing(self, monkeypatch):
+        connector, client, _ = make_connector()
+        monkeypatch.setattr(module, "get_audit_logger", MagicMock(side_effect=OSError("disk")))
+        assert await connector.call("kh_search", {"query": "x"}) == "hello"
+        client.call_tool.side_effect = UpstreamMcpClientError("unreachable")
+        with pytest.raises(UpstreamUnavailableError):
+            await connector.call("kh_search", {"query": "x"})
 
 
 class TestToolDefinitions:

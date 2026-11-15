@@ -252,8 +252,9 @@ A multi-user server with the environment alone, no bundle to build:
     on scoped tokens and AI proposals, and locks them on Admin
     ([setup guide](org-mode-setup-guide.md#delivering-tokens-to-n8n)).
 11. **Optional, upstream MCP servers:** declare other MCP servers that PrivacyFence puts its approvals
-    and audit in front of, and who may see which data domain. Write the declaration in a YAML file or
-    inline ([Upstream MCP file](#upstream-mcp-file)).
+    and audit in front of. Write the declaration in a YAML file or inline ([Upstream MCP file](#upstream-mcp-file)).
+    Who may see which audience comes from groups, set in `admin_config.json`
+    ([Upstream MCP servers](upstream-mcp.md)).
 
 Everything else (file delivery, step-up, sign-in restrictions, scoped tokens, audit forwarding) is on
 the [Admin page](org-mode-setup-guide.md#the-admin-page). Outbound HTTPS from the container must reach your identity
@@ -417,9 +418,6 @@ upstreams:
         gate: popup
         verb: add
         effect: Adds a change proposal to the knowledge hub.
-    grants:
-      - match: "*"
-        domains: [general]
 ```
 
 Then uncomment the mount in `compose.yaml` and the `PRIVACYFENCE_UPSTREAM_MCP_FILE` line in `privacyfence.env`, run `sudo docker compose up -d`, and check `sudo docker compose logs privacyfence | grep -i upstream`.
@@ -428,7 +426,7 @@ Then uncomment the mount in `compose.yaml` and the `PRIVACYFENCE_UPSTREAM_MCP_FI
 - JSON works in the same file. A name ending in `.yaml` or `.yml` is read as YAML, any other name as JSON.
 - YAML reads an unquoted `no` or `on` as a boolean: quote an id or tool name like that (`"no"`, `"on"`).
 - To declare the servers inline instead, put the same text under `environment:` in `compose.yaml` as `PRIVACYFENCE_UPSTREAM_MCP: |` (write every `$` as `$$`). Set one of the two variables, never both.
-- `grants` seed `admin_config.json` once per upstream id. After that the file belongs to `admin_config.json`, which you edit as a file; the declaration never overwrites it.
+- The declaration says nothing about who sees what. Audiences come from groups (`upstream_mcp.<id>.groups` in `admin_config.json`, see [Upstream MCP servers](upstream-mcp.md)). A `grants` key is refused at start.
 - A change to the declaration needs a restart.
 
 ## Start
