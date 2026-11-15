@@ -9,8 +9,8 @@ name: Dependency audit
 #
 # Severity policy:
 #   - Python runtime dependencies (requirements/runtime.lock.txt -- what
-#     `pip install privacyfence` actually installs, and what PyInstaller
-#     bundles into the .app) are audited with pip-audit and BLOCK the job on
+#     `pip install privacyfence` actually installs, and what the org
+#     Docker image installs) are audited with pip-audit and BLOCK the job on
 #     any known vulnerability, at any severity. There's no per-severity cutoff
 #     here because OSV, pip-audit's data source, doesn't consistently carry a
 #     normalized severity score across every Python advisory the way GitHub's
