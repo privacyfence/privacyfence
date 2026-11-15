@@ -53,6 +53,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## Final review
 
 - final: Blocking finding 1: tests/unit/test_required_checks.py cited ADR 0313 where the renumbered rulesets ADR is 0315; fixed on the fix-1 branch together with three non-blocking text fixes (ADR 0316 verification command, ADR 0314 decision 4 wording, the blank line after the Cutting a release heading).
+- final: fix-1 merged: one fix worker covered the blocking finding and the three small non-blocking text fixes; its files belong to p4, p5 and p9, so the scope check lists them as outside p5.
 
 ## Finishing
 
