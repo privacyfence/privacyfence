@@ -90,7 +90,7 @@ async def _connected_session(dispatcher: McpDispatcher):
 
 
 async def test_the_live_tool_list_is_exactly_the_set_checked_here():
-    async with _connected_session(McpDispatcher(lambda: CONNECTORS, scoped_token_policy=scoped_tokens.policy_from_org_config({}))) as session:
+    async with _connected_session(McpDispatcher(lambda: CONNECTORS, scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True))) as session:
         listed = await session.list_tools()
     assert sorted(tool.name for tool in listed.tools) == sorted(
         name for name in ADVERTISED if name != mcp_tools.RUNTIME_CREDENTIAL_STATUS_TOOL.name

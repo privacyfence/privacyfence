@@ -619,8 +619,8 @@ def _single_user_org(tmp_path, monkeypatch) -> OrgAuth:
     init_audit_logger(str(tmp_path / "audit"))
     monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
     monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
-    admin = admin_config.import_from_bundle({}, mode="org", single_user=True)
-    org_config = oauth_apps.effective_org_config({}, admin, mode="org", single_user=True)
+    admin = admin_config.import_from_bundle({}, single_user=True)
+    org_config = oauth_apps.effective_org_config({}, admin, single_user=True)
     provider = OrgOAuthProvider(None, idp_callback_url="", single_user=True)
     return OrgAuth(
         provider=provider, sessions=OrgSessionStore(), idp=None, issuer_url=SINGLE_USER_ISSUER,

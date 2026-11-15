@@ -2800,7 +2800,7 @@ class TestPeekRelease:
     def test_configuration_error_is_printed(self, env, monkeypatch, capsys):
         # The switch now lives in the admin config, whose key_env is validated when the
         # provisioning settings are parsed.
-        admin = admin_config.import_from_bundle(env.org_config, mode="org", single_user=False)
+        admin = admin_config.import_from_bundle(env.org_config, single_user=False)
         admin["services"]["peek"]["auto_provision"]["key_env"] = "not a name"
         admin_config.save(admin)
         assert daemon_main.run_peek_release("alice") == 1
@@ -4660,7 +4660,7 @@ class TestSingleUserEffectiveConfig:
         monkeypatch.setenv("PRIVACYFENCE_GRIST_SERVER_URL", "https://grist.example")
         monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://provisioner.example")
         bundle = {"mode": "org"}
-        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=True)
+        admin = admin_config.import_from_bundle(bundle, single_user=True)
         for name in ("peek", "grist"):
             admin["services"][name]["offered"] = True
             admin["services"][name]["auto_provision"]["enabled"] = True
@@ -4688,8 +4688,8 @@ class TestEffectiveOrgConfigWiring:
         )
 
     @staticmethod
-    def _offering_slack(bundle, mode):
-        admin = admin_config.import_from_bundle({}, mode=mode, single_user=False)
+    def _offering_slack(bundle):
+        admin = admin_config.import_from_bundle({}, single_user=False)
         admin["services"]["slack"]["offered"] = True
         return admin
 
@@ -4722,7 +4722,7 @@ class TestEffectiveOrgConfigWiring:
         fake = fake_client_class(result="my-workspace")
         monkeypatch.setattr(daemon_main, "SlackClient", fake)
         monkeypatch.setattr(daemon_main, "load_slack_token", lambda path: {"access_token": "xoxp-1"})
-        org_config = daemon_main.effective_org_config(self.ORG_BUNDLE, self._offering_slack(self.ORG_BUNDLE, "org"))
+        org_config = daemon_main.effective_org_config(self.ORG_BUNDLE, self._offering_slack(self.ORG_BUNDLE))
         assert org_config["slack"]["relay"] is True
 
         connectors, _failures = daemon_main.build_connectors({}, org_config)
@@ -4744,7 +4744,7 @@ class TestEffectiveOrgConfigWiring:
             },
         )
         bundle = dict(self.ORG_BUNDLE, authz={})
-        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        admin = admin_config.import_from_bundle(bundle, single_user=False)
         org_config = daemon_main.effective_org_config(bundle, admin)
 
         server = daemon_main._maybe_start_web_server(
@@ -4760,7 +4760,7 @@ class TestEffectiveOrgConfigWiring:
         monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://peek.example.com")
         monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "key")
         bundle = {"mode": "org", "idp": self.IDP}
-        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        admin = admin_config.import_from_bundle(bundle, single_user=False)
         admin["services"]["peek"]["offered"] = True
         admin["services"]["peek"]["auto_provision"]["enabled"] = True
         started = []
@@ -4808,7 +4808,7 @@ class TestEffectiveOrgConfigWiring:
         monkeypatch.setenv("PRIVACYFENCE_PEEK_PROVISIONING_KEY", "peekprov_secret")
         bundle = {"mode": "org", "idp": self.IDP}
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: bundle)
-        admin = admin_config.import_from_bundle(bundle, mode="org", single_user=False)
+        admin = admin_config.import_from_bundle(bundle, single_user=False)
         admin["services"]["peek"]["offered"] = True
         admin["services"]["peek"]["auto_provision"]["enabled"] = True
         admin_config.save(admin)
@@ -4967,7 +4967,7 @@ class TestConnectorConfigStartup:
     def test_effective_org_config_reads_the_stored_configs_of_this_servers_directory(self, legacy_org):
         install_legacy_bundle(legacy_org)
         daemon_main.prepare_connector_configs(LEGACY_ORG_BUNDLE)
-        admin = admin_config.import_from_bundle(LEGACY_ORG_BUNDLE, mode="org", single_user=False)
+        admin = admin_config.import_from_bundle(LEGACY_ORG_BUNDLE, single_user=False)
         assert daemon_main.effective_org_config(LEGACY_ORG_BUNDLE, admin)["miro"]["client_id"] == "own-miro"
         assert daemon_main._stored_connector_configs("local") is None
 
