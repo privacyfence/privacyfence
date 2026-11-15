@@ -201,9 +201,8 @@ rule names that full Document ID.
 `grist_add_records` and `grist_update_records` take at most 100 records inline. To load or refresh
 a larger table, the assistant hands PrivacyFence a CSV file instead, and you approve it once.
 
-- **Handing over the file.** The assistant gives either `local_path`, a path on your computer, or
-  `upload_id`, the id `privacyfence_create_upload_slot` returned after the file's bytes were sent
-  to its upload URL. On an organization install only `upload_id` is available.
+- **Handing over the file.** The assistant gives an `upload:<id>` reference, the id
+  `privacyfence_create_upload_slot` returned after the file's bytes were sent to its upload URL.
 - **Header.** The first row names the columns, by column id or by label as `grist_list_tables`
   shows them. The delimiter is a comma, a semicolon or a tab. Formula columns and columns of
   other types than Text, Numeric, Int, Bool, Date, Choice and Any cannot be written.
@@ -271,7 +270,7 @@ grant `add` and `update` only for a document you are happy to have bulk-written.
 
 ## Troubleshooting
 
-**`Grist is not authenticated. Use Authenticate… in PrivacyFence Settings.`** — no key or sign-in
+**`Grist is not authenticated. Connect Grist on the Connect page (/connect).`** — no key or sign-in
 is saved yet. Use **Connect** on the Grist row.
 
 **`Grist's saved sign-in could not be read.`** — the saved credential file is damaged. Connect

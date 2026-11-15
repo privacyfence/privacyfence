@@ -213,8 +213,7 @@ or space. Check permissions in Jira or Confluence.
 **Wrong site connected** — PrivacyFence connects the first site the account can reach; see
 [Users connect](#users-connect).
 
-**Jira Assets says "needs an extra Atlassian permission. Use Authenticate… on Jira Assets in
-PrivacyFence Settings."** — the saved sign-in was made before Assets was switched on, or without
+**Jira Assets says "needs an extra Atlassian permission. Connect Jira Assets on the Connect page (/connect)."** — the saved sign-in was made before Assets was switched on, or without
 the four Assets scopes. Check that Assets is on, that the app has the scopes, then use
 **Reconnect** on the Jira Assets row.
 

@@ -191,17 +191,15 @@ See the [tools reference](tools-reference.md#peek) for every parameter and retur
 
 ## Troubleshooting
 
-**`Peek is not authenticated. Use Authenticate… in PrivacyFence Settings.`** — no sign-in is saved
+**`Peek is not authenticated. Connect Peek on the Connect page (/connect).`** — no sign-in is saved
 yet. Connect as described above.
 
-**`Peek's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect
-again.`** — the saved credential file is damaged. Connect again.
+**`Peek's saved sign-in could not be read. Connect Peek on the Connect page (/connect).`** — the saved credential file is damaged. Connect again.
 
-**`Peek refused the saved sign-in (HTTP 401). Use Authenticate… in PrivacyFence Settings to connect
-again.`** — the token was revoked or expired. Connect again.
+**`Peek refused the saved sign-in (HTTP 401). Connect Peek on the Connect page (/connect).`** — the token was revoked or expired. Connect again.
 
-**`Peek was connected to a different server than your organization uses. Use Authenticate… in
-PrivacyFence Settings to connect again.`** — the saved token belongs to a server other than the
+**`Peek was connected to a different server than your organization uses. Connect Peek on the Connect
+page (/connect).`** — the saved token belongs to a server other than the
 one set for the install. Connect again.
 
 **`Peek organization config not installed`** — organization mode with no Peek server address. Ask your
@@ -234,8 +232,7 @@ Peek server address.`** — the address points at something that is not a Peek s
 
 **`Peek has not recorded your approval yet. Approve the code in Peek, then choose Done again.`** —
 approve the code in the browser first. **`The sign-in was denied in Peek.`** and **`The sign-in code
-expired. Start again.`** (the command line says `Run --peek-login again.`) — start the sign-in
-again.
+expired. Start again.`** — start the sign-in again.
 
 **`Peek refused the request (HTTP 403): …`** — the account does not own the page (only its owner or
 an admin changes it, or reads its comments).

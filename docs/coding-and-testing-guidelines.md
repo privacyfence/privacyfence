@@ -138,8 +138,8 @@ This is the one area where "looks like a style rule" is actually a security inva
   existing audit/data model explicitly requires a safe representation — log identifiers, subjects,
   counts instead.
 - `print()` is reserved for the handful of argparse CLI flags in `daemon_main.py`
-  (`--gmail-oauth`, `--telegram-setup`, `--print-mcp-token`, ...) that a human invokes directly at a
-  terminal and that need to print a human-facing confirmation. It does not belong inside a `*_client.py` method — those are
+  (`--print-env-from-bundle`, `--relay-dns-records`, `--rotate-upstream-claim-key`, ...) that a human
+  invokes directly at a terminal and that need to print a human-facing confirmation. It does not belong inside a `*_client.py` method — those are
   library code, called from multiple contexts, and should only log; the CLI entry point that calls
   them is responsible for any terminal-facing `print`.
 

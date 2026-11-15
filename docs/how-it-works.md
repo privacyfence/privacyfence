@@ -181,7 +181,7 @@ they accept an `upload:<id>` reference, never a path on your computer.
   ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)). A link
   only works for a client that can reach the server: claude.ai needs the host on its domain
   allowlist ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)). The
-  limits are bundle settings (`download_delivery.*`, see
+  limits are settings (`download_delivery.*`, see
   [Configuration reference](configuration-reference.md)).
 - **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`,
   `jira_export_issues`) return a one-time download link instead of saving a file, and only counts and
