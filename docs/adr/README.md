@@ -391,3 +391,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286 |
 | [0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) | Audiences come from group membership, and scoped tokens only narrow them | Accepted; amends 0287; supersedes the grant seeding of 0288 |
 | [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298 |
+| [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285 |
