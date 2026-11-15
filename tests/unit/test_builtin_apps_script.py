@@ -1,5 +1,5 @@
 """Tests for scripts/builtin_apps.py -- the one generator of the build-time built-in OAuth apps
-module, and the check build.yml and publish-pypi.yml run over the built wheel and sdist (ADR 0255).
+module, and the check build.yml runs over the built wheel and sdist (ADR 0255).
 
 Imported by file path, same pattern as tests/unit/test_telegram_credentials.py.
 """
@@ -268,27 +268,22 @@ def _other_jobs(workflow: str) -> list[str]:
 
 def test_server_builds_call_the_generator_and_desktop_builds_do_not() -> None:
     build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
-    pypi = (REPO_ROOT / ".github/workflows/publish-pypi.yml").read_text(encoding="utf-8")
     org_image = _build_org_image_job(build)
 
     assert "scripts/builtin_apps.py write" in org_image
-    assert "scripts/builtin_apps.py write" in pypi
     assert "scripts/builtin_apps.py check-dist" in build
-    assert "scripts/builtin_apps.py check-dist" in pypi
 
     desktop = build.replace(org_image, "")
     assert "builtin_apps.py" not in desktop
     assert "PF_APP_" not in desktop
 
-    for name, text in (("build.yml", build), ("publish-pypi.yml", pypi)):
-        assert "APPS = " not in text, f"{name} carries its own copy of the generator"
+    assert "APPS = " not in build, "build.yml carries its own copy of the generator"
 
 
 def test_secrets_reach_only_the_write_step() -> None:
     build = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
-    pypi = (REPO_ROOT / ".github/workflows/publish-pypi.yml").read_text(encoding="utf-8")
 
-    for text in (_build_org_image_job(build), pypi):
+    for text in (_build_org_image_job(build),):
         step = text[text.index("- name: Write built-in app credentials") :]
         step = step[: step.index("run: python3 scripts/builtin_apps.py write")]
         for key in builtin_apps.KEYS:

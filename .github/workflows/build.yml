@@ -46,7 +46,7 @@ jobs:
   # work. Independent of the `sbom` job, so it runs in parallel with it.
   #
   # The image is tested here and saved as a workflow artifact, never pushed: a registry outage
-  # inside this workflow would hold PyPI back (publish-pypi.yml waits for the whole run), so the
+  # inside this workflow would hold back the `privacyfence-sync` publish (publish-pypi.yml waits for the whole run), so the
   # push, the tag combination and the attestation live in publish-org-image.yml, which downloads
   # exactly the bytes tested below. `finalize-release` does need this job, though, so a tag whose
   # image fails its test gets no GitHub Release either. The artifact names (`org-image-<arch>`)
@@ -148,7 +148,7 @@ jobs:
       - name: Build wheel
         run: python -m build --wheel --no-isolation
 
-      # Same check as publish-pypi.yml's: a stable tag fails here, any other build only warns.
+      # The only place this check runs for a release: a stable tag fails here, any other build only warns.
       - name: Check Telegram app credentials are packaged
         run: |
           REQUIRE=()
@@ -236,7 +236,7 @@ jobs:
           echo "Resolved version=$VERSION channel=$CHANNEL"
 
       # From requirements/runtime.lock.txt, not a fresh resolve -- the SBOM
-      # should describe exactly what a plain PyPI install of privacyfence gets
+      # should describe exactly what the organization image installs
       # (and what pip-audit's blocking job in dependency-audit.yml already
       # vetted), not whatever the resolver would pick today.
       - name: Generate Python SBOM

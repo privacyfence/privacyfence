@@ -1,14 +1,13 @@
 name: Publish to PyPI
 
-# Same trigger as build.yml (see docs/releasing.md) -- one tag
-# push does everything: builds and signs the DMG (build.yml) *and* builds
-# and publishes the sdist/wheel (this workflow), with no separate step.
-# Independently triggered, but no longer independently *gated*: the
-# `wait_for_build` job below blocks every publish step here on build.yml's own
-# run for this exact commit actually succeeding -- packaged-artifact test
-# failures (macOS/Windows/Linux)
-# block PyPI/TestPyPI/R2 publication too, not just their own platform's DMG/
-# installer/.deb.
+# Publishes only `privacyfence-sync` (ADR 0304), to TestPyPI and then PyPI. The `privacyfence`
+# server is not published to a package index; its wheel is built only for the organization image
+# in build.yml's `build-org-image`. The file keeps its name because the trusted-publisher entries
+# on pypi.org and test.pypi.org are bound to it.
+#
+# Same trigger as build.yml (see docs/releasing.md) -- one tag push starts both. The
+# `wait_for_build` job below blocks every publish step here on build.yml's own run for this exact
+# commit succeeding, so a failed build.yml run blocks publication here too.
 #
 # Publishing itself uses PyPI's OIDC "Trusted Publisher" flow
 # (pypa/gh-action-pypi-publish), not a stored API token: GitHub mints a
@@ -67,20 +66,17 @@ jobs:
             gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
           fi
 
-  # Every published DMG/installer/.deb is started and exercised, automatically, before it (or
-  # anything else from the same tag) actually ships -- see docs/releasing.md's "Packaged-artifact release
-  # gating" section. This job wires that guarantee into this workflow's own publish steps too: a
-  # failed packaged-artifact test on any platform blocks publication here as well.
+  # build.yml's packaged-artifact tests and org image run before anything from the same tag ships --
+  # see docs/releasing.md's "Packaged-artifact release gating" section. This job wires that
+  # guarantee into this workflow's own publish steps: a failed build.yml run blocks publication here.
   #
   # GitHub Actions has no native `needs:` across separate workflow files -- build.yml and this
-  # workflow are two independent listeners on the same `push: tags: ['v*']` event, so there's no
-  # job graph connecting them the way `needs:` connects jobs within one file. This job is the
+  # workflow are two independent listeners on the same `push: tags: ['v*']` event. This job is the
   # closest equivalent: it polls the REST API for build.yml's *own* run against this exact commit
   # (not "the latest run of build.yml," which could be a different tag or a stray
-  # workflow_dispatch) and blocks every job below on that run actually succeeding, via an ordinary
-  # `needs:` edge inside this workflow. `build` (the sdist/wheel) still runs immediately in
-  # parallel -- it's cheap, side-effect-free, and needed either way -- only the three `publish-*`
-  # jobs actually wait on this one.
+  # workflow_dispatch) and blocks the publish jobs on that run actually succeeding, via an ordinary
+  # `needs:` edge inside this workflow. `build` (the sync sdist/wheel) still runs immediately in
+  # parallel -- it's cheap and side-effect-free -- only the publish jobs wait on this one.
   #
   # A `workflow_dispatch` rerun (e.g. after a transient publish failure) is gated the same way: if
   # build.yml's original run for that tag's commit already succeeded, this job finds that same
@@ -159,7 +155,7 @@ jobs:
   build:
     needs: dedupe
     if: needs.dedupe.outputs.duplicate != 'true'
-    runs-on: ubuntu-latest   # pure Python sdist/wheel -- no macOS-only step needed
+    runs-on: ubuntu-latest   # pure Python sdist/wheel of privacyfence-sync
     outputs:
       version: ${{ steps.release.outputs.version }}
       channel: ${{ steps.release.outputs.channel }}
@@ -172,65 +168,26 @@ jobs:
         with:
           python-version: '3.13'
 
-      # Telegram ships in the PyPI build too (ADR 0040): the same generator build.yml's three
-      # packaging jobs run through build_dmg.sh/build_deb.sh/build_installer.ps1 writes the
-      # git-ignored _telegram_credentials.py, and MANIFEST.in carries it into the sdist and wheel.
-      # Repository secrets, no environment -- the same ones build.yml reads.
-      - name: Write Telegram app credentials
-        env:
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-        run: python3 scripts/telegram_credentials.py write
-
-      # The built-in OAuth apps ship in the PyPI build too (ADR 0255): servers installed from PyPI
-      # sign in through the relay with them. The secrets go only to this step.
-      - name: Write built-in app credentials
-        env:
-          PF_APP_GOOGLE_WEB_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_ID }}
-          PF_APP_GOOGLE_WEB_CLIENT_SECRET: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_SECRET }}
-          PF_APP_SLACK_CLIENT_ID: ${{ secrets.PF_APP_SLACK_CLIENT_ID }}
-          PF_APP_SLACK_CLIENT_SECRET: ${{ secrets.PF_APP_SLACK_CLIENT_SECRET }}
-          PF_APP_SALESFORCE_CLIENT_ID: ${{ secrets.PF_APP_SALESFORCE_CLIENT_ID }}
-          PF_APP_SALESFORCE_CLIENT_SECRET: ${{ secrets.PF_APP_SALESFORCE_CLIENT_SECRET }}
-          PF_APP_ATLASSIAN_RELAY_CLIENT_ID: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_ID }}
-          PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET: ${{ secrets.PF_APP_ATLASSIAN_RELAY_CLIENT_SECRET }}
-          PF_APP_MIRO_CLIENT_ID: ${{ secrets.PF_APP_MIRO_CLIENT_ID }}
-          PF_APP_MIRO_CLIENT_SECRET: ${{ secrets.PF_APP_MIRO_CLIENT_SECRET }}
-          PF_APP_GOOGLE_SIGNIN_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_SIGNIN_CLIENT_ID }}
-          PF_APP_GOOGLE_SIGNIN_CLIENT_SECRET: ${{ secrets.PF_APP_GOOGLE_SIGNIN_CLIENT_SECRET }}
-          PF_APP_SALESFORCE_INSTALL_URL: ${{ vars.PF_APP_SALESFORCE_INSTALL_URL }}
-        run: python3 scripts/builtin_apps.py write
-
-      - name: Build sdist and wheel
+      # privacyfence-sync (sync/) is released with the same version, from the same tag (ADR 0304).
+      # The release lock supplies `build`, and setuptools_scm for the version step below.
+      - name: Build privacyfence-sync
         run: |
           pip install --require-hashes -r requirements/release.lock.txt
-          python -m build --no-isolation
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: pypi-dist
-          path: dist/
-
-      # privacyfence-sync (sync/) is released with the same version, from the same tag. Its own
-      # artifact, so the Telegram check-dist step and the R2 upload below keep reading dist/ only.
-      - name: Build privacyfence-sync
-        run: python -m build --no-isolation --sdist --wheel sync --outdir sync-dist
+          python -m build --no-isolation --sdist --wheel sync --outdir sync-dist
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pypi-dist-sync
           path: sync-dist/
 
-      # Drives both the public-index gating below (see docs/releasing.md and
-      # scripts/r2_release.py's module docstring: only a "stable" tag reaches PyPI/TestPyPI --
-      # alpha/beta/rc stop at the private R2 mirror published by the publish-r2 job) and that
-      # job's R2 key prefix (releases/<channel>/<version>/...). Same "skip off a tag" tolerance as
-      # build.yml's identically-named step, for this workflow's own workflow_dispatch reruns.
+      # Drives the public-index gating below (see docs/releasing.md and scripts/r2_release.py's
+      # module docstring: only a "stable" tag reaches PyPI/TestPyPI). Same "skip off a tag"
+      # tolerance as build.yml's identically-named step, for this workflow's own workflow_dispatch
+      # reruns.
       - name: Determine version and release channel
         id: release
         run: |
-          # This job doesn't install the package (the `build` step above builds the sdist/wheel
-          # from the release lock, without isolation) -- the same lock supplies setuptools_scm
+          # This job doesn't install the package -- the release lock supplies setuptools_scm
           # here, as in build.yml's own version-detection steps.
           pip install --quiet --require-hashes -r requirements/release.lock.txt
           VERSION="$(python3 -m setuptools_scm)"
@@ -244,44 +201,25 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Resolved version=$VERSION channel=$CHANNEL"
 
-      # A stable wheel/sdist without the credentials module would install fine and fail only when
-      # a user first opens Telegram, so a stable tag fails here instead; any other build (a
-      # pre-release, or a workflow_dispatch rerun off a tag) only warns. Runs before any publish
-      # job, all of which need this one.
-      - name: Check Telegram app credentials are packaged
-        run: |
-          REQUIRE=()
-          if [[ "${{ steps.release.outputs.channel }}" == "stable" ]]; then REQUIRE=(--require); fi
-          python3 scripts/telegram_credentials.py check-dist "${REQUIRE[@]}" dist/*.whl dist/*.tar.gz
-
-      # Same rule as build.yml's: every release tag requires the built-in apps.
-      - name: Check built-in app credentials are packaged
-        run: |
-          REQUIRE=()
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then REQUIRE=(--require); fi
-          python3 scripts/builtin_apps.py check-dist "${REQUIRE[@]}" dist/*.whl dist/*.tar.gz
-
   # Always published first -- rehearses the real upload (same files, same
   # metadata) against TestPyPI before anything reaches the real index.
   #
-  # Stable only -- alpha/beta/rc sdists/wheels never reach a public index at all (unlike the DMG/
-  # SBOMs in build.yml, which still get a public, asset-less GitHub Release entry for every
-  # channel); the publish-r2 job below is where every channel's sdist/wheel actually lands.
-  publish-testpypi:
+  # Stable only -- alpha/beta/rc builds never reach a public index at all.
+  publish-testpypi-sync:
     needs: [build, wait_for_build]
     if: needs.build.outputs.channel == 'stable'
     runs-on: ubuntu-latest
     environment: testpypi   # must match the Environment name on TestPyPI's
-                             # Trusted Publisher entry, if one was set there
+                             # Trusted Publisher entry for privacyfence-sync
     permissions:
       id-token: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: pypi-dist
+          name: pypi-dist-sync
           path: dist/
 
-      - name: Publish to TestPyPI
+      - name: Publish privacyfence-sync to TestPyPI
         # Pinned to the tip of upstream's own `release/v1` tracking branch
         # rather than a one-off tag -- that's the branch pypa itself
         # recommends following for v1.x, and Dependabot bumps this SHA the
@@ -295,57 +233,12 @@ jobs:
   # Gated behind the TestPyPI job above, and behind the "pypi" GitHub
   # Environment's own protection rules if any are configured (e.g. a
   # required reviewer) -- see docs/releasing.md for setting that up.
-  # No explicit channel gate needed here: `needs: publish-testpypi` already means this job is
-  # skipped automatically whenever that job is (GitHub Actions skips a dependent job when its
-  # `needs` job was itself skipped, not just when it failed) -- and publish-testpypi is the one
-  # gated on `channel == 'stable'` above.
-  publish-pypi:
-    needs: publish-testpypi
+  publish-pypi-sync:
+    needs: [build, publish-testpypi-sync]
+    if: needs.build.outputs.channel == 'stable'
     runs-on: ubuntu-latest
     environment: pypi   # must match the Environment name on PyPI's own
-                         # Trusted Publisher entry, if one was set there
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: pypi-dist
-          path: dist/
-
-      - name: Publish to PyPI
-        # See the TestPyPI job's "Publish to TestPyPI" step above for why
-        # this is pinned to release/v1's tip rather than a one-off tag.
-        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.2 (release/v1)
-        with:
-          skip-existing: true
-
-  # privacyfence-sync's own uploads, after the main ones, as separate jobs: a trusted publisher
-  # that is not registered yet for `privacyfence-sync` fails only these, never the `privacyfence`
-  # upload above. Same pinned action, `if:` and environments as their counterparts.
-  publish-testpypi-sync:
-    needs: [build, publish-testpypi]
-    if: needs.build.outputs.channel == 'stable'
-    runs-on: ubuntu-latest
-    environment: testpypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: pypi-dist-sync
-          path: dist/
-
-      - name: Publish privacyfence-sync to TestPyPI
-        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.2 (release/v1)
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-
-  publish-pypi-sync:
-    needs: [build, publish-pypi, publish-testpypi-sync]
-    if: needs.build.outputs.channel == 'stable'
-    runs-on: ubuntu-latest
-    environment: pypi
+                         # Trusted Publisher entry for privacyfence-sync
     permissions:
       id-token: write
     steps:
@@ -355,38 +248,7 @@ jobs:
           path: dist/
 
       - name: Publish privacyfence-sync to PyPI
+        # See the TestPyPI job's step above for why this is pinned to release/v1's tip.
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.2 (release/v1)
         with:
           skip-existing: true
-
-  # Independent of the two PyPI jobs above (doesn't `needs:` either one, and isn't gated on
-  # channel) -- this is where *every* channel's sdist/wheel actually lands, stable included: R2 is
-  # the one archive that has everything, same as build.yml's DMG/SBOM uploads. It only needs the
-  # `build` job's artifact and version/channel output, not a successful PyPI publish. It does,
-  # like the two PyPI jobs, still wait on `wait_for_build`: R2 is meant to be a
-  # complete record of what a tag actually shipped, not a place a broken build's bits land anyway
-  # just because nothing public depends on them.
-  publish-r2:
-    needs: [build, wait_for_build]
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: pypi-dist
-          path: dist/
-
-      # Requires these GitHub secrets/vars (Settings → Secrets and variables → Actions), same
-      # names r2-smoke-test.yml used before it was deleted -- see scripts/r2_release.py's module
-      # docstring for the bucket layout and why alpha/beta/rc stop here rather than reaching PyPI.
-      - name: Publish sdist and wheel to Cloudflare R2
-        env:
-          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
-          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
-          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
-          R2_BUCKET: privacyfence-releases
-        run: |
-          python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
-          python3 scripts/r2_release.py upload --version "${{ needs.build.outputs.version }}" dist/*
