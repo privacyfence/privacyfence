@@ -467,7 +467,7 @@ starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
 | `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE`, `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE` | none | The provisioning keys as Docker secret files. The plain `…_PROVISIONING_KEY` forms also work; never both. |
 | `PRIVACYFENCE_UPSTREAM_MCP_FILE` | none | The path inside the container of the YAML or JSON file that declares the upstream MCP servers ([Upstream MCP file](#upstream-mcp-file)). |
 | `PRIVACYFENCE_UPSTREAM_MCP` | none | The same declaration as inline text, set in `compose.yaml`; never together with the file variable ([Upstream MCP file](#upstream-mcp-file)). |
-| `PRIVACYFENCE_OIDC_CLIENTS` | none | Web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<server>/oidc`). Each app also needs `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` and `…_SECRET_FILE` (or `…_SECRET`). See [Sign in to other apps with PrivacyFence](oidc-provider.md). |
+| `PRIVACYFENCE_OIDC_CLIENTS` | none | Web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<server>/oidc`). Each app also needs `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` and `…_SECRET_FILE` (or `…_SECRET`). See [Sign in to other apps with PrivacyFence](oidc-provider.md). An app that should receive the person's approved groups also takes `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS` ([Groups](oidc-provider.md#groups)). |
 
 The [configuration reference](configuration-reference.md#environment-variables) has the full list.
 For audit forwarding to an HTTPS endpoint with a bearer token, put `NAME=token` in `privacyfence.env`

@@ -70,7 +70,7 @@ mistake in the declaration refuses the start; the message names the path of the 
 
 | Rule | Detail |
 |---|---|
-| Keys | `version` must be `1`. Only `version`, `upstreams`, `claim` and `membership` at the top; only `id`, `label`, `url`, `audience`, `tools`, `identity_claim`, `claim_lifetime_seconds` and `allowed_principal_types` in an upstream (an old `grants` key is refused with `grants were replaced by groups`); only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
+| Keys | `version` must be `1`. Only `version`, `upstreams`, `claim` and `membership` at the top; only `id`, `label`, `url`, `audience`, `tools`, `identity_claim`, `claim_lifetime_seconds`, `allowed_principal_types` and `email_for_visibility` in an upstream (an old `grants` key is refused with `grants were replaced by groups`); only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
 | Size | At most 8 upstreams and 50 tools per upstream; the file or inline text is at most 256 KiB. |
 | Repeated key | A key that appears twice in one mapping or object is refused (`the file repeats a key.` or `the text repeats a key.`), so a repeated tool name cannot silently keep the last gate. |
 | Format | A YAML file is checked by the same rules as JSON; a wrong top level still reads `must be a JSON object`. |
@@ -81,6 +81,7 @@ mistake in the declaration refuses the start; the message names the path of the 
 | `identity_claim` | `required` (the default) signs every call; `off` sends no claim and resolves no caller. |
 | `claim_lifetime_seconds` | 5-60, default 60: how long a claim is valid. |
 | `allowed_principal_types` | A non-empty list from `claude_client` (a person's AI client) and `n8n_workflow` (any scoped token); default both. A caller of another type is refused before anything is sent. |
+| `email_for_visibility` | `true` or `false`, default `false`. With `true` the claim carries the person's verified, lower-cased email, for use in the upstream's own visibility rules (see [the contract](identity-claim.md#email-as-a-visibility-input-opt-in)). Refused with `identity_claim: off` and for any value that is not a boolean; a YAML file reads `yes` and `on` as `true`. |
 | tool name | 1-48 letters, digits, underscores or hyphens; `<id>_<tool>` is at most 64 characters and must not collide with an existing tool. |
 | `gate` | `auto` (runs at once), `review` (runs, then the person sees the result before it is returned) or `popup` (the person approves before the call is sent). |
 | `verb` | One of the policy verbs. A **read verb** (`read`, `download`, `search`) takes `auto` or `review` and no `effect`. **Every other verb** takes `popup` and must carry an `effect`: 1-200 characters, ending in a full stop, shown on the card. |
@@ -149,7 +150,7 @@ Besides the per-upstream keys in the table above, the operator file has two top-
 | `membership.file` | With `static` only: the path of a JSON file `{"version": 1, "groups": {"mgmt@company.example": ["a@company.example"]}}`, re-read when it changes. No approvals; for a first try and for tests. |
 | `membership.max_additions` | 1-1000, default 20: how many additions one snapshot and the last 24 hours together may hold before the snapshot is rejected. |
 
-`identity_claim`, `claim_lifetime_seconds` and `allowed_principal_types` are described in the table of rules
+`identity_claim`, `claim_lifetime_seconds`, `allowed_principal_types` and `email_for_visibility` are described in the table of rules
 above. A change to any of these needs a restart.
 
 ### Group membership
