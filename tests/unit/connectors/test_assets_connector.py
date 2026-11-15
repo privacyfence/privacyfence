@@ -691,12 +691,12 @@ class TestAuditTrail:
         client.export_objects.return_value = [make_object()]
         monkeypatch.setattr(
             assets_module.local_files, "deliver_export",
-            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
+            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "link"},
         )
         await assert_all_tools_leave_an_audit_trail(
             connector, assets_module, monkeypatch, tmp_path,
             arg_overrides={"assets_export_objects": {
-                "aql": "objectType = Contract", "destination_dir": "/tmp/x", "file_name": "",
+                "aql": "objectType = Contract", "file_name": "",
             }},
         )
 
@@ -816,7 +816,15 @@ class TestSchemaAutoAccept:
         assert len(popups) == 1
 
 
-EXPORT_ARGS = {"aql": "objectType = Contract", "destination_dir": "~/out"}
+EXPORT_ARGS = {"aql": "objectType = Contract"}
+
+
+def test_assets_export_objects_takes_no_destination_or_download_mode():
+    spec = next(s for s in make_connector()[0].tool_specs() if s.name == "assets_export_objects")
+    names = {p.name for p in spec.params}
+    assert "destination_dir" not in names
+    assert "download_mode" not in names
+    assert "destination_dir" not in spec.description
 
 
 @pytest.fixture
@@ -824,16 +832,16 @@ def delivered(monkeypatch):
     calls = []
 
     def fake_deliver(
-        dest_dir, name, data, mime_type, *, download_mode, download_config=None,
+        dest_dir, name, data, mime_type, *, download_config=None,
         download_base_url="",
     ):
         calls.append({
             "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
-            "download_mode": download_mode, "download_config": download_config,
+            "download_config": download_config,
             "download_base_url": download_base_url,
         })
-        return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
-                "delivery": "local_disk"}
+        return {"path": None, "name": name, "size_bytes": len(data),
+                "delivery": "link"}
 
     monkeypatch.setattr(assets_module.local_files, "deliver_export", fake_deliver)
     return calls
@@ -894,9 +902,9 @@ class TestExportObjects:
         assert call["sender"] == "Jira Assets"
         assert call["filtered_data"] is None
         assert call["args"]["sha256"] == hashlib.sha256(delivered[0]["data"]).hexdigest()
-        assert call["new_info"]["Saved to"] == "~/out/assets-objects.csv"
+        assert call["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
         assert call["new_info"]["Rows"] == "2"
-        assert call["delivery"] == "client_bridge"
+        assert call["delivery"] == "staged_link"
         assert call["preview"] == {"AQL": "objectType = Contract",
                                    "Attributes": "Name, Tags, Account, Mail"}
         assert "ACME support contract" in call["pii_scan_text"]
@@ -950,13 +958,10 @@ class TestExportObjects:
     async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
         connector, _client = self._setup()
         cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
-        connector.download_mode = "org"
         connector.download_config = cfg
         connector.download_base_url = "https://pf.example"
 
         await connector.call("assets_export_objects", EXPORT_ARGS)
-
-        assert delivered[0]["download_mode"] == "org"
         assert delivered[0]["download_config"] is cfg
         assert delivered[0]["download_base_url"] == "https://pf.example"
         assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
@@ -966,7 +971,6 @@ class TestExportObjects:
         self, gated_call_spy, delivered,
     ):
         connector, client = self._setup()
-        connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
 
         with pytest.raises(ValueError, match="assets_search_objects"):

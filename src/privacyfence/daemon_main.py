@@ -1578,7 +1578,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             salesforce_client.report_max_pages = _salesforce_report_max_pages(config)
             logger.info("Salesforce connector ready for %s", merged.get("instance_url"))
             salesforce_connector = SalesforceConnector(salesforce_client)
-            salesforce_connector.download_mode = download_mode
             salesforce_connector.download_config = download_config
             salesforce_connector.download_base_url = download_base_url
             connectors.append(salesforce_connector)
@@ -1622,7 +1621,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             jira_connector = JiraConnector(jira_client)
             jira_connector.my_email = atlassian_token.get("account_email", "")
             jira_connector.my_account_id = jira_client.account_id
-            jira_connector.download_mode = download_mode
             jira_connector.download_config = download_config
             jira_connector.download_base_url = download_base_url
             connectors.append(jira_connector)
@@ -1670,7 +1668,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Jira Assets connector ready")
             assets_connector = AssetsConnector(assets_client)
             assets_connector.my_email = atlassian_token.get("account_email", "")
-            assets_connector.download_mode = download_mode
             assets_connector.download_config = download_config
             assets_connector.download_base_url = download_base_url
             connectors.append(assets_connector)

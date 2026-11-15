@@ -249,7 +249,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
 | `salesforce_list_reports` | read | `auto` | List Salesforce reports accessible to the user. |
-| `salesforce_export_report` | read | `review` | Write every row of a Salesforce report to a CSV or JSON file on the user's computer, in one approval. |
+| `salesforce_export_report` | read | `review` | Export every row of a Salesforce report as a CSV or JSON file, in one approval. |
 | `salesforce_get_record` | read | `review` | Fetch a Salesforce record by object type and id. |
 | `salesforce_run_report` | read | `review` | Run a Salesforce report by id and return the results. |
 | `salesforce_search` | read | `review` | Search Salesforce by name or id across one or more object types — the same mechanism as the search bar at the top of the Salesforce UI. |
@@ -268,7 +268,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `jira_list_projects` | read | `auto` | List Jira projects accessible to the user (key, name, type, lead). |
 | `jira_refresh_user_cache` | read | `auto` | Re-fetch the names of every Atlassian account id PrivacyFence has cached. |
 | `jira_search_issues` | read | `auto` | Search Jira issues using JQL. |
-| `jira_export_issues` | read | `review` | Write every issue a JQL query matches, up to 10,000, to a CSV or JSON file on the user's computer, in one approval. |
+| `jira_export_issues` | read | `review` | Export every issue a JQL query matches, up to 10,000, as a CSV or JSON file, in one approval. |
 | `jira_get_issue` | read | `review` | Fetch full details of a Jira issue by key (e.g. PROJ-123), including description and comments. |
 | `jira_search_issues_with_fields` | read | `review` | Search Jira issues using JQL and add extra fields to each one: custom fields such as Story Points or Sprint, or built-in ones such as due date or fix versions. |
 | `jira_add_comment` | write | `popup` | Add a comment to an existing Jira issue. |
@@ -300,7 +300,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `assets_list_attributes` | read | `auto` | List the attribute definitions of one Jira Assets object type, including which attributes reference other object types. |
 | `assets_list_object_types` | read | `auto` | List the object types in one Jira Assets schema. |
 | `assets_list_schemas` | read | `auto` | List the Jira Assets object schemas on the connected Atlassian site. |
-| `assets_export_objects` | read | `review` | Write every Jira Assets object an AQL query matches, up to 10,000, to a CSV or JSON file on the user's computer, in one approval. |
+| `assets_export_objects` | read | `review` | Export every Jira Assets object an AQL query matches, up to 10,000, as a CSV or JSON file, in one approval. |
 | `assets_get_connected_tickets` | read | `review` | List the Jira tickets connected to one Jira Assets object. |
 | `assets_get_object` | read | `review` | Read one Jira Assets object with every attribute value and its outbound references. |
 | `assets_get_related_objects` | read | `review` | Read the Jira Assets objects linked to one object, following references outbound, inbound or both, up to three hops. |
