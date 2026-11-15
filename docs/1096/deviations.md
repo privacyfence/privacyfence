@@ -108,7 +108,13 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p10b-other-loopback
 
-- pending
+- worker: Outside touches: comment and docstring edits in confluence_client.py, jira_client.py, org_identity.py and web/routes_connect.py that named the deleted oauth_loopback module or atlassian_oauth.authorize_interactive.
+- scope: scope: src/privacyfence/confluence_client.py
+- scope: scope: src/privacyfence/jira_client.py
+- scope: scope: src/privacyfence/org_identity.py
+- scope: scope: src/privacyfence/web/routes_connect.py
+- review: After this merge the coverage ratchet (scripts/check_coverage_floor.py on the unit suite) fails on one module: org_mode.py is at 99.23% against a 100% floor. It comes from the earlier mode-flip phase; p14b rewrites org_mode and p22 re-measures the floors.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p11-file-bridge
 
