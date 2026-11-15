@@ -199,6 +199,8 @@ def narrowing_error(proposed: dict[str, Any], final: dict[str, Any]) -> str | No
     for upstream_id, audiences in (final.get("upstream_audiences") or {}).items():
         if not set(audiences) <= set(proposed_audiences.get(upstream_id, ())):
             return WIDENED_MESSAGE
+    if final.get("upstream_approvals"):
+        return WIDENED_MESSAGE  # an approval is a widening only an administrator makes (ADR 0250)
     for flag in ("allow_personal_data", "allow_personal_data_reads"):
         if final.get(flag) and not proposed.get(flag):
             return WIDENED_MESSAGE

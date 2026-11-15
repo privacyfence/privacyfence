@@ -94,7 +94,7 @@ def test_scoped_token_may_name_the_tool(tmp_path, monkeypatch):
 
     def create():
         return store.create(
-            LOCAL_PRINCIPAL, label="kh-sync", days=30, rules=[], tools=["kh_search"], policy=policy,
+            LOCAL_PRINCIPAL, label="kh-sync", days=30, rules=[], tools=["kh_list_topics"], policy=policy,
             now=time.time(),
         )
 

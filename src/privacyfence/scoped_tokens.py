@@ -236,11 +236,29 @@ def normalise_create_request(payload: dict[str, Any]) -> dict[str, Any] | None:
     upstream_audiences = _normalise_upstream_audiences(payload.get("upstream_audiences"))
     if upstream_audiences is None:
         return None
+    upstream_approvals = _normalise_upstream_approvals(payload.get("upstream_approvals", []))
+    if upstream_approvals is None:
+        return None
     return {
         "label": label, "days": days, "rules": rules, "tools": sorted(tools),
         "allow_personal_data": allow_personal_data, "allow_personal_data_reads": allow_personal_data_reads,
-        "upstream_audiences": upstream_audiences,
+        "upstream_audiences": upstream_audiences, "upstream_approvals": upstream_approvals,
     }
+
+
+def _normalise_upstream_approvals(raw: Any) -> list[dict[str, str]] | None:
+    """The approvals de-duplicated and sorted by tool, or ``None`` unless ``raw`` is a list of dicts
+    with exactly the string keys ``tool`` and ``digest`` (plan 3.4)."""
+    if not isinstance(raw, list):
+        return None
+    found: set[tuple[str, str]] = set()
+    for item in raw:
+        if not isinstance(item, dict) or set(item) != {"tool", "digest"}:
+            return None
+        if not isinstance(item["tool"], str) or not isinstance(item["digest"], str):
+            return None
+        found.add((item["tool"], item["digest"]))
+    return [{"tool": tool, "digest": digest} for tool, digest in sorted(found)]
 
 
 def _normalise_upstream_audiences(raw: Any) -> dict[str, list[str]] | None:
@@ -325,11 +343,21 @@ def _upstream_audiences_from_json(raw: Any) -> dict[str, frozenset[str]]:
     }
 
 
+def _valid_approval_row(row: ScopeRow) -> bool:
+    """An approval row is valid only when its operations are exactly the operation its value names."""
+    value = row.value
+    return (
+        isinstance(value, str) and value.count("@") == 1
+        and row.operations == frozenset({value.split("@")[0]})
+    )
+
+
 def _from_json(principal_id: str, raw: Any) -> ScopedToken:
     """A token from its stored entry. An entry with ``rules`` holds its own rows; a row that cannot
     be read is left out (fail-closed: it only narrows the token). A legacy entry (``rule_ids``, no
     ``rules``) loads with no rules and keeps its entry in ``legacy_raw`` until it is converted."""
     from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+    from .policy import scopes as policy_scopes
 
     rows: list[ScopeRow] = []
     legacy_raw: dict[str, Any] | None = None
@@ -339,6 +367,9 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
         for item in raw["rules"]:
             row = scope_rows.row_from_dict(item)
             if row is None:
+                logger.warning("Scoped token %s: skipping a rule that cannot be read", raw["id"])
+                continue
+            if row.predicate in policy_scopes.TOKEN_ONLY_PREDICATES and not _valid_approval_row(row):
                 logger.warning("Scoped token %s: skipping a rule that cannot be read", raw["id"])
                 continue
             rows.append(row)
@@ -383,6 +414,7 @@ def owned_entry(
     narrowed to its ``rule_limits``; ``None`` for an entry that already holds its rules. Raises
     ``KeyError``, ``TypeError`` or ``ValueError`` for an entry that cannot be read."""
     from .policy import scope_rows  # function-local: scope_rows reaches auto_accept (import cycle)
+    from .policy import scopes as policy_scopes
 
     if not isinstance(raw, dict):
         raise TypeError("not a token entry")
@@ -410,6 +442,7 @@ def owned_entry(
             continue
         rows.extend(scope_rows.rows_for_rules(matching, rid))
         copied += 1
+    rows = [row for row in rows if row.predicate not in policy_scopes.TOKEN_ONLY_PREDICATES]
     entry = {k: v for k, v in raw.items() if k not in _LEGACY_KEYS}
     entry["rules"] = [scope_rows.row_to_dict(row) for row in rows]
     newly_flagged = raw.get("allow_personal_data") is not True and bool(set(ids) & personal_data_ids)
@@ -567,6 +600,50 @@ def normalise_rule_requests(raw: Any) -> list[dict[str, Any]] | None:
     return [keyed[key] for key in sorted(keyed)]
 
 
+def _checked_upstream_approvals(
+    tool_set: frozenset[str], approvals: Sequence[Mapping[str, str]], *, is_admin: bool,
+) -> list[tuple[str, str]]:
+    """The ``(tool, digest)`` approvals of a create request after plan 3.4's three rules, in order:
+    only an administrator approves; a gated upstream tool needs an approval; an approval must name a
+    listed gated upstream tool and the operator's current digest."""
+    from . import gate  # function-local: the module is import-cycle sensitive
+    from .policy import scopes as policy_scopes
+
+    pairs = sorted({(a["tool"], a["digest"]) for a in approvals})
+    if pairs and not is_admin:
+        raise ScopedTokenError(f"Only an administrator can create a token for {pairs[0][0]}.")
+    approved = {tool for tool, _ in pairs}
+    for name in sorted(tool_set):
+        if gate.is_gated_upstream_tool(name) and name not in approved:
+            raise ScopedTokenError(
+                f"{name} changes data or releases results unseen; an administrator must approve it "
+                "on the New token form."
+            )
+    for tool, digest in pairs:
+        operation = auto_accept.TOOL_TO_OPERATION.get(tool)
+        current = policy_scopes.UPSTREAM_DECLARATIONS.get(operation) if operation is not None else None
+        if tool not in tool_set or not gate.is_gated_upstream_tool(tool) or current is None or current != digest:
+            raise ScopedTokenError(
+                f"The server's declaration of {tool} changed; reload the page and review it again."
+            )
+    return pairs
+
+
+def _approval_row(tool: str, digest: str) -> ScopeRow:
+    """The token-only rule that approves ``tool`` while the operator's declaration still has ``digest``
+    (plan 3.2). The operation comes from the registry, never from the request."""
+    from .policy.scope_rows import ScopeRow
+    from .policy.registry import TOOL_TO_VERB
+
+    operation = auto_accept.TOOL_TO_OPERATION[tool]
+    value = f"{operation}@{digest}"
+    return ScopeRow(
+        id="r-" + hashlib.sha256(repr(("upstream", value)).encode()).hexdigest()[:10],
+        scope=None, value=value, verbs=frozenset({TOOL_TO_VERB[tool]}),
+        operations=frozenset({operation}), predicate="upstream.approved_tool", conditions=(),
+    )
+
+
 class ScopedTokenStore:
     def __init__(self, principal_dirs: Callable[[], Iterable[Principal]]) -> None:
         self._principal_dirs = principal_dirs
@@ -663,6 +740,7 @@ class ScopedTokenStore:
         held_audiences: Mapping[str, frozenset[str]] | None = None,
         principal_email_verified: bool = False,
         is_admin: bool = False,
+        upstream_approvals: Sequence[Mapping[str, str]] = (),
         now: float | None = None,
         token_id: str | None = None,
     ) -> tuple[ScopedToken, str]:
@@ -680,12 +758,15 @@ class ScopedTokenStore:
         if GROUP_MEMBERSHIP_TOOL in tool_set and not is_admin:
             # The sync tool changes who holds which audience, so only an administrator may mint it (plan 3.8).
             raise ScopedTokenError(f"Only an administrator can create a token for {GROUP_MEMBERSHIP_TOOL}.")
+        approvals = _checked_upstream_approvals(tool_set, upstream_approvals, is_admin=is_admin)
         chosen_audiences = {uid: frozenset(doms) for uid, doms in (upstream_audiences or {}).items() if doms}
         held = held_audiences or {}
         for uid, doms in sorted(chosen_audiences.items()):
             for audience in sorted(doms - held.get(uid, frozenset())):
                 raise ScopedTokenError(f"You can only give a token audiences you have: {audience}")
-        new_rules, own_rows = self._prepare(label=label, rules=rules, policy=policy)
+        new_rules, own_rows = self._prepare(
+            label=label, rules=rules, policy=policy, approvals=len(approvals),
+        )
         with self._lock:
             self._refresh(principal)
             existing = self._tokens[principal.id]
@@ -696,6 +777,7 @@ class ScopedTokenStore:
                 own_rows=own_rows, policy=policy,
             )
             token_rows, _ = scope_rows.add_rules(base_rows, new_rules)
+            token_rows = [*token_rows, *(_approval_row(tool, digest) for tool, digest in approvals)]
             created = time.time() if now is None else now
             secret = mint_secret()
             token = ScopedToken(
@@ -741,7 +823,7 @@ class ScopedTokenStore:
             )
 
     def _prepare(
-        self, *, label: str, rules: Sequence[dict[str, Any]], policy: ScopedTokenPolicy,
+        self, *, label: str, rules: Sequence[dict[str, Any]], policy: ScopedTokenPolicy, approvals: int = 0,
     ) -> tuple[list[PolicyRule], dict[str, ScopeRow]]:
         """No lock: the policy, label and rule-count checks, the compiled ``new`` rules (request
         order) and the person's Auto-accept rows a ``copy`` rule may name."""
@@ -752,7 +834,7 @@ class ScopedTokenStore:
             raise ScopedTokenError(_NOT_ENABLED_MESSAGE)
         if not LABEL_RE.match(label):
             raise ScopedTokenError(_LABEL_MESSAGE)
-        if len(rules) > MAX_RULES_PER_TOKEN:
+        if len(rules) + approvals > MAX_RULES_PER_TOKEN:
             raise ScopedTokenError(f"A token has at most {MAX_RULES_PER_TOKEN} rules.")
         # Read before the store lock: get_policy_rows takes the Auto-accept write lock, and
         # ensure_scope_rows takes that lock and then this one.
@@ -793,6 +875,8 @@ class ScopedTokenStore:
     ) -> list[ScopeRow]:
         """Caller holds ``self._lock``. Returns the rows the token takes over from ``copy`` and
         ``duplicate`` rules. ``check_existing=False`` skips the duplicate-label and 50-tokens checks."""
+        from .policy import scopes as policy_scopes
+
         if check_existing and any(t.label == label for t in existing):
             raise ScopedTokenError("You already have a token with that name.")
         if not 1 <= days <= policy.max_days:
@@ -813,6 +897,8 @@ class ScopedTokenStore:
                 base = next((r for r in source.rules if r.id == entry["rule_id"]), None) if source else None
             if base is None:
                 raise ScopedTokenError("One of the chosen rules no longer exists; reload the page.")
+            if base.predicate in policy_scopes.TOKEN_ONLY_PREDICATES:
+                raise ScopedTokenError("That rule cannot be copied.")
             if all(row.id != base.id for row in base_rows):
                 base_rows.append(replace(base, former_ids=()))
         if check_existing and len(existing) >= MAX_TOKENS_PER_PRINCIPAL:
