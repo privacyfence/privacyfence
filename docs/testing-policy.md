@@ -48,7 +48,7 @@ logs) under `test-results/`, which CI uploads as an artifact of the failed job.
 
 ## Layers 1–4: every PR
 
-`.github/workflows/tests.yml` runs on every pull request, every push to `main` or `releases/**`,
+`.github/workflows/tests.yml` runs on every pull request, every push to `main`,
 and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout-minutes` (45), so a hung run fails instead of holding a runner.
 
 | Job | Runs |
@@ -137,7 +137,7 @@ variable removed: these tests need no vendor account or credential, and must kee
 
 ### Other workflows that gate a PR
 
-- **`dependency-audit.yml`** — on a PR or a push to `main`/`releases/**` that touches
+- **`dependency-audit.yml`** — on a PR or a push to `main` that touches
   `pyproject.toml`, `requirements/*.lock.txt` or any `package.json`/`package-lock.json`, weekly
   (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a lock file is out of step with
   `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`,
@@ -148,7 +148,7 @@ variable removed: these tests need no vendor account or credential, and must kee
   because `privacyfence-sync` and the image's wheel resolve from the ranges in `pyproject.toml`; `npm-audit` blocks on high/critical in the n8n node's
   runtime dependencies (`--omit=dev`; its `n8n-workflow` peer is a pinned devDependency, so its tree
   is dev-only, and the whole n8n tree is reported informationally, ADR 0296).
-- **`website-build.yml`** — on every PR and every push to `main`/`releases/**`: builds
+- **`website-build.yml`** — on every PR and every push to `main`: builds
   privacyfence.eu with `scripts/build_site.py` three ways (the newest stable tag, as `pages.yml`
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,

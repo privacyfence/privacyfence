@@ -29,23 +29,6 @@ All changes to `main` go through pull requests. Direct pushes are blocked.
    PR description. See [`docs/testing-policy.md`](docs/testing-policy.md) for which checks run in CI
    versus which ones you run locally.
 
-### Release integration branches (`releases/*`)
-
-`releases/*` (e.g. `releases/4.1-dev`) is a long-lived, cross-cycle integration branch, cut from
-`main` when a batch of work for the next release needs to accumulate somewhere other than `main`
-while `main` stays frozen for a prior release's remaining blockers. It is a deliberate exception to
-"feature branches go straight to `main`", not a standing convention: while one exists, branches
-fork from and PR into it, with the normal `<type>/<kebab-case-description>` naming, and the
-`releases/*` branch itself is deleted once it merges back into `main` in one PR.
-
-`releases/*` is protected the same way `main` is — same ruleset (PR required, no force-push or
-deletion, the same required status checks `scripts/update_branch_protection.py` manages for
-`main`; run it with `--branch "releases/**"` to sync that ruleset too) and the same CI: every
-`.github/workflows/*.yml` push trigger scoped to `branches: [main]` for a test, audit or lint job
-also lists `"releases/**"`. This deliberately does **not** extend to the production-deploy
-triggers (`pages.yml`'s website deploy) — those stay `main`-only, so merging into a `releases/*` branch never ships to
-production ahead of that branch's eventual merge into `main`.
-
 ## Decisions, plans and ADRs
 
 Three kinds of document, three lifecycles — the full rules, template and index are in
