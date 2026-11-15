@@ -364,7 +364,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0270](0270-the-built-in-slack-app-reads-through-search-while-slack-throttles-it.md) | The built-in Slack app reads through search while Slack throttles it | Accepted; relates to 0255, 0269 |
 | [0271](0271-automatic-accounts-can-be-switched-on-from-the-environment.md) | Automatic accounts can be switched on from the environment | Accepted; relates to 0196, 0256, 0264 |
 | [0272](0272-a-single-user-install-provisions-its-one-person-as-verified.md) | A single-user install provisions its one person as verified | Accepted; relates to 0243, 0260, 0271 |
-| [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224, 0272 |
+| [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224, 0272; amended by 0311 |
 | [0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md) | The OIDC signing key is generated in the org directory | Accepted; relates to 0273 |
 | [0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md) | The single-user person is admin@privacyfence.localhost | Accepted; amends 0272 |
 | [0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) | Links to a docs page the next release publishes fall back to GitHub until it does | Accepted; amends 0099 |
@@ -388,9 +388,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md) | n8n delivery can be switched on from the server environment | Accepted; amends 0253, 0279, 0282; relates to 0165, 0257 |
 | [0295](0295-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 | Accepted |
 | [0296](0296-the-n8n-nodes-dev-tooling-advisories-wait-for-upstream-not-overrides.md) | The n8n node's dev-tooling advisories wait for upstream, not overrides | Accepted; relates to 0289 |
-| [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286 |
+| [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286; amended by 0310 |
 | [0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) | Audiences come from group membership, and scoped tokens only narrow them | Accepted; amends 0287; supersedes the grant seeding of 0288 |
-| [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298 |
+| [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298; amended by 0311 |
 | [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285 |
 | [0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md) | Desktop mode and its installers are removed in 8.x | Accepted; supersedes 0002, 0003, 0261 |
 | [0302](0302-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262 |
@@ -401,3 +401,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0307](0307-linux-is-the-only-ci-platform.md) | Linux is the only CI platform | Accepted; relates to 0057 |
 | [0308](0308-the-mcp-registry-listing-of-the-extension-is-no-longer-published.md) | The MCP registry listing of the extension is no longer published | Accepted; supersedes 0112 |
 | [0309](0309-the-organization-image-is-the-only-distribution.md) | The organization image is the only distribution | Accepted; amends 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255; relates to 0295 |
+| [0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md) | `email` is an opt-in visibility input of the identity claim | Accepted; amends 0297; relates to 0298 |
+| [0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md) | The OIDC provider sends approved group membership to apps that opt in | Accepted; amends 0273, 0299; relates to 0298 |
