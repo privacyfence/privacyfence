@@ -20,7 +20,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-token-form
 
-- pending
+- None.
+- review: The approvals line is shown in the token list row, not inside the "Rules and tools" details (the worker read "token list line" that way); accepted.
+- retry: tld plugin absent in the worker container; the worker ran the verify.dod commands directly and reported done. No roles are required for this phase. Orchestrator re-ran ruff, the full unit suite and all 29 browser tests (with the Chromium path override) on the merged tree: green.
 
 ## p5-end-to-end
 
