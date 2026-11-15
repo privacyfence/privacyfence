@@ -5,7 +5,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-token-only-approval-rule
 
-- pending
+- retry: Worker reported status=blocked only because the tld plugin was absent in its container (guard, dod and roles verify could not run); no roles are required for this phase. Orchestrator reviewed the diff and ran ruff, the full unit suite, mypy, strict mypy and bandit on the merged tree: all green. The coverage-floor row is left to CI.
 
 ## p2-create-with-approval
 
