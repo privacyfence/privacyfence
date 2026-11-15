@@ -6,7 +6,7 @@ Accepted (recorded retroactively on 2026-09-25; decided around 2026-09-17 in
 [#428](https://github.com/privacyfence/privacyfence/issues/428), `3b52aca7`, merged in
 [#487](https://github.com/privacyfence/privacyfence/pull/487)).
 
-**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
 
 ## Context
 

@@ -1,5 +1,5 @@
 """``PUT /mcp-files/slots/{slot}`` / ``GET /mcp-files/fetch/{token}`` -- the capability pair
-(ADR 0028, ADR 0299), reached by any HTTP client, no bearer header (or anything else) required:
+(ADR 0028, ADR 0304), reached by any HTTP client, no bearer header (or anything else) required:
 the capability token embedded in the URL is itself the credential. Built by
 ``mount_capability_routes`` below, as plain, unauthenticated ``Route``s -- never wrapped in a
 bearer-auth stack, since the whole point is a caller that may have no way to set a custom header

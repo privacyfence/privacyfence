@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-15.
 
-**Deprecated: ADR 0300 retired the download Worker, 2026-11-15.**
+**Deprecated: ADR 0305 retired the download Worker, 2026-11-15.**
 
 ## Context
 

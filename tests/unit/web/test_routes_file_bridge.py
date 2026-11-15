@@ -1,5 +1,5 @@
 """Tests for web/routes_file_bridge.py: the capability pair, PUT /mcp-files/slots/{slot} and
-GET /mcp-files/fetch/{token} (ADR 0028, ADR 0299), authenticated by the token in the URL alone."""
+GET /mcp-files/fetch/{token} (ADR 0028, ADR 0304), authenticated by the token in the URL alone."""
 from __future__ import annotations
 
 import hashlib

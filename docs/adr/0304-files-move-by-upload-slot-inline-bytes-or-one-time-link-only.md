@@ -1,4 +1,4 @@
-# ADR 0299: Files move by upload slot, inline bytes or one-time link only
+# ADR 0304: Files move by upload slot, inline bytes or one-time link only
 
 ## Status
 
@@ -35,4 +35,4 @@ Files reach the server only through the upload slot (`privacyfence_create_upload
 
 ## Related
 
-ADR 0007, 0012, 0028, 0115, 0160, 0296.
+ADR 0007, 0012, 0028, 0115, 0160, 0301.

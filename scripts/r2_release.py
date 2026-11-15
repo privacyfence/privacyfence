@@ -15,7 +15,7 @@ itself. The channel directory is derived from that version's PEP 440 pre-release
 same short spellings src/privacyfence/update_checker.py's _STAGE_RANK already uses to rank
 update-check results); a version with no suffix is "stable".
 
-A release (ADR 0301) builds the organization image, privacyfence-sync and the SBOM only, so what
+A release (ADR 0306) builds the organization image, privacyfence-sync and the SBOM only, so what
 lands here is the SBOM and the org admin tools (scripts/sync_room_directory.py,
 scripts/sign_connector_config.py and the connector config signing page). The archive keeps these
 uploads and nothing else: there is no manifest and no `latest` pointer. The bucket is left at

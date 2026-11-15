@@ -6,7 +6,7 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-09-04 in `45
 added `.github/workflows/publish-pypi.yml` and the "Publishing to PyPI" section of `CLAUDE.md`).
 Implemented and unchanged since then.
 
-Amended by [ADR 0304](0304-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
 
 ## Context
 

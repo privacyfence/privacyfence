@@ -1273,7 +1273,7 @@ class TestUploadFile:
 
     async def test_upload_id_claim_needs_no_filesystem(self, gated_call_spy):
         """An upload_id claim needs only the slot's own token -- see
-        local_files.require_local_files' own ``upload:`` handling (ADR 0299)."""
+        local_files.require_local_files' own ``upload:`` handling (ADR 0304)."""
         from privacyfence import local_files
         from privacyfence.principal import LOCAL_PRINCIPAL
         from privacyfence.upload_staging import get_upload_staging_store

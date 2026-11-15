@@ -1569,7 +1569,7 @@ class DriveConnector(Connector):
         upload_pii_scan_text = ""
         local_data: bytes | None = None
 
-        # Capability uploads (ADR 0299): upload_id names bytes already staged by
+        # Capability uploads (ADR 0304): upload_id names bytes already staged by
         # privacyfence_create_upload_slot, via the local_files.py ``upload:`` convention.
         upload_ref = f"{local_files.UPLOAD_REF_PREFIX}{upload_id.strip()}" if upload_id.strip() else ""
 

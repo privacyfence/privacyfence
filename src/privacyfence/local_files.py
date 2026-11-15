@@ -1,5 +1,5 @@
 """How a file an agent names in a tool call gets turned into bytes, and how bytes
-an export produced get back to the agent (ADR 0299).
+an export produced get back to the agent (ADR 0304).
 
 Files reach the server only through an upload slot (``privacyfence_create_upload_slot``, the
 ``upload:<id>`` reference a tool takes in place of a path), inline bytes, or the one-time link

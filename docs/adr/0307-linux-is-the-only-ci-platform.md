@@ -1,4 +1,4 @@
-# ADR 0302: Linux is the only CI platform
+# ADR 0307: Linux is the only CI platform
 
 ## Status
 
@@ -31,4 +31,4 @@ Windows and macOS legs existed to cover the installers and the platform-specific
 
 ## Related
 
-ADR 0057, 0296, 0301.
+ADR 0057, 0301, 0306.

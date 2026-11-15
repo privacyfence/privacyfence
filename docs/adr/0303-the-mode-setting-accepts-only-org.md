@@ -1,4 +1,4 @@
-# ADR 0298: The mode setting accepts only org
+# ADR 0303: The mode setting accepts only org
 
 ## Status
 
@@ -36,4 +36,4 @@ Accepted — 2026-11-14. Relates to [ADR 0260](0260-organization-mode-can-start-
 
 ## Related
 
-ADR 0260, 0296, 0297.
+ADR 0260, 0301, 0302.

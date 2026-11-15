@@ -96,7 +96,7 @@ def _says_org(root: Path) -> bool:
 
 
 def check_upgrade_source(root: Path) -> None:
-    """Refuse a data directory 8.x cannot trust (ADR 0297); write the marker into a fresh one.
+    """Refuse a data directory 8.x cannot trust (ADR 0302); write the marker into a fresh one.
 
     In order: data a newer release has moved on; desktop-install traces outside an organization
     server; data that 7.x has not marked as fully upgraded."""

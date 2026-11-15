@@ -1,4 +1,4 @@
-# ADR 0296: Desktop mode and its installers are removed in 8.x
+# ADR 0301: Desktop mode and its installers are removed in 8.x
 
 ## Status
 
@@ -33,4 +33,4 @@ The behaviour is covered by the tests named in the ADRs that follow; the deleted
 
 ## Related
 
-ADR 0002, 0003, 0261, 0297, 0298, 0299, 0304.
+ADR 0002, 0003, 0261, 0302, 0303, 0304, 0309.

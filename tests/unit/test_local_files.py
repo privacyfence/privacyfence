@@ -1,4 +1,4 @@
-"""Tests for local_files.py (ADR 0299): the single place an agent-named file turns into bytes
+"""Tests for local_files.py (ADR 0304): the single place an agent-named file turns into bytes
 (an ``upload:<id>`` reference only) and a produced file turns into a one-time link."""
 from __future__ import annotations
 

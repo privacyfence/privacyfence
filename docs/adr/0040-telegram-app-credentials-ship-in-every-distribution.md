@@ -4,7 +4,7 @@
 
 Accepted — 2026-09-24. Implemented by the `[cleanup P4]` pull request.
 
-Amended by [ADR 0304](0304-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
 
 ## Context
 

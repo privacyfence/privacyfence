@@ -6,7 +6,7 @@ Accepted — 2026-10-15. Implemented.
 Extends the rule of [ADR 0085](0085-ci-installs-ai-client-clis-from-a-committed-lockfile.md) from
 AI-client CLIs to every build and release tool.
 
-Amended by [ADR 0304](0304-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
 
 ## Context
 

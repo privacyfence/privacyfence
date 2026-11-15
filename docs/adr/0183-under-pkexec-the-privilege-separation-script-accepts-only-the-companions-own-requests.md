@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-15. Implemented.
 
-**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
 
 ## Context
 

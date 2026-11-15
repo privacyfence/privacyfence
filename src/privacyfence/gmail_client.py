@@ -76,7 +76,7 @@ _MAX_TOTAL_ATTACHMENT_BYTES = 18_000_000
 
 
 def _read_attachment(path: str) -> tuple[str, bytes]:
-    """Read one attachment from an upload slot (ADR 0299).
+    """Read one attachment from an upload slot (ADR 0304).
 
     ``path`` must be a ``local_files.UPLOAD_REF_PREFIX`` reference: bytes already staged by
     privacyfence_create_upload_slot and claimed via ``local_files.read_local_file()``. Anything

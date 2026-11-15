@@ -1,4 +1,4 @@
-# ADR 0301: Releases build the org image, privacyfence-sync and the SBOM only
+# ADR 0306: Releases build the org image, privacyfence-sync and the SBOM only
 
 ## Status
 
@@ -31,4 +31,4 @@ Accepted — 2026-11-14. Supersedes [ADR 0057](0057-stable-tags-are-gated-on-gra
 
 ## Related
 
-ADR 0057, 0087, 0169, 0296, 0300, 0302, 0304.
+ADR 0057, 0087, 0169, 0301, 0305, 0307, 0309.

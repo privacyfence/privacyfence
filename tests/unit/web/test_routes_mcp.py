@@ -498,7 +498,7 @@ class TestCallConnectorTool:
 
 
 class TestFilesOverTheWire:
-    """ADR 0299: files move by upload slot, inline bytes or a one-time link -- never by a
+    """ADR 0304: files move by upload slot, inline bytes or a one-time link -- never by a
     handshake carried in the result's ``_meta``."""
 
     async def test_a_path_that_is_not_an_upload_reference_reaches_the_model_as_the_upload_slot_message(self):

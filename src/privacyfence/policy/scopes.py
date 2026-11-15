@@ -697,7 +697,7 @@ def _gmail_query_matches(value: Any, ctx: ReviewContext) -> bool:
 TOKEN_ONLY_PREDICATES: frozenset[str] = frozenset({"upstream.approved_tool"})
 
 # Operation key ("<id>.<tool>") to the digest of the operator's declaration of it; filled by
-# `upstream_mcp_registry.register`, cleared by `unregister_all`. Empty in local mode.
+# `upstream_mcp_registry.register`, cleared by `unregister_all`. Empty until an upstream is registered.
 UPSTREAM_DECLARATIONS: dict[str, str] = {}
 
 

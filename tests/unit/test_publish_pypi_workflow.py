@@ -1,4 +1,4 @@
-"""publish-pypi.yml publishes only privacyfence-sync (ADR 0304)."""
+"""publish-pypi.yml publishes only privacyfence-sync (ADR 0309)."""
 
 from __future__ import annotations
 

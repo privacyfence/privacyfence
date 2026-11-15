@@ -58,7 +58,7 @@ the companion (starting the tray if none is running), and so does Windows' Start
 separated POSIX install, the companion channel also admits the companion's own user for the two
 page `SHOW`s. Decision 2's menu and decisions 3 and 4 are unchanged.
 
-**Superseded by [ADR 0296](0296-desktop-mode-and-its-installers-are-removed-in-8.md), 2026-11-15.**
+**Superseded by [ADR 0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md), 2026-11-15.**
 
 ## Context
 

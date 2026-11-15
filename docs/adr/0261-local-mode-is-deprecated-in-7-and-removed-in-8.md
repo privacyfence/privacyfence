@@ -5,7 +5,7 @@
 Accepted — 2026-10-30. Implemented: `org_mode.LOCAL_MODE_DEPRECATION` and the notices that show it.
 Relates to [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) and [ADR 0003](0003-separated-installs-only.md).
 
-**Superseded by [ADR 0296](0296-desktop-mode-and-its-installers-are-removed-in-8.md), 2026-11-15.**
+**Superseded by [ADR 0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md), 2026-11-15.**
 
 ## Context
 

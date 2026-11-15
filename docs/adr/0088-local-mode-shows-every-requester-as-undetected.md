@@ -7,7 +7,7 @@ Amends [ADR 0035](0035-agent-attribution-reads-client-params-per-call-and-org-pi
 decision 2 and [ADR 0037](0037-a-local-override-is-a-relabel-and-never-attests.md) for what a
 local install displays. What is recorded is unchanged.
 
-**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
 
 ## Context
 

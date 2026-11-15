@@ -5,7 +5,7 @@
 Accepted — 2026-09-24. Implemented in `installer/privacyfence.iss` (`CloseApplications=force`,
 and `PrepareToInstall`'s wait).
 
-**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
 
 ## Context
 

@@ -16,7 +16,7 @@ Three tiers (plus the retired undetected one), and they never look the same:
   ``UNRECOGNISED_LABEL``, with the sanitized raw claim alongside when one was sent. Never blank
   and never "Claude".
 - **undetected** -- no longer produced: it was the one label of a local install (ADR 0088),
-  which ADR 0296 removed. The renderers still know the tier until they are cleaned up.
+  which ADR 0301 removed. The renderers still know the tier until they are cleaned up.
 
 Everything here returns raw text. Every renderer escapes it, the same contract
 ``approval_window_html.fill_agent_placeholder`` documents -- escaping here too would show a name

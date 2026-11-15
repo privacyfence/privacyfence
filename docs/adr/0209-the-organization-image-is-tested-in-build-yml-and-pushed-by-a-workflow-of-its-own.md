@@ -4,7 +4,7 @@
 
 Accepted — 2026-10-20. Implemented: `.github/workflows/build.yml` (`build-org-image`), `.github/workflows/publish-org-image.yml`, `docs/releasing.md`.
 
-Amended by [ADR 0304](0304-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
 
 ## Context
 
