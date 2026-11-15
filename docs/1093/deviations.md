@@ -37,7 +37,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p8-release-branch-workflows
 
-- pending
+- review: Diff matches section 3.7: the releases/** triggers and their comments are gone; the qa-record-fixture guard is unchanged.
 
 ## p9-adrs
 
