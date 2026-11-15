@@ -139,6 +139,7 @@ hooks:
     - .github/workflows/dependency-audit.yml
     - .github/workflows/pages.yml
     - .github/workflows/website-build.yml
+    - .github/workflows/qa-record-fixture.yml
 
 admin:
   policy: .tld/admin-policy.yaml
