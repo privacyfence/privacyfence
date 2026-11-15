@@ -10,8 +10,8 @@
  * The choice lives in localStorage under CONSENT_KEY, never in a cookie, and is reopened from the
  * footer's "Cookie settings" link. /privacy/ describes what GA collects once accepted.
  *
- * Also exposes `window.pfAnalytics.event(name, params)` for page scripts (download.js sends
- * `download_click`). It is a no-op until the visitor has accepted.
+ * Also exposes `window.pfAnalytics.event(name, params)` for page scripts. It is a no-op until the
+ * visitor has accepted.
  */
 (() => {
   // Not a secret: a GA4 measurement ID is public in every page that uses it.
@@ -123,7 +123,7 @@
     const text = document.createElement('p');
     text.append(
       'May we use Google Analytics to count visits and see which pages help? It sets cookies and ' +
-        'runs only if you accept. Downloads are counted either way, without cookies. ',
+        'runs only if you accept. ',
     );
     const more = document.createElement('a');
     more.href = privacyHref();

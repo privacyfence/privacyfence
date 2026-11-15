@@ -64,7 +64,7 @@
           <h2>Which AI clients work?</h2>
           <p>PrivacyFence is tested with these clients, and any MCP-compatible client can connect:</p>
           <!-- include: clients -->
-          <p>Web clients (claude.ai, ChatGPT on the web and Gemini Enterprise) reach PrivacyFence only through an organization deployment, because on a single computer PrivacyFence listens only on that computer. On your own computer, use Claude Desktop, Claude Code or ChatGPT desktop on macOS. <a href="/ai-agents/">AI agents</a> has a page for each client, with how it connects and what it asks you, and links its setup steps.</p>
+          <p>Web clients (claude.ai, ChatGPT on the web and Gemini Enterprise) reach PrivacyFence only through an organization deployment, because on a single computer PrivacyFence listens only on that computer. On your own computer, use Claude Desktop or Claude Code with the Docker image. <a href="/ai-agents/">AI agents</a> has a page for each client, with how it connects and what it asks you, and links its setup steps.</p>
         </article>
 
         <article class="faq-item page-copy stack" id="before-approval">
@@ -83,7 +83,7 @@
 
         <article class="faq-item page-copy stack" id="certification">
           <h2>Is PrivacyFence certified?</h2>
-          <p><strong>No.</strong> PrivacyFence has no security certification, no business-continuity plan and no service-level agreement. It is open-source software that you run yourself, so the only infrastructure the maintainer operates is the download service and the sign-in relay, and neither sees your tokens, mail or files. Installed copies keep running without the maintainer. New sign-ins with the built-in apps on a server depend on the PrivacyFence relay, which carries only the sign-in redirect; existing connections and your own apps do not.</p>
+          <p><strong>No.</strong> PrivacyFence has no security certification, no business-continuity plan and no service-level agreement. It is open-source software that you run yourself, so the only infrastructure the maintainer operates is the sign-in relay, which does not see your tokens, mail or files. Running copies keep running without the maintainer. New sign-ins with the built-in apps on a server depend on the PrivacyFence relay, which carries only the sign-in redirect; existing connections and your own apps do not.</p>
           <p>Using it does not by itself satisfy a regulation or a contract either: that depends on your configuration, identity provider, retention and your own assessment. Where policy asks for a certification, organizations typically approve PrivacyFence through an exception process, pin a reviewed release, and assign an internal owner to track releases.</p>
           <p><a href="/security/#what-privacyfence-does-not-claim">What PrivacyFence does not claim</a></p>
         </article>
