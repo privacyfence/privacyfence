@@ -63,7 +63,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **Jira Assets errors say what Atlassian answered.** A failed Assets call now reports the HTTP status and Atlassian's own reason instead of "400 Client Error: Bad Request for url …", and the message no longer contains the site's cloud id or Assets workspace id.
+- **Jira Assets errors say what Atlassian answered.** A failed Assets call now reports the HTTP status and Atlassian's own reason instead of "400 Client Error: Bad Request for url …", and the message no longer contains the site's cloud id or Assets workspace id. The message also names the failing route and shows the reply text when Atlassian sends no standard reason.
 
 ## [7.0.2] — 2026-11-06
 
