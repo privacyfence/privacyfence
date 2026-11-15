@@ -142,7 +142,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p12a-google-connectors
 
-- pending
+- worker: src/privacyfence/daemon_main.py (outside touches, two lines): the connector.download_mode assignments for Drive and Gmail were removed because the attribute no longer exists; p12c removes the rest.
+- scope: scope: src/privacyfence/daemon_main.py
+- review: Drive and Gmail now take upload: references only; the dispatcher filter handles agents that still send destination_dir or local_path. After the merge the coverage ratchet fails only on org_mode.py (known, p14b).
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p12b-other-connectors
 
