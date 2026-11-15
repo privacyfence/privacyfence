@@ -138,21 +138,17 @@ class TestValidateSlug:
 
 
 class TestBundleBaseUrl:
-    def test_absent_is_empty(self):
-        assert bundle_base_url({}, org_mode=False) == ""
-        assert bundle_base_url({"base_url": ""}, org_mode=False) == ""
-
-    def test_org_mode_without_url(self):
+    def test_without_url(self):
         with pytest.raises(PeekClientError) as exc:
-            bundle_base_url({}, org_mode=True)
+            bundle_base_url({})
         assert str(exc.value) == "Peek organization config not installed"
 
     def test_normalized(self):
-        assert bundle_base_url({"base_url": "https://Peek.example.com/"}, org_mode=True) == BASE
+        assert bundle_base_url({"base_url": "https://Peek.example.com/"}) == BASE
 
     def test_bad_url(self):
         with pytest.raises(PeekClientError, match="Peek organization config is not usable: The Peek server address must start"):
-            bundle_base_url({"base_url": "http://peek.example.com"}, org_mode=False)
+            bundle_base_url({"base_url": "http://peek.example.com"})
 
 
 class TestSendErrors:

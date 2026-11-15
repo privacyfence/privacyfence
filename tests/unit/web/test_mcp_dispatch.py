@@ -1378,7 +1378,7 @@ class TestAwaitApprovalDenialFeedback:
 # privacyfence_propose_scoped_token + the session ledger (ADR 0251)
 # --------------------------------------------------------------------------- #
 
-_LOCAL_POLICY = scoped_tokens.policy_from_org_config({}, org_mode=False)
+_LOCAL_POLICY = scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True)
 _RULE = {"kind": "new", "group": "gmail.label", "value": "Receipts", "verbs": ["update"]}
 _SUGGESTION = {
     "group": "gmail.label", "label": "Gmail -- label", "value": ["Receipts"], "value_known": True,

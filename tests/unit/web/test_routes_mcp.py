@@ -163,7 +163,7 @@ class ReadWriteDeleteConnector(Connector):
 
 def _dispatcher(connectors: dict[str, Connector] | None = None, **kwargs) -> McpDispatcher:
     store = dict(connectors or {})
-    kwargs.setdefault("scoped_token_policy", scoped_tokens.policy_from_org_config({}, org_mode=False))
+    kwargs.setdefault("scoped_token_policy", scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True))
     return McpDispatcher(lambda: store, **kwargs)
 
 
@@ -364,7 +364,7 @@ class TestListTools:
     async def test_reflects_a_live_connector_set_change_between_calls(self):
         store: dict[str, Connector] = {}
         dispatcher = McpDispatcher(
-            lambda: store, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+            lambda: store, scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True),
         )
         async with _connected_session(dispatcher) as session:
             first = await session.list_tools()
@@ -397,7 +397,7 @@ class TestListTools:
         }
         dispatcher = McpDispatcher(
             lambda: per_principal.get(current_principal().id, {}),
-            scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+            scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True),
         )
 
         async with _connected_session(dispatcher, verifier=_OrgVerifier("alice")) as session:
@@ -419,7 +419,7 @@ class TestListTools:
         }
         dispatcher = McpDispatcher(
             lambda: per_principal.get(current_principal().id, {}),
-            scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+            scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True),
         )
 
         async with _connected_session(dispatcher, verifier=_OrgVerifier("bob")) as session:

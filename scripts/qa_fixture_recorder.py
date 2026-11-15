@@ -134,7 +134,7 @@ def _qa_org_config() -> dict[str, Any]:
     Google, Slack, Salesforce, Atlassian and Miro sections, Peek's and Grist's addresses from the
     environment, and anything the runner's optional bundle adds."""
     bundle = daemon_main.load_org_config()
-    return oauth_apps.effective_org_config({"mode": "org", **bundle}, QA_ADMIN, mode="org")
+    return oauth_apps.effective_org_config({"mode": "org", **bundle}, QA_ADMIN)
 
 # Only used for the diagnostic logging around lifecycle_calendar/_tasks'
 # eventually-consistent-delete retries below -- every *_client.py already
@@ -977,7 +977,7 @@ def check_confluence(record: bool, manifest: dict[str, Any]) -> list[CheckResult
 
 
 def _build_peek_client() -> PeekClient:
-    pinned = peek_client.bundle_base_url(_qa_org_config().get("peek") or {}, org_mode=True)
+    pinned = peek_client.bundle_base_url(_qa_org_config().get("peek") or {})
     record = peek_client.load_token_file(daemon_main._resolve_path(daemon_main.TOKEN_FILES["peek"]))
     return PeekClient(peek_client.resolve_server(pinned, record), record["token"])
 
@@ -1315,7 +1315,7 @@ def _check_jira_export(client: JiraClient, page_jql: str, project_key: str) -> C
 def _build_grist_client() -> tuple[GristClient, bool]:
     """The client and whether its credential is an OAuth one. The runner holds
     an API-key file; the same code serves an OAuth sign-in."""
-    bundle = grist_auth.bundle_settings(_qa_org_config().get("grist") or {}, org_mode=True)
+    bundle = grist_auth.bundle_settings(_qa_org_config().get("grist") or {})
     token_path = daemon_main._resolve_path(daemon_main.TOKEN_FILES["grist"])
     server, credential = grist_auth.resolve_credential(bundle, grist_auth.load_token_file(token_path), token_path)
     return GristClient(server, credential), bool(credential.can_refresh)

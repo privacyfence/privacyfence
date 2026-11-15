@@ -81,12 +81,12 @@ class World:
     def __init__(self, *, step_up=None, registry=None, settings=None, settings_path=""):
         self.settings = settings if settings is not None else {}
         self.bundle = json.loads(json.dumps(BUNDLE))
-        self.admin = admin_config.ensure(self.bundle, mode="org", single_user=False)[0]
+        self.admin = admin_config.ensure(self.bundle, single_user=False)[0]
         # An organization server's own app is a stored connector config, not a bundle section.
         stored = connector_configs.legacy_path(connector_configs.default_org_dir(), "slack")
         stored.parent.mkdir(parents=True, exist_ok=True)
         stored.write_text(json.dumps({"source": "legacy-bundle", "fields": BUNDLE["slack"]}), encoding="utf-8")
-        self.org_config = oauth_apps.effective_org_config(self.bundle, self.admin, mode="org")
+        self.org_config = oauth_apps.effective_org_config(self.bundle, self.admin)
         self.sessions = org_session.OrgSessionStore()
         self.registry = registry if registry is not None else Registry()
         self.routes = routes_admin.build_org_routes(

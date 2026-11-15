@@ -22,9 +22,6 @@ from .peek_client import PeekClientError, normalize_base_url
 
 logger = logging.getLogger(__name__)
 
-# Still the type of the ``mode`` parameters other modules declare.
-Mode = Literal["org"]
-
 DEFAULT_BIND_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
@@ -943,7 +940,6 @@ __all__ = [
     "DEFAULT_SYSLOG_PORT",
     "DEFAULT_SYSLOG_PROTOCOL",
     "DownloadDeliveryConfig",
-    "Mode",
     "GristProvisioningConfig",
     "PeekProvisioningConfig",
     "connector_enabled_by_org",

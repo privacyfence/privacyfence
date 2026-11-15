@@ -589,7 +589,7 @@ def load_admin_config(bundle: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """
     try:
         admin, imported = admin_config.ensure(
-            bundle, mode="org", single_user=org_mode.is_single_user(bundle),
+            bundle, single_user=org_mode.is_single_user(bundle),
         )
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
@@ -639,7 +639,7 @@ def effective_org_config(bundle: dict[str, Any], admin: dict[str, Any]) -> dict[
     """The one dict every org-config reader sees: bundle, admin config, connector configs and
     built-in apps composed."""
     return oauth_apps.effective_org_config(
-        bundle, admin, mode="org", single_user=org_mode.is_single_user(bundle),
+        bundle, admin, single_user=org_mode.is_single_user(bundle),
         connectors=_stored_connector_configs("org"),
     )
 
@@ -649,11 +649,11 @@ def _release_org_config() -> dict[str, Any]:
     bundle = load_org_config()
     single_user = org_mode.is_single_user(bundle)
     try:
-        admin = admin_config.config_for(bundle, mode="org", single_user=single_user)
+        admin = admin_config.config_for(bundle, single_user=single_user)
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
     return oauth_apps.effective_org_config(
-        bundle, admin, mode="org", single_user=single_user, connectors=_stored_connector_configs("org"),
+        bundle, admin, single_user=single_user, connectors=_stored_connector_configs("org"),
     )
 
 
@@ -1190,7 +1190,7 @@ def _start_org_web_server(
         mode="org",
         unattended_sessions_enabled=unattended_sessions_enabled,
         registry=approval_registry,
-        scoped_token_policy=scoped_tokens.policy_from_org_config(org_config, org_mode=True),
+        scoped_token_policy=scoped_tokens.policy_from_org_config(org_config),
         agent_runtime=agent_runtime,
     )
 
@@ -1706,7 +1706,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not org_mode.connector_enabled_by_org(org_config, "peek"):
                 raise PeekClientError("Peek organization config not installed")
-            pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=True)
+            pinned = peek_bundle_base_url(org_config.get("peek") or {})
             record = load_peek_token(_resolve_path(TOKEN_FILES["peek"]))
             client = PeekClient(peek_resolve_server(pinned, record), record["token"])
             client.check_connection()
@@ -1721,7 +1721,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not org_mode.connector_enabled_by_org(org_config, "grist"):
                 raise GristClientError("Grist organization config not installed")
-            grist_bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=True)
+            grist_bundle = grist_bundle_settings(org_config.get("grist") or {})
             token_path = _resolve_path(TOKEN_FILES["grist"])
             server_url, credential = grist_resolve_credential(grist_bundle, load_grist_token(token_path), token_path)
             grist_client = GristClient(server_url, credential)

@@ -52,7 +52,6 @@ from starlette.routing import BaseRoute, Route
 
 from .. import admin_config, agent_runtimes, connector_configs, data_format, oauth_apps, org_mode, paths, relay_client, settings_window_html, web_shell
 from ..connector_registry import ConnectorRegistry
-from ..org_mode import Mode
 from ..principal import Principal, principal_scope
 from ..settings_state import REPO_URL, _pii_general_fields, _privacy_state_from_config
 from ..step_up_config import StepUpConfig
@@ -192,7 +191,7 @@ _ADMIN_PAGE_TITLE = "PrivacyFence — Admin"
 
 
 def _admin_page_body(
-    state: dict[str, Any], *, mode: Mode, is_admin: bool, csrf: str, nonce: str,
+    state: dict[str, Any], *, mode: str, is_admin: bool, csrf: str, nonce: str,
 ) -> str:
     """The page's markup: the shared renderer on the admin surface, the WebAuthn helpers a
     sensitive action's passkey prompt needs, and the bridge shim that posts to ``/api/admin``."""
@@ -299,7 +298,7 @@ def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[st
 
 
 def _admin_state(
-    *, mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
+    *, mode: str, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     principal: Principal, install_wide_settings: dict[str, Any] | None = None, issuer_url: str = "",
 ) -> dict[str, Any]:
     """What the Admin page renders from. It carries no secret: service rows hold a client id at
@@ -307,10 +306,10 @@ def _admin_state(
 
     An organization server also reports its install-wide privacy policy (``install_wide_settings``,
     when the caller has it) and the usage stats counted from every principal's files."""
-    admin = admin_config.config_for(bundle, mode=mode, single_user=_single_user(bundle))
+    admin = admin_config.config_for(bundle, single_user=_single_user(bundle))
     state: dict[str, Any] = {
         "services": admin_config.service_rows(
-            bundle, admin, mode=mode, single_user=_single_user(bundle), issuer_url=issuer_url,
+            bundle, admin, single_user=_single_user(bundle), issuer_url=issuer_url,
         ),
         "rooms": {"count": len(admin.get("rooms") or []), "synced_at": str(admin.get("rooms_synced_at") or "")},
         "unattended_sessions": admin.get("unattended_sessions", {}),
@@ -334,7 +333,7 @@ def _admin_state(
 
 def _dispatch(
     principal: Principal, action: str, body: dict[str, Any], *,
-    mode: Mode, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
+    mode: str, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
     refresh_live: Callable[[list[str]], None],
     install_wide_settings: dict[str, Any] | None = None, install_wide_settings_path: str = "",
@@ -386,7 +385,7 @@ def _dispatch(
     else:
         try:
             summary, changed = admin_config.apply_change(
-                action, params, bundle=bundle, mode=mode, single_user=_single_user(bundle),
+                action, params, bundle=bundle, single_user=_single_user(bundle),
             )
         except admin_config.AdminConfigError as exc:
             return _error(str(exc))
@@ -433,7 +432,7 @@ def _apply_privacy_action(
 
 async def _replace_rooms_from_upload(
     form: Any, principal: Principal, *,  # noqa: ANN401 -- starlette's FormData
-    mode: Mode, bundle: dict[str, Any], step_up: StepUpConfig | None, step_up_origin: str,
+    mode: str, bundle: dict[str, Any], step_up: StepUpConfig | None, step_up_origin: str,
     challenges: StepUpChallengeStore, refresh_live: Callable[[list[str]], None],
     state: Callable[[], dict[str, Any]],
 ) -> Response:
@@ -465,7 +464,7 @@ async def _replace_rooms_from_upload(
             _record_settings_audit(principal, f"Step-up required for 'upload_rooms', refused (principal={principal.id})")
         return refusal
     try:
-        summary = admin_config.replace_rooms(data, bundle=bundle, mode=mode, single_user=_single_user(bundle))
+        summary = admin_config.replace_rooms(data, bundle=bundle, single_user=_single_user(bundle))
     except admin_config.AdminConfigError as exc:
         return _error(str(exc))
     except OSError as exc:
@@ -612,7 +611,7 @@ def build_org_routes(
     def refresh_live(changed: list[str]) -> None:
         single_user = _single_user(bundle)
         effective = oauth_apps.effective_org_config(
-            bundle, admin_config.config_for(bundle, mode="org", single_user=single_user), mode="org",
+            bundle, admin_config.config_for(bundle, single_user=single_user),
             single_user=single_user,
         )
         oauth_apps.refresh_in_place(org_config, effective)

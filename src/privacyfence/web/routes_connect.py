@@ -125,7 +125,7 @@ def _token_file_path(principal: Principal, service: str) -> str:
 def _grist_bundle(org_config: dict[str, Any]) -> grist_auth.GristBundle | None:
     """The bundle's Grist section when org mode can offer it, else ``None``."""
     try:
-        return grist_auth.bundle_settings(org_config.get("grist") or {}, org_mode=True)
+        return grist_auth.bundle_settings(org_config.get("grist") or {})
     except grist_auth.GristClientError:
         return None
 
@@ -150,7 +150,7 @@ def _grist_connected(principal: Principal, org_config: dict[str, Any] | None) ->
 def _peek_pinned_url(org_config: dict[str, Any]) -> str:
     """The bundle's Peek server address when org mode can offer Peek, else ``""``."""
     try:
-        return peek_client.bundle_base_url(org_config.get("peek") or {}, org_mode=True)
+        return peek_client.bundle_base_url(org_config.get("peek") or {})
     except peek_client.PeekClientError:
         return ""
 
