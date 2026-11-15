@@ -29,7 +29,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-tld-lifecycle-docs
 
-- pending
+- review: Diff matches section 3.8 for CLAUDE.md, CONTRIBUTING.md, the steward skill, the PR template and section 2.7; ADR 0311 and 0312 stay plain text until the ADR phases.
 
 ## p7-release-branch-docs
 
