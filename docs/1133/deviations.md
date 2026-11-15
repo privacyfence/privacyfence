@@ -24,7 +24,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-reference-docs
 
-- pending
+- review: Worker reported no deviations and ran ruff and the docs tests by hand because the toolkit was unavailable. Orchestrator ran the dod commands after the merge as the owner chose (ask gate-handling). Docs tests, the manifest pytest line, the full unit suite and ruff pass. No docs added, moved or deleted.
 
 ## p6-retire
 
