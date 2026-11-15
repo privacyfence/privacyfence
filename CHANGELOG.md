@@ -53,6 +53,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A configuration with `mode: local` refuses to start; no mode means organization mode.** `PRIVACYFENCE_MODE=local` or `"mode": "local"` in `org_bundle.json` stops the start with a message that points to [Moving to organization mode](docs/moving-to-organization-mode.md); any other value but `org` is refused too ([ADR 0298](docs/adr/0298-the-mode-setting-accepts-only-org.md)).
 - **The AI agent pages describe the custom-connector and Docker path.** The Claude Desktop, Claude Code, ChatGPT and overview pages no longer describe the extension, desktop mode or the companion app; they connect to the Docker image or an organization server and link the install page.
 - **The website describes PrivacyFence as the Docker image or an organization server.** The enterprise, FAQ, security, privacy, GDPR, how-it-works and Telegram pages and the architecture diagram no longer describe the desktop installers, the extension or the companion app, and the install page names the Docker guide for a reverse proxy.
 - **8.x refuses a data directory that is not ready for it.** On start, PrivacyFence checks the data directory: one that belongs to a desktop install, or that a 7.x release has not yet marked "Ready for PrivacyFence 8: yes", is refused with a message and left untouched. See [Moving to organization mode](docs/moving-to-organization-mode.md) ([ADR 0297](docs/adr/0297-8x-refuses-a-data-directory-that-is-not-ready-for-it.md)).

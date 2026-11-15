@@ -96,11 +96,10 @@ def init_privacy_filter(config: dict[str, Any], *, org_managed: bool = False) ->
 
     Raises ``PrivacyFilterConfigError`` for a group that's present
     but malformed -- see ``_parse_group``. ``org_managed`` (the caller's
-    ``org_mode.resolve_mode(...) == "org"``) picks the fail-safe default
-    used for a group that's genuinely absent from settings.yaml: "allow",
-    unchanged, for a local-mode install (this module must never turn into a
+    organization-managed flag) picks the fail-safe default used for a group that's genuinely
+    absent from settings.yaml: "allow" when it is false (this module must never turn into a
     new default-block surface a pre-existing install didn't opt into), but
-    "block" for an org-managed one -- an organization's centrally deployed
+    "block" when it is true -- an organization's centrally deployed
     settings.yaml is expected to state its own privacy policy explicitly,
     not silently inherit the permissive default nobody there configured.
     """

@@ -449,8 +449,8 @@ def load_org_config() -> dict[str, Any]:
     Before this, "broken" collapsed into the same {} result as "absent" —
     so a corrupted or tampered org_config.json silently behaved exactly
     like no org config at all. For an org-mode install that's a silent
-    downgrade to no IdP-backed auth at all (org_mode.resolve_mode({})
-    resolves to "local"), triggerable by anything that can truncate or
+    downgrade to no IdP-backed auth at all (an empty bundle
+    reads as organization mode with no identity provider), triggerable by anything that can truncate or
     corrupt the file — not a state this daemon should ever paper over.
     A desktop (local-mode) bundle is installed in PrivacyFence Settings under
     Admin → Organization configuration → "Install configuration file…". An
@@ -511,7 +511,8 @@ def load_org_config() -> dict[str, Any]:
             "pinned to %s -- every future bundle must verify against this key",
             org_bundle_signing.pinned_public_key_path(org_dir()),
         )
-    if org_mode.resolve_mode(data) == "org" and not trust.signed:
+    org_mode.validate_mode(data)
+    if not trust.signed:
         raise org_mode.ConfigurationError(
             f"Organization config at {path} has \"mode\": \"org\" but is not signed -- org mode "
             "requires a signed bundle (build one with scripts/build_org_bundle.py --sign-key ...; "
@@ -588,7 +589,7 @@ def load_admin_config(bundle: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """
     try:
         admin, imported = admin_config.ensure(
-            bundle, mode=org_mode.resolve_mode(bundle), single_user=org_mode.is_single_user(bundle),
+            bundle, mode="org", single_user=org_mode.is_single_user(bundle),
         )
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
@@ -637,24 +638,22 @@ def _stored_connector_configs(mode: str) -> dict[str, connector_configs.LoadedCo
 def effective_org_config(bundle: dict[str, Any], admin: dict[str, Any]) -> dict[str, Any]:
     """The one dict every org-config reader sees: bundle, admin config, connector configs and
     built-in apps composed."""
-    mode = org_mode.resolve_mode(bundle)
     return oauth_apps.effective_org_config(
-        bundle, admin, mode=mode, single_user=org_mode.is_single_user(bundle),
-        connectors=_stored_connector_configs(mode),
+        bundle, admin, mode="org", single_user=org_mode.is_single_user(bundle),
+        connectors=_stored_connector_configs("org"),
     )
 
 
 def _release_org_config() -> dict[str, Any]:
     """The effective config of the server the release commands act on."""
     bundle = load_org_config()
-    mode = org_mode.resolve_mode(bundle)
     single_user = org_mode.is_single_user(bundle)
     try:
-        admin = admin_config.config_for(bundle, mode=mode, single_user=single_user)
+        admin = admin_config.config_for(bundle, mode="org", single_user=single_user)
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
     return oauth_apps.effective_org_config(
-        bundle, admin, mode=mode, single_user=single_user, connectors=_stored_connector_configs(mode),
+        bundle, admin, mode="org", single_user=single_user, connectors=_stored_connector_configs("org"),
     )
 
 
@@ -863,14 +862,13 @@ def _maybe_start_web_server(
     ``connector_host`` is already built and holds the real connector set by the time this is
     called (see run_app's ordering).
 
-    ``org_config`` is where ``"mode"`` lives; ``resolve_mode`` refuses anything but ``org``.
+    ``org_config`` is where ``"mode"`` lives; ``org_mode.validate_mode`` refuses anything but ``org``.
     Defaults to ``{}`` when omitted, which no real caller does -- run_app() always passes the
     result of ``load_org_config()``.
     """
     web_config = config.get("web", {}) or {}
     mcp_config = web_config.get("mcp", {}) or {}
     org_config = org_config or {}
-    org_mode.resolve_mode(org_config)
     mcp_enabled = bool(mcp_config.get("enabled", False))
 
     # ADR 0007: settings.yaml's own file_bridge: section, read once here --
@@ -1812,6 +1810,7 @@ def _log_cache_warm_failure(future: "concurrent.futures.Future[None]") -> None:
 # ---------------------------------------------------------------------------- #
 
 def run_app(config: dict[str, Any], config_path: str) -> int:
+    org_mode.validate_mode({})
     if not _acquire_instance_lock():
         # Finding one already running is an expected outcome, not a failure
         # -- a second start of the service, or a human who ran the CLI or
@@ -1851,16 +1850,15 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # ConfigurationError -- refuse to start rather than quietly advertise something other than
     # what the administrator configured.
     org_mode.reject_removed_tool_annotations(bundle)
-    if org_mode.resolve_mode(bundle) == "org":
-        prepare_connector_configs(bundle)
+    prepare_connector_configs(bundle)
     admin, admin_imported = load_admin_config(bundle)
     # Before the web server is built (it loads the scoped token store, whose tokens must already
     # hold their own rules) and for every person, signed in or not.
     data_format.migrate_everything(log=logger.warning)
     # Same "org mode fails closed, local mode warns" posture as the
     # rest of this function's fail-safe defaults now that mode is known.
-    check_storage_permissions(org_mode.resolve_mode(bundle) == "org")
-    init_privacy_filter(config, org_managed=org_mode.resolve_mode(bundle) == "org")
+    check_storage_permissions(True)
+    init_privacy_filter(config, org_managed=True)
     # From here on every reader gets the effective config; the raw bundle stays for the
     # signature, the hash and the mode checks above.
     org_config = effective_org_config(bundle, admin)
@@ -1877,7 +1875,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # mode regardless of what the section says.
     audit_forwarder = None
     audit_forwarding_config = org_mode.AuditForwardingConfig.from_org_config(org_config)
-    if audit_forwarding_config.enabled and org_mode.resolve_mode(org_config) == "org":
+    if audit_forwarding_config.enabled:
         try:
             sender = audit_forwarding.build_sender(audit_forwarding_config)
             audit_forwarder = audit_forwarding.AuditForwarder(sender)
