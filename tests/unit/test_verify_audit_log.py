@@ -1,7 +1,7 @@
 """Tests for scripts/verify_audit_log.py -- the audit-log chain-verification
 CLI.
 
-Imported by file path (importlib), same as test_build_org_bundle.py, since
+Imported by file path (importlib), since
 scripts/ isn't part of the installed ``privacyfence`` distribution.
 """
 from __future__ import annotations

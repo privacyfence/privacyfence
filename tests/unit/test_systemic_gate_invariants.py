@@ -173,7 +173,7 @@ _PII_SCAN_TEXT_EXEMPT = {
 # around it, not a second independent write site).
 #
 # scripts/sync_room_directory.py carries its own standalone copy of the
-# atomic-write pattern (deliberately, same as build_org_bundle.py: it must
+# atomic-write pattern (deliberately: it must
 # not import the privacyfence package at all, see its own module
 # docstring), so it isn't a fair fit for *this* check (which is
 # specifically "does it call the shared helper" -- a script that can't

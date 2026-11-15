@@ -6,10 +6,7 @@ real-network-stack bug (uvicorn startup, real TCP binding, real HTTP
 framing) could still slip through. This module closes that gap: does a
 real ``web/server.py`` ``WebServer``, bound to a real loopback socket,
 actually speak Streamable HTTP correctly to the official ``mcp`` Python
-client -- the same client Claude Code/Desktop itself uses, and
-mcpb/shim/'s own stdio proxy sits in front of for Desktop (covered
-separately, with the shim included, by
-tests/integration/test_shim_mcp_contract.py). Needs only the `mcp`
+client -- the same client Claude Code itself uses. Needs only the `mcp`
 package (test-only, see pyproject.toml's [project.optional-dependencies]
 .test) -- no Node, no npm, no subprocess.
 """

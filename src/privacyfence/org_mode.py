@@ -283,7 +283,7 @@ def is_loopback_issuer(issuer_url: str) -> bool:
 def reject_removed_tool_annotations(org_config: dict[str, Any]) -> None:
     """Refuses a bundle that still carries ``mcp.tool_annotations``.
 
-    Only a bundle built by 5.0.0a1's ``build_org_bundle.py --tool-annotations`` can carry it. The
+    Only a bundle written by 5.0.0a1 with its tool-annotations option can carry it. The
     key chose between truthful tool annotations and advertising every connector tool read-only;
     the second was removed and truthful annotations are the only behaviour (ADR 0089). A bundle
     naming the key -- whichever value -- is refused with ``ConfigurationError`` rather than read
@@ -304,10 +304,8 @@ class ServerConfig:
     (see docs/org-mode-setup-guide.md's "Reverse proxy and TLS"). Only org mode
     reads this class -- ``daemon_main.py`` calls ``from_org_config`` only
     for an organization server. The defaults (``bind_host="127.0.0.1"``, no TLS, no
-    trusted proxies) are the same loopback listener
-    ``scripts/build_org_bundle.py`` writes when ``--server-bind-host`` isn't
-    passed, so a bundle with no ``bind_host`` binds exactly what a bundle
-    built with no flags does: reachable only by a reverse proxy on the
+    trusted proxies) are a loopback listener,
+    so a bundle with no ``bind_host`` is reachable only by a reverse proxy on the
     same host, never directly from the network.
     """
 
@@ -743,8 +741,8 @@ class AuthzPolicyConfig:
 class WebPushConfig:
     """Whether org mode sends a web push notification when an approval is waiting (ADR 0081).
 
-    Lives in ``org_bundle.json``'s ``web_push`` section and is written by
-    ``scripts/build_org_bundle.py --no-web-push``. On by default: push is what lets a phone user
+    Lives in ``org_bundle.json``'s ``web_push`` section and is set by
+    its ``enabled`` flag. On by default: push is what lets a phone user
     learn about an approval at all, since mobile browsers suspend background tabs. Turning it off
     is the org-wide switch for an organization that does not want approval metadata, however
     little, to pass through Apple's, Google's or Mozilla's push services.
@@ -773,8 +771,8 @@ _ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]{0,127}")
 class PeekProvisioningConfig:
     """Whether org mode creates a Peek account for each person at sign-in and connects it for them.
 
-    Lives in ``org_bundle.json``'s ``peek.auto_provision`` section and is written by
-    ``scripts/build_org_bundle.py --peek-auto-provision``. Off by default. The provisioning key
+    Lives in ``org_bundle.json``'s ``peek.auto_provision`` section and is set by
+    its ``enabled`` flag. Off by default. The provisioning key
     itself is never in the bundle: ``key_env`` names the environment variable the daemon reads it
     from, as ``AuditForwardingConfig.http_bearer_token_env`` does for the SIEM bearer token.
     ``trust_unverified_email`` provisions people whose ID token does not say ``email_verified``,
@@ -828,8 +826,8 @@ class GristProvisioningConfig:
     """Whether org mode registers a Grist API key for each person at sign-in through the Grist
     provisioner, a small service next to Grist.
 
-    Lives in ``org_bundle.json``'s ``grist.auto_provision`` section and is written by
-    ``scripts/build_org_bundle.py --grist-auto-provision``. The provisioning key itself is never in
+    Lives in ``org_bundle.json``'s ``grist.auto_provision`` section and is set by
+    its ``enabled`` flag. The provisioning key itself is never in
     the bundle: the daemon reads it from the environment variable ``key_env`` names, as it does
     for ``http_bearer_token_env``. ``provisioner_url`` and ``server_url`` are normalised and set
     only when enabled.

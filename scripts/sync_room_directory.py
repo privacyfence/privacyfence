@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sync the Google Workspace room/resource directory into a rooms file.
 
-Unlike scripts/build_org_bundle.py, this is deliberately *not* the same
+This is deliberately *not* the same
 Google Cloud project as the one your organization's everyday Gmail/Drive/
 Calendar/Contacts/Tasks OAuth client uses. It's driven by a second project
 whose OAuth client requests only the Admin SDK's
@@ -23,15 +23,14 @@ The admin client_secret.json you pass in, and the --token-file this script
 caches its own OAuth token in, must never be uploaded or distributed -- keep
 them private to whoever runs this script.
 
-Like build_org_bundle.py, this script deliberately doesn't import the
+This script deliberately doesn't import the
 `privacyfence` package, so it's runnable standalone (e.g. copied out of the
 repo to wherever IT actually runs it) without a full PrivacyFence install.
 It carries its own copy of the pieces it needs from
 src/privacyfence/room_directory_client.py, src/privacyfence/calendar_client.py
 (just the CalendarRoom field shape) and src/privacyfence/secure_files.py
 (just the atomic-write helper) -- room_directory_client.py itself was
-retired once this became the module's only caller. Unlike
-build_org_bundle.py this DOES perform a live OAuth handshake + Admin SDK
+retired once this became the module's only caller. This DOES perform a live OAuth handshake + Admin SDK
 call, so it isn't stdlib-only: it needs the same three Google client
 libraries PrivacyFence itself depends on (see pyproject.toml's
 [project.dependencies]):
@@ -237,7 +236,7 @@ def _load_admin_client_secret(path: str) -> dict[str, Any]:
     """Extract the inner "installed"/"web" block from Google's client_secret.json.
 
     Same shape PrivacyFence stores flat for the main "google" bundle
-    section (see build_org_bundle.py::_load_google_client_secret) — this is
+    section — this is
     a separate Google Cloud project's Desktop app client, so it gets its own
     copy of this helper rather than importing across scripts.
     """

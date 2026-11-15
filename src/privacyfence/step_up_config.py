@@ -31,9 +31,7 @@ StepUpScope = Literal["writes", "writes_and_pii_reads", "writes_and_reads"]
 StepUpBatchMode = Literal["single_assertion", "per_item"]
 
 # Widening ladder, narrowest first -- also the order both validators below
-# name them in, and the order scripts/build_org_bundle.py's own
-# --step-up-scope choices list repeats (that script is deliberately
-# stdlib-only, so it cannot import this tuple; keep the two in sync).
+# name them in, and the order the Admin page lists them in.
 STEP_UP_SCOPES: tuple[StepUpScope, ...] = ("writes", "writes_and_pii_reads", "writes_and_reads")
 _SCOPE_CHOICES_TEXT = ", ".join(f'"{name}"' for name in STEP_UP_SCOPES)
 

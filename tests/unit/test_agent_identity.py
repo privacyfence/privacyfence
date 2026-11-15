@@ -109,7 +109,7 @@ class TestRegistry:
             # DCR client_name, captured from Claude Code 2.1.283 (ADR 0094).
             ("Claude Code (privacyfence)", "claude-code", "Claude Code"),
             ("Claude Code (my-pf)", "claude-code", "Claude Code"),
-            # Claude Desktop 2.9939.2's handshake through the .mcpb extension (ADR 0094).
+            # Claude Desktop 2.9939.2's handshake (ADR 0094).
             ("local-agent-mode-privacyfence", "claude-desktop", "Claude Desktop"),
             ("local-agent-mode-other", "claude-desktop", "Claude Desktop"),
         ],

@@ -262,25 +262,6 @@ class TestBuildCsp:
 
 
 # --------------------------------------------------------------------------- #
-# WebServer owns a ControlChannelServer alongside the ASGI app -- test_control_channel.py covers the channel's own protocol
-# and socket handling; this is just the wiring (built in __init__, started/
-# stopped alongside the rest of WebServer's own lifecycle).
-# --------------------------------------------------------------------------- #
-
-# --------------------------------------------------------------------------- #
-# No sign-in link is ever written to a discovery file: handoff/ is
-# group-shared with the logged-in user by design, so such a file would be a
-# session for the taking by anything running as that user.
-# --------------------------------------------------------------------------- #
-
-# --------------------------------------------------------------------------- #
-# The mcp_url discovery file mcpb/shim reads to find /mcp without any
-# config the user has to edit. Only written/cleared
-# when this WebServer actually has an mcp_dispatcher (i.e. web.mcp.enabled);
-# a server started for the approval UI alone must not claim /mcp exists.
-# --------------------------------------------------------------------------- #
-
-# --------------------------------------------------------------------------- #
 # Audience separation (ADR 0061): the MCP bearer token and the approval
 # surface's session cookie/CSRF token are different secrets, checked in
 # different middleware, and neither is ever accepted on the other's routes.

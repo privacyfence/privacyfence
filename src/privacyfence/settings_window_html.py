@@ -659,19 +659,6 @@ _JS = r"""
     }
     html += '</div>';
 
-    // The update check is meaningless on a headless org server -- it asks
-    // GitHub Releases about the install it runs on
-    // (org_settings_scope.NOT_APPLICABLE_ACTIONS covers toggle_update_check).
-    if (!notApplicable('toggle_update_check')) {
-      html += '<div class="card pf-card">';
-      html += rowHtml('Check for Updates', 'Once-a-day check against GitHub Releases. Never installs anything automatically.',
-        toggleHtml(g.update_check_enabled, 'toggle_update_check', {}, false, 'Check for Updates'));
-      html += rowHtml('Receive beta releases', '',
-        toggleHtml(g.update_check_beta, 'toggle_update_check_beta', {}, !g.update_check_enabled, 'Receive beta releases'),
-        'pf-row-sub', !g.update_check_enabled);
-      html += '</div>';
-    }
-
     html += '</div>';
     return html;
   }

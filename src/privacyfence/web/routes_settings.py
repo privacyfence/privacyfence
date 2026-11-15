@@ -686,7 +686,6 @@ def build_org_routes(
         return {
             "error": "",
             "general": {
-                "update_check_enabled": True, "update_check_beta": False,
                 "org_installed": False, "org_installed_date": "",
                 "version": about["version"],
                 "notifications_enabled": True, "notifications_detail": "minimal",
