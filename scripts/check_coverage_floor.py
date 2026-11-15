@@ -59,7 +59,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # just let a real, module-sized regression hide inside the aggregate, which
 # is the exact failure mode MODULE_FLOORS exists to close for the modules
 # listed below; it shouldn't reopen for everything else.
-OVERALL_FLOOR = 95.9
+OVERALL_FLOOR = 98.3
 
 # Security-critical modules get a floor of their own, on top of the overall
 # one above -- see the module docstring for why. Paths are repository-
@@ -71,19 +71,19 @@ MODULE_FLOORS: dict[str, float] = {
     # Shared href-scheme allowlist and its two callers.
     "src/privacyfence/url_safety.py": 100.0,
     "src/privacyfence/email_markdown.py": 99.0,
-    "src/privacyfence/markdown_to_html.py": 95.0,
+    "src/privacyfence/markdown_to_html.py": 96.9,
     # Core gate/auto-accept/audit path.
-    "src/privacyfence/gate.py": 95.0,
-    "src/privacyfence/auto_accept.py": 98.0,  # identity-matching rules live here
-    "src/privacyfence/audit_log.py": 97.0,  # audit-export formula-injection guard
-    "src/privacyfence/approvals.py": 94.0,  # per-principal pending-approval cap
-    "src/privacyfence/pii_detector.py": 98.0,
+    "src/privacyfence/gate.py": 96.4,
+    "src/privacyfence/auto_accept.py": 99.2,  # identity-matching rules live here
+    "src/privacyfence/audit_log.py": 98.9,  # audit-export formula-injection guard
+    "src/privacyfence/approvals.py": 95.1,  # per-principal pending-approval cap
+    "src/privacyfence/pii_detector.py": 98.9,
     # Org-config fail-closed load path.
     "src/privacyfence/org_mode.py": 100.0,
     # Per-person Peek credentials and token lifetime.
     "src/privacyfence/peek_provisioning.py": 100.0,
     "src/privacyfence/peek_client.py": 100.0,
-    "src/privacyfence/daemon_main.py": 96.0,
+    "src/privacyfence/daemon_main.py": 97.3,
     "src/privacyfence/grist_provisioning.py": 100.0,
     "src/privacyfence/grist_provisioner_api.py": 100.0,
     # Org bundle trust.
@@ -98,7 +98,7 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/oauth_apps.py": 100.0,
     "src/privacyfence/relay_client.py": 100.0,
     # Bootstrap flow, session and token lifetimes.
-    "src/privacyfence/web/oauth_provider.py": 99.0,
+    "src/privacyfence/web/oauth_provider.py": 100.0,
     "src/privacyfence/web/org_session.py": 100.0,
     "src/privacyfence/web/session_auth.py": 100.0,
     # The only place org-mode bearer material is written to disk. Every
@@ -112,7 +112,7 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/secure_files.py": 100.0,
     # OIDC discovery trust validation.
     "src/privacyfence/org_identity.py": 100.0,
-    "src/privacyfence/web/routes_org_identity.py": 99.0,
+    "src/privacyfence/web/routes_org_identity.py": 100.0,
     # Single-user mode's whole sign-in: the setup code and the passkey that replace an IdP.
     "src/privacyfence/web/single_user_auth.py": 100.0,
     # Safe-error taxonomy at the MCP boundary.
@@ -122,13 +122,13 @@ MODULE_FLOORS: dict[str, float] = {
     # the passkey enrollment gate and its own tests -- the largest single block
     # of new branches this module has taken on, and the one it would be worst
     # to let rot.
-    "src/privacyfence/web/routes_security.py": 97.0,
-    "src/privacyfence/webauthn_stepup.py": 99.0,
+    "src/privacyfence/web/routes_security.py": 100.0,
+    "src/privacyfence/webauthn_stepup.py": 99.6,
     # This module decides whether a passkey is required at all --
     # an install's single most consequential security default, and now a
     # packaging-dependent one. Small enough that the overall floor would
     # never notice it rotting, which is exactly what this list is for.
-    "src/privacyfence/step_up_config.py": 99.0,
+    "src/privacyfence/step_up_config.py": 100.0,
     # Org mode's settings surface. It authorizes on Principal.is_admin
     # and rewrites the install-wide privacy/PII policy for every
     # principal -- the same class of thing as the fail-closed load path
@@ -140,30 +140,30 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/connectors/assets.py": 100.0,
     # decide() -- the module's actual authorization surface -- and the SSE
     # stream's event_source are both covered; only a few edge branches remain.
-    "src/privacyfence/web/routes_approvals.py": 98.0,
+    "src/privacyfence/web/routes_approvals.py": 100.0,
     # Added with the ratchet audit; each is one point under what the suite measured.
-    "src/privacyfence/scoped_tokens.py": 98.0,
+    "src/privacyfence/scoped_tokens.py": 99.4,
     # The pass that records the data-format marker 8.x relies on: every branch is a data-safety decision.
     "src/privacyfence/data_format.py": 100.0,
-    "src/privacyfence/web/mcp_dispatch.py": 95.0,
-    "src/privacyfence/web/step_up_decide.py": 99.0,
-    "src/privacyfence/web/approval_step_up.py": 99.0,
-    "src/privacyfence/web/mcp_auth.py": 98.0,
-    "src/privacyfence/policy/scopes.py": 99.0,
-    "src/privacyfence/policy/engine.py": 99.0,
-    "src/privacyfence/policy/store.py": 99.0,
-    "src/privacyfence/policy/conditions.py": 99.0,
-    "src/privacyfence/local_files.py": 99.0,
-    "src/privacyfence/upload_staging.py": 99.0,
-    "src/privacyfence/download_staging.py": 95.0,
-    "src/privacyfence/principal.py": 97.0,
-    "src/privacyfence/audit_forwarding.py": 97.0,
-    "src/privacyfence/deny_feedback.py": 99.0,
-    "src/privacyfence/web/routes_connect.py": 91.0,
-    "src/privacyfence/web/server.py": 95.0,
-    "src/privacyfence/web/routes_org_stepup.py": 96.0,
-    "src/privacyfence/web/csp.py": 99.0,
-    "src/privacyfence/web/state_stream.py": 99.0,
+    "src/privacyfence/web/mcp_dispatch.py": 97.1,
+    "src/privacyfence/web/step_up_decide.py": 100.0,
+    "src/privacyfence/web/approval_step_up.py": 100.0,
+    "src/privacyfence/web/mcp_auth.py": 100.0,
+    "src/privacyfence/policy/scopes.py": 100.0,
+    "src/privacyfence/policy/engine.py": 100.0,
+    "src/privacyfence/policy/store.py": 100.0,
+    "src/privacyfence/policy/conditions.py": 100.0,
+    "src/privacyfence/local_files.py": 100.0,
+    "src/privacyfence/upload_staging.py": 100.0,
+    "src/privacyfence/download_staging.py": 96.5,
+    "src/privacyfence/principal.py": 98.3,
+    "src/privacyfence/audit_forwarding.py": 98.1,
+    "src/privacyfence/deny_feedback.py": 100.0,
+    "src/privacyfence/web/routes_connect.py": 96.8,
+    "src/privacyfence/web/server.py": 97.7,
+    "src/privacyfence/web/routes_org_stepup.py": 97.3,
+    "src/privacyfence/web/csp.py": 100.0,
+    "src/privacyfence/web/state_stream.py": 100.0,
 }
 
 # How far above its floor a number may sit before the run says the floor should be raised. A
