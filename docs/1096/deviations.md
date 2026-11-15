@@ -156,7 +156,16 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p12c-remaining-connectors
 
-- pending
+- worker: Outside touches: org_mode.py (wording only: LINK_RESULT_NOTE and comments no longer say destination_dir is ignored; one docstring was left with an odd closing line) and src/privacyfence/resources/settings.yaml.example (a comment); tests: test_assets_connector.py, test_jira_connector.py, test_salesforce_connector.py (one-line repoints), test_confluence_client.py, test_gate.py, test_org_mode.py (two tests that pin the Peek and Grist auto-provision "needs mode org" guards, which closed the org_mode
+- worker: tests/integration/test_pending_approval_releases_nothing.py (outside touches): the fake Drive client was repointed to what the organization download path reads, and the stale destination_dir argument was dropped; the test failed on the merged result and the phase was sent back once to fix it.
+- scope: scope: src/privacyfence/connectors/assets.py
+- scope: scope: src/privacyfence/connectors/jira.py
+- scope: scope: src/privacyfence/connectors/salesforce.py
+- scope: scope: src/privacyfence/org_mode.py
+- scope: scope: src/privacyfence/resources/settings.yaml.example
+- scope: scope: tests/integration/test_pending_approval_releases_nothing.py
+- scope: scope: tests/unit/test_org_mode.py
+- retry: Sent back once: the first merge was undone locally (nothing pushed) because test_approved_download_is_audited_as_approved_under_one_request_id went red on the merged result. No tld CLI in the worker container; the orchestrator ran the checks, including the integration set and the coverage ratchet, which now passes (owner choice orch_roles); no roles are required for this diff.
 
 ## p12d-live-qa
 
