@@ -90,6 +90,20 @@ class TestRequireLocalFilesUploadRef:
         ):
             local_files.require_local_files([ref], max_total_bytes=1000, download_mode="local")
 
+    @pytest.mark.parametrize("ref", ["upload:a", "upload:!!!!", "upload:"])
+    def test_a_malformed_upload_reference_is_refused(self, ref):
+        with principal_scope(ALICE), local_files.call_context(), pytest.raises(
+            local_files.LocalFileAccessError, match="invalid upload reference",
+        ):
+            local_files.require_local_files([ref], max_total_bytes=1000, download_mode="org")
+
+    def test_an_expired_upload_slot_is_refused(self):
+        with principal_scope(ALICE):
+            token = get_upload_staging_store().create_slot(ALICE, "a.pdf", max_bytes=1000, ttl_seconds=-1.0)
+            ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
+            with local_files.call_context(), pytest.raises(local_files.LocalFileAccessError, match="expired"):
+                local_files.require_local_files([ref], max_total_bytes=1000, download_mode="org")
+
     def test_second_require_for_the_same_ref_in_one_call_reuses_the_cache(self, monkeypatch):
         with principal_scope(ALICE):
             store = get_upload_staging_store()
