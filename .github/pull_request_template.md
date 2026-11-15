@@ -25,8 +25,8 @@ reason rather than leaving it blank.
       "Release notes come from CHANGELOG.md"). Internal-only changes don't need one.
 - [ ] A decision that is hard to reverse, moves a trust boundary, changes the build/release/
       distribution path, or rejects a non-obvious alternative has an ADR in `docs/adr/`. A PR that
-      deletes a plan document extracts that plan's decisions into ADRs first, or says below that it
-      made none (`docs/adr/README.md`).
+      brings a plan document (`docs/<issue>/plan.md`) to `main` extracts that plan's decisions
+      into ADRs first, or says below that it made none (`docs/adr/README.md`).
 - [ ] Every new/changed tool call still resolves through `gated_call` or an explicit
       always-auto-approve connector, and leaves an audit trail either way.
 - [ ] No preview dict carries full content; no log line carries a credential or a
