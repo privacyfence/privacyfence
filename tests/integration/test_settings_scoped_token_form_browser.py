@@ -75,7 +75,7 @@ def browser():
 @pytest.fixture
 def page(browser):
     pg = browser.new_page()
-    pg.set_content(build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(DATA), mode="org"))
+    pg.set_content(build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(DATA)))
     yield pg
     pg.close()
 
@@ -351,7 +351,7 @@ UPSTREAM_DATA = {
 def upstream_page(browser):
     pg = browser.new_page()
     pg.set_content(build_html(
-        _make_state(), mode="org", initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(UPSTREAM_DATA),
+        _make_state(), initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(UPSTREAM_DATA),
     ))
     yield pg
     pg.close()

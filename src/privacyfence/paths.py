@@ -2,7 +2,7 @@
 
 In a source checkout (editable dev install, or no install at all): data
 lives in the project root. In a bundled .app, or a real (non-editable)
-``pip``/``pipx install privacyfence``: data lives under a per-user data
+the wheel the organization image installs into site-packages: data lives under a per-user data
 directory so it survives app updates/reinstalls -- see is_bundled() and
 _is_installed_package(). On POSIX that's ``~/.privacyfence``; on Windows
 it's ``%LOCALAPPDATA%\\PrivacyFence`` -- see windows_data_dir() for why
@@ -70,8 +70,8 @@ def is_windows() -> bool:
 
 
 def _is_installed_package() -> bool:
-    """True for a normal (non-editable) ``pip``/``pipx install privacyfence``
-    -- i.e. this file living under some ``site-packages``/``dist-packages``
+    """True for a normal (non-editable) install of the wheel, which is how the organization
+    image installs PrivacyFence -- i.e. this file living under some ``site-packages``/``dist-packages``
     -- as opposed to a source checkout, editable dev install included: an
     editable install (``pip install -e .``, what every documented dev/source
     setup in this repo uses) keeps the real ``.py`` files at their original
@@ -80,7 +80,7 @@ def _is_installed_package() -> bool:
     rather than "is this package installed" is what makes that distinction
     -- ``importlib.metadata`` reports a distribution as installed either
     way. Without this, ``data_dir()`` would fall to its ``else`` branch for
-    a real PyPI install too, landing config/credentials/logs somewhere
+    the installed wheel too, landing config/credentials/logs somewhere
     inside site-packages instead of a real per-user data directory."""
     return "site-packages" in Path(__file__).resolve().parts or "dist-packages" in Path(__file__).resolve().parts
 

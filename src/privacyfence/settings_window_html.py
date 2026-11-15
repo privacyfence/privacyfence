@@ -3104,7 +3104,7 @@ def _capabilities_for(*, is_admin: bool, surface: str = "settings") -> dict[str,
 
 def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
-    mode: str = ORG_MODE, is_admin: bool = False,
+    is_admin: bool = False,
     scoped_tokens: dict[str, Any] | None = None, personal_transfer: bool = False,
     scoped_proposal: dict[str, Any] | None = None, surface: Literal["settings", "admin"] = "settings",
 ) -> str:
@@ -3134,8 +3134,6 @@ def build_html(
     ``"auto_accept"``/``"privacy"`` -- the General page is empty (hidden
     entirely, in fact) for a non-admin principal, so falling back to it
     would land every non-admin on a blank nav selection.
-
-    ``mode`` is accepted and ignored: organization mode is the only mode.
 
     ``is_admin``: see ``_capabilities_for`` above for exactly what it hides.
 
