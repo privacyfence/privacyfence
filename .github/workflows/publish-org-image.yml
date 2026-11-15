@@ -20,7 +20,7 @@ name: Publish org Docker image
 # The GHCR package starts private. Make it public once, after the first stable release pushes it
 # (docs/releasing.md); nothing here can do that.
 #
-# Same trigger and `wait_for_build` gate as publish-mcp-registry.yml, whose jobs `dedupe` and
+# Same trigger and `wait_for_build` gate as publish-n8n-node.yml, whose jobs `dedupe` and
 # `wait_for_build` are copied below.
 on:
   push:
@@ -71,7 +71,7 @@ jobs:
             gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
           fi
 
-  # A copy of publish-mcp-registry.yml's `wait_for_build` (itself a copy of publish-pypi.yml's --
+  # A copy of publish-n8n-node.yml's `wait_for_build` (itself a copy of publish-pypi.yml's --
   # see that job's own comment for why it polls with the `gh` CLI keyed on commit SHA, rather than
   # `needs:` or `actions/github-script`). It also exports the run's id, so `publish` downloads the
   # images from exactly the build.yml run it waited for.
@@ -149,7 +149,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      # Same resolution publish-mcp-registry.yml uses; the channel only words the summary.
+      # Same resolution build.yml uses; the channel only words the summary.
       - name: Determine version and release channel
         id: release
         run: |

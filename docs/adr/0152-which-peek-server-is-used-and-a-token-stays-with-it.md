@@ -48,5 +48,5 @@ instead of sending a token somewhere unexpected.
 
 ## Related
 
-- [`peek_client.py`](../../src/privacyfence/peek_client.py), [`scripts/build_org_bundle.py`](../../scripts/build_org_bundle.py)
+- [`peek_client.py`](../../src/privacyfence/peek_client.py), `scripts/build_org_bundle.py`
 - ADR [0151](0151-peek-sign-in-uses-peeks-own-device-flow-and-keeps-the-token-per-principal.md), ADR [0143](0143-the-bundle-pins-the-grist-server-and-a-credential-stays-with-its-server.md)
