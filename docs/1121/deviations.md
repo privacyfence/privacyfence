@@ -24,7 +24,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-end-to-end
 
-- pending
+- worker: The sample proposal text "contact: bob@example.org" is not detected as personal data by the PII scan (an email alone is not a category), so the review result passed. The reference server and its tests use an IBAN sample instead, which is detected; the still-denied test therefore proves the scan of the structured part.
+- worker: tests/unit/test_upstream_mcp_client.py (not in touches) had one tool-count assertion updated for the new list_proposals tool; accepted.
+- scope: scope: tests/unit/test_upstream_mcp_client.py (the one-line fix above; accepted)
+- retry: tld plugin absent in the worker container; the worker ran the verify.dod commands directly and reported done. No roles are required for this phase. Orchestrator re-ran ruff, the full unit suite and the integration file on the merged tree: green.
 
 ## p6-retire-adr-docs-changelog
 
