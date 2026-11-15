@@ -24,13 +24,13 @@ class TestRequireLocalFilesPaths:
         f = tmp_path / "report.pdf"
         f.write_bytes(b"hello")
         with local_files.call_context(), pytest.raises(local_files.LocalFileAccessError) as excinfo:
-            local_files.require_local_files([str(f)], max_total_bytes=500)
+            local_files.require_local_files([str(f)])
         assert str(excinfo.value) == local_files.NO_BRIDGE_UPLOAD_MESSAGE
         assert "privacyfence_create_upload_slot" in str(excinfo.value)
 
     def test_the_refusal_does_not_need_a_call_context(self):
         with pytest.raises(local_files.LocalFileAccessError, match="upload slot"):
-            local_files.require_local_files(["~/a.pdf"], max_total_bytes=500)
+            local_files.require_local_files(["~/a.pdf"])
 
     def test_read_and_size_of_an_unclaimed_path_never_touch_the_disk(self, tmp_path):
         f = tmp_path / "report.pdf"
@@ -43,7 +43,7 @@ class TestRequireLocalFilesPaths:
     def test_the_first_bad_path_in_a_list_stops_the_call(self):
         with local_files.call_context(), pytest.raises(local_files.LocalFileAccessError, match="upload slot"):
             local_files.require_local_files(
-                ["~/a.pdf", "~/b.pdf"], max_total_bytes=500)
+                ["~/a.pdf", "~/b.pdf"])
 
 
 class TestRequireLocalFilesUploadRef:
@@ -60,7 +60,7 @@ class TestRequireLocalFilesUploadRef:
             store.fill(token, ALICE.id, [b"file content"])
             ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
             with local_files.call_context():
-                local_files.require_local_files([ref], max_total_bytes=1000)
+                local_files.require_local_files([ref])
                 assert local_files.read_local_file(ref) == b"file content"
 
     def test_works_with_no_call_context_bound_by_the_call_but_needs_one_to_claim_into(self, monkeypatch):
@@ -69,7 +69,7 @@ class TestRequireLocalFilesUploadRef:
             token = store.create_slot(ALICE, "report.pdf", max_bytes=1000)
         ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
         with pytest.raises(local_files.LocalFileAccessError, match="no active call"):
-            local_files.require_local_files([ref], max_total_bytes=1000)
+            local_files.require_local_files([ref])
 
     def test_wrong_principal_gets_the_same_error_as_expired_or_already_claimed(self, monkeypatch):
         with principal_scope(ALICE):
@@ -80,21 +80,21 @@ class TestRequireLocalFilesUploadRef:
         with principal_scope(BOB), local_files.call_context(), pytest.raises(
             local_files.LocalFileAccessError,
         ):
-            local_files.require_local_files([ref], max_total_bytes=1000)
+            local_files.require_local_files([ref])
 
     @pytest.mark.parametrize("ref", ["upload:a", "upload:!!!!", "upload:"])
     def test_a_malformed_upload_reference_is_refused(self, ref):
         with principal_scope(ALICE), local_files.call_context(), pytest.raises(
             local_files.LocalFileAccessError, match="invalid upload reference",
         ):
-            local_files.require_local_files([ref], max_total_bytes=1000)
+            local_files.require_local_files([ref])
 
     def test_an_expired_upload_slot_is_refused(self):
         with principal_scope(ALICE):
             token = get_upload_staging_store().create_slot(ALICE, "a.pdf", max_bytes=1000, ttl_seconds=-1.0)
             ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
             with local_files.call_context(), pytest.raises(local_files.LocalFileAccessError, match="expired"):
-                local_files.require_local_files([ref], max_total_bytes=1000)
+                local_files.require_local_files([ref])
 
     def test_second_require_for_the_same_ref_in_one_call_reuses_the_cache(self, monkeypatch):
         with principal_scope(ALICE):
@@ -103,9 +103,9 @@ class TestRequireLocalFilesUploadRef:
             store.fill(token, ALICE.id, [b"file content"])
             ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
             with local_files.call_context():
-                local_files.require_local_files([ref], max_total_bytes=1000)
+                local_files.require_local_files([ref])
                 # A second call must not try to re-claim the single-use slot.
-                local_files.require_local_files([ref], max_total_bytes=1000)
+                local_files.require_local_files([ref])
                 assert local_files.read_local_file(ref) == b"file content"
 
 
@@ -131,7 +131,7 @@ class TestBuildUploadSlot:
             get_upload_staging_store().fill(token, ALICE.id, [b"file content"])
             ref = f"{local_files.UPLOAD_REF_PREFIX}{slot['upload_id']}"
             with local_files.call_context():
-                local_files.require_local_files([ref], max_total_bytes=1000)
+                local_files.require_local_files([ref])
                 assert local_files.read_local_file(ref) == b"file content"
 
     def test_rejects_a_size_over_the_cap_before_minting_a_slot(self):

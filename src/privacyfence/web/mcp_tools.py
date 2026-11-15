@@ -15,11 +15,9 @@ descriptions, same input shapes) since routes_mcp.py replaces the bridge as
 the thing serving them, not what they are. One exception has no bridge-era
 counterpart: ``PRIVACYFENCE_STATUS_TOOL``, the meta-tool that
 tells a client an install is not set up yet. There is deliberately no
-meta-tool that mints a sign-in link for the agent (ADR 0013): ADR 0003 makes
-the companion mandatory on all three platforms, and a session is not
-something to hand the party it governs (web/session_auth.py's
-``PROVENANCE_*``). What stands in for one is the companion itself, and ``privacyfence-app
---print-sign-in-link`` for a human whose companion menu is out of reach.
+meta-tool that mints a sign-in link for the agent (ADR 0013): a session is
+not something to hand the party it governs. The person signs in to the
+server themselves, and connects services on its Connect page.
 """
 from __future__ import annotations
 
@@ -291,14 +289,14 @@ END_UNATTENDED_SESSION_TOOL = types.Tool(
 CREATE_UPLOAD_SLOT_TOOL = types.Tool(
     name="privacyfence_create_upload_slot",
     description=(
-        "Get a one-time URL to upload a local file to PrivacyFence, for a client without the "
-        "PrivacyFence extension (e.g. Claude Code) -- use it when a tool's local_path/attachments "
-        "parameter says PrivacyFence can't read your files directly. Returns {upload_id, upload_url, "
-        "method: 'PUT', max_bytes, expires_at, example}: PUT the raw bytes to upload_url (e.g. the "
-        "curl -T example); no Authorization header -- the URL is the credential. Then pass upload_id "
-        "to the tool that needs the file (its upload_id parameter, e.g. drive_upload_file, or an "
-        "'upload:<upload_id>' attachments entry, e.g. gmail_*_with_attachments). Never fetch "
-        "upload_url yourself or pass it as local_path. Single-use, expires in 10 minutes, claimable "
+        "Get a one-time URL to upload a local file to PrivacyFence. PrivacyFence never reads your "
+        "files directly: a tool that takes a file (e.g. drive_upload_file, gmail_*_with_attachments) "
+        "accepts only an upload made here. Returns {upload_id, upload_url, method: 'PUT', max_bytes, "
+        "expires_at, example}: PUT the raw bytes to upload_url (e.g. the curl -T example); no "
+        "Authorization header -- the URL is the credential. Then pass upload_id to the tool that needs "
+        "the file (its upload_id parameter, e.g. drive_upload_file, or an 'upload:<upload_id>' "
+        "attachments entry, e.g. gmail_*_with_attachments). Never fetch upload_url yourself or pass "
+        "it to a tool in place of the upload_id. Single-use, expires in 10 minutes, claimable "
         "only by your next tool call in this conversation. This uploads, gates and approves nothing: "
         "that happens when the destination tool runs. reason: one sentence on why this file is needed "
         "now (logged, self-reported, unverified)."

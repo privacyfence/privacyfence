@@ -967,12 +967,8 @@ class TestStatus:
     def _row(name, *, enabled=True, authenticated=False, blocked_by=None):
         return {"name": name, "enabled": enabled, "authenticated": authenticated, "blocked_by": blocked_by}
 
-    def test_defaults_to_local_mode(self):
+    def test_reports_org_mode(self):
         dispatcher = _dispatcher({})
-        assert dispatcher.status("checking")["mode"] == "local"
-
-    def test_reports_org_mode_when_constructed_that_way(self):
-        dispatcher = _dispatcher({}, mode="org")
         assert dispatcher.status("checking")["mode"] == "org"
 
     def test_no_connectors_state_provider_falls_back_to_built_connectors_only(self):
@@ -1017,7 +1013,7 @@ class TestStatus:
         assert "companion" not in result["message"]
 
     def test_org_mode_points_at_an_administrator_instead(self):
-        dispatcher = _dispatcher({}, mode="org")
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
         result = dispatcher.status("checking")
         assert result["sign_in_url"] is None
@@ -1025,12 +1021,12 @@ class TestStatus:
 
     @pytest.mark.parametrize("authenticated", [False, True])
     def test_status_carries_no_deprecation_field(self, authenticated):
-        dispatcher = _dispatcher({}, mode="org")
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
         assert "deprecation" not in dispatcher.status("checking")
 
     def test_status_has_no_upstreams_key_when_none_are_configured(self):
-        dispatcher = _dispatcher({}, mode="org")
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=True)])
         assert "upstreams" not in dispatcher.status("checking")
 
@@ -1055,7 +1051,7 @@ class TestStatus:
             groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
             resolver=StaticFileResolver(tmp_path / "members.json"),
         )
-        dispatcher = _dispatcher({}, mode="org")
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
         assert dispatcher.status("checking")["upstreams"] == [{
             "id": "kh", "label": "Knowledge hub", "tools_exposed": 0, "state": "waiting_for_tool_list",
@@ -1078,7 +1074,7 @@ class TestStatus:
         assert entries[0]["decision"] == "status_checked"
 
     def test_audits_status_checked_in_org_mode(self):
-        dispatcher = _dispatcher({}, mode="org")
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
         dispatcher.status("just checking")
         entries = self._read_entries()
@@ -1640,9 +1636,9 @@ class _DeliveryBase:
         return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
 
     @staticmethod
-    def _dispatcher(*, mode="org", policy=_ORG_POLICY, runtime=_N8N_CONFIG):
+    def _dispatcher(*, policy=_ORG_POLICY, runtime=_N8N_CONFIG):
         return _dispatcher(
-            {"gmail": FakeConnector("gmail")}, mode=mode, scoped_token_policy=policy, agent_runtime=runtime,
+            {"gmail": FakeConnector("gmail")}, scoped_token_policy=policy, agent_runtime=runtime,
         )
 
     @staticmethod

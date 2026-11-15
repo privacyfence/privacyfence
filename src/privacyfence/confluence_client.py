@@ -207,7 +207,7 @@ class ConfluenceClient:
 
         if not access_token or not cloud_id:
             raise ConfluenceClientError(
-                "Confluence is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                "Confluence is not authenticated. Connect Confluence on the Connect page (/connect)."
             )
 
         # Confluence Cloud's REST API lives under /wiki (unlike Jira's), and the

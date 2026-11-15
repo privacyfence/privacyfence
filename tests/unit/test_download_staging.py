@@ -281,6 +281,7 @@ class TestReleaseAttribution:
         assert (claimed.data, claimed.name, claimed.mime_type) == (b"data", "f.txt", "text/plain")
         assert claimed.request_id == "req-1"
         assert claimed.agent == self._AGENT
+        assert claimed.principal_id == ALICE.id
 
     def test_outside_any_release_both_are_empty(self):
         store = DownloadStagingStore()

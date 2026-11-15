@@ -319,10 +319,9 @@ def _pii_general_fields(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def _privacy_state_from_config(cfg: dict[str, Any], *, fail_safe_default: str = "allow") -> dict[str, Any]:
     """``fail_safe_default`` threads straight through to ``_parse_privacy_
-    group`` for a group genuinely absent from ``cfg`` -- local mode's own
-    call below keeps this module's long-standing "allow" default; org
-    mode's caller (web/routes_settings.py's own org state builder) passes
-    "block", the same fail-closed posture the former web/org_settings_
+    group`` for a group genuinely absent from ``cfg`` -- this module's
+    long-standing default is "allow"; the organization settings caller
+    (web/routes_settings.py's own org state builder) passes "block", the same fail-closed posture the former web/org_settings_
     pages.py's ``_privacy_policy_view`` used and this function must keep
     matching now that the two share it."""
     groups = [{"key": g, "label": label} for g, label in PRIVACY_GROUP_LABELS.items()]
@@ -376,9 +375,8 @@ def _rule_usage_map() -> dict[str, Any]:
     principal's own ``logs/audit/`` directory -- ``authority_root``/
     ``data_dir`` are themselves principal-scoped (the same contextvar
     ``principal_scope`` sets), so this already reads whichever principal is
-    currently scoped when called, local mode's single ``LOCAL_PRINCIPAL``
-    or an org caller's own ``with principal_scope(principal):``
-    block -- see ``_auto_accept_state_from_rows`` below, this function's
+    currently scoped when called, a caller's own
+    ``with principal_scope(principal):`` block -- see ``_auto_accept_state_from_rows`` below, this function's
     only caller."""
     log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
     return AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
@@ -464,9 +462,8 @@ def rule_resource_ids(rule: PolicyRule) -> tuple[GrantResourceType | None, list[
 def cached_rule_value(rule: PolicyRule, resolver: ResourceNameResolver) -> str:
     """A rule's value as the Auto-accept page's comma-separated display string: each resource id
     shown by its last-known name (``resolver.cached_name`` -- no network call), or a shortened id
-    until one is known. Shared by local mode's ``SettingsController._resolved_rule_value`` and org
-    mode's ``web/routes_settings.py`` state builder; the two differ only in how a missing name gets
-    resolved, never in how a known one is shown."""
+    until one is known. Used by ``web/routes_settings.py``'s state builder, which resolves a
+    missing name separately."""
     rt, str_values = rule_resource_ids(rule)
     if rt is None:
         return ", ".join(str_values)
@@ -534,8 +531,7 @@ def _entry_agent(entry: AuditEntry) -> AgentIdentity:
 
 
 def audit_rows(entries: list[AuditEntry]) -> list[dict[str, Any]]:
-    """The Audit Log page's "Recent decisions" rows -- shared by local mode's
-    ``_audit_state`` and org mode's own page state, so both show the same columns. ``agent`` is
+    """The Audit Log page's "Recent decisions" rows, for the Settings page state. ``agent`` is
     ``agent_label.AgentLabel.to_dict()``: the same tiered wording the approval card and list use
     (``agent_label.py``), raw text the page escapes."""
     return [

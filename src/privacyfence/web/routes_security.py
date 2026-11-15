@@ -667,16 +667,16 @@ def build_routes(
 
 
 # --------------------------------------------------------------------- #
-# Page rendering -- org mode's caller (nav_items given) wraps this in
+# Page rendering -- with nav_items given this is wrapped in
 # web_shell.wrap()'s persistent header/nav, same as routes_connect.py's own
-# _render_connect_page; local mode's (nav_items=None) stays the small,
-# self-contained document it always was -- see module docstring's own
+# _render_connect_page; without them (nav_items=None) it stays a small,
+# self-contained document -- see module docstring's own
 # ``nav_items`` paragraph and build_routes' docstring on ``back_link``.
 # --------------------------------------------------------------------- #
 
 # On the shared design system (resources/design/, ADR 0078): each passkey is a `card` with a
 # `badge`, the controls are `.button`s, and colours are tokens, so app.css's dark mode needs no rule
-# here. Inside the shell the page is a readable column; local mode's bare document puts it in
+# here. Inside the shell the page is a readable column; the bare document puts it in
 # web_shell.plain_page's panel instead, which already is one.
 _STYLE = """
 .pf-shell-main #pf-security-page{width:min(680px,100% - 2 * var(--gutter));margin-inline:auto;

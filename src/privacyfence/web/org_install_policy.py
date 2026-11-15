@@ -8,26 +8,18 @@ nothing until somebody with shell access on the server restarts the daemon
 -- the friction an admin settings page exists to remove, kept and given a
 button.
 
-Reloading turned out to be the smaller change anyway, because most of it
-already existed and was simply never reachable from org mode:
-``settings_controller._save_and_reload_privacy`` has re-run
-``init_privacy_filter`` after every local-mode settings.yaml write since
-long before this. What org mode adds is the two things that make that
-correct for more than one user:
+Reloading needs two things to be correct for more than one user:
 
 - **Every principal, not just the editor's.** ``privacy_filter._REGISTRY``
   and ``pii_detector._REGISTRY`` are ``PrincipalRegistry`` instances, so
   ``init_privacy_filter``/``init_pii_detection`` only ever write the entry
-  of whoever is scoped when they're called. In local mode that is the only
-  entry there is. In org mode it would be the admin's own -- every other
+  of whoever is scoped when they're called: the admin's own -- every other
   signed-in principal would go on enforcing the policy loaded when their
   entry was first built, with the page cheerfully reporting the new one.
   ``privacy_filter.reload_for_all_principals`` /
   ``pii_detector.reload_for_all_principals`` are the fan-out versions.
-- **``org_managed=True``.** ``settings_controller``'s own reload call passes
-  neither ``org_managed`` nor anything else, so it takes
-  ``init_privacy_filter``'s local-mode default of ``org_managed=False``.
-  Reached from org mode, that single omission would swap org mode's
+- **``org_managed=True``.** ``init_privacy_filter`` defaults to
+  ``org_managed=False``; a reload that omitted it would swap the server's
   fail-closed ``block`` default for a genuinely absent group back to
   ``allow`` -- an edit to one group silently widening what the filter lets
   through for every group nobody had configured. Every reload here is
@@ -47,8 +39,7 @@ copy, persisted, and only adopted into the live dict (and reloaded) once
 settings.yaml is actually on disk.
 
 ``apply_change`` is also the only writer of settings.yaml that two admins can
-reach concurrently -- local mode's equivalent is one desktop app talking to
-one settings.yaml. Without serializing them, two browser tabs saving at
+reach concurrently. Without serializing them, two browser tabs saving at
 nearly the same moment would each deep-copy the *same* starting ``settings``,
 so the second admin's write would land on disk as if the first admin's had
 never happened (the second admin's file write and live-dict adoption would
@@ -80,17 +71,15 @@ logger = logging.getLogger(__name__)
 _write_lock = threading.Lock()
 
 # The action names this module can apply, deliberately the same strings
-# `org_settings_scope.ACTION_SCOPES` marks `admin_only` and
-# `routes_settings._ALLOWED_ACTIONS` dispatches in local mode -- one name per
-# concept across all three, so a route authorizes and applies the same
+# `org_settings_scope.ACTION_SCOPES` marks `admin_only` -- one name per
+# concept across both, so a route authorizes and applies the same
 # string rather than translating between two vocabularies.
 #
 # `toggle_calendar_free_busy`, `toggle_gmail_signature` and `set_log_level`
 # are the admin-only actions deliberately absent. All are install-wide and
 # would belong here eventually, but none is privacy/PII *policy* and each
 # needs a reload path of its own that doesn't exist yet: the first two rebuild
-# connectors (per principal, through `ConnectorRegistry`, not the single
-# `refresh_connectors()` local mode calls), the second reconfigures
+# connectors (per principal, through `ConnectorRegistry`), the third reconfigures
 # process-wide logging. Adding either is additive -- a mutator below and a
 # control on the page -- not a reshape of this module.
 SUPPORTED_ACTIONS: frozenset[str] = frozenset({
@@ -145,13 +134,11 @@ def _bool_field(payload: dict[str, Any], key: str) -> bool:
     """An explicit desired value, not a flip of whatever the server
     currently holds.
 
-    Local mode's ``toggle_pii_detection``/``toggle_pii_category`` read the
-    current value and invert it, which is right for a menu item that
-    renders from live state at the moment of the click. A browser form can
-    be submitted from a page rendered minutes ago, or twice; a flip would
+    A browser form can be submitted from a page rendered minutes ago, or
+    twice; a flip of the current value would
     then land the *opposite* of what the admin saw themselves choosing. The
     action keeps its ``toggle_`` name (that name is the authorization key
-    `org_settings_scope` gates on, shared with local mode), but the
+    `org_settings_scope` gates on), but the
     payload carries the value.
     """
     raw = payload.get(key)
@@ -198,9 +185,7 @@ def _toggle_pii_category(settings: dict[str, Any], payload: dict[str, Any]) -> s
     enabled = _bool_field(payload, "enabled")
     pii_cfg = settings.setdefault("pii_detection", {})
     if not pii_cfg.get("enabled", True):
-        # Same guard local mode's own toggle_pii_category keeps (there, the
-        # submenu item is greyed out without a callback): the optional
-        # categories are meaningless while the master switch is off, and
+        # The optional categories are meaningless while the master switch is off, and
         # writing one anyway would persist a value the running filter is
         # not using.
         raise PolicyChangeRejected("enable PII detection before changing an individual category")
@@ -254,8 +239,7 @@ def apply_change(
 def _reload_everywhere(settings: dict[str, Any]) -> None:
     privacy_filter.reload_for_all_principals(settings, org_managed=True)
     pii_detector.reload_for_all_principals(settings.get("pii_detection", {}) or {})
-    # The same thing settings_controller._save_config does after a
-    # local-mode write, fanned out -- every entry recorded from here on
+    # Fanned out to every principal -- every entry recorded from here on
     # fingerprints the policy that actually governed it.
     set_security_config_hash_for_all_principals(compute_security_config_hash(settings))
 

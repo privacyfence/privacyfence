@@ -388,9 +388,8 @@ async def _run_in_popup_executor(func, *args, **kwargs) -> Any:
     than letting ``loop.run_in_executor`` submit ``func`` to the thread pool
     directly -- unlike ``loop.call_soon``, ``run_in_executor`` does *not*
     copy context on its own, so a bare submit would run ``func`` in that
-    worker thread's own (empty) context instead of this call's. That's
-    invisible in local mode (there's only ever one principal), but in org
-    mode it silently resolved ``current_principal()`` back to the default
+    worker thread's own (empty) context instead of this call's. That
+    silently resolved ``current_principal()`` back to the default
     principal for every popup this function drives that registers its own
     ``PendingApproval`` with no pre-registered one handed in --
     ``show_rule_confirmation_popup`` (propose_policy_change's confirmation,

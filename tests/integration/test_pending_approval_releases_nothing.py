@@ -83,7 +83,7 @@ def local_server(tmp_path):
     calendar.my_email = "me@example.com"
     registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=0.5, ledger_ttl=0.5)
     approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
-    dispatcher = McpDispatcher(lambda: {"drive": drive, "calendar": calendar}, mode="org", registry=registry)
+    dispatcher = McpDispatcher(lambda: {"drive": drive, "calendar": calendar}, registry=registry)
 
     with single_user_org_server(tmp_path, web_ui=approval_ui.get_approval_ui(), dispatcher=dispatcher) as server:
         try:
@@ -164,16 +164,18 @@ async def test_approved_download_is_audited_as_approved_under_one_request_id(loc
     await _call(server, "drive_download_file", {**_DOWNLOAD_ARGS, "file_id": "f2"})
 
     rows = _rows(audit_dir)
-    assert [(r["tool"], r["decision"]) for r in rows[:2]] == [
+    assert [(r["tool"], r["decision"]) for r in rows[:3]] == [
         ("drive_download_file", "approval_pending"),
         ("drive_download_file", "approved"),
+        ("", "bridge_download_served"),
     ]
     assert ("drive_download_file", "expired") not in _decisions(audit_dir)
-    pending_row, approved_row = rows[:2]
+    pending_row, approved_row, served_row = rows[:3]
     assert pending_row["request_id"]
-    assert approved_row["request_id"] == pending_row["request_id"]
+    assert approved_row["request_id"] == served_row["request_id"] == pending_row["request_id"]
     assert approved_row["decided_at"]
-    assert approved_row["agent_id"] == pending_row["agent_id"]
+    assert served_row["agent_id"]
+    assert served_row["agent_id"] == approved_row["agent_id"] == pending_row["agent_id"]
 
 
 async def test_uncollected_approval_expires_saying_what_was_decided(local_server):

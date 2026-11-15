@@ -33,13 +33,8 @@ key (``pinned_serial_path()``) and a bundle with a lower serial is refused
 as a rollback. Deleting that one file is how an administrator deliberately
 goes back to an older bundle.
 
-An install that never adopts signing (no ``--sign-key`` ever used) never
-pins a key and keeps working exactly as before -- signing is opt-in for
-local mode. It's mandatory for ``mode: org`` (see ``daemon_main.
-load_org_config``'s and ``settings_controller.install_org_config_bytes``'s
-own enforcement of that), since org mode is the surface this phase is
-hardening towards enterprise-production readiness, not every existing
-local install.
+Signing is mandatory for ``mode: org`` (see ``daemon_main.load_org_config``'s
+own enforcement of that).
 
 This module intentionally takes each caller's own ``org_dir`` as a
 parameter rather than importing ``paths.org_dir`` itself -- both

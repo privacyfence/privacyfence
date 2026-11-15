@@ -5,19 +5,13 @@ authorized and connect the rest, and ``GET /oauth/start/{service}``/
 ``GET /oauth/callback/{service}`` are the server-side redirect endpoints
 that make it possible from a phone with no desktop in the loop.
 
-**Not** a port of settings_window_html.py/routes_settings.py's ~30-action
-surface into org mode -- that's real, separate follow-up work (see web/
-server.py's own module docstring): this page does exactly one
-thing, authorizing a principal's own connectors, using org mode's session
-cookie (``pf_org_session``) for its own small CSRF model (``org_session.
-check_csrf``/``check_origin``) rather than reusing local mode's shared-
-secret-token one.
+This page does exactly one thing, authorizing a principal's own
+connectors, using the session cookie (``pf_org_session``) for its own small
+CSRF model (``org_session.check_csrf``/``check_origin``).
 
 **Google** gets five separate authorize buttons (gmail/drive/calendar/
-contacts/tasks), not one "Connect Google" -- see settings_controller.py's
-own ``GOOGLE_CONNECTORS``/``_GOOGLE_CLIENTS``, which already draws this
-same distinction for local mode's own Connectors-page flow: each is a
-distinct OAuth grant with its own scopes and its own token file.
+contacts/tasks), not one "Connect Google": each is a distinct OAuth grant
+with its own scopes and its own token file.
 
 **The one load-bearing rule this module exists to get right**: the callback
 must be finished in the same signed-in session that started it (ADR 0178).
@@ -36,13 +30,12 @@ The cookie is ``SameSite=Lax`` so that the *sign-in* landing
 does not loop; see ``org_session.set_session_cookie``'s own comment.
 
 **Atlassian's multi-site accounts** are handled with one deliberate
-simplification versus local mode: if the signed-in account can reach more
-than one Atlassian site, the first one returned is used automatically
-rather than prompting for a choice (local mode's own web picker has
-nowhere to block inside a one-shot HTTP callback -- see atlassian_oauth.
-resolve_resource_and_save's own ``pick_resource`` parameter). Anyone who
-needs a different site can still get one via local mode's Connectors page,
-or by disconnecting and asking IT to scope the account down to one site.
+simplification: if the signed-in account can reach more than one Atlassian
+site, the first one returned is used automatically rather than prompting
+for a choice (a picker has nowhere to block inside a one-shot HTTP callback
+-- see atlassian_oauth.resolve_resource_and_save's own ``pick_resource``
+parameter). Anyone who needs a different site can disconnect and ask IT to
+scope the account down to one site.
 Worth flagging in review, not hidden in a comment only.
 """
 from __future__ import annotations
@@ -257,9 +250,7 @@ class _TelegramState:
 
 class _TelegramAuthStore:
     """Principal-keyed, one in-progress sign-in attempt at a time per
-    principal -- the org-mode counterpart of settings_controller.py's own
-    single ``self._telegram_auth`` slot, which is correct only for local
-    mode's one user."""
+    principal."""
 
     def __init__(self, ttl: float = _PENDING_TTL_SECONDS) -> None:
         self._ttl = ttl

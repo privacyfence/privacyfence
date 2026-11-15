@@ -660,7 +660,7 @@ _JS = r"""
     html += '</div>';
 
     // The update check is meaningless on a headless org server -- it asks
-    // GitHub Releases about this desktop install
+    // GitHub Releases about the install it runs on
     // (org_settings_scope.NOT_APPLICABLE_ACTIONS covers toggle_update_check).
     if (!notApplicable('toggle_update_check')) {
       html += '<div class="card pf-card">';
@@ -1135,7 +1135,7 @@ _JS = r"""
 
   // Static for the life of the page: a create or revoke
   // reloads it, so the list is always rebuilt from the server.
-  var SCOPED = window.__pfScopedTokens || { delivery: 'companion', max_days: 365, default_days: 90, warn_days: 14, tokens: [], rules: [], tools: [], scope_groups: [] };
+  var SCOPED = window.__pfScopedTokens || { delivery: 'once', max_days: 365, default_days: 90, warn_days: 14, tokens: [], rules: [], tools: [], scope_groups: [] };
 
   function scopedExpiryText(t) {
     var day = new Date(t.expires_at * 1000).toISOString().slice(0, 10);
@@ -1339,9 +1339,7 @@ _JS = r"""
     var html = '<div class="pf-page">';
     html += '<h1 class="pf-page-title">Scoped tokens</h1>';
     html += '<div class="pf-page-subtitle">A scoped token lets one AI client use only the tools and rules you pick, for a limited time. ' +
-      (SCOPED.delivery === 'once'
-        ? 'A new token is shown once and cannot be shown again.'
-        : 'A new token is copied to your clipboard once and cannot be shown again.') + '</div>';
+      'A new token is shown once and cannot be shown again.</div>';
     html += '<div class="pf-chips">' + showIdsToggleHtml() + '</div>' + invalidLegendHtml(SCOPED.rules);
 
     html += '<h2 class="pf-group-title">Your tokens</h2><div class="card pf-card">';

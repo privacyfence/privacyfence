@@ -43,7 +43,7 @@ _MAX_TABLES = 100
 
 _UNAUTHORIZED = (
     "Grist refused the sign-in (HTTP 401). The API key or sign-in may be wrong, expired or revoked. "
-    "Use Authenticate… in PrivacyFence Settings to connect again."
+    "Connect Grist on the Connect page (/connect) to connect again."
 )
 _FORBIDDEN = (
     "Grist refused the request (HTTP 403). Your Grist account, or what you allowed PrivacyFence "

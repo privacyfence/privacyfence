@@ -284,8 +284,8 @@ def load_token_file(token_file: str) -> dict[str, Any]:
     """Load a previously saved Slack token record, or raise SlackClientError."""
     if not os.path.exists(token_file):
         raise SlackClientError(
-            f"No Slack token found at '{token_file}'. Use Authenticate… in the "
-            "PrivacyFence Settings to sign in."
+            f"No Slack token found at '{token_file}'. Connect Slack on the "
+            "Connect page (/connect) to sign in."
         )
     with open(token_file, encoding="utf-8") as fh:
         return json.load(fh)
@@ -416,8 +416,8 @@ class SlackClient:
     ) -> None:
         if not user_token:
             raise SlackClientError(
-                "No Slack user token available. Use Authenticate… in the "
-                "PrivacyFence Settings to sign in."
+                "No Slack user token available. Connect Slack on the "
+                "Connect page (/connect) to sign in."
             )
         self._client = WebClient(token=user_token)
         # WebClient's own default retry handlers cover connection errors only

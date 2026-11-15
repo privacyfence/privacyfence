@@ -172,7 +172,7 @@ class TestSendErrors:
         err = self._error(monkeypatch, client, FakeResponse(401, {"error": "bad token"}))
         assert str(err) == (
             "Peek refused the saved sign-in (HTTP 401). "
-            "Use Authenticate… in PrivacyFence Settings to connect again."
+            "Connect Peek on the Connect page (/connect) to connect again."
         )
         assert err.status == 401
 
@@ -400,7 +400,7 @@ class TestTokenFile:
     def test_missing_file(self, tmp_path):
         with pytest.raises(PeekClientError) as exc:
             load_token_file(str(tmp_path / "nope.json"))
-        assert str(exc.value) == "Peek is not authenticated. Use Authenticate… in PrivacyFence Settings."
+        assert str(exc.value) == "Peek is not authenticated. Connect Peek on the Connect page (/connect)."
 
     @pytest.mark.parametrize(
         "content",
@@ -419,7 +419,7 @@ class TestTokenFile:
         with pytest.raises(PeekClientError) as exc:
             load_token_file(str(path))
         assert str(exc.value) == (
-            "Peek's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect again."
+            "Peek's saved sign-in could not be read. Connect Peek on the Connect page (/connect) to connect again."
         )
         assert TOKEN not in str(exc.value)
 
@@ -447,7 +447,7 @@ class TestResolveServer:
             resolve_server("https://other.example.com", self.record)
         assert str(exc.value) == (
             "Peek was connected to a different server than your organization uses. "
-            "Use Authenticate… in PrivacyFence Settings to connect again."
+            "Connect Peek on the Connect page (/connect) to connect again."
         )
         assert TOKEN not in str(exc.value)
 

@@ -1,7 +1,7 @@
 """How PrivacyFence signs in to Miro.
 
 - The authorization code flow of a confidential client, with no PKCE (Miro
-  offers none); the ``state`` is checked by the loopback.
+  offers none); the ``state`` is checked by the Connect page's callback route.
 - Expiring tokens only, refreshed and rotated: a refresh returns a new refresh
   token and voids the old one.
 - One token per person, for the one team chosen at sign-in.
@@ -29,15 +29,15 @@ logger = logging.getLogger(__name__)
 AUTHORIZE_URL = "https://miro.com/oauth/authorize"
 TOKEN_URL = "https://api.miro.com/v1/oauth/token"  # nosec B105  # an endpoint URL, not a credential
 REQUIRED_SCOPES = ("boards:read", "boards:write")
-NOT_AUTHENTICATED = "Miro is not authenticated. Use Authenticate… in PrivacyFence Settings."
+NOT_AUTHENTICATED = "Miro is not authenticated. Connect Miro on the Connect page (/connect)."
 
 _REFRESH_MARGIN_SECONDS = 60
 _DETAIL_LIMIT = 200
 _UNREADABLE = (
-    "Miro's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect again."
+    "Miro's saved sign-in could not be read. Connect Miro on the Connect page (/connect) to connect again."
 )
 _EXPIRED = (
-    "Your Miro sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again."
+    "Your Miro sign-in has expired or was revoked. Connect Miro on the Connect page (/connect) to sign in again."
 )
 _NEVER_EXPIRES = (
     "Miro returned a token that never expires. Create the PrivacyFence app in Miro with "

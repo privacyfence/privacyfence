@@ -12,37 +12,26 @@ instead of one shared secret. Passed to ``build_app``/``WebServer`` as one
 ``OrgAuth`` bundle (see that class) rather than four separate parameters,
 so a caller either opts into the whole org-mode picture or none of it.
 
-**`/approvals` in org mode** (web/routes_approvals.py's ``build_routes()``)
-is *not* ``routes_approvals.create_app``'s local-mode surface -- that one
-authenticates with one shared secret and lists *every* pending approval
-with no principal filtering, so exposing it as-is under org mode, where
-many principals share one daemon, would leak every principal's pending
-approvals to whoever holds any valid token. ``/approvals``/``/security``
-here are a separate, principal-aware route set (ADR 0033): every read and
+**`/approvals`** (web/routes_approvals.py's ``build_routes()``) is a
+principal-aware route set (ADR 0033), since many principals share one
+daemon and none may see another's pending approvals: every read and
 write is authorized against ``current_principal()`` via ``org_session``,
 and a *write* decision additionally demands a fresh WebAuthn step-up when
 the admin config's ``step_up.enabled`` is set --
 web/routes_approvals.py's own module docstring covers both.
 
-**`/settings` in org mode** is, likewise, *not*
-``routes_settings.py``'s ~30-action local-mode dispatcher opened up
-wholesale -- ``routes_settings.build_org_routes()`` mounts a
-capability-filtered subset instead,
-restricted to ``org_settings_scope.ACTION_SCOPES``'s own ``ORG_MODE``
+**`/settings`**: ``routes_settings.build_org_routes()`` mounts a
+capability-filtered set of actions, restricted to ``org_settings_scope.ACTION_SCOPES``'s own ``ORG_MODE``
 members: ``GET /settings``, every signed-in principal's own auto-accept
 rules, read-only except for adding or removing one. The install-wide PII/privacy
 policy (web/org_install_policy.py) is an administrator's, changed on the Admin page
 (web/routes_admin.py); ``GET /settings/privacy`` redirects there.
-That subset renders through the exact same settings_window_html.build_html()
-local mode's own settings page does (capability-filtered per
-mode/``is_admin``) and dispatches every write through the same generic
-``POST /api/settings/{action}`` local mode's own dispatcher answers (ADR
-0032), restricted to
-``routes_settings._ORG_ALLOWED_ACTIONS``. The rest of routes_settings.py's
-~30 actions (connector management, the update banner, Telegram's
-interactive auth -- see web/org_settings_scope.py's own ``ACTION_SCOPES``
-for the ones that only ever meant something on a desktop install) remain
-unmounted, as do the two admin-only actions that are install-wide but
+That set renders through settings_window_html.build_html() (capability-filtered
+per ``is_admin``) and dispatches every write through the generic
+``POST /api/settings/{action}`` (ADR 0032), restricted to
+``routes_settings._ORG_ALLOWED_ACTIONS``. Actions outside
+web/org_settings_scope.py's own ``ACTION_SCOPES`` are not served, nor are
+the admin-only actions that are install-wide but
 aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``,
 ``toggle_gmail_signature``) --
 ``ACTION_SCOPES`` is the one place that split is declared now, consulted
@@ -150,9 +139,8 @@ _PERMISSIONS_POLICY = (
 # a permanent, browser-vendor-controlled commitment keyed on the exact
 # public hostname, wrong for a value that varies per self-hosted org
 # deployment (``org.issuer_url``'s host) rather than being one fixed domain
-# this project itself controls. Only ever added in org mode -- see
-# _SecurityHeadersMiddleware's own docstring for why local mode never sends
-# this header at all.
+# this project itself controls. Only added where ``hsts`` is on -- see
+# _SecurityHeadersMiddleware's own docstring.
 _HSTS = "max-age=31536000; includeSubDomains"
 
 
@@ -254,13 +242,12 @@ def _approved_upstream_tools(token: ScopedToken) -> list[dict[str, str]]:
 
 
 def scoped_token_page_data(
-    principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, delivery: str, connector_names: set[str],
+    principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, connector_names: set[str],
 ) -> dict[str, Any]:
     """What ``window.__pfScopedTokens`` carries for ``principal``: their
     tokens, the rules they may carry and the tools of their enabled
-    connectors. ``delivery`` is how a new secret reaches the person:
-    ``"companion"`` (local mode, ADR 0164) or ``"once"`` (organization mode,
-    ADR 0165). Must not be called under another principal's scope.
+    connectors. A new secret is shown to the person once (``delivery``
+    ``"once"``, ADR 0165). Must not be called under another principal's scope.
 
     Each rule's resource ids are shown by the names the Auto-accept page has
     cached (``cached_row_value``), so the two pages name a rule alike. A
@@ -294,13 +281,10 @@ def scoped_token_page_data(
             by_connector.setdefault(connector, []).append(name)
     tokens = []
     activity = store.activity_for(principal)
-    # Delivery records exist only in organization mode; looking them up on a local install would
-    # create the org directory (ADR 0281).
-    delivered = (
-        {r.token_id: r for r in runtime_credentials.get_store().all()
-         if r.principal_id == principal.id and r.state == runtime_credentials.DELIVERED}
-        if delivery == "once" else {}
-    )
+    delivered = {
+        r.token_id: r for r in runtime_credentials.get_store().all()
+        if r.principal_id == principal.id and r.state == runtime_credentials.DELIVERED
+    }
     for token in own_tokens:
         seen = activity.get(token.id, scoped_tokens.TokenActivity())
         expired = token.expired(now)
@@ -331,7 +315,7 @@ def scoped_token_page_data(
         for p in scoped_token_proposals.get_registry().pending_for(principal.id)
     ]
     page: dict[str, Any] = {
-        "delivery": delivery, "proposals": proposals, "proposals_enabled": policy.allow_ai_proposals,
+        "delivery": "once", "proposals": proposals, "proposals_enabled": policy.allow_ai_proposals,
         "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
         "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": rules,
         "auto_tools": sorted(
@@ -361,21 +345,17 @@ def scoped_token_page_data(
 
 
 def _write_mcp_url_file(url: str) -> None:
-    """The discovery file a client that talks to /mcp reads to find it --
-    see mcpb/shim/src/protocol.ts's module docstring, which reads this same
-    file: WebServer.start() writes it when it binds, and clears it on
-    shutdown. 0600 for the
-    same reason web_token/mcp_token are: not a secret itself, but written
-    alongside them under the same directory."""
+    """The discovery file naming the /mcp URL: WebServer.start() writes it
+    when it binds, and clears it on shutdown. 0600: not a secret itself,
+    but written alongside the server's other files under the same
+    directory."""
     path = paths.data_dir() / MCP_URL_FILE_NAME
     secure_files.atomic_write_text(path, url)
 
 
 def _clear_mcp_url_file() -> None:
-    """Called on WebServer.stop() so a shim launched after this daemon exits
-    finds no file rather than a stale, now-dead URL -- the same reasoning
-    ipc_server.py's own shutdown has for not leaving a dangling PORT_FILE
-    behind."""
+    """Called on WebServer.stop() so a reader after this daemon exits finds
+    no file rather than a stale, now-dead URL."""
     (paths.data_dir() / MCP_URL_FILE_NAME).unlink(missing_ok=True)
 
 
@@ -408,19 +388,16 @@ class _SecurityHeadersMiddleware:
     see test_server.py's ``TestCacheControlOnSensitivePages`` for the sweep
     that checks every one of those routes actually does.
 
-    ``hsts`` gates ``Strict-Transport-Security`` alone: local mode (``org``
-    is ``None`` in build_app()) binds to plain ``http://localhost`` by
-    design (this module's own docstring), where the header is at best
-    inert and at worst actively wrong -- a browser that honored it would
-    start refusing plain-HTTP connections to ``localhost`` for every *other*
-    app on the machine too, since HSTS is scoped by hostname, not by port
-    or origin. Org mode is the one caller that passes ``hsts=True``: its
+    ``hsts`` gates ``Strict-Transport-Security`` alone: on plain
+    ``http://localhost`` the header is at best inert and at worst actively
+    wrong -- a browser that honored it would start refusing plain-HTTP
+    connections to ``localhost`` for every *other* app on the machine too,
+    since HSTS is scoped by hostname, not by port or origin. With ``hsts=True``
     ``issuer_url`` is a real, single-purpose public hostname reached over
     HTTPS (TLS terminated here or, just as often, at a reverse proxy in
     front of this daemon -- either way the browser's own connection is
     HTTPS, which is what HSTS actually governs), so pinning that hostname
-    to HTTPS-only is exactly the win intended, with none of local
-    mode's collateral risk.
+    to HTTPS-only is exactly the win intended.
 
     **CSP nonce.** A fresh nonce is minted for every
     HTTP request and placed on ``scope["state"]`` (readable downstream as
@@ -737,10 +714,9 @@ def _build_org_app(
         lifespans.append(mcp_lifespan(session_manager))
         # Only a real dispatcher-backed server carries gated calls worth watching -- see latency.py.
         lifespans.append(latency.loop_health_lifespan())
-        # ADR 0028: org mode's own privacyfence_create_upload_slot and
-        # DownloadDeliveryConfig.agent_links need the same two
-        # unauthenticated capability routes local mode mounts above --
-        # see routes_file_bridge.py's own module docstring. Gated on
+        # ADR 0028: privacyfence_create_upload_slot and
+        # DownloadDeliveryConfig.agent_links need the two unauthenticated
+        # capability routes -- see routes_file_bridge.py's own module docstring. Gated on
         # mcp_dispatcher exactly like /mcp itself: with no dispatcher,
         # neither the upload-slot meta-tool nor a connector download tool
         # is reachable to mint a capability link in the first place.
@@ -795,9 +771,8 @@ def _build_org_app(
             sessions=org.sessions, issuer_url=org.issuer_url, step_up=step_up,
             default_next_path=default_next_path, push_store=org.push_store,
         ))
-    # One approval route module builds both modes' routes (ADR 0033) --
-    # only the IdP step-up routes (no local-mode analogue at all) stay a
-    # separate mount, see routes_org_stepup.py's own module docstring.
+    # One approval route module builds the approval routes (ADR 0033) --
+    # only the IdP step-up routes stay a separate mount, see routes_org_stepup.py's own module docstring.
     # The installable app (manifest, icons) always; the push subscription routes only when the
     # org has push on (ADR 0081). The approvals page is the one that offers to subscribe.
     push_store = org.push_store if org.push_notifier is not None else None
@@ -837,7 +812,7 @@ def _build_org_app(
         def org_scoped_token_page_data(principal: Principal) -> dict[str, Any]:
             # The dispatcher's connector set is the principal's own while scoped to them.
             return scoped_token_page_data(
-                principal, policy=scoped_token_policy, delivery="once", connector_names=set(dispatcher.connectors),
+                principal, policy=scoped_token_policy, connector_names=set(dispatcher.connectors),
             )
 
     # Mounted unconditionally, same reasoning as /approvals above --

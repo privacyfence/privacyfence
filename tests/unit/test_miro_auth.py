@@ -38,10 +38,10 @@ TEAM = "3458764549483493025"
 CONFIG = MiroOAuthConfig("client-id", SECRET)
 REDIRECT = "http://localhost:53686/callback"
 UNREADABLE = (
-    "Miro's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect again."
+    "Miro's saved sign-in could not be read. Connect Miro on the Connect page (/connect) to connect again."
 )
 EXPIRED = (
-    "Your Miro sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again."
+    "Your Miro sign-in has expired or was revoked. Connect Miro on the Connect page (/connect) to sign in again."
 )
 
 

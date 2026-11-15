@@ -56,7 +56,7 @@ _TYPE_ENDPOINT = {
 }
 
 _UNAUTHORIZED = (
-    "Miro refused the sign-in (HTTP 401). Use Authenticate… in PrivacyFence Settings to sign in again."
+    "Miro refused the sign-in (HTTP 401). Connect Miro on the Connect page (/connect) to sign in again."
 )
 _FORBIDDEN = (
     "Miro refused the request (HTTP 403). Your Miro account, or the team PrivacyFence was signed in to, "

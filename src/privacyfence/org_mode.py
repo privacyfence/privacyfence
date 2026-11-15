@@ -58,9 +58,8 @@ class ConfigurationError(ValueError):
     rather than genuinely absent. daemon_main.py's ``main()``
     never catches this specifically: it's a ``ValueError`` subclass, so it
     falls into the same "print and refuse to start" path every other
-    startup configuration error already takes, deliberately -- there is no
-    silent fallback to local mode for a *broken* config, only for a
-    missing one (see load_org_config's own docstring for why that
+    startup configuration error already takes, deliberately -- a *broken*
+    config is never treated like a missing one (see load_org_config's own docstring for why that
     distinction matters)."""
 
 
@@ -470,9 +469,8 @@ class DownloadDeliveryConfig:
     staged behind a short-lived, single-claim link when it does not (ADR
     0092 for the limit's unit and default; see ADR 0017
     for the rationale and the inline/staging split). Lives in
-    ``org_bundle.json``'s ``download_delivery`` section, org-mode-only for
-    the same reason ``ServerConfig`` is -- local mode never reads this
-    class.     """
+    ``org_bundle.json``'s ``download_delivery`` section.
+    """
 
     inline_max_bytes: int = DEFAULT_INLINE_MAX_BYTES
     link_ttl_seconds: float = DEFAULT_LINK_TTL_SECONDS
@@ -614,10 +612,8 @@ DEFAULT_SYSLOG_PORT = 6514
 @dataclass(frozen=True)
 class AuditForwardingConfig:
     """Org mode's centralized audit-log forwarding destination. Lives in
-    ``org_bundle.json``'s ``audit_forwarding`` section, org-mode-only like
-    ``ServerConfig``/``DownloadDeliveryConfig`` above -- local mode never
-    looks at this at all (there is no "centralize" to speak of for a single
-    employee's own machine).
+    ``org_bundle.json``'s ``audit_forwarding`` section, like
+    ``ServerConfig``/``DownloadDeliveryConfig`` above.
 
     Forwarding is *additional* visibility, never a replacement for the
     local audit log ``audit_log.py``'s ``AuditLogger`` always writes --
@@ -751,8 +747,7 @@ class WebPushConfig:
     ``scripts/build_org_bundle.py --no-web-push``. On by default: push is what lets a phone user
     learn about an approval at all, since mobile browsers suspend background tabs. Turning it off
     is the org-wide switch for an organization that does not want approval metadata, however
-    little, to pass through Apple's, Google's or Mozilla's push services. Local mode never reads
-    this class and never pushes.
+    little, to pass through Apple's, Google's or Mozilla's push services.
     """
 
     enabled: bool = True
@@ -784,7 +779,7 @@ class PeekProvisioningConfig:
     from, as ``AuditForwardingConfig.http_bearer_token_env`` does for the SIEM bearer token.
     ``trust_unverified_email`` provisions people whose ID token does not say ``email_verified``,
     for providers that only issue verified, organization-owned addresses. ``base_url`` is the
-    normalised ``peek.base_url`` and is set only when enabled. Local mode never provisions.
+    normalised ``peek.base_url`` and is set only when enabled.
     """
 
     enabled: bool = False
@@ -837,7 +832,7 @@ class GristProvisioningConfig:
     ``scripts/build_org_bundle.py --grist-auto-provision``. The provisioning key itself is never in
     the bundle: the daemon reads it from the environment variable ``key_env`` names, as it does
     for ``http_bearer_token_env``. ``provisioner_url`` and ``server_url`` are normalised and set
-    only when enabled. Local mode never provisions.
+    only when enabled.
     """
 
     enabled: bool = False

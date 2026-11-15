@@ -45,14 +45,6 @@ MAX_QUERY_RULES_PER_CALL = 10
 # human has decided anything.
 _ATTACHMENT_PREFETCH_MAX_BYTES = 5_000_000
 
-# Per-attachment ceiling passed to local_files.require_local_files() for the three
-# *_with_attachments tools: an upload slot is buffered entirely in memory, so this is a real
-# per-file memory cap, not just a preview-read cap like _ATTACHMENT_PREFETCH_MAX_BYTES above.
-# Reuses gmail_client's own outgoing-message cap (_MAX_TOTAL_ATTACHMENT_BYTES) as the natural
-# ceiling for any single attachment; gmail_client._attach_files() still enforces the true
-# cross-attachment running total once the bytes are actually read.
-_ATTACHMENT_UPLOAD_MAX_BYTES = 18_000_000
-
 
 def _parse_attachment_paths(value: str) -> list[str]:
     """Parse the ``attachments`` tool argument: a JSON array of ``upload:<id>`` references.
@@ -1527,7 +1519,7 @@ class GmailConnector(Connector):
         expired or already-used upload is reported before the human is asked to approve
         anything. A path that is not an upload reference raises ``LocalFileAccessError``
         with ``NO_BRIDGE_UPLOAD_MESSAGE``."""
-        local_files.require_local_files(paths, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES)
+        local_files.require_local_files(paths)
 
     def _stat_attachments(self, paths: list[str]) -> list[dict[str, Any]]:
         """Name and size of each claimed upload, so the approval popup shows real sizes

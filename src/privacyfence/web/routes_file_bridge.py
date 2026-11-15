@@ -25,6 +25,7 @@ from starlette.types import ASGIApp
 from ..agent_identity import agent_scope
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..download_staging import ClaimedDownload, get_download_staging_store
+from ..principal import Principal, principal_scope
 from ..upload_staging import UploadAlreadyFilledError, UploadTooLargeError, get_upload_staging_store
 
 logger = logging.getLogger(__name__)
@@ -63,11 +64,12 @@ def _audit_bridge_upload_received(principal_id: str, size_bytes: int) -> None:
 
 
 def _audit_bridge_download_served(principal_id: str, claimed: ClaimedDownload) -> None:
-    """Recorded under the request_id of the gated decision that released
-    the file and the agent whose call staged it (ADR 0093) -- neither is on
-    the fetch itself, which for a capability link carries no bearer."""
+    """Recorded in the audit log of the principal whose file it is, under the
+    request_id of the gated decision that released the file and the agent
+    whose call staged it (ADR 0093) -- none of them is on the fetch itself,
+    which for a capability link carries no bearer."""
     try:
-        with agent_scope(claimed.agent):
+        with principal_scope(Principal(id=claimed.principal_id)), agent_scope(claimed.agent):
             get_audit_logger().record(AuditEntry(
                 timestamp=_now_iso(), week=current_week(), request_id=claimed.request_id, connector="",
                 tool="", tool_name="",

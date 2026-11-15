@@ -35,19 +35,19 @@ _REFRESH_MARGIN_SECONDS = 60
 _DEFAULT_EXPIRES_IN = 3600
 _DETAIL_LIMIT = 200
 
-_NOT_AUTHENTICATED = "Grist is not authenticated. Use Authenticate… in PrivacyFence Settings."
+_NOT_AUTHENTICATED = "Grist is not authenticated. Connect Grist on the Connect page (/connect)."
 _UNREADABLE = (
-    "Grist's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect again."
+    "Grist's saved sign-in could not be read. Connect Grist on the Connect page (/connect) to connect again."
 )
 _OAUTH_REQUIRED = (
-    "Your organization connects to Grist with OAuth. Use Authenticate… in PrivacyFence Settings."
+    "Your organization connects to Grist with OAuth. Connect Grist on the Connect page (/connect)."
 )
 _DIFFERENT_SERVER = (
     "Grist was connected to a different server than your organization uses. "
-    "Use Authenticate… in PrivacyFence Settings to connect again."
+    "Connect Grist on the Connect page (/connect) to connect again."
 )
 _EXPIRED = (
-    "Your Grist sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again."
+    "Your Grist sign-in has expired or was revoked. Connect Grist on the Connect page (/connect) to sign in again."
 )
 _SCHEME_RULE = "The Grist server address must start with https:// (http:// is allowed only for localhost)."
 

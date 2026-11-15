@@ -66,7 +66,7 @@ class EchoConnector(Connector):
 @pytest.fixture
 def running_mcp_server(tmp_path):
     connector = EchoConnector()
-    dispatcher = McpDispatcher(lambda: {"contract_test": connector}, mode="org")
+    dispatcher = McpDispatcher(lambda: {"contract_test": connector})
     with single_user_org_server(tmp_path, dispatcher=dispatcher) as server:
         yield connector, server, dispatcher
 

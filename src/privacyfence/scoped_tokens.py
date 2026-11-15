@@ -78,7 +78,7 @@ class ScopedToken:
     label: str
     digest: str  # sha256 hex of the full secret
     principal_id: str
-    principal_email: str  # org mode, for the principal's claims; "" in local mode
+    principal_email: str  # for the principal's claims; "" when the principal has none
     principal_display_name: str
     created_at: float
     expires_at: float

@@ -642,8 +642,8 @@ def load_token_file(token_file: str) -> dict[str, Any]:
     """Load a previously saved Salesforce token record, or raise SalesforceClientError."""
     if not os.path.exists(token_file):
         raise SalesforceClientError(
-            f"No Salesforce token found at '{token_file}'. Use Authenticate… in "
-            "PrivacyFence Settings to sign in."
+            f"No Salesforce token found at '{token_file}'. Connect Salesforce on the "
+            "Connect page (/connect) to sign in."
         )
     with open(token_file, encoding="utf-8") as fh:
         return json.load(fh)
@@ -707,8 +707,8 @@ class SalesforceClient:
         instance_url = self._config.get("instance_url", "")
         if not access_token or not instance_url:
             raise SalesforceClientError(
-                "Salesforce is not authenticated. Use Authenticate… in the "
-                "PrivacyFence Settings to sign in."
+                "Salesforce is not authenticated. Connect Salesforce on the "
+                "Connect page (/connect) to sign in."
             )
         instance = instance_url.replace("https://", "").replace("http://", "").rstrip("/")
         try:

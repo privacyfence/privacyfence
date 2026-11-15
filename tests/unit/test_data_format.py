@@ -221,6 +221,46 @@ class TestCheckUpgradeSource:
         with pytest.raises(ConfigurationError, match="This data was last used by PrivacyFence 8.0.0"):
             data_format.check_upgrade_source(tmp_path)
 
+    def test_a_dangling_token_symlink_is_a_desktop_trace(self, tmp_path):
+        (tmp_path / "mcp_token").symlink_to(tmp_path / "gone")
+        self._marker(tmp_path, 7)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_dangling_symlink_under_authority_is_a_desktop_trace(self, tmp_path):
+        (tmp_path / "authority").mkdir()
+        (tmp_path / "authority" / "mcp_token").symlink_to(tmp_path / "gone")
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_directory_that_cannot_be_inspected_is_refused_with_a_sentence(self, tmp_path, monkeypatch):
+        def fail(self):
+            raise PermissionError("permission denied")
+
+        monkeypatch.setattr(Path, "is_symlink", fail)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            data_format.check_upgrade_source(tmp_path)
+
+        assert str(excinfo.value) == f"The data directory ({tmp_path}) could not be inspected: permission denied"
+        assert isinstance(excinfo.value.__cause__, PermissionError)
+
+    def test_a_fresh_directory_whose_marker_cannot_be_written_is_refused(self, tmp_path, monkeypatch):
+        def fail(*args, **kwargs):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(data_format, "atomic_write_json", fail)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            data_format.check_upgrade_source(tmp_path)
+
+        assert str(excinfo.value) == (
+            f"The data-format marker could not be written to {tmp_path / 'data_format.json'}: "
+            "read-only file system. The data directory must be writable."
+        )
+
     def test_the_guide_the_texts_point_to_exists(self):
         repo = Path(__file__).resolve().parents[2]
         assert (repo / "docs" / "moving-to-organization-mode.md").is_file()

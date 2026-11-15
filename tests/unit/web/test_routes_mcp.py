@@ -170,7 +170,7 @@ def _dispatcher(connectors: dict[str, Connector] | None = None, **kwargs) -> Mcp
 def _delivery_dispatcher(connectors: dict[str, Connector] | None = None) -> McpDispatcher:
     """An organization-mode dispatcher with token proposals and n8n delivery both on."""
     return _dispatcher(
-        connectors or {"echo": EchoConnector()}, mode="org",
+        connectors or {"echo": EchoConnector()},
         scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
         agent_runtime=agent_runtimes.N8nRuntimeConfig(
             enabled=True, base_url="https://n8n.example.com", project_id="", mcp_url="",
@@ -230,6 +230,11 @@ class TestServerInstructions:
         assert result.instructions == SERVER_INSTRUCTIONS
         assert "companion" not in SERVER_INSTRUCTIONS
         assert "Connect page" in SERVER_INSTRUCTIONS
+        # "It is the one tool guaranteed to exist" must follow the sentence about
+        # privacyfence_status, so "It" names that tool rather than the Connect page.
+        status_sentence = SERVER_INSTRUCTIONS.index("what to tell the user to do about it.")
+        guaranteed = SERVER_INSTRUCTIONS.index("It is the one tool guaranteed to exist")
+        assert guaranteed == status_sentence + len("what to tell the user to do about it. ")
         # Named concretely, per the status tool's own docstring -- the
         # instructions are what tells a client the tool exists and why to
         # call it, not just that an empty tool list means "not set up".
@@ -504,7 +509,7 @@ class TestFilesOverTheWire:
     async def test_a_path_that_is_not_an_upload_reference_reaches_the_model_as_the_upload_slot_message(self):
         class ReadsAPathConnector(EchoConnector):
             async def call(self, tool: str, args: dict) -> object:
-                local_files.require_local_files(["~/a.pdf"], max_total_bytes=1000)
+                local_files.require_local_files(["~/a.pdf"])
                 return {}
 
         dispatcher = _dispatcher({"echo": ReadsAPathConnector()})
@@ -593,7 +598,7 @@ class TestMetaTools:
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("privacyfence_status", {"reason": "planning"})
         assert result.is_error is False
-        assert result.structured_content["mode"] == "local"
+        assert result.structured_content["mode"] == "org"
         assert result.structured_content["setup_complete"] is True
 
     async def test_create_upload_slot_round_trips(self, tmp_path, monkeypatch):
@@ -770,18 +775,17 @@ class TestRuntimeCredentialStatusTool:
         with_delivery = await self._names(_delivery_dispatcher(), verifier=verifier)
         no_proposals = await self._names(
             _dispatcher(
-                {"echo": EchoConnector()}, mode="org",
+                {"echo": EchoConnector()},
                 scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, False),
                 agent_runtime=agent_runtimes.N8nRuntimeConfig(True, "https://n8n.example.com", "", ""),
             ), verifier=verifier,
         )
-        local_mode = await self._names(_dispatcher({"echo": EchoConnector()}))
-        no_runtime = await self._names(_dispatcher({"echo": EchoConnector()}, mode="org"), verifier=verifier)
+        no_runtime = await self._names(_dispatcher({"echo": EchoConnector()}), verifier=verifier)
         monkeypatch.delenv("PRIVACYFENCE_N8N_API_KEY")
         no_key = await self._names(_delivery_dispatcher(), verifier=verifier)
 
         assert RUNTIME_CREDENTIAL_STATUS_TOOL.name in with_delivery
-        for names in (no_proposals, local_mode, no_runtime, no_key):
+        for names in (no_proposals, no_runtime, no_key):
             assert RUNTIME_CREDENTIAL_STATUS_TOOL.name not in names
 
     async def test_a_call_answers_over_the_wire_and_is_audited(self):
@@ -1342,13 +1346,13 @@ def _triples(tools) -> dict[str, tuple]:
 
 class TestToolAnnotationsOverTheWire:
     """ADR 0089, checked on a live ``/mcp`` ``list_tools``: every connector tool is annotated
-    truthfully in both modes, whatever the client sends, and the meta-tools keep their own."""
+    truthfully for every caller, whatever the client sends, and the meta-tools keep their own."""
 
-    @pytest.mark.parametrize("dispatcher_mode", ["local", "org"])
+    @pytest.mark.parametrize("org_verifier", [False, True])
     @pytest.mark.parametrize("header", [None, "all-read-only", "truthful", "read-only"])
-    async def test_connector_tools_are_always_truthful(self, dispatcher_mode, header):
-        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()}, mode=dispatcher_mode)
-        verifier = _OrgVerifier("alice@example.com") if dispatcher_mode == "org" else None
+    async def test_connector_tools_are_always_truthful(self, org_verifier, header):
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
+        verifier = _OrgVerifier("alice@example.com") if org_verifier else None
         headers = {_REMOVED_HEADER: header} if header is not None else None
         async with _connected_session(dispatcher, verifier=verifier, headers=headers) as session:
             result = await session.list_tools()

@@ -12,7 +12,7 @@ from privacyfence import paths
 from privacyfence.agent_identity import AgentIdentity, AgentSource, agent_scope
 from privacyfence.audit_log import current_week, init_audit_logger, released_request_scope, set_released_request_id
 from privacyfence.download_staging import get_download_staging_store
-from privacyfence.principal import LOCAL_PRINCIPAL, Principal
+from privacyfence.principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from privacyfence.upload_staging import get_upload_staging_store
 from privacyfence.web import routes_file_bridge
 from privacyfence.web.routes_file_bridge import mount_capability_routes
@@ -146,6 +146,21 @@ class TestCapabilityDownloadRoute:
         assert row["decision"] == "bridge_download_served"
         assert row["request_id"] == "req-1"
         assert (row["agent_id"], row["agent_name"]) == ("claude-code", "Claude Code")
+
+    def test_served_row_goes_to_the_audit_log_of_whoever_staged_the_file(self, tmp_path):
+        """The fetch runs as no principal at all, so without the staged owner the row would land
+        in some other log than the decision that released the file."""
+        init_audit_logger(str(tmp_path / "current"))
+        with principal_scope(BOB):
+            init_audit_logger(str(tmp_path / "bob"))
+        token = get_download_staging_store().stage(BOB, b"data", "f.txt", "text/plain")
+
+        assert _capability_client().get(f"/mcp-files/fetch/{_b64(token)}").status_code == 200
+
+        week = f"{current_week()}.jsonl"
+        [row] = [json.loads(line) for line in (tmp_path / "bob" / week).read_text(encoding="utf-8").splitlines()]
+        assert row["decision"] == "bridge_download_served"
+        assert not (tmp_path / "current" / week).exists()
 
 
 class TestMount:

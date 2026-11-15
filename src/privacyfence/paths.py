@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from .principal import Principal
 
 # Deliberately strict -- principal ids reach here from an OAuth 2.1/OIDC
-# `sub` claim in org mode (in local mode it's always "local"), and this is the one
+# `sub` claim (or the fixed "local" id), and this is the one
 # place that string becomes a filesystem path component. Anything outside
 # this set (a "/", a leading "." that could hide a directory, ...) is
 # rejected rather than sanitized, so a hostile or malformed id fails loudly
@@ -173,20 +173,16 @@ def user_dir(principal: "Principal | None" = None) -> Path:
 
 
 def authority_dir(principal: "Principal | None" = None) -> Path:
-    """Directory root for the files that back the *human's* authority in
-    local mode -- the control channel's socket (macOS/Linux; Windows' named
-    pipe lives outside the filesystem, see web/control_channel.py), the
+    """Directory root for the files that back the *human's* authority -- the
     privacy policy (``config/settings.yaml``), enrolled WebAuthn credentials,
-    and local mode's audit log and its HMAC key -- as distinct from
+    scoped tokens, and the audit log and its HMAC key -- as distinct from
     ``user_dir()``, which stays reachable by the agent for its connector
     caches/credentials.
 
     A subdirectory of ``user_dir(principal)``, not a sibling of it: the
     local principal's authority root is ``data_dir()/authority`` (since
     ``user_dir(LOCAL_PRINCIPAL_ID)`` *is* ``data_dir()``), and any other
-    principal's is ``user_dir(principal)/authority``. Org mode's daemon
-    already runs where the agent has no access, but the non-local branch
-    costs nothing extra to keep correct.
+    principal's is ``user_dir(principal)/authority``.
     """
     return authority_root(user_dir(principal))
 

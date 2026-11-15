@@ -256,8 +256,8 @@ class RegistrationChallengeStore:
     ``authorized`` is how the
     two halves of a gated enrollment stay one ceremony: web/
     routes_security.py's ``register_options`` is where the gate actually
-    runs -- a fresh assertion when this principal already has a credential,
-    a companion confirmation when it has none -- and it records the verdict
+    runs -- a fresh assertion when this principal already has a credential
+    -- and it records the verdict
     here, on the challenge it just issued, so ``register_verify`` can check
     that the ceremony it is being asked to complete is the one that passed
     rather than re-deciding (and re-prompting) for itself. ``pop`` returns

@@ -186,30 +186,18 @@ class AuditEntry:
                             # ("webauthn_enrollment_refused": the enrollment gate --
                             #  plan -- web/routes_security.py's register_options/register_verify,
                             #  recorded when the gate on *adding* a passkey turns an enrollment away:
-                            #  a failed step-up assertion where a credential is already enrolled, or
-                            #  a first enrollment the companion did not confirm. The counterpart to
+                            #  a failed step-up assertion where a credential is already enrolled. The
+                            #  counterpart to
                             #  "webauthn_credential_enrolled" above, and the entry whose absence was
                             #  the gap: before that gate existed, an enrollment nobody asked for left
                             #  a successful enrollment entry and nothing to distinguish it from one
                             #  the human made. A 428 asking for the assertion is not recorded -- it
                             #  is a round trip in the ordinary protocol, not a refusal.)
-                            # ("sign_in_code_minted":
-                            #  web/control_channel.py's own MINT handler, recorded for *every*
-                            #  bootstrap code this daemon issues, whichever shape asked for it.
-                            #  Before this, exactly one of the three ways to a session wrote an
-                            #  audit entry (the MCP sign-in-link tool, now retired) and the two
-                            #  silent ones were the two anything on this machine could use, so the
-                            #  log recorded the sanctioned path and not the reachable ones. The
-                            #  summary names which shape asked and what the resulting session may
-                            #  do: "human" (the companion's own menu, or --print-sign-in-link, both
-                            #  confirmed by the companion) or "unattested" (a bare MINT -- can view
-                            #  what is pending, cannot release it). A *refused* attested mint is
-                            #  recorded too, since "somebody asked for a session that can approve
-                            #  and was turned down" is exactly the line a human scanning this log
-                            #  wants to see. /security shows the recent ones, so an unexpected mint
-                            #  is visible rather than merely inferable.)
+                            # ("sign_in_code_minted": a sign-in code issued over the control
+                            #  channel of a release before 8. Nothing records it any more (ADR
+                            #  0301); a log carried over from such a release may still hold it.)
                             # ("webauthn_recovery_code_used": web/routes_security.py's
-                            #  recover_credential, local mode's sanctioned way back in when the only
+                            #  recover_credential, the sanctioned way back in when the only
                             #  enrolled authenticator is lost with no IdP to fall back on: trading in
                             #  the one-time recovery code from enrollment removes every credential on
                             #  file for that principal. Always recorded on a successful trade-in --
@@ -223,7 +211,7 @@ class AuditEntry:
                             #  recovery code left no trace until a guess succeeded.)
                             # ("step_up_requirement_enabled"/"step_up_requirement_disabled":
                             #  daemon_main.py, recorded once per daemon startup that finds
-                            #  local mode's effective ``step_up.enabled and step_up.require_passkey``
+                            #  the effective ``step_up.enabled and step_up.require_passkey``
                             #  differs from what the previous startup observed. There is no UI path to
                             #  flip this (it's a config file edit plus a restart, deliberately -- see
                             #  step_up_config.py's own docstring), so a startup-time comparison is the
@@ -488,8 +476,8 @@ class AuditEntry:
                               # deployment_id(), an opaque random id persisted once at
                               # data_dir()/deployment_id -- not a hostname or MAC address). Lets a
                               # centrally forwarded or manually aggregated collection of audit
-                              # entries -- from several employees' local-mode machines, or several
-                              # org-mode servers -- be told apart by which install produced them.
+                              # entries -- from several organization servers -- be told apart by
+                              # which install produced them.
     security_config_hash: str = ""  # sha256 of the settings.yaml (privacy policy) content in effect
                               # when this decision was recorded -- see compute_security_config_hash()
                               # below. Lets a reviewer (or an automated diff) tell whether the policy
@@ -1209,9 +1197,8 @@ def set_security_config_hash_for_all_principals(value: str) -> list[str]:
     """Push a new ``security_config_hash`` onto every principal's logger,
     returning the ids updated.
 
-    ``AuditLogger.set_security_config_hash`` covers local mode, where
-    settings_controller.py's ``_save_config`` is writing the one principal's
-    own settings.yaml. Org mode's install-wide policy edit is a change to
+    ``AuditLogger.set_security_config_hash`` covers one principal's own
+    settings.yaml. The install-wide policy edit is a change to
     the policy governing *every* principal's decisions, so every
     principal's logger has to start stamping the new fingerprint -- a
     reviewer diffing a decision against the policy in force when it was

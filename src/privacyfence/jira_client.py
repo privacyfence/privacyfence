@@ -236,7 +236,7 @@ class JiraClient:
 
         if not access_token or not cloud_id:
             raise JiraClientError(
-                "Jira is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                "Jira is not authenticated. Connect Jira on the Connect page (/connect)."
             )
 
         self._users = user_directory or AtlassianUserDirectory(cloud_id=cloud_id)

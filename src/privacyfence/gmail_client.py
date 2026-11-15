@@ -395,8 +395,8 @@ class GmailClient:
     def _load_credentials(self) -> Credentials:
         """Load cached credentials, refreshing them if expired.
 
-        Raises if no usable token exists - the user must authenticate Gmail from
-        Settings (Connectors), or from ``/connect`` in org mode.
+        Raises if no usable token exists - the user must connect Gmail on the
+        Connect page (``/connect``).
         """
         # Guards concurrent refresh/save of the shared token file when
         # multiple threads hit an expired token at the same time.
@@ -404,7 +404,7 @@ class GmailClient:
             if not os.path.exists(self._token_file):
                 raise GmailClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Authenticate Gmail from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
+                    "Connect Gmail on the Connect page (/connect) to authorize."
                 )
 
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
@@ -419,14 +419,14 @@ class GmailClient:
                 except Exception as exc:  # noqa: BLE001 - surface a clear message
                     raise GmailClientError(
                         f"Failed to refresh OAuth token: {exc}. "
-                        "Reconnect Gmail from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                        "Connect Gmail on the Connect page (/connect) to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
 
             raise GmailClientError(
                 "Cached OAuth token is invalid and cannot be refreshed. "
-                "Reconnect Gmail from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                "Connect Gmail on the Connect page (/connect) to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:

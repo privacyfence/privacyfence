@@ -525,8 +525,7 @@ def _attendee_email(attendee: Any) -> str:
 
 # ── Per-principal state ──────────────────────────────────────────────────────
 #
-# One PrincipalRegistry entry per principal (local mode has exactly one; org mode one per signed-in
-# user) -- config path, write lock, the temp-accept grace window, the hot-reloaded v2 rule cache, and
+# One PrincipalRegistry entry per principal (one per signed-in user) -- config path, write lock, the temp-accept grace window, the hot-reloaded v2 rule cache, and
 # the rules-changed listener broadcast that lets a pending approval re-resolve the moment a rule
 # changes. Every accessor function below is what gate.py/settings_controller.py/daemon_main.py
 # actually call; nothing outside this module reaches into _AutoAcceptState directly.
