@@ -61,6 +61,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Admin → Agent runtimes has a credential type for n8n.** The default is unchanged: delivery still creates an n8n bearer credential for the MCP Client node. Choosing **PrivacyFence node** makes delivery create a `privacyFenceApi` credential that holds the token and this server's address, for the PrivacyFence node; delivery then refuses, before a token is created, when the community node is not installed in that n8n. Tokens already delivered keep their type. See [docs/n8n-node.md](docs/n8n-node.md).
 - **n8n delivery can be switched on from the server environment.** An operator of an organization server sets `PRIVACYFENCE_N8N_DELIVERY=true` in `privacyfence.env` to turn on n8n delivery, scoped tokens and AI token proposals without opening Admin, and `PRIVACYFENCE_N8N_PROJECT_ID` and `PRIVACYFENCE_N8N_MCP_URL` fill the n8n project and PrivacyFence address. A variable that is set locks its field on Admin; `true` without the n8n address and key refuses the start ([ADR 0294](docs/adr/0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md)).
 
+### Fixed
+
+- **Jira Assets errors say what Atlassian answered.** A failed Assets call now reports the HTTP status and Atlassian's own reason instead of "400 Client Error: Bad Request for url …", and the message no longer contains the site's cloud id or Assets workspace id.
+
 ## [7.0.2] — 2026-11-06
 
 ### Fixed

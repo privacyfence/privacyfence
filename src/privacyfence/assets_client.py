@@ -59,6 +59,8 @@ _SCHEMA_PAGE_SIZE = 100
 _HTTP_TIMEOUT_SECONDS = 30
 _ID_RE = re.compile(r"[0-9]{1,12}")
 WORKSPACE_ID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+_DETAIL_MAX_CHARS = 300
+_UUID_RE = re.compile(WORKSPACE_ID_RE.pattern)
 _MAX_AQL_CHARS = 4000
 _DIRECTIONS = ("outbound", "inbound", "both")
 _ATTRIBUTE_KINDS = {
@@ -209,16 +211,60 @@ def _scope_refused(exc: requests.HTTPError) -> bool:
     return status == 401 and "scope does not match" in (getattr(response, "text", "") or "")
 
 
+def _scrub(text: str) -> str:
+    """Replace every UUID (the Atlassian cloud id, the Assets workspace id) with ``<id>``."""
+    return _UUID_RE.sub("<id>", text)
+
+
+def _error_detail(response: Any) -> str:
+    """Atlassian's reason from an error response, one short line with no UUID, or ``no detail``."""
+    try:
+        body = response.json()
+    except ValueError:
+        text = (getattr(response, "text", "") or "").strip()
+        if not text or text.startswith("<"):
+            return "no detail"
+        reason = text
+    else:
+        parts: list[str] = []
+        if isinstance(body, dict):
+            messages = body.get("errorMessages")
+            if isinstance(messages, list):
+                parts.extend(m for m in messages if isinstance(m, str) and m)
+            errors = body.get("errors")
+            if isinstance(errors, dict):
+                parts.extend(f"{k}: {v}" for k, v in errors.items() if isinstance(v, str) and v)
+            for key in ("message", "error"):
+                value = body.get(key)
+                if isinstance(value, str) and value:
+                    parts.append(value)
+        if not parts:
+            return "no detail"
+        reason = "; ".join(parts)
+    reason = _scrub(" ".join(reason.split()).replace("|", "/"))
+    if len(reason) > _DETAIL_MAX_CHARS:
+        reason = reason[: _DETAIL_MAX_CHARS - 1] + "…"
+    return reason
+
+
 def _guarded(fn: Callable[..., _T]) -> Callable[..., _T]:
-    """Re-raise anything but an ``AssetsClientError`` as ``AssetsClientError("<method> failed: …")``."""
+    """Re-raise anything but an ``AssetsClientError`` as ``AssetsClientError("<method> failed: …")``.
+
+    The message names the HTTP status and Atlassian's reason and never carries the request URL
+    or a UUID: the URL holds the site's cloud id and Assets workspace id, and the message
+    reaches public logs, the daemon log and the AI client."""
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> _T:
         try:
             return fn(*args, **kwargs)
         except AssetsClientError:
             raise
+        except requests.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            detail = _error_detail(exc.response) if exc.response is not None else "no detail"
+            raise AssetsClientError(f"{fn.__name__} failed: HTTP {status}: {detail}") from exc
         except Exception as exc:
-            raise AssetsClientError(f"{fn.__name__} failed: {exc}") from exc
+            raise AssetsClientError(_scrub(f"{fn.__name__} failed: {exc}")) from exc
     return wrapper
 
 
