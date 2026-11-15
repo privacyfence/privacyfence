@@ -4703,3 +4703,90 @@ class TestOrganizationModeContext:
         monkeypatch.setattr(sys, "argv", ["qa_fixture_recorder.py", "--check"])
         assert recorder.main() == 0
         assert seen == ["qa-live"]
+
+
+class TestSuspendedConnectors:
+    """SUSPENDED_CONNECTORS switches a connector's LIVE check/recording off (https://github.com/privacyfence/privacyfence/issues/1131)."""
+
+    @staticmethod
+    def _result(name: str) -> list:
+        return [recorder.CheckResult(name, "m", "seed", True, "fine", {"a": 1}, "x.json")]
+
+    @pytest.fixture
+    def setup(self, monkeypatch, tmp_path):
+        calls: list[str] = []
+
+        def ok(record, manifest):
+            calls.append("ok")
+            return self._result("ok")
+
+        def ok2(record, manifest):
+            calls.append("ok2")
+            return self._result("ok2")
+
+        def paused(record, manifest):
+            raise AssertionError("must not run")
+
+        monkeypatch.setattr(recorder, "CONNECTOR_CHECKS", {"ok": ok, "ok2": ok2, "paused": paused})
+        monkeypatch.setattr(recorder, "SUSPENDED_CONNECTORS", {"paused": "why"})
+        monkeypatch.setattr(recorder, "load_manifest", lambda: {})
+        monkeypatch.setattr(recorder, "FIXTURES_DIR", tmp_path)
+        return calls
+
+    def test_default_run_skips_a_suspended_connector_and_passes(self, setup, capsys, monkeypatch):
+        monkeypatch.setattr(recorder, "CONNECTOR_CHECKS", {
+            "ok": recorder.CONNECTOR_CHECKS["ok"], "paused": recorder.CONNECTOR_CHECKS["paused"],
+        })
+        assert recorder.run("check", [], None) == 0
+        out = capsys.readouterr().out
+        assert "Command: `qa_fixture_recorder.py --check ok`" in out.splitlines()
+        assert "| ok |" in out
+        assert "Suspended, not run: paused -- why" in out
+        assert not any("paused" in ln for ln in out.splitlines() if ln.startswith("Fixture freshness"))
+
+    def test_default_record_writes_no_fixture_for_a_suspended_connector(self, setup, tmp_path):
+        recorder.run("record", [], None)
+        assert (tmp_path / "ok" / "x.json").exists()
+        assert not (tmp_path / "paused").exists()
+
+    def test_explicit_suspended_name_is_refused(self, setup, capsys):
+        assert recorder.run("check", ["paused"], None) == 1
+        cap = capsys.readouterr()
+        assert "'paused' is suspended: why. To resume, delete its entry from SUSPENDED_CONNECTORS" in cap.err
+        assert "Suspended, not run: paused -- why" in cap.out
+
+    def test_explicit_list_with_a_suspended_name_still_runs_the_others(self, setup, capsys):
+        assert recorder.run("check", ["ok", "paused"], None) == 1
+        out = capsys.readouterr().out
+        assert "| ok |" in out
+        assert "Command: `qa_fixture_recorder.py --check ok`" in out.splitlines()
+        assert setup == ["ok"]
+
+    def test_duplicate_explicit_suspended_names_report_once(self, setup, capsys):
+        recorder.run("check", ["paused", "paused"], None)
+        assert capsys.readouterr().out.count("Suspended, not run:") == 1
+
+    def test_report_file_carries_the_suspended_line(self, setup, tmp_path, capsys):
+        report = tmp_path / "r.md"
+        recorder.run("check", [], str(report))
+        assert "Suspended, not run: paused -- why" in report.read_text(encoding="utf-8")
+
+    def test_no_suspended_connector_changes_nothing(self, setup, monkeypatch, capsys):
+        monkeypatch.setattr(recorder, "SUSPENDED_CONNECTORS", {})
+        monkeypatch.setattr(recorder, "CONNECTOR_CHECKS", {
+            k: v for k, v in recorder.CONNECTOR_CHECKS.items() if k != "paused"
+        })
+        assert recorder.run("check", [], None) == 0
+        out = capsys.readouterr().out
+        assert setup == ["ok", "ok2"]
+        assert "Suspended" not in out
+
+    def test_assets_is_suspended_with_a_reason(self):
+        assert set(recorder.SUSPENDED_CONNECTORS) == {"assets"}
+        assert "issues/1131" in recorder.SUSPENDED_CONNECTORS["assets"]
+        fixtures_root = Path(__file__).resolve().parents[1] / "fixtures" / "live"
+        for name in recorder.SUSPENDED_CONNECTORS:
+            assert name in recorder.CONNECTOR_CHECKS
+            assert name in recorder.EXPECTED_FIXTURES
+            for fname in recorder.EXPECTED_FIXTURES[name]:
+                assert (fixtures_root / name / fname).is_file()
