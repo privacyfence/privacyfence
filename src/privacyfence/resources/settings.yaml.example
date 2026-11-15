@@ -207,24 +207,17 @@ logging:
 
 web:
   # Port the embedded HTTP server listens on -- shared by the approval
-  # surface, /mcp below, and /settings, one server either way. Always
-  # bound to localhost only in this (local) mode -- see web/server.py's
-  # module docstring. The web approval UI is the only approval UI there
-  # is, so the embedded server has no "off" switch (the old
-  # `web.approval_ui` native/web choice is gone, not just defaulted).
+  # surface, /mcp below, and /settings, one server either way. The web
+  # approval UI is the only approval UI there is, so the embedded server
+  # has no "off" switch.
   port: 8765
   mcp:
-    # Turns on the /mcp Streamable HTTP endpoint -- Claude talks to
-    # PrivacyFence directly over HTTP. On by default because
-    # PrivacyFence.mcpb installs a thin stdio shim for Claude Desktop that
-    # only speaks /mcp, so a fresh install needs this on for that
-    # extension's zero-config promise ("no config file edited") to
-    # actually hold. It is also the only way Claude reaches this daemon
-    # at all. Flip to false only if you want this daemon completely
-    # unreachable from Claude for a while (a full stop, not a fallback to
-    # something else that still works). Once enabled, point a Streamable
-    # HTTP MCP client at http://localhost:<port>/mcp with
-    # `Authorization: Bearer <the token in ~/.privacyfence/mcp_token>`.
+    # Turns on the /mcp Streamable HTTP endpoint -- AI clients talk to
+    # PrivacyFence directly over HTTP. It is the only way an AI client
+    # reaches this server at all. Flip to false only if you want the server
+    # completely unreachable from AI clients for a while. Point a
+    # Streamable HTTP MCP client at http://localhost:<port>/mcp and sign in
+    # when it asks.
     enabled: true
   settings:
     # Serve /settings and its POST /api/settings/{action} dispatcher.
@@ -236,14 +229,8 @@ web:
     # Flip to false only if you're deliberately editing config by hand and
     # want /settings unreachable too.
     enabled: true
-    # The web settings page's "Quit PrivacyFence" action stops the server
-    # rendering the page it was clicked on -- confirmed in-page either way,
-    # but this is the local-mode-only kill switch for the action entirely.
-    # Will be refused outright once `mode: org` exists (a future phase);
-    # local mode leans "the token is enough" for now.
-    allow_quit: true
   notifications:
-    # Desktop notifications for a new pending approval while the
+    # Browser notifications for a new pending approval while the
     # /approvals tab is open but not focused (docs/approvals-and-policy.md's
     # "Notifications") -- tiers 0 (title badge, aria-live announcement) and 1
     # (registration.showNotification(), no push service involved, nothing
@@ -273,14 +260,9 @@ web:
 #
 # `enabled` and `require_passkey` are deliberately left unset below rather
 # than written out as `false`. Unset means "whatever this install can
-# actually back": ON for a packaged install (the DMG/.pkg, the Windows
-# installer, the .deb), which is privilege-separated or refuses to serve at
-# all, so the credential store a passkey is checked against is out of the
-# agent's reach; OFF for a source checkout or a `pip`/`pipx install`, where
-# nothing separates anything and a passkey checked against a store the
-# agent can write is a checkbox a local process ticks for itself. Write
-# either key out by hand to decide for yourself -- an explicit value always
-# wins, in both directions.
+# actually back": off here, and on for a single-user install. Write either
+# key out by hand to decide for yourself -- an explicit value always wins,
+# in both directions.
 step_up:
   # Turns on step-up at decide time: releasing an approving decision
   # (accept/accept_all) on a gated write -- or, with the wider scope below,
@@ -298,8 +280,8 @@ step_up:
   # this file directly still works too, and is the only way back to
   # `false` -- there's no UI control that turns step-up back off.
   #
-  # Unset: on for a packaged install, off otherwise (see the note above
-  # this section). Uncomment to decide for yourself.
+  # Unset: off (on for a single-user install; see the note above this
+  # section). Uncomment to decide for yourself.
   # enabled: false
   # Which approvals require step-up, narrowest first:
   #   writes                 every approval popup for a write
@@ -336,18 +318,10 @@ step_up:
   # with this on, it still starts -- refusing to boot would remove the one
   # path (/security) that fixes it -- but every page carries a persistent
   # banner until a passkey is added, and no approving decision is released
-  # in the meantime. On a packaged install the companion app walks you
-  # through enrolling the first one at its next start, so that state is
-  # meant to last minutes rather than to be lived in.
+  # in the meantime.
   #
-  # Setting this to `true` on an install that is *not* privilege-separated
-  # (ADR 0003) is refused outright at startup, naming the fix: this flag
-  # and the enrolled-credential store would both be files the agent this
-  # check defends against can edit, which makes the guarantee worse than
-  # not having it at all.
-  #
-  # Unset: on for a packaged install, off otherwise (see the note above
-  # this section). Uncomment to decide for yourself.
+  # Unset: off (on for a single-user install; see the note above this
+  # section). Uncomment to decide for yourself.
   # require_passkey: false
   # The approval binder's own batch decide endpoint (/approvals):
   # "single_assertion" -- the default -- lets one passkey prompt release a
@@ -361,16 +335,12 @@ step_up:
   # unaffected either way -- denying never needs step-up.
   batch: single_assertion
 
-# ADR 0007 (docs/adr/0007-local-file-bridge.md): the local file bridge --
-# how the daemon hands an export or a download to the client as a one-time
-# link, and takes an upload through an upload slot, instead of reading or
-# writing the user's filesystem.
-# Unset means every default below applies -- most installs never need this
-# section at all.
+# How the server hands an export or a download to the client as a one-time
+# link, instead of writing to the user's filesystem. Unset means every
+# default below applies -- most installs never need this section at all.
 file_bridge:
-  # A download this large is held fully in memory before it's staged for
-  # the shim (or, with no shim, before a one-time link is handed out) --
-  # not streamed to disk on this side. 200MB is generous for anything a
+  # A download this large is held fully in memory before
+  # a one-time link is handed out -- not streamed to disk on this side. 200MB is generous for anything a
   # Drive/Gmail/Confluence tool plausibly downloads; raise it only if you
   # know this machine has memory to spare for occasional larger files.
   # Uncomment to change it.
@@ -381,8 +351,7 @@ file_bridge:
 # one it does. Values are registry ids: claude-code, claude, chatgpt,
 # gemini-cli, cursor. This only relabels the name: a match is still
 # recorded as "Not verified" (client_info) on every install, because it is
-# selected by the name the AI system itself sends, and every AI system on
-# this machine shares one local credential. Read at startup -- restart
+# selected by the name the AI system itself sends. Read at startup -- restart
 # after changing it.
 # agent_overrides:
 #   my-internal-wrapper: claude-code

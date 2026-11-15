@@ -9,16 +9,16 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
 
 ### Install and first steps
 
-- [`getting-started.md`](getting-started.md) — what you need, which install fits, your first
-  approval, and troubleshooting shared by every platform.
+- [`getting-started.md`](getting-started.md) — what you need, which deployment fits, your first
+  approval, and troubleshooting.
 - [`connecting-a-service.md`](connecting-a-service.md) — the Admin page, connecting Gmail, Slack and
   the other services, and what each connector status means.
-- [`moving-to-organization-mode.md`](moving-to-organization-mode.md) — why desktop mode is deprecated,
-  the two ways forward, and what to do before any upgrade to 8.x.
+- [`moving-to-organization-mode.md`](moving-to-organization-mode.md) — why 8 runs only in organization mode,
+  the two ways forward, and what to do before upgrading to 8.x.
 
 ### Using PrivacyFence
 
-- [`how-it-works.md`](how-it-works.md) — the daemon, the companion app, how AI clients connect,
+- [`how-it-works.md`](how-it-works.md) — the server, how AI clients connect,
   and the `privacyfence_*` tools every client sees.
 - [`approvals-and-policy.md`](approvals-and-policy.md) — how requests are gated, approval cards,
   the PII check, "Always allow" and policy rules, the privacy filter, file previews and
@@ -41,14 +41,14 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
 - [`oidc-provider.md`](oidc-provider.md) — let Peek and Grist (or other apps you name) sign people in
   through PrivacyFence, with the identity PrivacyFence already has.
 - [`security-and-compliance.md`](security-and-compliance.md) — trust boundaries, step-up
-  authentication, privilege separation, audit integrity, and what PrivacyFence does not claim.
+  authentication, audit integrity, and what PrivacyFence does not claim.
 - [`oauth-relay.md`](oauth-relay.md) — the OAuth redirect relay at `oauth.privacyfence.eu`: what it
   forwards and stores, and how the maintainers run, check and revoke it.
 
 ### Connector setup
 
 Registering your organization's own OAuth app (or bot) for a service, in place of the built-in one,
-as a signed connector config on an organization server or a bundle section on a desktop install:
+as a signed connector config or a bundle section on an organization server:
 
 - [`google-cloud-setup.md`](google-cloud-setup.md) — Gmail, Drive, Docs, Sheets, Calendar,
   Contacts, Tasks and Apps Script
@@ -62,15 +62,13 @@ as a signed connector config on an organization server or a bundle section on a 
 
 ### AI agent setup
 
-Connecting each AI client, in local mode and in an organization deployment:
+Connecting each AI client to a single-user Docker install or an organization deployment:
 
-- [`connect-claude-desktop.md`](connect-claude-desktop.md) — Claude Desktop, through the extension
-  or as a custom connector
-- [`connect-claude-code.md`](connect-claude-code.md) — Claude Code, over HTTP with your own token
-  or through OAuth sign-in to an organization deployment
+- [`connect-claude-desktop.md`](connect-claude-desktop.md) — Claude Desktop, as a custom connector
+- [`connect-claude-code.md`](connect-claude-code.md) — Claude Code, through OAuth sign-in
 - [`connect-claude-ai.md`](connect-claude-ai.md) — claude.ai, through an organization deployment
-- [`connect-chatgpt.md`](connect-chatgpt.md) — ChatGPT desktop on your own computer, and ChatGPT
-  (Developer Mode) through an organization deployment
+- [`connect-chatgpt.md`](connect-chatgpt.md) — ChatGPT (Developer Mode), through an
+  organization deployment
 - [`connect-gemini-enterprise.md`](connect-gemini-enterprise.md) — Gemini Enterprise, through an
   organization deployment
 
@@ -92,11 +90,11 @@ privacyfence.eu.
 - [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — how to propose a change: issues, forks, branches, pull
   requests, license.
 - [`releasing.md`](releasing.md) — versioning, cutting a tag, release notes, release gating,
-  PyPI and the R2 release archive.
+  the organization image and the R2 release archive.
 - [`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) — code and test
   conventions, adding a connector, and the definition of done for a pull request (§2.7).
 - [`dev-vs-live-setup.md`](dev-vs-live-setup.md) — running PrivacyFence from source without
-  clashing with a packaged install.
+  clashing with a Docker install.
 - [`testing-policy.md`](testing-policy.md) — the test layers, which workflow runs which layer, and
   where.
 - [`release-testing.md`](release-testing.md) — the release gates and the manual checks every
@@ -131,8 +129,7 @@ Every doc in this directory except the ADRs follows these rules.
 4. **Checked against the code, and kept that way by tests** wherever a table can be generated or
    a claim asserted: [`tools-reference.md`](tools-reference.md) and
    [`always-allow-rules-reference.md`](always-allow-rules-reference.md) are generated, the
-   configuration reference is checked against `settings.yaml.example`, the install pages against
-   the support matrix, and every `docs/…md` path named anywhere in the repository must exist.
+   configuration reference is checked against `settings.yaml.example`, and every `docs/…md` path named anywhere in the repository must exist.
 5. **Every limit and default stated** with its real value: sizes, timeouts, defaults that differ
    between the code and the seeded `settings.yaml`, supported OS versions and architectures.
 

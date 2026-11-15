@@ -13,9 +13,9 @@ is not this suite's business), and `mailto:` is skipped for the same reason -- b
 `github.com/privacyfence/privacyfence/blob/main/<path>` or
 `raw.githubusercontent.com/privacyfence/privacyfence/main/<path>` URL names a file in the working
 tree, so it is resolved against the checkout exactly like a relative link would be. README.md is
-the reason that matters: it is also the PyPI long description, so its links and images have to be
-absolute to render there, and without this they would have dropped
-out of the check above the moment they stopped being relative.
+the reason that matters: it is shown on GitHub and in registry listings that render it away from
+the repository, so its links and images have to be absolute, and without this they would have
+dropped out of the check above the moment they stopped being relative.
 """
 from __future__ import annotations
 
@@ -176,7 +176,7 @@ def test_the_self_url_scan_actually_found_links():
 def test_absolute_self_url_resolves(path: Path, line: int, url: str):
     """A `blob/main/...` or `raw.githubusercontent.com/.../main/...` URL is a path into this
     checkout wearing a hostname. Resolve it as one -- a doc renamed without updating README.md
-    would otherwise only 404 for whoever clicked it on PyPI."""
+    would otherwise only 404 for whoever clicked it in a listing that renders README.md."""
     where = f"{path.relative_to(REPO_ROOT)}:{line}"
     prefix = next(p for p in _SELF_URL_PREFIXES if url.startswith(p))
     file_part, _, anchor = url[len(prefix) :].partition("#")

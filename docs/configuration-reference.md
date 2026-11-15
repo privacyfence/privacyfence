@@ -5,23 +5,21 @@ PrivacyFence reads these configuration files and variables:
 - **`settings.yaml`**: your policy and the daemon's own settings. It carries no secrets. Most of it
   is edited from PrivacyFence **Settings**; this page lists every key, including the ones with no
   control there.
-- **`org_bundle.json`**: on a desktop install, the signed bundle of app credentials for the
-  services it connects ([Desktop configuration bundle](#desktop-configuration-bundle-org_bundlejson)).
-  It is `org_config.json` in 6.x.
+- **`org_bundle.json`**: the legacy signed bundle of an organization server upgraded from 6.x
+  ([Legacy bundle](#legacy-bundle-orgorg_bundlejson)). It is `org_config.json` in 6.x.
 - **On an organization server**, instead of a bundle: environment variables, `org/admin_config.json`
   (written by the Admin page) and signed connector configs
   ([Organization server settings](#organization-server-settings)).
 
-Where the files live on each platform is in Platform support. They are
-owned by PrivacyFence's service account on a packaged install, so editing one by hand needs
-administrator rights.
+In the Docker image the files live in the data volume
+([What stays in the data volume](org-mode-docker.md#what-stays-in-the-data-volume)).
 
 The command-line options of `privacyfence-app` are at the end of this page
 ([Command-line options](#command-line-options)).
 
 ## How settings.yaml is read
 
-- **First start.** If `settings.yaml` does not exist, the daemon creates it from the packaged
+- **First start.** If `settings.yaml` does not exist, the daemon creates it from the shipped
   example (`src/privacyfence/resources/settings.yaml.example`). The **Seeded** column below is the
   value that example writes.
 - **Missing keys.** A key that is absent (or commented out) takes the **Code default**. Where the
@@ -35,8 +33,7 @@ The command-line options of `privacyfence-app` are at the end of this page
 - **Organization mode.** The server's own `settings.yaml` is install-wide: `privacy`, the other
   `*_privacy` groups, `pii_detection`, `logging` and `web.approvals` apply to everyone, and
   `web.mcp.enabled` must be `true`. Each person also gets a `settings.yaml` of their own, of which
-  only the `auto_accept` section is used. Keys marked *local mode only* have no effect on an
-  organization server.
+  only the `auto_accept` section is used.
 
 ### Exporting and importing personal settings
 
@@ -49,7 +46,7 @@ direction. Only the person's own `auto_accept` rules and step-up level move.
 | `format` | Always `privacyfence-personal-settings` |
 | `format_version` | `1`; a newer version is refused |
 | `exported_at` | UTC ISO-8601 time of the export |
-| `source` | `mode` (`local` or `org`) and the PrivacyFence `version` |
+| `source` | `mode` (`org`; a file exported by PrivacyFence 7 on a desktop install says `local`) and the PrivacyFence `version` |
 | `auto_accept` | `version: 3` and the `rules` rows, without their former ids; custom rules are left out |
 | `step_up` | `scope`: the person's own step-up scope, or `null` |
 | `not_portable` | Informational list of what does not move; import ignores it |
@@ -90,8 +87,7 @@ filter applies before you see the data on a card, and it is a minimum: approvals
 from **Settings > Privacy Filter**. Details: [Approvals and policy](approvals-and-policy.md).
 
 Code defaults: a category that is not listed takes its group's `default_policy`. A group that is
-missing altogether is `allow` for everything in local mode and `block` for everything on an
-organization server.
+missing altogether is `block` for everything.
 
 | Key | Seeded | Covers |
 |---|---|---|
@@ -177,35 +173,34 @@ or empty `auto_accept` section means nothing auto-accepts.
 |---|---|---|---|---|
 | `logging.level` | string | `INFO` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. **Settings > Audit Log**, applied immediately. |
 | `logging.file` | string | `logs/privacyfence.log` | `logs/privacyfence.log` | Daemon log file. A relative path is resolved against PrivacyFence's data directory. |
-| `update_check.enabled` | bool | `true` | `true` | Once a day, check GitHub Releases for a newer version and show a banner. Never downloads or installs anything; a network failure is logged, not shown. **Settings > General > Check for Updates**. Local mode only. |
+| `update_check.enabled` | bool | `true` | `true` | Once a day, check GitHub Releases for a newer version and show a banner. Never downloads or installs anything; a network failure is logged, not shown. **Settings > General > Check for Updates**. |
 | `update_check.include_beta` | bool | `false` | `false` | Also offer pre-releases. Same card. |
 
-### Web server and MCP (local mode only unless noted)
+### Web server and MCP
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `web.port` | int | `8765` | `8765` | Port of the one local server that carries Approvals, Settings and `/mcp`. It listens on `localhost` only. An organization server takes its port from `PRIVACYFENCE_PORT` ([Environment variables](#environment-variables)). |
+| `web.port` | int | `8765` | `8765` | Port of the one server that carries Approvals, Settings and `/mcp`. An organization server takes its port from `PRIVACYFENCE_PORT` ([Environment variables](#environment-variables)). |
 | `web.mcp.enabled` | bool | **`false`** | **`true`** | Serve `/mcp`. With it off, no AI system can reach PrivacyFence at all. Must be `true` on an organization server. |
 | `web.settings.enabled` | bool | **`false`** | **`true`** | Serve Settings (`/settings`). With it off, the only way to change anything is to edit the files by hand. |
-| `web.settings.allow_quit` | bool | `true` | `true` | Whether **Quit PrivacyFence** on **Settings > About** works. It always asks for confirmation first. |
 | `web.notifications.enabled` | bool | `true` | `true` | Browser notifications for a new pending approval while the Approvals tab is open but not focused. Nothing is sent through a push service. |
 | `web.notifications.detail` | string | **`minimal`** | **`standard`** | What a notification about a single approval may say: `minimal` ("1 approval pending"), `standard` (adds connector, tool and direction), `detailed` (adds the card's title line, which can contain gated content, e.g. a recipient). A notification about several approvals always uses `minimal`. **Settings > General > Approval Notifications**. |
-| `web.approvals.hold_window_seconds` | number | `30` | not set | How long a gated call waits for your decision before returning `approval_pending`. Local and organization mode. |
-| `web.approvals.pending_ttl_seconds` | number | `900` (15 min) | not set | How long an undecided approval stays pending before it expires. Local and organization mode. |
-| `web.approvals.ledger_ttl_seconds` | number | `300` (5 min) | not set | How long a decision stays available for the AI system to repeat its call and collect it. A decided write is released once. Local and organization mode. |
-| `web.approvals.max_pending` | int | `50` | not set | Most approvals pending at once, across everyone. Local and organization mode. |
-| `web.approvals.max_pending_per_principal` | int | `20` | not set | Most approvals pending at once for one person. Local and organization mode. |
-| `web.approvals.adaptive_hold` | bool | `true` | not set | Once one of your approvals is pending, return `approval_pending` for later gated calls straight away instead of waiting `hold_window_seconds` each. Local and organization mode. |
+| `web.approvals.hold_window_seconds` | number | `30` | not set | How long a gated call waits for your decision before returning `approval_pending`. |
+| `web.approvals.pending_ttl_seconds` | number | `900` (15 min) | not set | How long an undecided approval stays pending before it expires. |
+| `web.approvals.ledger_ttl_seconds` | number | `300` (5 min) | not set | How long a decision stays available for the AI system to repeat its call and collect it. A decided write is released once. |
+| `web.approvals.max_pending` | int | `50` | not set | Most approvals pending at once, across everyone. |
+| `web.approvals.max_pending_per_principal` | int | `20` | not set | Most approvals pending at once for one person. |
+| `web.approvals.adaptive_hold` | bool | `true` | not set | Once one of your approvals is pending, return `approval_pending` for later gated calls straight away instead of waiting `hold_window_seconds` each. |
 
-### Local file transfers
+### File transfers
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `file_bridge.max_download_bytes` | int | `200000000` (200 MB) | not set (section present, key commented out) | Largest file a download tool delivers in local mode; it also caps the files the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write. The file is held in memory before it is handed over, so raise it only with memory to spare. See [How PrivacyFence works](how-it-works.md#files). |
+| `file_bridge.max_download_bytes` | int | `200000000` (200 MB) | not set (section present, key commented out) | Largest file a download or an export delivers; it caps the files the export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) produce. The file is held in memory before it is handed over, so raise it only with memory to spare. See [How PrivacyFence works](how-it-works.md#files). |
 
-### Passkey step-up (local mode)
+### Passkey step-up
 
-Step-up asks for a fresh passkey (Face ID, Touch ID, Windows Hello) before an approving decision is
+Step-up asks for a fresh passkey (Face ID, Touch ID, Windows Hello, a security key) before an approving decision is
 released, and before a sensitive settings change (rules, grants, privacy policy, PII settings).
 Denying never needs one. Passkeys are enrolled at `/security`, linked from
 **Settings > General > Security > Manage passkeys**. An organization server reads the `step_up` section of `org/admin_config.json` instead (set on Admin → Step-up, [below](#admin-config-orgadmin_configjson)). Details: [Approvals and policy](approvals-and-policy.md) and
@@ -213,43 +208,38 @@ Denying never needs one. Passkeys are enrolled at `/security`, linked from
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `step_up.enabled` | bool | `true` on a packaged install, `false` otherwise | not set (commented out) | Require a passkey at decide time for the approvals `scope` covers. With nothing enrolled and `require_passkey` off, decisions go through without one (in organization mode, a single decision offers an identity-provider sign-in instead, and an approving batch is refused). |
+| `step_up.enabled` | bool | `false` (`true` on a single-user install) | not set (commented out) | Require a passkey at decide time for the approvals `scope` covers. With nothing enrolled and `require_passkey` off, decisions go through without one (in organization mode, a single decision offers an identity-provider sign-in instead, and an approving batch is refused). |
 | `step_up.scope` | string | `writes_and_pii_reads` | not set (commented out) | `writes` (write approvals), `writes_and_pii_reads` (also reads the PII check flagged), or `writes_and_reads` (every gated read too). The minimum: **Settings > General > Security > Passkey required for** can widen it for your own approvals, never narrow it (ADR 0091). An auto-accepted read never asks. Needs a restart. |
-| `step_up.require_passkey` | bool | `true` on a packaged install, `false` otherwise | not set (commented out) | Make the passkey mandatory: with nothing enrolled, approving decisions that need step-up (see `step_up.scope`) and sensitive settings changes are refused (a banner points to `/security`) rather than released. The daemon still starts. Setting it to `true` on an install that is not privilege-separated stops the daemon at start. |
+| `step_up.require_passkey` | bool | `false` (`true` on a single-user install) | not set (commented out) | Make the passkey mandatory: with nothing enrolled, approving decisions that need step-up (see `step_up.scope`) and sensitive settings changes are refused (a banner points to `/security`) rather than released. The daemon still starts. |
 | `step_up.rp_id` | string | `localhost` | `localhost` | WebAuthn relying-party id. Leave as is. |
 | `step_up.rp_name` | string | `PrivacyFence` | `PrivacyFence` | Name shown in your system's passkey prompt. |
 | `step_up.batch` | string | `single_assertion` | `single_assertion` | `single_assertion`: one passkey prompt releases a whole selected batch on Approvals, bound to exactly that selection. `per_item`: a batch containing anything that needs step-up is refused as a whole, and each item is decided from its own card. |
 
-"Packaged install" means the macOS `.pkg`, the Windows installer or the `.deb`, which are
-privilege-separated. A source checkout or a `pip`/`pipx` install defaults both keys off. A value
-written in the file always wins over these defaults, in either direction.
+A value written in the file always wins over these defaults, in either direction.
 
 **The Turn on button.** Once at least one passkey is enrolled, **Settings > General > Security**
 shows **Step-up for approvals** with a **Turn on** button. It writes `step_up.enabled: true` and
 `step_up.require_passkey: true` together and takes effect immediately, with no restart. There is
 no control to turn step-up off: set `step_up.require_passkey` (and `step_up.enabled`) to `false` in
-the file and restart. Changing `scope` or `batch` also needs a file edit and a restart. The button
-is not shown on an organization server.
+the file and restart. Changing `scope` or `batch` also needs a file edit and a restart.
 
 **Passkey required for.** With step-up enabled, the same card shows the three scopes with the
 configured `step_up.scope` as the minimum; the ones below it are locked. Picking a wider one applies
 to your own approvals at once, with no restart, and is stored beside your passkeys
-(`step_up_preference.json` under the authority directory), not in this file. In organization mode
-every member sees this control, and the admin config's `step_up.scope` is the minimum. Once a passkey
+(`step_up_preference.json` under the authority directory), not in this file. Every member sees this control, and the admin config's `step_up.scope` is the minimum. Once a passkey
 is required for settings changes, changing this needs one too. See ADR 0091.
 
 ### AI system names
 
 | Key | Type | Code default | Seeded | What it does |
 |---|---|---|---|---|
-| `agent_overrides.<client name>` | string | none | not set (commented out) | Label an MCP client whose handshake name PrivacyFence does not recognise as a known AI system. The value is an AI system id such as `claude-code` or `claude` (the ids the **Audit Log** shows); an unknown id is ignored with a warning. It relabels the recorded name only: the entry is still recorded as claimed (`client_info`), and the card still shows *Undetected*, as every local-mode card does. Local mode only; needs a restart. See [How PrivacyFence works](how-it-works.md#which-ai-system-is-asking). |
+| `agent_overrides.<client name>` | string | none | not set (commented out) | Label an MCP client whose handshake name PrivacyFence does not recognise as a known AI system. The value is an AI system id such as `claude-code` or `claude` (the ids the **Audit Log** shows); an unknown id is ignored with a warning. It relabels the recorded name only: the entry is still recorded as claimed (`client_info`), and the card still shows the caller as claimed. Needs a restart. See [How PrivacyFence works](how-it-works.md#which-ai-system-is-asking). |
 
-## Desktop configuration bundle (org_bundle.json)
+## Bundle file (org_bundle.json)
 
-A desktop install read one signed file with the app credentials for the services it connected; the
-script that built it is no longer shipped. An organization server does not take a bundle: see
+An organization server does not need a bundle: see
 [Organization server settings](#organization-server-settings). A legacy `org/org_bundle.json` is
-still read, as described below and under [Legacy bundle](#legacy-bundle-orgorg_bundlejson).
+read, as described below and under [Legacy bundle](#legacy-bundle-orgorg_bundlejson).
 Per-service registration steps are in [Google Cloud setup](google-cloud-setup.md),
 [Slack setup](slack-setup.md), [Salesforce setup](salesforce-setup.md),
 [Atlassian setup](atlassian-setup.md), [Grist setup](grist-setup.md) and
@@ -257,15 +247,14 @@ Per-service registration steps are in [Google Cloud setup](google-cloud-setup.md
 
 How the daemon treats the file:
 
-- **Absent**: a desktop install has no organization credentials, and every connector that needs them
-  is unavailable.
+- **Absent**: the built-in apps and connector configs supply the credentials.
 - **Unreadable, not valid JSON, or not a JSON object**: the daemon refuses to start.
 - **Signed**: the first signed bundle an install reads pins its signing key; from then on every
   bundle, unsigned ones included, must verify against that key or the daemon refuses to start. To
   accept a new key, an administrator deletes the pinned `org_bundle_signing_pubkey.txt` in the
   organization config directory. Rotation after an upgrade is covered under
   [Files in the org directory](#files-in-the-org-directory).
-- **File name**: PrivacyFence 7 reads `org_bundle.json`. `org_config.json` is the 6.x name: on the
+- **File name**: PrivacyFence reads `org_bundle.json`. `org_config.json` is the 6.x name: on the
   first start after an upgrade the daemon copies it (and its two pin files) to the new names and
   leaves the originals untouched, and a later change to `org_config.json` is ignored with a warning.
 - **Operational settings in an older bundle** (services offered, file delivery, step-up and the
@@ -274,7 +263,7 @@ How the daemon treats the file:
 
 ## Organization server settings
 
-An organization server (Docker image or [the systemd install](org-mode-setup-guide.md)) reads no
+An organization server (the Docker image, [guide](org-mode-setup-guide.md)) reads no
 bundle. It takes its settings from four places, and nothing else:
 
 | What | Where it lives | Changed by |
@@ -296,7 +285,7 @@ lists; spaces around each item are ignored.
 
 | Variable | Default | What it sets |
 |---|---|---|
-| `PRIVACYFENCE_MODE` | `local` (`org` in the Docker image) | `local` or `org`. Any other value refuses the start. A legacy bundle that sets `mode` to something else refuses the start too. |
+| `PRIVACYFENCE_MODE` | `org` | Organization mode is the only mode, so leave it unset or set it to `org`. `local` and any other value refuse the start, and so does a legacy bundle whose `mode` disagrees. |
 | `PRIVACYFENCE_ISSUER_URL` | `http://localhost:<port>` in single-user mode, otherwise required | The public origin, with no path, such as `https://pf.acme.example.com`. Every redirect URI and link is built from it. |
 | `PRIVACYFENCE_BIND_HOST` | `127.0.0.1` (`0.0.0.0` in the Docker image) | The address the daemon listens on. |
 | `PRIVACYFENCE_PORT` | `8765` | The port the daemon listens on (1 to 65535). |
@@ -320,7 +309,7 @@ lists; spaces around each item are ignored.
 | `PRIVACYFENCE_N8N_DELIVERY` | unset | Unset or empty: the Admin page decides. `true`: n8n delivery is on, and so are scoped tokens and AI token proposals (`agent_runtimes.n8n.enabled`, `scoped_tokens.enabled`, `scoped_tokens.allow_ai_proposals`), shown on Admin as set by the server and locked; `scoped_tokens.max_days` stays editable. Any other value (`false`, `1`) refuses the start, and so does `true` without `PRIVACYFENCE_N8N_URL` and the API key. Removing the variable hands the fields back to what Admin stored. Organization mode only ([ADR 0294](adr/0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md)). |
 | `PRIVACYFENCE_N8N_PROJECT_ID` | unset | The n8n project the credential is created in: 1 to 36 letters and digits. When set it locks `agent_runtimes.n8n.project_id` on Admin. Any other value refuses the start. Works with or without `PRIVACYFENCE_N8N_DELIVERY`. Organization mode only. |
 | `PRIVACYFENCE_N8N_MCP_URL` | unset | The PrivacyFence `/mcp` address Claude is told to use: `https://`, or `http://` on localhost. When set it locks `agent_runtimes.n8n.mcp_url` on Admin. Any other value refuses the start. Works with or without `PRIVACYFENCE_N8N_DELIVERY`. Organization mode only. |
-| `PRIVACYFENCE_OIDC_CLIENTS` | none | The web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<issuer>/oidc`), comma-separated lower-case names. Organization mode and single-user mode only; local mode refuses the start. |
+| `PRIVACYFENCE_OIDC_CLIENTS` | none | The web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<issuer>/oidc`), comma-separated lower-case names.  |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` | none | The app's redirect addresses, comma-separated, matched exactly (`https://`, or `http://` for localhost). `<NAME>` is the app name in capitals with `-` as `_`. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET`, `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET_FILE` | none | The app's client secret (at least 32 characters), or the path of a file that holds it. Set one, never both. Never logged. See [Sign in to other apps with PrivacyFence](oidc-provider.md). |
 | `PRIVACYFENCE_UPSTREAM_MCP_FILE` | none | The path of a YAML or JSON file (`.yaml`/`.yml` is read as YAML, any other name as JSON) that declares other MCP servers PrivacyFence puts its tool policy in front of: their address, audience and each tool's gate and verb. Read once at startup; a change needs a restart. Organization mode only; any other mode refuses the start. Which people hold which data domains is the `upstream_mcp` key of `org/admin_config.json`; `grants` in the declaration seed it once. At most 256 KiB; never together with `PRIVACYFENCE_UPSTREAM_MCP`. See [Upstream MCP servers](upstream-mcp.md). |
@@ -339,7 +328,7 @@ single-user start instead of exposing the server on its address with a setup cod
 ### Admin config (org/admin_config.json)
 
 Written by the daemon when an administrator saves a change on the
-[Admin page](org-mode-setup-guide.md#the-admin-page); a desktop install keeps one too. It holds
+[Admin page](org-mode-setup-guide.md#the-admin-page). It holds
 everything operational and is part of the backup. Do not edit it while the daemon runs, except `upstream_mcp.<id>.grants`, which may be edited while it
 runs (see [upstream-mcp.md](upstream-mcp.md); `grants` in the upstream declaration seed it once, on the first start that names the id); write the file in one step, while no one is saving on the
 Admin page. Do not
@@ -439,7 +428,7 @@ files are mode `0600`.
 
 | File | Written by | What it is |
 |---|---|---|
-| `org_bundle.json` | the daemon, once (copied from `org_config.json`) | The legacy bundle ([above](#legacy-bundle-orgorg_bundlejson)); desktop installs also take a bundle here. |
+| `org_bundle.json` | the daemon, once (copied from `org_config.json`) | The legacy bundle ([above](#legacy-bundle-orgorg_bundlejson)) |
 | `org_bundle_signing_pubkey.txt`, `org_bundle_serial.txt` | the daemon | The pinned bundle signing key and the highest bundle serial accepted. Deleting the key file accepts a new key at the next start; keep the serial file unless you want to go back to an older bundle on purpose. After an upgrade, deleting the new-name pin is the rotation: the 6.x pin (`org_config_signing_pubkey.txt`) is not copied again. Delete the 6.x pins only when going back to 6.x is no longer wanted. |
 | `org_config.json`, `org_config_signing_pubkey.txt`, `org_config_serial.txt` | PrivacyFence 6 | The 6.x names, never changed by 7.x. |
 | `org_bundle_adopted.json` | the daemon | Records the copy from `org_config.json` (its hash and time), that the pins were adopted, and a retirement. |
@@ -454,21 +443,19 @@ files are mode `0600`.
 
 ## Command-line options
 
-`privacyfence-app` is the daemon's executable. On a packaged install the service starts it; the
-options below are for running it by hand.
+`privacyfence-app` is the server's executable; the image starts it. The options below are for
+running it by hand, for example with `docker compose exec`.
 
 | Option | What it does |
 |---|---|
 | `--config PATH` | Read `settings.yaml` from `PATH` instead of its default location. |
-| `--print-sign-in-link` | Print a one-time sign-in link to Approvals and exit. See [How PrivacyFence works](how-it-works.md#opening-privacyfence-opens-approvals). Local mode only. |
-| `--print-mcp-token` | Print this OS account's MCP token (creating it the first time) and exit. See [Connect Claude Code](connect-claude-code.md#local-mode). Local mode only. |
 | `--gmail-oauth`, `--drive-oauth`, `--calendar-oauth`, `--contacts-oauth`, `--tasks-oauth`, `--apps-script-oauth` | Sign in to that Google service in the browser from the command line, save the token, and exit. |
 | `--slack-oauth`, `--salesforce-oauth`, `--atlassian-oauth` | The same for Slack, Salesforce, and Jira plus Confluence. |
 | `--grist-oauth` | The same for Grist, when the bundle (or, on a server, a connector config) carries a Grist OAuth app. With an API key, use **Settings > Connectors** instead. |
 | `--miro-oauth` | The same for Miro, which needs the Miro app in the bundle, a connector config or the built-in app. |
 | `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |
 | `--peek-login` | Sign in to Peek with Peek's device sign-in and save the token, then exit. |
-| `--revoke-scoped-tokens PRINCIPAL_ID` | Revoke every scoped token that account holds (`local` in local mode, or the principal id the audit log and the org Settings page show) and exit. Run it as the account the daemon runs as. |
+| `--revoke-scoped-tokens PRINCIPAL_ID` | Revoke every scoped token that account holds (the principal id the audit log and the Settings page show) and exit. Run it as the account the daemon runs as. |
 | `--peek-release PRINCIPAL_ID` | Revoke the Peek token PrivacyFence minted for that account, stop renewing it, and exit. The Peek account stays. Needs the Peek provisioning key in the environment; run it as the account the daemon runs as. |
 | `--relay-dns-records` | Print the DNS TXT records the built-in Google sign-in still needs, one line per sign-in domain the relay has not found yet, and exit. Organization mode ([guide](org-mode-setup-guide.md#built-in-google-sign-in)). |
 | `--print-env-from-bundle` | Print the `PRIVACYFENCE_*` lines that say what a legacy `org/org_bundle.json` says about the mode, the server and the identity provider, and exit. The client secret is never printed. See [Legacy bundle](#legacy-bundle-orgorg_bundlejson). |
@@ -476,25 +463,7 @@ options below are for running it by hand.
 | `--retire-bundle` | Import the legacy bundle's app credentials as connector configs if that has not happened, and delete `org/org_bundle.json` once the environment says the same mode, server address and identity provider. |
 | `--grist-release PRINCIPAL_ID` | Release the Grist key PrivacyFence holds for that account: the provisioner deletes it in Grist if it created it, and PrivacyFence forgets it. Then the daemon exits. Needs the Grist provisioning key in the environment; run it as the account the daemon runs as. |
 
-The sign-in options are for an install that is not privilege-separated (a source checkout or a
-`pip`/`pipx` install). On a packaged install the daemon refuses to run as your account, so they
-fail; connect services from **Settings > Connectors** instead (see
-[Connecting a service](connecting-a-service.md)). They need the app's credentials first (a desktop
-bundle, or on an organization server a connector config or the built-in app), except `--telegram-setup` and
-`--peek-login` (the latter asks for the Peek server address when none is configured).
-
-### privacyfence-companion
-
-The companion app's own command. The packaged installs start it for you. `--action`, `--serve` and
-`--launch` are mutually exclusive.
-
-| Option | What it does |
-|---|---|
-| (no option) | Run the tray (Windows) or menu-bar (macOS) companion. Linux has no tray, so there `--action` or `--serve` is required. |
-| `--launch` | Open Approvals, starting the tray or menu-bar companion first if none is running. This is what clicking the app icon or the Start Menu entry runs ([ADR 0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md)). |
-| `--serve` | Run only the companion's control channel, with no tray or menu, and stay up, so a separated daemon can hand this session a sign-in link to open. A separated Linux install's autostart entry runs this. |
-| `--action open-approvals` / `open-settings` | Open Approvals / Settings and exit. |
-| `--action copy-mcp-token` | Copy this account's AI client token to the clipboard ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md)). |
-| `--action recovery-code` | Ask the daemon for a new one-time passkey recovery code and show it in a dialog. |
-| `--action service-status`, `service-start`, `service-restart`, `service-stop` | Report on, start, restart or stop the background service; the last three ask for an administrator's password. |
-| `--action quit` | Ask the daemon to shut down, as Settings' Quit button does (only when the install allows quitting). |
+The sign-in options need the app's credentials first (a connector config or the built-in app), except
+`--telegram-setup` and `--peek-login` (the latter asks for the Peek server address when none is
+configured). Connect services from **/connect** otherwise
+(see [Connecting a service](connecting-a-service.md)).

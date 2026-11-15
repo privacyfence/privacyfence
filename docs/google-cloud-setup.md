@@ -11,13 +11,8 @@ as trusted in the Workspace Admin console. Do not mark the built-in PrivacyFence
 pre-approved: that trust would extend to every PrivacyFence server and to anyone using the public
 app. To trust an app, register your own.
 
-How the app reaches PrivacyFence depends on the deployment:
-
-- **Organization server (and the Docker image):** the app is a signed connector config uploaded on
-  **Admin → Services**. Its OAuth client must be a **Web application** client.
-- **Desktop install:** the app is a `google` section in the organization config bundle. Its client
-  must be a **Desktop app** client. Desktop installs have no built-in app; desktop mode is deprecated
-  and goes away in PrivacyFence 8 ([moving to organization mode](moving-to-organization-mode.md)).
+The app reaches PrivacyFence as a signed connector config uploaded on **Admin → Services**. Its
+OAuth client must be a **Web application** client.
 
 Users then sign in to each Google connector from PrivacyFence — they never open the Google Cloud
 console.
@@ -28,10 +23,7 @@ console.
   [console.cloud.google.com](https://console.cloud.google.com/)).
 - For Workspace accounts, ideally the right to create an **Internal** app, so no Google
   verification is needed (see [Consent screen and verification](#3-consent-screen-and-verification)).
-- Python 3, to run `scripts/sign_connector_config.py` (organization server) or
-  `scripts/build_org_bundle.py` (desktop install), or a browser for the offline signing page.
-- Which deployment you are building for: **desktop installs**, an **organization server**, or
-  both. They need different OAuth client types (step 4).
+- Python 3, to run `scripts/sign_connector_config.py`, or a browser for the offline signing page.
 
 ## Register the app
 
@@ -69,7 +61,7 @@ Open **Google Auth Platform** (also reachable as **APIs & Services → OAuth con
      in, and Google requires **no verification**, whatever the scopes. Use this when you can.
    - **External**: any Google account. The app starts in **Testing**: only the accounts you add
      as **test users** (up to 100) can sign in, and Google expires their sign-ins after **7 days**,
-     so each user has to **Reconnect…** weekly. To lift both limits you publish the app, which
+     so each user has to **Reconnect** weekly. To lift both limits you publish the app, which
      requires Google's verification (below).
 3. **Data access:** you can add the scopes from the [values table](#values) here; they are
    requested at sign-in either way, but verification reviews this list.
@@ -86,17 +78,11 @@ request those connectors' scopes: Calendar, Contacts and Tasks use no restricted
 Open **Google Auth Platform → Clients** (or **APIs & Services → Credentials → + Create
 Credentials → OAuth client ID**):
 
-- **Desktop installs:** application type **Desktop app**. No redirect URI is registered: a
-  Desktop app client accepts a loopback redirect on any port, which is what PrivacyFence uses.
-- **Organization server:** application type **Web application**, with every org redirect URI from
-  the [values table](#values) under **Authorized redirect URIs**. Use a client dedicated to the
-  connectors, separate from the one your server uses for sign-in (see
-  [org-mode-setup-guide.md](org-mode-setup-guide.md)). A Desktop app client is refused at sign-in
-  with `redirect_uri_mismatch`.
-
-The two types are not interchangeable: a Desktop app client cannot hold an HTTPS redirect URI, and
-a Web application client cannot accept a loopback redirect on a port picked at sign-in time. If you
-run both kinds of deployment, create one client of each type (in the same project is fine).
+Application type **Web application**, with every org redirect URI from
+the [values table](#values) under **Authorized redirect URIs**. Use a client dedicated to the
+connectors, separate from the one your server uses for sign-in (see
+[org-mode-setup-guide.md](org-mode-setup-guide.md)). A Desktop app client is refused at sign-in
+with `redirect_uri_mismatch`.
 
 Download each client's JSON (`client_secret_….json`). Treat it as a secret.
 
@@ -104,16 +90,14 @@ Download each client's JSON (`client_secret_….json`). Treat it as a secret.
 
 | Item | Value |
 |---|---|
-| Local redirect (desktop installs) | `http://localhost:<port>/`, port picked by the operating system at each sign-in. Nothing to register — requires a **Desktop app** client. |
-| Org redirects (organization server) | Register all six on the **Web application** client, with `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`):<br>`https://<server>/oauth/callback/gmail`<br>`https://<server>/oauth/callback/drive`<br>`https://<server>/oauth/callback/calendar`<br>`https://<server>/oauth/callback/contacts`<br>`https://<server>/oauth/callback/tasks`<br>`https://<server>/oauth/callback/apps_script` |
+| Redirects | Register all six on the **Web application** client, with `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`):<br>`https://<server>/oauth/callback/gmail`<br>`https://<server>/oauth/callback/drive`<br>`https://<server>/oauth/callback/calendar`<br>`https://<server>/oauth/callback/contacts`<br>`https://<server>/oauth/callback/tasks`<br>`https://<server>/oauth/callback/apps_script` |
 | Gmail scopes | `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/gmail.settings.basic` |
 | Drive scope | `https://www.googleapis.com/auth/drive` |
 | Calendar scope | `https://www.googleapis.com/auth/calendar` |
 | Contacts scope | `https://www.googleapis.com/auth/contacts` |
 | Tasks scope | `https://www.googleapis.com/auth/tasks` |
 | Apps Script scopes | `https://www.googleapis.com/auth/script.projects`, `https://www.googleapis.com/auth/script.processes`, `https://www.googleapis.com/auth/drive.metadata.readonly` |
-| Connector config (organization server) | `sign_connector_config.py sign --provider google --client-id <client ID> --client-secret-file <file holding the client secret> …`, or the same in the browser signing page |
-| Bundle flag (desktop install) | `--google-client-secret <path to the downloaded JSON>` |
+| Connector config | `sign_connector_config.py sign --provider google --client-id <client ID> --client-secret-file <file holding the client secret> …`, or the same in the browser signing page |
 
 Each Google connector is a separate sign-in with only its own scopes. PrivacyFence never requests
 Admin SDK or Workspace-directory scopes from users; room booking uses a separately synced directory
@@ -144,26 +128,6 @@ The key tool, the serial rule and the signing page that works offline in a brows
 own app** on the same row goes back to the built-in app; either change makes everyone who connected
 Google sign in again.
 
-### Desktop install: the bundle
-
-`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
-stable GitHub Release. It needs only Python 3 (signing with `--sign-key` also needs
-`pip install cryptography`); no PrivacyFence install is required.
-
-```bash
-python3 scripts/build_org_bundle.py \
-  --org-name "Your Company" \
-  --google-client-secret /path/to/client_secret.json \
-  -o org_bundle.json
-```
-
-The bundle carries credentials only. The settings that used to go into it (which services are
-offered, step-up, unattended sessions and the others) are on the Admin page, and the script refuses
-their old flags. Add `--merge` to add Google to an existing bundle without losing its other
-sections; the `google` section itself is replaced by the client you pass. Install the bundle on
-**Admin → Organization configuration** ([connecting-a-service.md](connecting-a-service.md)). Signing
-and the other flags are covered in [org-mode-setup-guide.md](org-mode-setup-guide.md).
-
 ### Optional: room directory for `calendar_list_rooms`
 
 Skip this if your organization does not book Workspace rooms; every other Calendar tool works
@@ -178,8 +142,7 @@ keeping that scope off the client every user signs in with:
 1. Create a second project (for example `privacyfence-room-sync`) and enable only the **Admin SDK
    API**.
 2. Configure its consent screen as in step 3; only the administrators who run the sync need access.
-3. Create a **Desktop app** OAuth client and download its JSON. Never put it in a connector config or
-   bundle.
+3. Create a **Desktop app** OAuth client and download its JSON. Never put it in a connector config.
 4. Run the sync signed in as an account with the Workspace **Directory Reader** role (or super
    admin):
 
@@ -198,8 +161,7 @@ keeping that scope off the client every user signs in with:
 
 ## Users connect
 
-Users click **Authenticate…** (desktop install, after the bundle is installed) or **Connect**
-(organization server) for each Google connector they want — the shared flow is described in
+Users click **Connect** for each Google connector they want — the shared flow is described in
 [connecting-a-service.md](connecting-a-service.md). Google-specific points:
 
 - Each Google connector is its own sign-in; connecting Gmail does not connect Drive.
@@ -222,17 +184,16 @@ through **Advanced → Go to PrivacyFence**. See [verification](#3-consent-scree
 organization.
 
 **Sign-ins stop working after a week** — an External app in Testing: Google expires test-user
-sign-ins after 7 days. Users can **Reconnect…**; to stop it, use an Internal app or publish and
+sign-ins after 7 days. Users can **Reconnect**; to stop it, use an Internal app or publish and
 verify the External one.
 
-**"Error 400: redirect_uri_mismatch"** — the client type does not match the deployment. Desktop
-installs need a **Desktop app** client; an organization server needs a **Web application** client
+**"Error 400: redirect_uri_mismatch"** — the client type or redirect URIs do not match. The client must be a **Web application** client
 with all six `https://<server>/oauth/callback/<service>` URIs registered, spelled exactly as
 PrivacyFence builds them from the server's public address (the Apps Script one is `apps_script`, with
-an underscore). Check which client the connector config or installed bundle actually contains.
+an underscore). Check which client the connector config actually contains.
 
 **"authentication failed: Google OAuth exchange failed: the granted scopes are missing [...]"** —
-a permission was unticked on Google's consent page. **Reconnect…** and leave every box ticked.
+a permission was unticked on Google's consent page. **Reconnect** and leave every box ticked.
 
 **`accessNotConfigured` / "API has not been used in project … or it is disabled"** — the API
 behind that tool is not enabled in the project ([step 2](#2-enable-the-apis)). Enabling it takes
@@ -242,7 +203,7 @@ effect within a few minutes; users do not need to reconnect.
 turned on the per-user switch at
 [script.google.com/home/usersettings](https://script.google.com/home/usersettings).
 
-**Scopes changed on the client, or a 403 on a tool that worked before** — **Reconnect…** the
+**Scopes changed on the client, or a 403 on a tool that worked before** — **Reconnect** the
 connector so Google issues a token with the current scopes.
 
 **`calendar_list_rooms` returns nothing** — no room directory has been uploaded yet. Run the

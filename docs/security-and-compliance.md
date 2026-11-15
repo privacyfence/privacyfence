@@ -6,68 +6,37 @@ statement. The reasons behind each decision are in the linked ADRs.
 
 ## Deployment modes
 
-| | Local mode (desktop; deprecated) | Organization mode | Single-user mode (organization mode on localhost) |
-| --- | --- | --- | --- |
-| Where it runs | One person's own computer | A server the organization runs | One person's own computer, usually in Docker |
-| Who signs in | Nobody: one implicit user per OS account | Each person, through the organization's OIDC identity provider | One administrator: a setup code, then a passkey |
-| How AI clients connect | `/mcp` on `127.0.0.1`, plain HTTP ([ADR 0010](adr/0010-local-mode-serves-plain-http-on-localhost.md)) | `/mcp` behind the organization's HTTPS reverse proxy, with OAuth 2.1 ([ADR 0011](adr/0011-org-mode-runs-its-own-oauth-authorization-server.md)) | `/mcp` at `http://localhost`, with OAuth 2.1 and the person's consent |
-| Privilege separation | Always, on a packaged install (see [Privilege separation](#privilege-separation)) | Not used: the AI client has no access to the server | Not used; see [Single-user mode](#single-user-mode) |
-| Built-in OAuth apps | None | Yes, through the relay | Yes, through the relay |
+PrivacyFence runs in organization mode only. The Docker image runs in one of two shapes:
 
-Local mode is deprecated in PrivacyFence 7 and removed in 8 ([moving to organization
-mode](moving-to-organization-mode.md)). Claude Desktop and Claude Code work with every mode. claude.ai
-can reach PrivacyFence only through an organization deployment, because the others listen only on
-localhost.
+| | Organization server | Single-user mode (organization mode on localhost) |
+| --- | --- | --- |
+| Where it runs | A server the organization runs | One person's own computer, in Docker |
+| Who signs in | Each person, through the organization's OIDC identity provider | One administrator: a setup code, then a passkey |
+| How AI clients connect | `/mcp` behind the organization's HTTPS reverse proxy, with OAuth 2.1 ([ADR 0011](adr/0011-org-mode-runs-its-own-oauth-authorization-server.md)) | `/mcp` at `http://localhost`, with OAuth 2.1 and the person's consent |
+| Separation from the AI client | The AI client has no access to the server except through `/mcp` | None beyond the container; see [Single-user mode](#single-user-mode) |
+| Built-in OAuth apps | Yes, through the relay | Yes, through the relay |
 
-**Which PrivacyFence-operated services exist.** In local mode there are none: every tool call goes
-from the machine running PrivacyFence straight to the provider (Google, Slack, Salesforce,
-Atlassian, Telegram, Grist or your Peek server). Organization mode and the Docker image have one,
-and only when a service uses a built-in app: the **OAuth redirect relay** at
-`oauth.privacyfence.eu`, which forwards a provider's redirect to your server. It is not in the path
-of any tool call, and an organization that uses its own apps for every provider needs it only for
-the opt-in built-in Google sign-in. What it sees and what it can do are in
+Claude Desktop and Claude Code work with both. claude.ai can reach PrivacyFence only through an
+organization server, because single-user mode listens only on localhost. A desktop install of
+PrivacyFence 7 is not read by 8 ([moving to organization mode](moving-to-organization-mode.md)).
+
+**Which PrivacyFence-operated services exist.** One, and only when a service uses a built-in app:
+the **OAuth redirect relay** at `oauth.privacyfence.eu`, which forwards a provider's redirect to your
+server. It is not in the path of any tool call: every tool call goes from the machine running
+PrivacyFence straight to the provider (Google, Slack, Salesforce, Atlassian, Telegram, Grist or your
+Peek server). An organization that uses its own apps for every provider needs the relay only for the
+opt-in built-in Google sign-in. What it sees and what it can do are in
 [Built-in apps, the admin config and the relay](#built-in-apps-the-admin-config-and-the-relay).
-
-A **packaged install** is the macOS `.pkg` (on the DMG), the Windows installer, or the `.deb`. A
-source checkout or a `pip`/`pipx install privacyfence` is not packaged. It is never
-privilege-separated, and it is how organization mode is deployed.
 
 ## Trust boundary
 
-The daemon, its policy, the approval UI, connector credentials, the organization configuration and
+The server, its policy, the approval UI, connector credentials, the organization configuration and
 the audit log are the trusted computing base. Invalid security configuration stops the daemon
 rather than weakening it.
 
-### Local-mode trust boundary
-
-On a packaged install the daemon runs under its own service account. The files that decide what
-the AI client may do are out of reach of your own OS account, and so of any AI client running as
-you (see [Privilege separation](#privilege-separation)). What stays reachable from your account, by
-design, is starting a web session. The companion app and an AI client run as the same OS user, and
-no permission bit can tell them apart ([ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md),
-decision 6). So a session is made *insufficient* rather than unreachable. A session the AI client
-starts for itself cannot approve anything ([Human and unattested sessions](#human-and-unattested-sessions)),
-and releasing a gated call needs a passkey ([Passkey step-up](#passkey-step-up)).
-
-The result on a packaged install:
-
-- **Integrity is the strongest property.** An AI client with shell access cannot approve its own
-  request, add an always-allow rule, change the PII policy, enroll its own passkey, or rewrite the
-  audit log without it showing.
-- **Confidentiality of the review screen is weaker.** A process running as you can open the
-  approvals page and read what is pending. It cannot release it.
-- **Root or a local Administrator is out of scope.** `sudo` re-owns any file and reconfigures any
-  service. Separation makes escalation need an authentication prompt you see; it does not stop it.
-
-On a non-packaged install (no separation) the AI client runs as the same account as the daemon. It
-can read and write every file above, so the approval gate is a workflow control with an audit
-trail, not a boundary against local code. It still defends against an AI client acting only
-through `/mcp`, against mistakes, against remote attackers without code execution, and against a
-hostile web page in your browser.
-
 ### Organization mode
 
-The daemon runs on a server the AI client cannot reach except through `/mcp`. People sign in with
+The server runs where the AI client cannot reach it except through `/mcp`. People sign in with
 the organization's identity provider. A browser session and an MCP client's OAuth token from the
 same sign-in resolve to the same person. Each person's connectors, approvals, staged downloads,
 passkeys and audit log are kept apart by principal, and one person never receives another's.
@@ -102,8 +71,8 @@ credentials file in the volume; the next start prints a new code.
 
 ## Built-in apps, the admin config and the relay
 
-**Built-in apps.** The organization image and the PyPI package carry PrivacyFence's own OAuth apps
-for Google, Slack, Salesforce, Atlassian and Miro; the desktop installers carry none. A server uses
+**Built-in apps.** The organization image carries PrivacyFence's own OAuth apps
+for Google, Slack, Salesforce, Atlassian and Miro. A server uses
 one when a service is offered and no connector config replaces it. Their client secrets are public in
 effect: anyone can read them from the image. A refresh token is bound to the app that issued it, so a built-in app's
 public secret adds no protection to a stolen token; protect tokens as you would with your own app.
@@ -150,8 +119,8 @@ your server ([ADR 0259](adr/0259-org-servers-use-built-in-apps-through-a-domain-
   the provider guides tell you not to trust the built-in app.
 
 **The admin config.** Installation-wide settings live in `org/admin_config.json`, written only by the
-daemon with owner-only permissions, and changed on the Admin page by the install owner (desktop) or an
-IdP administrator (organization). It has the trust of `settings.yaml`: whoever can write the install
+daemon with owner-only permissions, and changed on the Admin page by an
+administrator (the one administrator in single-user mode, an identity-provider administrator on a server). It has the trust of `settings.yaml`: whoever can write the install
 directory can change it ([ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md)).
 The addresses a Peek or Grist provisioning key is sent to come only from the server's environment (or
 an upgraded server's locked address), so a hijacked Admin session cannot point the key at another
@@ -163,14 +132,14 @@ administrator confirms its fingerprint, a different key is refused (rotation is 
 `org/connector_config_signing_pubkey.txt` on the server), each provider's serial must exceed any
 accepted before, also after the config is removed, and the file is verified again at every start
 ([ADR 0269](adr/0269-organization-servers-use-signed-connector-configs-instead-of-a-bundle.md)).
-Signing now covers only startup settings (on a desktop bundle) and app credentials; operational
+Signing covers only app credentials (and the startup settings of a legacy bundle); operational
 settings are not signed, they are the admin config
 ([ADR 0256](adr/0256-org-config-holds-only-startup-settings-and-app-credentials.md)).
 Uploading or removing one always asks for a passkey, is audited without the secret, and makes everyone
 who connected that service sign in again.
 
 **Sign-in by verified email.** An administrator can be named by email
-(`PRIVACYFENCE_ADMIN_EMAILS`), and sign-in can be limited to allowed email domains. Both now trust
+(`PRIVACYFENCE_ADMIN_EMAILS`), and sign-in can be limited to allowed email domains. Both trust
 an address only when the identity provider reports it verified (`email_verified` exactly `true`),
 and with Google the account's Workspace domain (`hd`) must match the address, so a personal account
 registered with a work address cannot get in. A
@@ -181,51 +150,29 @@ administrators named by email. See
 
 ## Human and unattested sessions
 
-Every local-mode web session records how it was started:
+A web session is created by signing in: with your passkey after the setup code in single-user mode,
+or through the organization's identity provider on a server. An AI client has no way to obtain one:
+no MCP tool mints a sign-in link or a sign-in credential
+([ADR 0013](adr/0013-no-mcp-tool-mints-a-sign-in-credential.md)). A client can only call `/mcp`, so it
+cannot approve its own request, and releasing a gated call needs a passkey wherever step-up requires
+one ([Passkey step-up](#passkey-step-up)).
 
-| Session | Started by | Can view | Can approve |
-| --- | --- | --- | --- |
-| `human` | The companion's **Open Approvals** or **Open Settings** (the daemon calls the companion back to confirm the request came from it); clicking PrivacyFence itself (app icon, Start Menu, applications menu), after the companion's confirmation dialog; `privacyfence-app --print-sign-in-link`, after the companion's confirmation dialog | Yes | Yes |
-| `unattested` | Anything else running as your OS user that asks the control channel for a sign-in code; `--print-sign-in-link` when no companion confirms it | Yes | No |
-
-A `human` session is needed to approve a call (singly or in a batch), to confirm a rule the AI
-client proposed, to use a recovery code, to upload an organization config bundle, and for every
-sensitive settings change listed under [Passkey step-up](#passkey-step-up). Denying and cancelling
-need nothing. An unattested session shows what is pending and says it cannot approve.
-
-This is enforced on privilege-separated installs, where a companion is guaranteed to be installed
-and running. No MCP tool can obtain a sign-in link
-([ADR 0013](adr/0013-no-mcp-tool-mints-a-sign-in-credential.md)).
-
-Every sign-in code the daemon issues, and every attested one it refuses, is written to the audit
-log as `sign_in_code_minted`. The code's source and whether its session can approve are included.
-The most recent ones are listed under **Recent sign-ins** on the `/security` page. If one appears
-that you did not ask for, treat the install as compromised.
-
-Sign-in codes are single-use and expire after 10 minutes. A session expires after 30 minutes idle
-or 24 hours after it started, whichever comes first.
-
-Limits: the companion signs you in by opening a URL carrying the code in your browser. A process
-running as you can read that URL from the browser's command line and race the browser to use it.
-The companion's own socket is also reachable by your OS user, so a process that binds it before the
-companion starts can impersonate it. Both are visible (a missing companion breaks connector
-sign-in), and neither can be done at a time of the AI client's choosing without you.
+A session expires after 30 minutes idle or 24 hours after it started, whichever comes first.
 
 ## Passkey step-up
 
 Step-up asks for a fresh WebAuthn passkey assertion (Touch ID, Windows Hello, a security key, or
-a phone over the browser's QR-code flow) before a decision is released. The `step_up` settings (in `config/settings.yaml` for local mode,
-`org/admin_config.json` for organization mode; see [Configuration reference](configuration-reference.md))
-default to:
+a phone over the browser's QR-code flow) before a decision is released. The `step_up` settings live
+in `org/admin_config.json` (see [Configuration reference](configuration-reference.md)) and default to:
 
-| Key | Packaged local install | Non-packaged local install | Organization mode |
-| --- | --- | --- | --- |
-| `enabled` | `true` | `false` | `false` (`true` on a single-user install) |
-| `require_passkey` | `true` | `false` (setting `true` is refused at startup) | `false` (`true` on a single-user install) |
-| `scope` | `writes_and_pii_reads` | `writes_and_pii_reads` | `writes_and_pii_reads` |
-| `batch` | `single_assertion` | `single_assertion` | `single_assertion` |
+| Key | Organization server | Single-user install |
+| --- | --- | --- |
+| `enabled` | `false` | `true` |
+| `require_passkey` | `false` | `true` |
+| `scope` | `writes_and_pii_reads` | `writes_and_pii_reads` |
+| `batch` | `single_assertion` | `single_assertion` |
 
-An explicit value always wins. On an organization server an administrator makes step-up stricter on
+An explicit value always wins. An administrator makes step-up stricter on
 **Admin → Step-up** (the page only offers stricter choices); relaxing it is an edit of
 `org/admin_config.json` followed by a restart ([ADR 0068](adr/0068-step-up-is-turned-on-from-the-ui-and-off-only-by-a-config-edit.md)),
 and `rp_id`, `rp_name` and `batch` have no control and are set the same way.
@@ -240,7 +187,7 @@ and `rp_id`, `rp_name` and `batch` have no control and are set the same way.
 
 A read an always-allow rule covers never becomes an approval, so no scope asks about it.
 
-With `require_passkey` on, the following also need a passkey in **both modes**
+With `require_passkey` on, the following also need a passkey on every deployment
 ([ADR 0034](adr/0034-sensitive-settings-writes-require-step-up-in-both-modes.md)), whatever `scope`
 says:
 
@@ -262,12 +209,10 @@ How the settings combine:
 
 - **`require_passkey` on, nothing enrolled:** the daemon starts, every page shows a banner, and
   every approving decision `scope` covers and every sensitive change is refused (`403`, naming
-  `/security`) until a passkey is added. On a packaged install the companion opens `/security` at
-  its next start so you can enroll one.
+  `/security`) until a passkey is added.
 - **`enabled` on, `require_passkey` off:** a passkey is asked for only if one is enrolled. With
-  none enrolled, local mode lets decisions, batches included, go through. Organization mode accepts
-  a fresh sign-in at the identity provider instead of a passkey for a single decision, and refuses
-  a batch that needs step-up (`400`, nothing applied): approve each item from its card, or add a
+  none enrolled, a decision is accepted on a fresh sign-in at the identity provider instead of a passkey for a single decision, and a batch
+  is refused that needs step-up (`400`, nothing applied): approve each item from its card, or add a
   passkey ([ADR 0066](adr/0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md)).
   That sign-in starts only from the card's own button, by a request the page checks, never from a
   link ([ADR 0179](adr/0179-an-idp-step-up-starts-only-from-the-card-by-post.md)).
@@ -277,15 +222,14 @@ How the settings combine:
   and choice dialogs are never batched.
 
 Turning step-up on from the Settings page (the **Security** card) is immediate and audited
-(`step_up_requirement_enabled`). There is no control that turns it off. That takes an edit to
-`config/settings.yaml` and a restart. The change is audited (`step_up_requirement_disabled`), and a
-banner stays on every page, with a warning in the daemon log, until it is turned back on.
+(`step_up_requirement_enabled`). There is no control that turns it off. That takes an edit of
+`org/admin_config.json` and a restart. The change is audited (`step_up_requirement_disabled`), and a
+banner stays on every page, with a warning in the server log, until it is turned back on.
 
 ### Passkeys for proposed rules
 
 `privacyfence_propose_policy_change` lets an AI client ask for an always-allow rule. No approval
-card is involved, so the confirmation dialog is the whole gate. Confirming it needs a `human`
-session and, wherever `require_passkey` is on, a passkey, in both modes and regardless of `scope`.
+card is involved, so the confirmation dialog is the whole gate. Confirming it needs a signed-in session and, wherever `require_passkey` is on, a passkey, regardless of `scope`.
 The dialogs that follow an approval card you already answered (the PII confirmation, **Always
 allow**) need neither again.
 
@@ -301,14 +245,11 @@ created a new passkey, and the user-verification flag is the authenticator's own
 itself is therefore gated:
 
 - **A passkey is already enrolled:** adding another needs an assertion with an existing one. Same
-  in both modes.
-- **Nothing enrolled yet (local mode):** the companion shows a system dialog asking you to confirm.
-  No answer, a denial, or no companion running is a refusal. On Linux this dialog needs `zenity` or
-  `kdialog`; with neither installed, the first enrollment is refused with a message naming them.
-- **Nothing enrolled yet (organization mode):** there is no companion, so the first enrollment
-  rests on the identity-provider sign-in. Enroll everyone before relying on `require_passkey`
-  against a stolen session, and treat an unexpected `webauthn_credential_enrolled` entry as an
-  incident.
+  everywhere.
+- **Nothing enrolled yet:** the first enrollment rests on the sign-in: the setup code in
+  single-user mode, the identity provider on a server. Enroll everyone before relying on
+  `require_passkey` against a stolen session, and treat an unexpected
+  `webauthn_credential_enrolled` entry as an incident.
 
 Refused enrollments are audited as `webauthn_enrollment_refused`. A first enrollment's audit entry
 says "First passkey enrolled".
@@ -319,23 +260,14 @@ A recovery code lets you back in when every enrolled passkey is lost. It is 16 h
 characters in four groups (`A1B2-C3D4-E5F6-1789`). It is issued when you enroll a passkey and no
 unused code is on file. Only a salted SHA-256 hash is stored, under `authority/`.
 
-**Where it is shown.** On a packaged local install the companion shows it in a desktop dialog, and
-the daemon stores it only after the dialog was shown. If the companion cannot be reached, the
-passkey is still enrolled, no code is issued, and `/security` says why. In organization mode and on
-a non-packaged install it is shown once in the browser.
-
-**Getting a new one.** Nothing keeps the plain text, so a lost code is replaced, not shown again:
-**New Recovery Code…** in the companion's menu (macOS menu bar, Windows tray), or the **New
-PrivacyFence recovery code** action on the PrivacyFence entry in the Linux applications menu. The
-companion asks you to confirm first, because a new code invalidates the old one.
+**Where it is shown.** Once, in the browser, when the passkey is enrolled. Nothing keeps the plain
+text, so a lost code cannot be shown again.
 
 **Using it.** On `/security`, choose **Use your recovery code**. The attempt:
 
-- needs a `human` session on a privilege-separated install; an unattested one is refused;
 - is rate-limited to 5 attempts per session and 20 across all sessions in any 15 minutes (the
   count resets when the daemon restarts);
-- is audited, whatever the outcome: `webauthn_recovery_refused` with the reason (unattested
-  session, too many attempts, wrong or used code) but never the code, or
+- is audited, whatever the outcome: `webauthn_recovery_refused` with the reason (too many attempts, wrong or used code) but never the code, or
   `webauthn_recovery_code_used` on success.
 
 A wrong code consumes nothing: the stored code stays valid for the next attempt. A correct code is
@@ -343,7 +275,7 @@ marked used and removes every passkey enrolled for you, so you can enroll a new 
 
 ## Scoped tokens
 
-A scoped token is a bearer credential for `/mcp` that a person creates in Settings, in both modes,
+A scoped token is a bearer credential for `/mcp` that a person creates in Settings
 for one client or job. It has a name, an expiry (90 days by default) and a scope.
 
 - **What a scope limits.** The tools the client sees and may call, and the token's own rules. The
@@ -356,8 +288,7 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   rule list or wait for an approval.
 - **Stored as a hash.** The secret is `pfst_` plus random characters; only its SHA-256 is kept, in
   `scoped_tokens.json` under `authority/`. A malformed file fails closed: the tokens stop working.
-  It is accepted only on `/mcp`. An older version cannot read a token file written by this one: the
-  tokens stop working there, and its next token change deletes them.
+  It is accepted only on `/mcp`.
 - **Attested agent.** The audit log records the call as the agent `scoped-token:<id>`, named after
   the token, with source `override`. It is attested because a person created the credential, and it
   outranks a redirect-URI attestation for that call
@@ -378,8 +309,7 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   the token to take its access away ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)).
 - **AI-proposed tokens.** A client can call `privacyfence_propose_scoped_token`; it creates nothing and
   returns only a review link ([ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md), [ADR 0251](adr/0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md)).
-  - The tool is not offered to a scoped token, and is refused in an unattended session. Locally only
-    the computer's owner can use it.
+  - The tool is not offered to a scoped token, and is refused in an unattended session.
   - A proposal is single use and lasts one hour. The review can only narrow it (rules, verbs, tools,
     days); the personal-data boxes start unticked and only the person can tick them.
   - Creating needs the token's name typed exactly. Passkey step-up, where in force, is bound to the
@@ -389,14 +319,14 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   - `from_session` builds the proposal from a ledger of the session's approved calls, kept in memory
     only and dropped when the session ends ([ADR 0252](adr/0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md)).
   - Every step is audited (`scoped_token_proposed`, `_accepted`, `_declined`, `_expired`).
-- **Local mode** copies the secret to the clipboard through the companion once. **Organization
-  mode** shows it once in the browser, and only after the administrator turns scoped tokens on
-  (`scoped_tokens.enabled`) and sets the longest lifetime (`scoped_tokens.max_days`). Token proposals
-  are a further opt-in, `scoped_tokens.allow_ai_proposals`, off by default and only effective when
-  scoped tokens are on ([ADR 0253](adr/0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md)).
+- **Showing it.** The secret is shown once in the browser, and only after the administrator turns
+  scoped tokens on (`scoped_tokens.enabled`) and sets the longest lifetime
+  (`scoped_tokens.max_days`). Token proposals are a further opt-in,
+  `scoped_tokens.allow_ai_proposals`, off by default and only effective when scoped tokens are on
+  ([ADR 0253](adr/0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md)).
 - **Revoking.** A person revokes one token, or all, in Settings (with a passkey wherever the
   install requires one). An administrator revokes every token of one person with
-  `privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`. A scoped token outlives an OAuth sign-in
+  `privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID` (run it in the container: `docker compose exec privacyfence privacyfence-app --revoke-scoped-tokens PRINCIPAL_ID`). A scoped token outlives an OAuth sign-in
   (which ends within 30 days), so offboarding a person includes running that command
   ([ADR 0165](adr/0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md)).
   When Peek auto-provisioning is on, also remove the person from the identity provider and run
@@ -411,7 +341,7 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
 
 ## Tokens delivered to n8n
 
-On an organization server an administrator can let an AI client ask for a scoped token to be delivered
+An administrator can let an AI client ask for a scoped token to be delivered
 into n8n ([ADR 0278](adr/0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md)). This is the
 one case where a token's secret leaves PrivacyFence.
 
@@ -447,90 +377,33 @@ one case where a token's secret leaves PrivacyFence.
   covered too ([ADR 0281](adr/0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md)).
   If the n8n address is changed, the old credentials are not deleted: their tokens are revoked and the audit log
   says to delete them by hand.
-- Every delivery, deletion and failure is audited (`runtime_credential_*`). Delivery is organization mode only and
-  starts only from an AI proposal ([ADR 0282](adr/0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md)).
+- Every delivery, deletion and failure is audited (`runtime_credential_*`). Delivery starts only from an AI proposal ([ADR 0282](adr/0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md)).
 
-## Privilege separation
+## Where the data lives
 
-Every packaged install runs the daemon under a dedicated service account and keeps its data in a
-system directory that account owns. The installer does this; a packaged daemon that finds itself
-unseparated refuses to serve `/mcp` or approvals and names the command that fixes it
-([ADR 0003](adr/0003-separated-installs-only.md)).
+The server runs in its own container and keeps its data in the container's data volume
+(`/var/lib/privacyfence-org/.privacyfence`), owned by the image's user (uid and gid `10001`). The
+AI client reaches PrivacyFence only through `/mcp`, so it cannot read or write the files that decide
+what it may do: the always-allow rules, policy and PII settings, the passkey and recovery-code
+files, connector credentials, the scoped-token hashes and the audit log with its `.audit_chain.key`.
+What the volume holds is listed in
+[Organization deployment with Docker](org-mode-docker.md#what-stays-in-the-data-volume); the modes
+and owners to keep on a bind-mounted data directory are in
+[A bind-mounted data directory](org-mode-docker.md#a-bind-mounted-data-directory).
 
-| | macOS | Linux (`.deb`) | Windows |
-| --- | --- | --- | --- |
-| Separation tool | `/Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh` | `/usr/sbin/privacyfence-privilege-separation` | `%ProgramFiles%\PrivacyFence\privilege-separation.ps1` |
-| Service account | `_privacyfence` | `privacyfence` (system user) | `NT SERVICE\PrivacyFence` (virtual account) |
-| Group your account joins | `_privacyfence` | `privacyfence` | `PrivacyFenceUsers` |
-| System root | `/Library/Application Support/PrivacyFence` | `/var/lib/privacyfence` | `%ProgramData%\PrivacyFence` |
-| Daemon runs as | LaunchDaemon `com.privacyfence.daemon` | systemd unit `privacyfence-daemon.service` | Windows service `PrivacyFence` |
-| Companion runs as | LaunchAgent `com.privacyfence.companion` (menu-bar app) | `/etc/xdg/autostart/privacyfence-companion.desktop` (`privacyfence-companion --serve`, no tray) | Scheduled task `PrivacyFenceCompanion` (tray app) |
-| Daemon program | Root-owned copy in `/Library/PrivacyFence/image` | `/opt/privacyfence` (owned by the package) | `%ProgramFiles%\PrivacyFence` (admin-only install) |
-
-Each tool takes `enable [--for-user <name>]`, `status` and `uninstall [--purge]` (`-ForUser`,
-`-Purge` on Windows). Run it with `sudo`, or from an elevated PowerShell with
-`-ExecutionPolicy Bypass -File`. `uninstall` keeps the data; `--purge` also deletes the data, the
-marker, and the service account and group
-([ADR 0042](adr/0042-uninstall-replaces-disable.md)). `status` checks the modes and owners below,
-your group membership (`PENDING USER` while nobody has been added to the group yet; a new
-membership takes effect at your next login), and that the daemon and companion are registered. The daemon repeats the same checks at every start, and refuses to run as
-the wrong account.
-
-Layout under the system root (POSIX modes; Windows expresses the same with NTFS ACLs):
-
-| Path | Holds | macOS / Linux | Windows |
-| --- | --- | --- | --- |
-| *(root)* | Everything below | service account, `0711`: anyone may traverse, nobody else may list | Owner `Administrators`; inheritance removed; service account, `SYSTEM`, `Administrators` full; `Users` traverse only |
-| `privilege-separation.json` | The marker: platform, account names, recorded owner | `0644` | Adds `Users` read |
-| `authority/` | `config/settings.yaml` (policy, rules, PII settings); `webauthn_credentials.json`; `webauthn_recovery_code.json`; `step_up_state.json`; `mcp_token`; `scoped_tokens.json` (hashes of scoped tokens); `scoped_token_activity.json` (per token id, the time of its last use and last denial and the denied tool's name; no secrets); `logs/audit/` (audit log and its `.audit_chain.key`) | service account, `0700` | Service account, `SYSTEM`, `Administrators` only |
-| `credentials/` | Connector OAuth tokens and the Telegram session | service account, `0700` | As root |
-| `org/`, `logs/`, `downloads/`, `uploads/`, caches | Organization config, daemon logs, staged files | service account, `0700` | As root |
-| `users/os-<id>/` | Another OS account's own data, with its own `authority/` ([ADR 0008](adr/0008-one-principal-per-os-user.md)) | service account, `0700` | As root |
-| `handoff/` | `mcp_url`, `web_base_url`; on macOS and Linux also `control.sock` and each account's `companion*.sock` | group, `3770` (setgid and sticky); files `0640`, control socket `0660` | Adds `PrivacyFenceUsers` read (both channels are named pipes, so nothing is created here) |
-
-The recorded owner in the marker keeps the install's original data. Adding another account with
-`enable --for-user` gives that account its own principal and never changes the owner
-([ADR 0043](adr/0043-the-recorded-owner-is-never-rewritten.md)). One group member cannot take over
-another's companion socket ([ADR 0027](adr/0027-a-group-member-cannot-take-over-another-members-companion-socket.md)).
-
-On Linux the script refuses to separate an install whose daemon program, or any directory above it,
-a non-root account can write. Run through `pkexec`, it accepts only the companion's own requests:
-starting, stopping or restarting the service, and setting it up for the account that ran `pkexec`
-([ADR 0183](adr/0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md)).
-
-What this takes away from a process running as you:
-
-- editing `config/settings.yaml`: the always-allow rules, policy and PII settings;
-- writing `webauthn_credentials.json` or the recovery-code file;
-- reading the MCP token file or the audit log's key. An MCP client gets its token from the control
-  channel, which identifies the calling OS account from the kernel; the `.mcpb` shim does this
-  itself, and for other clients `privacyfence-app --print-mcp-token` prints it and the companion's
-  **Copy AI Client Token** copies it to the clipboard. Settings' **Copy token** asks the daemon to
-  have the companion copy it, so no web response carries it; rotating it from Settings takes a
-  passkey when passkeys are required
-  ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md));
-- reading connector credentials;
-- asking the companion to open an arbitrary URL. The companion accepts that only from the daemon's
-  service account. From your own account it accepts only "show Approvals/Settings", which asks you
-  first.
-
-On a separated install, a tool that reads or writes a local file you named goes through the
-`.mcpb` shim, which runs as you and acts only on a path that appears in that tool call's arguments
-([ADR 0007](adr/0007-local-file-bridge.md)).
-
-A non-packaged install is never separated. `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` exists for
-development against a source checkout and must never be set in a real deployment.
+Anyone who can run `docker` on the host, or who can write to the volume, controls the install; that
+is why single-user mode is no protection against an agent with a shell and the Docker socket
+([Single-user mode](#single-user-mode)).
 
 ## Audit log integrity
 
 Each gate decision, approval and security event is written to a weekly JSON Lines file
-(`YYYY-Www.jsonl`). Local mode's log is `authority/logs/audit/` under the data directory; other
-principals have their own. Every entry is chained to the previous one with HMAC-SHA256, keyed by
+(`YYYY-Www.jsonl`). Each principal's log is `authority/logs/audit/` under that principal's data directory. Every entry is chained to the previous one with HMAC-SHA256, keyed by
 `.audit_chain.key` in the same directory, on every install. Check a log from a source checkout with
 its dependencies installed:
 
 ```
-sudo python3 scripts/verify_audit_log.py "/var/lib/privacyfence/authority/logs/audit"
+python3 scripts/verify_audit_log.py "<data directory>/authority/logs/audit"
 python3 scripts/verify_audit_log.py <dir> --week 2026-W38     # one ISO week
 ```
 
@@ -539,11 +412,9 @@ Exit status: `0` intact, `1` a week failed (or no files found), `2` directory mi
 The script also checks that each week's first entry continues the previous week's last one, and that the newest entry matches `.audit_chain_state.json`, so a removed week or a cut-off tail is reported, unless the `.audit_chain_state.json` file was edited too (it is not keyed). Lines written before chaining existed are accepted only at the top of a file ([ADR 0176](adr/0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md)).
 
 The chain detects edits, insertions and deletions made without the key. Anyone who can read the
-key can rebuild a consistent chain. On a separated install that means root or the service account.
-On a non-packaged install it includes any process running as you. For evidence that survives that,
-send a copy off the machine. Organization mode can forward every entry to syslog or an HTTP
-endpoint (**Admin → Audit forwarding**, stored as `audit_forwarding` in `org/admin_config.json`); local
-mode has no forwarding.
+key can rebuild a consistent chain. On the server that means root on the host or anyone who can read the volume. For evidence that survives that,
+send a copy off the machine. The server can forward every entry to syslog or an HTTP
+endpoint (**Admin → Audit forwarding**, stored as `audit_forwarding` in `org/admin_config.json`).
 
 Security events have their own `decision` values: `sign_in_code_minted`,
 `webauthn_credential_enrolled`, `webauthn_credential_removed`, `webauthn_enrollment_refused`,
@@ -554,30 +425,27 @@ resources were used even when no content was released.
 ## Which AI system the audit log names
 
 Each gated call records the calling AI system in `agent_id`, `agent_name`, `agent_version` and
-`agent_source`. In organization mode the approval card, the approvals list and the Audit Log page
+`agent_source`. The approval card, the approvals list and the Audit Log page
 show it as **Verified**, **Not verified** ("Says it is …"), or **Unrecognised AI system** with the
-name sent. In local mode they show every request as **Undetected**, with no name and no badge; the
-fields are still recorded
-([ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md)).
+name sent.
 
-| `agent_source` | Meaning | Shown as (organization mode) |
+| `agent_source` | Meaning | Shown as |
 | --- | --- | --- |
-| `oauth_client` | Organization mode: the call's access token belongs to an OAuth client that registered only with a vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise) | Verified |
-| `client_info` | The name the client sent (MCP `clientInfo`, or an organization-mode client's registered name), including one relabelled by a local `agent_overrides:` entry | Not verified, or Unrecognised if it matches no known AI system |
+| `oauth_client` | The call's access token belongs to an OAuth client that registered only with a vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise) | Verified |
+| `client_info` | The name the client sent (MCP `clientInfo`, or a client's registered name), including one relabelled by an `agent_overrides:` entry | Not verified, or Unrecognised if it matches no known AI system |
 | `""` (empty) | No usable name | Unrecognised |
 
 The only verified identity is a redirect-URI attestation: the authorization code can only be
 delivered to a redirect URI the client registered, so a registration whose every redirect URI is
 one vendor's own callback got its tokens through that vendor. It needs no administrator step, and
 it applies to one OAuth registration only. Claude Code and any client with a
-loopback redirect stay Not verified, because any local program can register one. A member, or a
+loopback redirect stay Not verified, because any program on the client's computer can register one. A member, or a
 program using their signed-in browser session, can still register under a vendor's redirect URI and
 have their own calls shown as that vendor; it never reaches another member's calls
 ([AI systems](org-mode-setup-guide.md#11-ai-systems),
 [ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md),
 [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)).
-In local mode the AI clients of one OS account share that account's MCP token, so nothing can tell
-them apart, except a client that holds its own [scoped token](#scoped-tokens): its calls are
+A client that holds its own [scoped token](#scoped-tokens) has its calls
 recorded as the attested agent `scoped-token:<id>`. An `agent_overrides:` entry only relabels the recorded name and never makes it verified
 ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)).
 
@@ -600,9 +468,7 @@ to build the card, detect personal data or check a rule. That data stays inside 
   adds no tools and reveals no extra data.
 - **Errors** returned over MCP carry no credentials, session or sign-in codes, secret paths, or
   unreleased content; details go to the daemon log.
-- **Notifications** follow `notifications.detail`: `minimal` and `standard` (the default) carry no
-  gated content; `detailed` adds the approval's summary line and can put it on a lock screen. An
-  organization deployment's push notifications always carry the count only, encrypted and padded
+- **Notifications** are web push and carry the count only, encrypted and padded
   to a fixed size; the browser's push service (Apple, Google, Mozilla or Microsoft) sees when one
   was sent, and an administrator can turn them off on the Admin page
   ([ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md)).
@@ -632,18 +498,17 @@ See [Approvals and policy](approvals-and-policy.md) for the approval list, cards
 - **Organization OAuth server:** at most 2,000 registered clients, 8 KiB of metadata per
   registration, and unused registrations pruned after 180 days. Access tokens last 1 hour and
   refresh tokens at most 30 days.
-- **Organization config:** validated at startup, which fails instead of weakening. A desktop bundle
-  or a server's legacy bundle has its hash audited and can be signed
+- **Organization config:** validated at startup, which fails instead of weakening. A server's legacy bundle has its hash audited and can be signed
   ([ADR 0016](adr/0016-org-config-bundle-hash-log-and-signing.md)). An organization server's own apps
   are signed connector configs, each verified again at every start. Protect who can replace them and
   the data directory, which holds the admin config.
-- **Downloads in organization mode:** staged encrypted, served once through a short-lived link
+- **Downloads:** staged encrypted, served once through a short-lived link
   (default 300 seconds) ([ADR 0017](adr/0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md)).
 - **Client secrets** belong to the deployment, not a person. Rotate a leaked one with the provider.
-- **Supply chain:** each release build produces CycloneDX SBOMs, and installers are signed as
-  described in Platform support. Release and QA-runner jobs install every build tool from hash-pinned locks
+- **Supply chain:** each release build produces CycloneDX SBOMs, and the organization image is verified as described in
+  [Verify the image](org-mode-docker.md#verify-the-image). Release and QA-runner jobs install every build tool from hash-pinned locks
   ([ADR 0182](adr/0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md)).
-- **Operations:** one daemon per data directory (a file lock enforces it); organization mode is not
+- **Operations:** one server per data directory (a file lock enforces it); it is not
   clustered. Back up and restore the data directory with its owners and permissions intact.
 
 ## What PrivacyFence does not claim
@@ -655,11 +520,8 @@ See [Approvals and policy](approvals-and-policy.md) for the approval list, cards
   running without the maintainer. Reports are handled best-effort. Treat this as a risk acceptance: approve
   PrivacyFence through an exception process, pin a reviewed release, and assign an internal owner to
   track releases ([ADR 0025](adr/0025-no-certified-security-framework.md)).
-- **No protection against root or a local Administrator**, or against local code on a
-  non-packaged install, or against an agent that can run `docker` on a single-user install
-  ([Single-user mode](#single-user-mode)).
-- **No confidentiality of the local review screen** against a process running as you.
-- **No verified AI-system identity in local mode.**
+- **No protection against root on the host**, or against an agent that can run `docker` on a
+  single-user install ([Single-user mode](#single-user-mode)).
 - **No hard stop from the unattended-session flag.** It is advisory
   ([ADR 0015](adr/0015-unattended-session-flag-is-advisory-only.md)).
 - **No compliance by itself.** Whether a deployment meets a regulatory or contractual requirement

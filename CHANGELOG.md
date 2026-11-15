@@ -585,7 +585,7 @@ and the two runs each uploaded half of the files, so no release was created. 5.2
 - **ChatGPT desktop, with a local install.** The ChatGPT app for macOS connects to PrivacyFence on
   your own computer as a Streamable HTTP server, with the token from **Settings → AI clients** or
   **Copy AI Client Token** in the companion's menu. Checked end to end with a personal plan: reads,
-  gated writes, and downloads and uploads through one-time links. [Connect ChatGPT](docs/connect-chatgpt.md#chatgpt-desktop)
+  gated writes, and downloads and uploads through one-time links. [Connect ChatGPT](docs/connect-chatgpt.md)
   has the steps, and **Settings → AI clients** shows them too.
 - **ChatGPT (Developer Mode, with an organization deployment).** ChatGPT on the web connects to an
   organization deployment's `/mcp` as a Developer Mode app, signing in with OAuth, and has been
