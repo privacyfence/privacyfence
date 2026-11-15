@@ -327,6 +327,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p23-retirement
 
 - None.
+- conflict: Merging origin/main (117 commits, scoped-token-gated upstream tools) conflicted in 15 files (daemon_main, routes_admin, routes_mcp, routes_settings, server, their tests, docs, dependency-audit.yml); main's feature kept, local-mode halves dropped, pyinstaller_common.py and test_routes_settings.py stay deleted. Not a manifest phase; worker branch merge-main.
+- level: The merge-main worker ran on the strong level (Opus) instead of the worker level, because the conflicts are semantic and in security-relevant routes.
+- conflict: Main took ADR numbers 0296-0300, so this plan's ADRs were renumbered: 0296->0301, 0297->0302, 0298->0303, 0299->0304, 0300->0305, 0301->0306, 0302->0307, 0303->0308, 0304->0309, with every reference updated outside docs/1096. The plan and this file still use the old numbers (0296-0304).
+- worker: Added unit tests for upstream approval branches that main introduced and for two markdown_to_html branches so the coverage ratchet passes after the merge; no floor was lowered.
 
 ## Final review
 
