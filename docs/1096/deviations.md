@@ -149,7 +149,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p12b-other-connectors
 
-- pending
+- worker: src/privacyfence/daemon_main.py (outside touches, three lines): the connector.download_mode assignments for Salesforce, Jira and Assets were removed because the attribute no longer exists; p12c removes the rest.
+- scope: scope: src/privacyfence/daemon_main.py
+- review: After merge the coverage ratchet fails only on org_mode.py (known, p14b). The worker reported no deviations of its own.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p12c-remaining-connectors
 
