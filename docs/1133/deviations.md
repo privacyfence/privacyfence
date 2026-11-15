@@ -39,4 +39,4 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Finishing
 
-- pending
+- final: Scope: no phase went out of scope, so there is no drift to accept or revert. The full dod gate (pytest with coverage, coverage floor, ruff, bandit, mypy, strict mypy) was run by the orchestrator on the feature branch after the final review and passed; the toolkit was unavailable in worker sessions throughout.
