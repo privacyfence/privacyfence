@@ -102,7 +102,7 @@ class TestAssertTagMatchesVersion:
 
 
 class TestCheckTagCommand:
-    """The `check-tag` CLI surface build.yml and publish-pypi.yml actually call."""
+    """The `check-tag` CLI surface build.yml and publish-pypi.yml's version step actually call."""
 
     def test_exits_zero_on_match(self, capsys):
         assert r2_release.main(["check-tag", "--tag", "v4.2.0b1", "--version", "4.2.0b1"]) == 0

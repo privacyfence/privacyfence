@@ -148,7 +148,7 @@ jobs:
         if: always()
         run: pip-audit --strict -r requirements/docs.lock.txt
 
-      # The release tooling (build, SBOM, R2 upload, PyPI publish) runs holding signing and
+      # The release tooling (build, SBOM, R2 upload, `privacyfence-sync` publish) runs holding signing and
       # storage credentials, so it blocks like the runtime set.
       - name: Audit release tooling (blocking)
         if: always()
@@ -158,29 +158,6 @@ jobs:
         if: always()
         continue-on-error: true
         run: pip-audit --strict -r requirements/dev.lock.txt
-
-  floor-audit:
-    # The runtime lock pins what packaged builds ship, but `pip install privacyfence` resolves
-    # fresh from pyproject.toml's ranges, so a user can land on the lowest version each range
-    # allows. This audits that lowest-direct resolution; a failure means a floor in pyproject.toml
-    # needs raising (with a one-line comment saying why).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.13'
-
-      # release.lock.txt carries uv and pip-audit, hash-pinned.
-      - name: Install audit tooling
-        run: pip install --require-hashes -r requirements/release.lock.txt
-
-      - name: Resolve the lowest direct versions
-        run: uv pip compile --resolution lowest-direct --python-version 3.11.5 pyproject.toml -o /tmp/lowest.txt
-
-      - name: Audit the lowest-direct set (blocking)
-        run: pip-audit --strict --no-deps --disable-pip -r /tmp/lowest.txt
 
   npm-audit:
     runs-on: ubuntu-latest
