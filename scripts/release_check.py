@@ -9,7 +9,7 @@ Runs, in order, and stops at the first failure:
      will ship must exist and be released, never `--allow-unreleased`.
   3. `scripts/tag_release.py <version> --no-fetch --check-only` -- on top of an unmoved `main`,
      no tag on HEAD, valid and sequential version. `--no-fetch` because the workflow has just
-     fetched `origin/main` into a clone that holds no credentials (docs/releasing.md, ADR 0310).
+     fetched `origin/main` into a clone that holds no credentials (docs/releasing.md, ADR 0312).
 
 Stdlib only, no PrivacyFence install: the release workflow's check step has no setup-python and
 no `pip install`, so this runs under whatever `python3` the runner has.

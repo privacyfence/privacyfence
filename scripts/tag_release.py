@@ -2,7 +2,7 @@
 """Create a release tag safely -- the checks this repo's release history says a human keeps missing.
 
 Cutting a release is "tag `main`'s tip and push the tag", which `.github/workflows/tld-release.yml`
-does after running these checks through `scripts/release_check.py` (docs/releasing.md, ADR 0310) --
+does after running these checks through `scripts/release_check.py` (docs/releasing.md, ADR 0312) --
 there's no version-bump commit and no build step to catch a mistake before it's live.
 This script runs the checks that step has no other gate for, before creating the tag locally:
 
@@ -33,7 +33,7 @@ missing or unmerged `[Unreleased]` section fails loudly there rather than being 
 
 Only creates the tag locally by default -- pushing it starts `build.yml` and `publish-pypi.yml`
 immediately (docs/releasing.md), which is not something this script does without `--push` being
-passed explicitly. `tld-release.yml` is the only documented way to cut a release (ADR 0310) and
+passed explicitly. `tld-release.yml` is the only documented way to cut a release (ADR 0312) and
 creates the tag itself; running this by hand is for checking a version number.
 
 Stdlib only, no PrivacyFence install required -- same as scripts/r2_release.py and
