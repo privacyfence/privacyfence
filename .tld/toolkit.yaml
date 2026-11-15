@@ -45,10 +45,6 @@ verify:
     - bandit -c pyproject.toml -r src
     - python3 -m mypy src/privacyfence
     - python3 scripts/mypy_strict_modules.py
-    - run: npm test
-      cwd: mcpb/shim
-    - run: npm run typecheck
-      cwd: mcpb/shim
   dod_conditional:
     - when: ["src/privacyfence/*_client.py", "src/privacyfence/connectors/**"]
       do: >-
@@ -59,10 +55,10 @@ verify:
       do: >-
         If the change is to ToolSpec/ToolParam in connector.py, or to web/server.py's socket-binding or
         lifecycle: `pytest tests/integration -v`, and test_mcp_daemon_contract.py must pass.
-    - when: ["src/privacyfence/web/mcp_auth.py", "src/privacyfence/web/server.py", "mcpb/shim/src/**"]
+    - when: ["src/privacyfence/web/mcp_auth.py", "src/privacyfence/web/server.py"]
       do: >-
-        If the change is to web/mcp_auth.py, to web/server.py's mcp_url discovery-file writing, or to
-        mcpb/shim/src/: `pytest tests/integration -v`, and test_shim_mcp_contract.py must pass.
+        If the change is to web/mcp_auth.py or to web/server.py's mcp_url discovery-file writing:
+        `pytest tests/integration -v`, and test_mcp_daemon_contract.py must pass.
     - when: ["pyproject.toml"]
       do: >-
         If a dependency changed: run scripts/update_dependency_locks.sh (needs uv) and commit the resulting
@@ -77,8 +73,6 @@ verify:
       do: >-
         In n8n/: `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test` must pass, then
         `pytest tests/integration/test_n8n_node_contract.py -v`.
-    - when: ["cloudflare/downloads/**"]
-      do: "In cloudflare/downloads/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
     - when: ["cloudflare/oauth-relay/**"]
       do: "In cloudflare/oauth-relay/: `npm test`, `npm run typecheck` and `npm run dry-run` must pass."
   dod_manual:
@@ -113,7 +107,7 @@ ci:
       use_when: The weekly drift check of `main` itself; not for a branch's definition-of-done QA row
       notes: No inputs. It checks `main`'s code, not a branch's, so it cannot stand in for the QA row; use qa-record-fixture.yml with `branch=` or run `--check` locally with QA credentials.
     - workflow: build.yml
-      use_when: A real DMG, .pkg, .mcpb, Windows installer or .deb
+      use_when: The org image, the SBOM and the release assets
       notes: No inputs. Each platform job runs its own packaged-artifact smoke test before upload.
     - workflow: release.yml
       use_when: Cutting a release tag (never from a session without the maintainer's say-so)
@@ -150,7 +144,6 @@ hooks:
     - .github/workflows/windows-graphical-session.yml
     - .github/workflows/pages.yml
     - .github/workflows/website-build.yml
-    - mcpb/shim/package-lock.json
     - cloudflare/downloads/package-lock.json
 
 admin:
@@ -162,9 +155,6 @@ deps:
   audit:
     - ecosystem: "pip"
       run: "pip-audit --strict -r requirements/runtime.lock.txt"
-    - ecosystem: "npm"
-      run: "npm audit --omit=dev --audit-level=high"
-      cwd: "mcpb/shim"
     - ecosystem: "npm"
       run: "npm audit --omit=dev --audit-level=high"
       cwd: "cloudflare/downloads"

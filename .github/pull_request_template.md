@@ -20,8 +20,6 @@ reason rather than leaving it blank.
       `scripts/mypy_strict_modules.py` checks with strict flags. A genuine
       Bandit false positive gets a `# nosec BXXX  # <reason>` at the call site, never a suppression
       in `pyproject.toml`.
-- [ ] In `mcpb/shim/`: `npm test` and `npm run typecheck` pass (CI blocks on both on every PR,
-      whether or not it touches the shim).
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading — **not**
       under a concrete `## [X.Y.Z]` heading, which a feature branch must never open (`docs/releasing.md`,
       "Release notes come from CHANGELOG.md"). Internal-only changes don't need one.
@@ -47,9 +45,8 @@ reason rather than leaving it blank.
 - [ ] **`web/mcp_dispatch.py`, `web/routes_mcp.py`, `connector.py`'s `ToolSpec`/`ToolParam`, or
       `web/server.py`'s socket-binding/lifecycle** — `pytest tests/integration -v` run locally,
       `test_mcp_daemon_contract.py` still passes.
-- [ ] **`web/mcp_auth.py`, `web/server.py`'s `mcp_url` discovery-file writing, or anything under
-      `mcpb/shim/src/`** — `pytest tests/integration -v` run locally (needs Node on PATH),
-      `test_shim_mcp_contract.py` still passes.
+- [ ] **`web/mcp_auth.py` or `web/server.py`'s `mcp_url` discovery-file writing** —
+      `pytest tests/integration -v` run locally, `test_mcp_daemon_contract.py` still passes.
 - [ ] **A dependency in `pyproject.toml`** — `scripts/update_dependency_locks.sh` run (needs `uv`)
       and the resulting `requirements/*.lock.txt` committed, or `dependency-audit.yml`'s
       `lockfile-freshness` job fails.
@@ -58,7 +55,7 @@ reason rather than leaving it blank.
       `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
 - [ ] **`n8n/**`** — in `n8n/`, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test` pass,
       then `pytest tests/integration/test_n8n_node_contract.py -v` passes.
-- [ ] **`cloudflare/downloads/`** — `npm test`, `npm run typecheck` and `npm run dry-run` pass
+- [ ] **`cloudflare/oauth-relay/`** — `npm test`, `npm run typecheck` and `npm run dry-run` pass
       there.
 
 ## QA fixture report

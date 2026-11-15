@@ -279,10 +279,6 @@ def test_server_builds_call_the_generator_and_desktop_builds_do_not() -> None:
     desktop = build.replace(org_image, "")
     assert "builtin_apps.py" not in desktop
     assert "PF_APP_" not in desktop
-    for installer in ("scripts/build_dmg.sh", "scripts/build_deb.sh", "scripts/build_installer.ps1"):
-        text = (REPO_ROOT / installer).read_text(encoding="utf-8")
-        assert "builtin_apps.py" not in text, installer
-        assert "PF_APP_" not in text, installer
 
     for name, text in (("build.yml", build), ("publish-pypi.yml", pypi)):
         assert "APPS = " not in text, f"{name} carries its own copy of the generator"

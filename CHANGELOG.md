@@ -73,6 +73,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The download page, the releases page and the download counter.** `/download/` is now a short page that links to [the install page](https://privacyfence.eu/install/) and to GitHub Releases, where the installers of PrivacyFence 7 remain; `/releases/` and the download count on the home page are gone, and the site no longer contacts `downloads.privacyfence.eu` ([ADR 0300](docs/adr/0300-the-download-page-and-worker-are-retired.md)).
 - **The desktop command-line flags.** `privacyfence-app` no longer takes `--windows-service`, `--print-sign-in-link`, `--print-mcp-token`, `--peek-login`, `--telegram-setup` or the `--<connector>-oauth` sign-in flags; sign in to connectors from Settings in the web UI.
 - **Privilege separation and its installer scripts.** The Linux, macOS and Windows privilege-separation scripts and the Windows ACL audit are gone; an install keeps its data in the one data directory.
+- **The desktop installers, the `.mcpb` extension and the packaging files.** The macOS DMG and `.pkg`, the Windows installer, the Linux `.deb`, the Claude Desktop `.mcpb` extension and the build files behind them are removed; the Docker image is the way to run PrivacyFence.
 
 ## [7.0.2] — 2026-11-06
 

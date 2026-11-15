@@ -28,15 +28,13 @@ behind that makes later checks lie.
 
 **Then pre-flight `build.yml` itself against that same commit — do not skip this.**
 `release.yml`'s own dry run never installs the package or builds anything, so it cannot catch a
-regression in the `pytest.mark.packaged` smoke tests (macOS DMG/`.pkg`, Windows installer, `.deb`
-lifecycle) — those run only inside `build.yml`'s `build`/`build-windows`/`build-deb`/`build-org-image` jobs, which
+regression in the org image build — that runs only inside `build.yml`'s `build-org-image` jobs, which
 otherwise trigger only on a real tag push. That gap is exactly how `v4.2.0` reached a pushed tag
 broken (see `CHANGELOG.md`'s `[4.2.1]` entry and
 [ADR 0030](../../docs/adr/0030-preflight-dispatches-build-yml-before-tagging.md)).
 
 Dispatch `.github/workflows/build.yml` (`workflow_dispatch`, it takes no inputs) against
-`origin/main`'s exact commit from the step above, and wait for the `build`, `build-windows`,
-`build-deb`, `build-org-image (amd64)`, `build-org-image (arm64)`, and `sbom` jobs to all finish. This is safe off an untagged commit: every
+`origin/main`'s exact commit from the step above, and wait for the `build-org-image (amd64)`, `build-org-image (arm64)`, and `sbom` jobs to all finish. This is safe off an untagged commit: every
 upload/publish/release step in `build.yml` — including `finalize-release` — is gated
 `if: startsWith(github.ref, 'refs/tags/')`, so this run builds and tests every artifact but
 publishes nothing anywhere. Report the run URL and its outcome.
