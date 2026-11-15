@@ -34,7 +34,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 from .google_http import authorized_http
-from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 from .text_extraction import EXTRACTABLE_MIME_TYPES
 
@@ -134,33 +133,6 @@ def resolve_download_name(metadata: Any) -> str:
     elif export_mime == "text/csv" and not name.endswith(".csv"):
         name = name + ".csv"
     return name
-
-
-def resolve_download_destination(metadata: Any, destination_dir: str = "") -> str:
-    """Compute where ``download_file`` will save this file, without touching disk.
-
-    ``destination_dir`` is mandatory -- there is no default. Callers must
-    deliberately choose between a location the user will find (e.g.
-    ~/Downloads) and Claude's own working/scratch directory, rather than a
-    file silently landing in Downloads just because nobody thought about it.
-    ``metadata.name`` comes from Drive and is untrusted -- a file can be
-    renamed to anything, including path separators -- so only the basename of
-    the resolved download name is kept. This is the same protection
-    ``gmail_client.resolve_attachment_destination`` applies to attachment
-    names, and for the same reason: it's what stops a file renamed to
-    "../../.ssh/authorized_keys" from writing outside ``destination_dir``.
-    """
-    if not destination_dir.strip():
-        raise DriveClientError(
-            "download_file requires a non-empty destination_dir -- there is "
-            "no default. Pass ~/Downloads (or another location the user "
-            "asked for) if this file is a deliverable the user should find "
-            "afterward, or your own working/scratch directory if you're "
-            "only downloading it to read or process it yourself."
-        )
-    dest_dir = os.path.expanduser(destination_dir.strip())
-    safe_name = os.path.basename(resolve_download_name(metadata)) or metadata.id or "file"
-    return os.path.join(dest_dir, safe_name)
 
 
 # ------------------------------------------------------------------ #
@@ -1254,30 +1226,11 @@ class DriveClient:
     # ------------------------------------------------------------------ #
     # Authentication
     # ------------------------------------------------------------------ #
-    def authorize_interactive(self) -> None:
-        """Run the interactive OAuth flow and persist the token.
-
-        Opens a local browser window, lets the user grant access, then writes
-        the token to ``token_file``. ``client_config`` comes from the
-        organization config bundle (installed via PrivacyFence Settings), not a file
-        on disk.
-        """
-        if not self._client_config:
-            raise DriveClientError(
-                "No Google organization config installed. Install the configuration file on "
-                "Admin → Organization configuration in PrivacyFence Settings first."
-            )
-
-        logger.info("Starting interactive OAuth flow")
-        creds = authorize_local(self._client_config, SCOPES)
-        self._save_token(creds)
-        logger.info("OAuth token saved to '%s'", self._token_file)
-
     def _load_credentials(self) -> Credentials:
         """Load cached credentials, refreshing them if expired.
 
-        Raises if no usable token exists - the user must authenticate Google Drive
-        from Settings (Connectors), or from ``/connect`` in org mode.
+        Raises if no usable token exists - the user must connect Google Drive on
+        the Connect page (``/connect``).
         """
         # Guards concurrent refresh/save of the shared token file when
         # multiple threads hit an expired token at the same time.
@@ -1285,7 +1238,7 @@ class DriveClient:
             if not os.path.exists(self._token_file):
                 raise DriveClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Authenticate Google Drive from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
+                    "Connect Google Drive on the Connect page (/connect) to authorize."
                 )
 
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
@@ -1300,14 +1253,14 @@ class DriveClient:
                 except Exception as exc:  # noqa: BLE001 - surface a clear message
                     raise DriveClientError(
                         f"Failed to refresh OAuth token: {exc}. "
-                        "Reconnect Google Drive from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                        "Connect Google Drive on the Connect page (/connect) to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
 
             raise DriveClientError(
                 "Cached OAuth token is invalid and cannot be refreshed. "
-                "Reconnect Google Drive from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                "Connect Google Drive on the Connect page (/connect) to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:
@@ -1585,49 +1538,10 @@ class DriveClient:
             ) from exc
         return b"".join(chunks), export_mime
 
-    def download_file(
-        self, file_id: str, destination_dir: str = ""
-    ) -> dict[str, Any]:
-        """Download a file to a local directory and return the saved path.
-
-        ``destination_dir`` is mandatory -- see ``resolve_download_destination``.
-        Google Workspace documents are exported as text (Docs/Slides → .txt,
-        Sheets → .csv). Binary files are saved with their original extension.
-        Returns a dict with ``path``, ``name``, ``size_bytes``, and
-        ``truncated`` (always False for full downloads).
-        """
-        if not file_id:
-            raise DriveClientError("download_file requires a non-empty file_id")
-
-        metadata = self.get_file_metadata(file_id)
-        dest_path = resolve_download_destination(metadata, destination_dir)
-        data, _export_mime = self._stream_full_content(file_id, metadata)
-        try:
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            with open(dest_path, "wb") as fh:
-                fh.write(data)
-        except OSError as exc:
-            raise DriveClientError(
-                f"download_file: could not write to {dest_path!r}: {exc}. "
-                "Choose a different destination_dir."
-            ) from exc
-
-        size = os.path.getsize(dest_path)
-        logger.info("download_file %s → %s (%d bytes)", file_id, dest_path, size)
-        return {
-            "path": dest_path,
-            "name": os.path.basename(dest_path),
-            "size_bytes": size,
-            "truncated": False,
-        }
-
     def download_file_bytes(self, file_id: str) -> dict[str, Any]:
-        """Org-mode inline/staged delivery entry point (connectors/
-        drive.py's ``_download_file``, ADR 0017): the same complete-file fetch ``download_file``
-        does, returned as bytes instead of written to disk --
-        ``download_file``'s own ``destination_dir`` doesn't correspond to
-        anything reachable on an org-mode server. Returns a dict with
-        ``data`` (bytes), ``name``, ``mime_type``, and ``size_bytes``.
+        """Inline/staged delivery entry point (connectors/drive.py's ``_download_file``,
+        ADR 0160): the complete file, fetched and returned as bytes -- nothing is written to
+        disk. Returns a dict with ``data`` (bytes), ``name``, ``mime_type``, and ``size_bytes``.
         """
         if not file_id:
             raise DriveClientError("download_file_bytes requires a non-empty file_id")
@@ -1890,65 +1804,32 @@ class DriveClient:
 
     def upload_file(
         self,
-        local_path: str = "",
         name: str = "",
         parent_folder_id: str = "",
         content_base64: str = "",
     ) -> dict:
-        """Upload a file as a new Drive file, either from disk or inline bytes.
+        """Upload a file as a new Drive file from inline base64 bytes.
 
-        Exactly one of ``local_path`` or ``content_base64`` must be given.
-        Both paths use a resumable Google API media upload instead of the
-        ``write_file_content`` path, which always encodes as UTF-8 text and
-        uploads with a hardcoded ``text/plain`` media type — arbitrary binary
-        files (PDFs, images, …) can't round-trip through that.
-
-        ``local_path`` reads straight from disk via ``MediaFileUpload`` and is
-        preferred when the file already lives on the same machine as
-        PrivacyFence. ``content_base64`` lets a caller that only has the bytes
-        in hand (no shared filesystem) hand them over directly — PrivacyFence
-        decodes the base64 itself via ``MediaIoBaseUpload``.
+        Uses a resumable Google API media upload instead of the ``write_file_content`` path,
+        which always encodes as UTF-8 text and uploads with a hardcoded ``text/plain`` media
+        type -- arbitrary binary files (PDFs, images, ...) can't round-trip through that.
+        PrivacyFence decodes the base64 itself via ``MediaIoBaseUpload``.
         """
-        from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
-
-        if bool(local_path.strip()) == bool(content_base64.strip()):
-            raise DriveClientError(
-                "upload_file: provide exactly one of local_path or content_base64"
-            )
-
-        if local_path.strip():
-            path = os.path.expanduser(local_path.strip())
-            if not os.path.isfile(path):
-                raise DriveClientError(f"upload_file: no such file: {local_path!r}")
-            resolved_name = name.strip() or os.path.basename(path)
-            mime_type = mimetypes.guess_type(resolved_name)[0] or "application/octet-stream"
-            media = MediaFileUpload(path, mimetype=mime_type, resumable=True)
-            size_bytes = os.path.getsize(path)
-        else:
-            resolved_name = name.strip()
-            if not resolved_name:
-                raise DriveClientError("upload_file: name is required with content_base64")
-            try:
-                data = base64.b64decode(content_base64, validate=True)
-            except (binascii.Error, ValueError) as exc:
-                raise DriveClientError(f"upload_file: invalid content_base64: {exc}") from exc
-            mime_type = mimetypes.guess_type(resolved_name)[0] or "application/octet-stream"
-            media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
-            size_bytes = len(data)
-
-        return self._create_with_media(media, resolved_name, mime_type, size_bytes, parent_folder_id)
+        resolved_name = name.strip()
+        if not resolved_name:
+            raise DriveClientError("upload_file: name is required with content_base64")
+        if not content_base64.strip():
+            raise DriveClientError("upload_file: content_base64 is required")
+        try:
+            data = base64.b64decode(content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise DriveClientError(f"upload_file: invalid content_base64: {exc}") from exc
+        return self.upload_file_bytes(data, resolved_name, parent_folder_id)
 
     def upload_file_bytes(self, data: bytes, name: str, parent_folder_id: str = "") -> dict:
-        """The local file bridge's own upload entry point (ADR 0007): same
-        ``MediaIoBaseUpload`` path ``upload_file``'s own ``content_base64``
-        branch already uses, but from bytes the daemon already holds (
-        claimed from ``upload_staging.UploadStagingStore`` -- see
-        connectors/drive.py's ``_upload_file``) rather than a base64 string
-        decoded from an MCP argument. A privilege-separated daemon cannot
-        pass ``local_path`` to ``MediaFileUpload`` at all -- it cannot read
-        the user's filesystem -- so this is what ``local_path`` uploads
-        route through once the shim has read the bytes on the daemon's
-        behalf.
+        """Uploads bytes the daemon already holds (claimed from ``upload_staging.
+        UploadStagingStore`` -- see connectors/drive.py's ``_upload_file``) through the same
+        ``MediaIoBaseUpload`` path ``upload_file`` uses for its inline base64 content.
         """
         from googleapiclient.http import MediaIoBaseUpload
 

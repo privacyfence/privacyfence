@@ -42,8 +42,8 @@ from .principal import Principal, PrincipalRegistry, principal_scope
 logger = logging.getLogger(__name__)
 
 _VALID_POLICIES = ("allow", "redact", "block")
-# Public alias for the same tuple. settings_controller.py has imported the
-# private name as PRIVACY_POLICIES since long before this; the org-mode
+# Public alias for the same tuple. The settings code historically imported the
+# private name as PRIVACY_POLICIES; the org-mode
 # admin policy editor needs to validate an HTTP form value against it
 # too, and two modules reaching for a leading-underscore name is one too
 # many.
@@ -58,8 +58,8 @@ _GROUP_NAMES = (
 # Keyed by group name ("privacy", "drive_privacy", "slack_privacy",
 # "contacts_privacy", "tasks_privacy", "confluence_privacy"), each value
 # {"default_policy": str, "categories": {category: policy}}. Populated once
-# per principal, at daemon startup (local mode) or on first use (any other
-# principal -- see PrincipalRegistry.get()), by init_privacy_filter(); empty
+# per principal, on first use (see PrincipalRegistry.get()), by
+# init_privacy_filter(); empty
 # dict for any group not yet initialized resolves every category to "allow"
 # (fail open on missing config, same posture pii_detector.py takes when
 # disabled -- this module only ever narrows what already ships, it never
@@ -96,11 +96,10 @@ def init_privacy_filter(config: dict[str, Any], *, org_managed: bool = False) ->
 
     Raises ``PrivacyFilterConfigError`` for a group that's present
     but malformed -- see ``_parse_group``. ``org_managed`` (the caller's
-    ``org_mode.resolve_mode(...) == "org"``) picks the fail-safe default
-    used for a group that's genuinely absent from settings.yaml: "allow",
-    unchanged, for a local-mode install (this module must never turn into a
+    organization-managed flag) picks the fail-safe default used for a group that's genuinely
+    absent from settings.yaml: "allow" when it is false (this module must never turn into a
     new default-block surface a pre-existing install didn't opt into), but
-    "block" for an org-managed one -- an organization's centrally deployed
+    "block" when it is true -- an organization's centrally deployed
     settings.yaml is expected to state its own privacy policy explicitly,
     not silently inherit the permissive default nobody there configured.
     """
@@ -132,10 +131,9 @@ def reload_for_all_principals(config: dict[str, Any], *, org_managed: bool = Tru
     this is called.
 
     ``org_managed`` defaults to True, unlike ``init_privacy_filter``'s own
-    default: every caller of this function is org mode's admin settings
-    surface, and getting that argument wrong would silently swap org
-    mode's fail-closed ``block`` default for a genuinely absent group back
-    to local mode's ``allow`` -- an *edit* that quietly widens what the
+    default: every caller of this function is the admin settings surface,
+    and getting that argument wrong would silently swap the fail-closed
+    ``block`` default for a genuinely absent group back to ``allow`` -- an *edit* that quietly widens what the
     filter lets through, which is the one thing this function must not do.
     """
     fail_safe_default = "block" if org_managed else "allow"

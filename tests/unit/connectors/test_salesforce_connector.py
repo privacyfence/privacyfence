@@ -954,14 +954,14 @@ class TestEveryToolIsAudited:
         client.find_records.return_value = [{"Id": "001000000000001AAA", "Name": "Old"}]
         monkeypatch.setattr(
             salesforce_module.local_files, "deliver_export",
-            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
+            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "link"},
         )
 
         await assert_all_tools_leave_an_audit_trail(
             connector, salesforce_module, monkeypatch, tmp_path,
             arg_overrides={
                 "salesforce_export_report": {
-                    "report_id": "00O000000000001", "destination_dir": str(tmp_path),
+                    "report_id": "00O000000000001",
                 },
                 "salesforce_create_record": {"fields": '{"Name": "A"}'},
                 "salesforce_update_record": {
@@ -1528,7 +1528,15 @@ class TestUpdateRecords:
 # Export to a file
 # ---------------------------------------------------------------------- #
 
-EXPORT_ARGS = {"report_id": REPORT_ID, "destination_dir": "~/out"}
+EXPORT_ARGS = {"report_id": REPORT_ID}
+
+
+def test_salesforce_export_report_takes_no_destination_or_download_mode():
+    spec = next(s for s in make_connector()[0].tool_specs() if s.name == "salesforce_export_report")
+    names = {p.name for p in spec.params}
+    assert "destination_dir" not in names
+    assert "download_mode" not in names
+    assert "destination_dir" not in spec.description
 
 
 @pytest.fixture
@@ -1536,16 +1544,16 @@ def delivered(monkeypatch):
     calls = []
 
     def fake_deliver(
-        dest_dir, name, data, mime_type, *, download_mode, download_config=None,
+        name, data, mime_type, *, download_config=None,
         download_base_url="",
     ):
         calls.append({
-            "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
-            "download_mode": download_mode, "download_config": download_config,
+            "name": name, "data": data, "mime_type": mime_type,
+            "download_config": download_config,
             "download_base_url": download_base_url,
         })
-        return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
-                "delivery": "local_disk"}
+        return {"path": None, "name": name, "size_bytes": len(data),
+                "delivery": "link"}
 
     monkeypatch.setattr(salesforce_module.local_files, "deliver_export", fake_deliver)
     return calls
@@ -1596,7 +1604,6 @@ class TestExportReport:
 
         client.run_report.assert_called_once_with(REPORT_ID, None, None, False)
         assert delivered[0]["name"] == f"{REPORT_ID}.csv"
-        assert delivered[0]["dest_dir"] == "~/out"
         assert delivered[0]["mime_type"] == "text/csv"
         lines = delivered[0]["data"].decode("utf-8").splitlines()
         assert lines[0] == ",".join(COLUMNS)
@@ -1778,7 +1785,7 @@ class TestExportReport:
         assert call["preview_tables"][0]["rows"][0][1] == "Account 1"
         assert list(call["raw_data"]) == ["report_id", "rows", "columns", "sha256"]
         assert "Account 1" not in json.dumps(call["raw_data"])
-        assert call["new_info"]["Saved to"] == f"~/out/{REPORT_ID}.csv"
+        assert call["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
         assert call["new_info"]["Rows"] == "3"
         assert "{agent}" not in call["details_text"]
         assert call["args"]["sha256"] == hashlib.sha256(delivered[0]["data"]).hexdigest()
@@ -1788,18 +1795,15 @@ class TestExportReport:
 
         await connector.call("salesforce_export_report", EXPORT_ARGS)
 
-        assert gated_call_spy[0]["delivery"] == "local_disk"
+        assert gated_call_spy[0]["delivery"] == "staged_link"
 
     async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
         connector, _client = export_connector()
         cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
-        connector.download_mode = "org"
         connector.download_config = cfg
         connector.download_base_url = "https://pf.example"
 
         await connector.call("salesforce_export_report", EXPORT_ARGS)
-
-        assert delivered[0]["download_mode"] == "org"
         assert delivered[0]["download_config"] is cfg
         assert delivered[0]["download_base_url"] == "https://pf.example"
         assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
@@ -1807,7 +1811,6 @@ class TestExportReport:
 
     async def test_org_mode_without_staging_is_refused_before_any_request(self, gated_call_spy, delivered):
         connector, client = export_connector()
-        connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
 
         with pytest.raises(ValueError, match="allow_disk_staging"):

@@ -5,6 +5,8 @@
 Accepted — 2026-10-11. Implemented.
 Amended by [ADR 0207](0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md).
 
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+
 ## Context
 
 Refreshing a data lake and a dashboard is a regular, deterministic job that should cost no model

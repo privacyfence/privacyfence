@@ -15,7 +15,7 @@ back out.
 [#426](https://github.com/privacyfence/privacyfence/issues/426) builds the half that makes
 it mean something, and stays gated on that platform's Phase 4 having landed *and soaked* — D1
 turning the default on does not by itself satisfy that; see
-[`platform-support.md`](../platform-support.md)'s "Known open items" for what a soak still needs
+the platform support page's "Known open items" for what a soak still needs
 to show on a real machine. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see
 "Relationship to ADR 0001" below.
 
@@ -57,6 +57,8 @@ principal per OS user.
 the companion (starting the tray if none is running), and so does Windows' Start Menu entry. On a
 separated POSIX install, the companion channel also admits the companion's own user for the two
 page `SHOW`s. Decision 2's menu and decisions 3 and 4 are unchanged.
+
+**Superseded by [ADR 0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md), 2026-11-15.**
 
 ## Context
 

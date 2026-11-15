@@ -5,6 +5,8 @@
 Accepted — 2026-10-20. Implemented: `.github/workflows/publish-org-image.yml`, `docs/org-mode-docker.md`.
 Amended by [0268](0268-pre-releases-publish-the-organization-image-under-their-exact-version.md): pre-releases publish the image under their exact version tag only.
 
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+
 ## Context
 
 Organization mode ships as a container image (`ghcr.io/privacyfence/privacyfence-org`), and an image has to live in some registry. PyPI carries stable releases only, and the organization guide promises that an unattended upgrade never picks up a test build; a `latest` tag that could point at a release candidate would break that promise.

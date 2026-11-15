@@ -78,7 +78,7 @@ class ScopedToken:
     label: str
     digest: str  # sha256 hex of the full secret
     principal_id: str
-    principal_email: str  # org mode, for the principal's claims; "" in local mode
+    principal_email: str  # for the principal's claims; "" when the principal has none
     principal_display_name: str
     created_at: float
     expires_at: float
@@ -198,9 +198,7 @@ def _digest(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
-def policy_from_org_config(org_config: dict, *, org_mode: bool) -> ScopedTokenPolicy:
-    if not org_mode:
-        return ScopedTokenPolicy(True, LOCAL_MAX_DAYS, True)
+def policy_from_org_config(org_config: dict) -> ScopedTokenPolicy:
     section = org_config.get("scoped_tokens")
     if not isinstance(section, dict):
         section = {}

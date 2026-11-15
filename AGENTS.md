@@ -10,9 +10,9 @@ themselves live in [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 - `src/privacyfence/`: the Python daemon. `gate.py` and `audit_log.py` are the policy core.
   `connectors/` has one module per service (the `*_client.py` files beside it are the API clients).
   `web/` is the embedded approval/settings UI and the MCP endpoint.
-- `tests/unit/` (fast, offline), `tests/integration/`, `tests/platform/`, `tests/system/`.
+- `tests/unit/` (fast, offline), `tests/integration/`, `tests/system/`.
 - `website/` is the public Jekyll-style site; `docs/` the reference docs; `docs/adr/` the decisions.
-- `cloudflare/` (Workers, npm), `mcpb/` (Node stdio shim for Claude Desktop), `sync/` (separate Python
+- `cloudflare/` (the OAuth relay Worker, npm), `n8n/` (the n8n node, npm), `sync/` (separate Python
   package with its own tests), `scripts/`, `requirements/*.lock.txt` (generated, never hand-edit).
 
 ## Verify
@@ -20,7 +20,7 @@ themselves live in [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 The check command is `verify.fast` in `.tld/toolkit.yaml`: `ruff check .` then
 `python3 -m pytest tests/unit -q`, offline. To rerun just your part, use the same interpreter and `pytest <path> -q`.
 
-It does **not** cover: Playwright/browser tests (they skip), `npm test`/`typecheck` in `mcpb/shim` and
+It does **not** cover: Playwright/browser tests (they skip), `npm test`/`typecheck` in `n8n/` and
 `cloudflare/*`, `sync/` tests, `tests/integration`, bandit, mypy, the 100% coverage floor, live connector
 QA. CI runs those on the PR; do not claim them as passed. Say so in the PR description.
 

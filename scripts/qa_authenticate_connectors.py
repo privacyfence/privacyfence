@@ -18,12 +18,10 @@ existing account (`docs/telegram-setup.md`), not a dedicated QA account, and
 uses a different flag (`--telegram-setup`) with a different (phone/code)
 prompt shape. Run that one by hand if/when you need it.
 
-Prerequisite: the QA org config bundle (`org_config.qa.json`, built by
-`scripts/build_org_bundle.py --merge` from each provider's "For IT admins"
-setup, see `docs/connector-qa.md`'s "QA accounts and organization config")
-must already be installed at `org/org_bundle.json` -- `--org-config` below
-can do that copy for you, or do it by hand (or via PrivacyFence Settings'
-"Install configuration file...").
+Prerequisite: the QA org config bundle (`org_config.qa.json`, see `docs/connector-qa.md`'s
+"QA accounts and organization config") must already be installed at
+`org/org_bundle.json` -- `--org-config` below can do that copy for you, or
+do it by hand.
 
     .venv/bin/python scripts/qa_authenticate_connectors.py
         Runs every QA connector's OAuth flow, in this order: Gmail, Drive,

@@ -1,5 +1,5 @@
 """Tests for scripts/telegram_credentials.py -- the one generator of the build-time Telegram app
-credentials module, and the check publish-pypi.yml runs over the built wheel and sdist (ADR 0040).
+credentials module, and the check build.yml's `build-org-image` runs over the built wheel and sdist (ADR 0040).
 
 Imported by file path, same pattern as tests/unit/test_changelog_section.py.
 """
@@ -158,19 +158,16 @@ def test_generated_module_is_git_ignored_but_packaged() -> None:
     assert f"include {relative}" in manifest
 
 
-def test_build_scripts_and_pypi_workflow_share_the_generator() -> None:
+def test_build_scripts_and_build_workflow_share_the_generator() -> None:
     callers = [
-        "scripts/build_dmg.sh",
-        "scripts/build_deb.sh",
-        "scripts/build_installer.ps1",
-        ".github/workflows/publish-pypi.yml",
+        ".github/workflows/build.yml",
     ]
     for caller in callers:
         text = (REPO_ROOT / caller).read_text(encoding="utf-8")
         assert "scripts/telegram_credentials.py write" in text, caller
         assert "API_HASH = " not in text, f"{caller} carries its own copy of the generator"
 
-    workflow = (REPO_ROOT / ".github/workflows/publish-pypi.yml").read_text(encoding="utf-8")
+    workflow = (REPO_ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
     assert "scripts/telegram_credentials.py check-dist" in workflow
     assert "secrets.TELEGRAM_API_ID" in workflow
     assert "secrets.TELEGRAM_API_HASH" in workflow

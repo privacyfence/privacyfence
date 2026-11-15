@@ -1,7 +1,7 @@
 """Tests for scripts/verify_audit_log.py -- the audit-log chain-verification
 CLI.
 
-Imported by file path (importlib), same as test_build_org_bundle.py, since
+Imported by file path (importlib), since
 scripts/ isn't part of the installed ``privacyfence`` distribution.
 """
 from __future__ import annotations
@@ -113,7 +113,7 @@ class TestMain:
 
 
 class TestExamplePaths:
-    """The daemon writes the local-mode log under ``authority/``; an example
+    """The daemon writes the audit log under ``authority/``; an example
     without it names a directory no install has."""
 
     def test_help_and_docstring_name_the_authority_log_directory(self):

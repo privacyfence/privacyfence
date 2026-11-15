@@ -1,12 +1,12 @@
 # How PrivacyFence works
 
 PrivacyFence sits between an MCP-compatible AI system (Claude Desktop, Claude Code, ChatGPT, claude.ai
-or Gemini Enterprise through an organization deployment) and the services it can reach for you: Gmail, Google Drive,
+or Gemini Enterprise) and the services it can reach for you: Gmail, Google Drive,
 Calendar, Contacts, Tasks, Apps Script, Slack, Telegram, Salesforce, Jira and Confluence. The AI
 system never holds your credentials for those services. It asks PrivacyFence, and PrivacyFence
 decides whether the request runs straight away, needs your approval first, or is filtered.
 
-This page explains the moving parts. For installing, see [Getting started](getting-started.md).
+This page explains the moving parts. For setting up, see [Getting started](getting-started.md).
 For what each tool does and which gate it goes through, see the
 [Tools reference](tools-reference.md). For how approvals, rules and filters behave, see
 [Approvals and policy](approvals-and-policy.md).
@@ -15,105 +15,62 @@ For what each tool does and which gate it goes through, see the
 
 | Piece | What it is | Where you see it |
 |---|---|---|
-| **Daemon** | The background service. It holds the connector sign-ins, evaluates policy, keeps pending approvals and the audit log, and serves the web pages and the MCP endpoint on one local port (`8765` by default, `web.port`). | Nowhere directly. It runs as a system service on a packaged install. |
-| **Companion app** | Your way into the daemon's web pages. On macOS it is a menu-bar icon, on Windows a tray icon; on Linux it is the **PrivacyFence** entry in the applications menu, whose right-click actions open Settings, show a new recovery code, and start, stop or check the service. It opens pages in your browser already signed in, starts and stops the service, and shows your recovery code. | Menu bar, tray, or applications menu. |
-| **Web pages** | **Approvals** (`/approvals`), where pending requests wait for you, and **Settings** (`/settings`), where you connect services and manage rules, the privacy filter, passkeys and the audit log. | Your browser, at `http://localhost:8765`. |
+| **Server** | The PrivacyFence process in the Docker image. It holds the connector sign-ins, evaluates policy, keeps pending approvals and the audit log, and serves the web pages and the MCP endpoint on one port (`8765` by default). | Nowhere directly. It runs as a container. |
+| **Web pages** | **Approvals** (`/approvals`), where pending requests wait for you, **Connect** (`/connect`), where you connect services, **Settings** (`/settings`), where you manage rules, the privacy filter, passkeys and the audit log, and **Admin** (`/admin`), where an administrator decides which services and features the server offers. | Your browser, at `http://localhost:8765` for a single-user install, or your organization's address. |
 | **MCP endpoint** | `/mcp` on the same port, speaking MCP over Streamable HTTP. Every AI system reaches PrivacyFence through it. | Your AI system's connector list. |
-| **Claude Desktop extension** | `PrivacyFence.mcpb`, a small Node.js shim Claude Desktop runs. It connects Claude Desktop to `/mcp` and reads and writes local files on the daemon's behalf. | Claude Desktop's extensions. |
 
-The companion menu (macOS and Windows) has a status line, **Open Approvals**, **Open Settings**,
-one of **Start PrivacyFence…** / **Restart PrivacyFence…** / **Stop PrivacyFence…** (depending on
-whether the service is running), **Service Details…**, **Copy AI Client Token**,
-**New Recovery Code…** and **Quit Companion**. Quitting the companion leaves the daemon running.
+The server runs in its own container, so the AI system (which runs as you, or on another
+company's servers) cannot read PrivacyFence's credentials, rules or audit log, and an approval needs
+your passkey, which the AI system does not hold. The layout and the reasons are in
+[Security and compliance](security-and-compliance.md). What stays in the data volume is in
+[Organization deployment with Docker](org-mode-docker.md#what-stays-in-the-data-volume).
 
-On a packaged install the daemon runs under its own service account, so the AI system (which runs
-as you) cannot read PrivacyFence's credentials, rules or audit log, or approve its own requests. The
-layout and the reasons are in [Security and compliance](security-and-compliance.md). Where each
-file lives on each platform is in [Platform support](platform-support.md).
+## Single-user and organization deployments
 
-### Opening PrivacyFence opens Approvals
+PrivacyFence runs in organization mode only. It comes in two shapes of the same image:
 
-Clicking PrivacyFence itself (the app in `/Applications` on macOS, the Start Menu entry on Windows,
-the applications-menu entry on Linux) opens **Approvals** through the companion on every platform:
-
-- If a companion is running, it asks you to allow opening the page, then opens it.
-- If no companion is running (macOS and Windows), the click starts the tray or menu-bar icon and
-  opens Approvals from it, with no extra dialog.
-
-Settings is one click away from the page, or from **Open Settings** in the companion. See
-[ADR 0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md).
-
-If the companion cannot be reached (an SSH session, a tray icon that failed to start), run
-`privacyfence-app --print-sign-in-link` in your own terminal. It prints a one-time link to
-Approvals. If the companion is running, it asks you to confirm first and the link can approve;
-if nothing confirms it, the link is view-only: it shows what is pending but cannot release
-anything. The link is used up by its first visit.
-
-## Local mode and organization mode
-
-- **Local mode** (desktop mode) is what the macOS, Windows and Linux installers set up; it is
-  deprecated in PrivacyFence 7 and removed in 8
-  ([Moving to organization mode](moving-to-organization-mode.md)). One daemon on your own computer serves you. The web pages and
-  `/mcp` listen on `localhost` only, so an AI system on another machine, including claude.ai,
-  cannot reach it.
-- **Organization mode** is one Linux server that serves many people. People sign in through the
-  organization's identity provider, AI systems authorize through PrivacyFence's own OAuth 2.1
-  server, and each person's connectors, rules and approvals are kept separate. claude.ai can reach
-  PrivacyFence only this way. See [Organization deployment](org-mode-setup-guide.md). It runs from
-  the `ghcr.io/privacyfence/privacyfence-org` Docker image configured by environment variables
-  ([Organization deployment with Docker](org-mode-docker.md)), or from PyPI under systemd.
-- **Single-user mode** is organization mode with no identity provider: one administrator, served only
+- **An organization server** serves many people. People sign in through the organization's identity
+  provider, AI systems authorize through PrivacyFence's own OAuth 2.1 server, and each person's
+  connectors, rules and approvals are kept separate. claude.ai can reach PrivacyFence only this
+  way. See [Organization deployment](org-mode-setup-guide.md). It runs from the
+  `ghcr.io/privacyfence/privacyfence-org` Docker image configured by environment variables
+  ([Organization deployment with Docker](org-mode-docker.md)).
+- **Single-user mode** is the same image with no identity provider: one administrator, served only
   on `localhost`, who signs in with a passkey after a one-time setup code. It is how the Docker image
   starts on your own computer
   ([Run it on this computer](org-mode-docker.md#run-it-on-this-computer)). It is no protection against
   an agent that can run `docker` on that computer
   ([Single-user mode](security-and-compliance.md#single-user-mode)).
 
-Which mode a daemon runs in is set by `PRIVACYFENCE_MODE` (`local` by default, `org` in the Docker
-image), or by a legacy organization config bundle's `mode` key. See
+The mode is organization mode; `PRIVACYFENCE_MODE`, when set, must be `org`. A desktop (local) install of PrivacyFence 7 is not read by 8: see
+[Moving to organization mode](moving-to-organization-mode.md). See
 [Configuration reference](configuration-reference.md#environment-variables).
 
 ## How an AI system connects
 
-There are two ways in, and each AI client has its own setup page:
+Each AI client has its own setup page. The client discovers PrivacyFence's authorization server from
+`/mcp`, registers itself as an OAuth client, you sign in in the browser (through the organization's
+identity provider, or with your passkey on a single-user install), and the client receives its own
+access token. There is no token to copy.
 
-- **Local mode.** Claude Desktop uses PrivacyFence's extension, `PrivacyFence.mcpb`, which the
-  macOS DMG and the Windows installer ship. The extension (the *shim*) waits for the daemon, asks it
-  for your MCP token over the local control channel (the `MINT MCP` command), reads the `/mcp` URL
-  from the handoff directory's `mcp_url` file, relays MCP messages, and reads and writes local
-  files for the tools that need them (see [Files](#files)). Any other client that speaks MCP over
-  Streamable HTTP, Claude Code among them, connects to `/mcp` directly with a bearer token that
-  `--print-mcp-token` mints through the same `MINT MCP` request. The companion's **Copy AI Client
-  Token** menu item, and **Copy token** on the Settings page's **AI clients** section, put the same
-  token on your clipboard instead; the Settings page asks the companion to do it, so the token is
-  never in a web response ([ADR 0104](adr/0104-the-companion-copies-the-ai-client-token.md)).
-  There is **one token per OS
-  account**, with its own connectors, rules and approvals
-  ([ADR 0008](adr/0008-one-principal-per-os-user.md)), and the control channel answers only the
-  accounts the install serves.
-- **Organization mode.** There is no local token and no extension. The client discovers
-  PrivacyFence's authorization server from `/mcp`, registers itself as an OAuth client, you sign in
-  through the organization's identity provider in the browser, and the client receives its own
-  access token.
+| AI client | How it connects | Setup |
+|---|---|---|
+| Claude Desktop | custom connector | [Connect Claude Desktop](connect-claude-desktop.md) |
+| Claude Code | OAuth sign-in | [Connect Claude Code](connect-claude-code.md) |
+| ChatGPT | Developer Mode app with OAuth sign-in | [Connect ChatGPT](connect-chatgpt.md) |
+| claude.ai | custom connector | [Connect claude.ai](connect-claude-ai.md) |
+| Gemini Enterprise | custom MCP server data store | [Connect Gemini Enterprise](connect-gemini-enterprise.md) |
 
-| AI client | Local mode | Organization mode | Setup |
-|---|---|---|---|
-| Claude Desktop | the extension | custom connector | [Connect Claude Desktop](connect-claude-desktop.md) |
-| Claude Code | `/mcp` with a bearer token | OAuth sign-in | [Connect Claude Code](connect-claude-code.md) |
-| ChatGPT | ChatGPT desktop, `/mcp` with a bearer token (checked on macOS) | Developer Mode app with OAuth sign-in | [Connect ChatGPT](connect-chatgpt.md) |
-| claude.ai | not reachable | custom connector | [Connect claude.ai](connect-claude-ai.md) |
-| Gemini Enterprise | not reachable | custom MCP server data store | [Connect Gemini Enterprise](connect-gemini-enterprise.md) |
-
-Any other MCP client that supports Streamable HTTP connects the way Claude Code does: with the
-same URL and bearer token in local mode, or with OAuth 2.1 and dynamic client registration in
-organization mode.
+claude.ai, ChatGPT and Gemini Enterprise call PrivacyFence from their own servers, so they need an
+organization server on a public HTTPS address. Any other MCP client that supports Streamable HTTP
+connects the way Claude Code does, with OAuth 2.1 and dynamic client registration.
 
 ### Scoped tokens
 
 Instead of its own credential, a client can hold a **scoped token** created in Settings: a named
 bearer token with an expiry, its own rules and a list of tools. It sees only those tools,
 and a call it makes is auto-accepted only through one of its own rules; otherwise it is denied at
-once, with no approval card. A box on the token lets covered Gmail, Slack and Drive file content reads return personal data, which the scan still reports in the audit log. Revoking it affects no other client. In organization mode the
+once, with no approval card. A box on the token lets covered Gmail, Slack and Drive file content reads return personal data, which the scan still reports in the audit log. Revoking it affects no other client. The
 administrator must turn the feature on. Claude can also propose a token for you to review and create ([ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md)). See [Scoped tokens](security-and-compliance.md#scoped-tokens).
 
 ### What the AI system is told
@@ -125,7 +82,7 @@ PrivacyFence-governed action. It also advertises tool-list change notifications:
 disable or re-enable a service in Settings, connected clients are told to refresh their tool list.
 
 The tool list holds one tool per enabled, signed-in connector tool, plus the `privacyfence_*`
-tools below: eight always, `privacyfence_propose_scoped_token` only where token proposals are on (always on a local install, by the administrator's choice in organization mode), and `privacyfence_runtime_credential_status` where n8n delivery is also set up. Each connector tool carries MCP annotations that say what it does: a read is
+tools below: eight always, `privacyfence_propose_scoped_token` only where token proposals are on (by the administrator's choice), and `privacyfence_runtime_credential_status` where n8n delivery is also set up. Each connector tool carries MCP annotations that say what it does: a read is
 read-only and idempotent; a write is neither. Only the three tools that delete something,
 `calendar_delete_event` (an event), `drive_sheets_delete_dimensions` (rows or columns of a
 spreadsheet) and `peek_delete_page` (a Peek page with its comments and visit history), are marked
@@ -187,58 +144,50 @@ rules are in [Approvals and policy](approvals-and-policy.md).
 
 ## PrivacyFence's own tools
 
-PrivacyFence adds eight tools of its own, plus `privacyfence_propose_scoped_token` where token proposals are on (always on a local install, by the administrator's choice in organization mode) and `privacyfence_runtime_credential_status` where n8n delivery is also set up. They are not connector tools and have no gate. Unlike
+PrivacyFence adds eight tools of its own, plus `privacyfence_propose_scoped_token` where token proposals are on (by the administrator's choice) and `privacyfence_runtime_credential_status` where n8n delivery is also set up. They are not connector tools and have no gate. Unlike
 connector tools, each carries its real MCP annotations.
 
 | Tool | What it does | Required arguments | Annotations |
 |---|---|---|---|
-| `privacyfence_status` | Reports the mode, whether setup is complete, and each connector's state (`enabled`, `authenticated`, `blocked_by`: `no_org_config`, `not_authenticated` or a short reason), plus what to tell you next. It never returns a sign-in link: in local mode it tells the AI system to send you to the companion's **Open Settings**; in organization mode, to your administrator. | `reason` | read-only, idempotent |
+| `privacyfence_status` | Reports the mode, whether setup is complete, and each connector's state (`enabled`, `authenticated`, `blocked_by`: `no_org_config`, `not_authenticated` or a short reason), plus what to tell you next. It never returns a sign-in link: it tells the AI system to send you to the server's Connect page, or to ask your administrator. | `reason` | read-only, idempotent |
 | `privacyfence_check_policy` | Predicts whether a specific call would auto-accept (`auto_accept`), needs a human (`requires_review`), or depends on content it cannot see yet (`unknown`), and names the rule that would match. When a call would not auto-accept, `suggested_rules` lists the rules that would cover it (scope, value and verb), derived from the call's own arguments; a value of `null` means it is whatever the call reaches at run time. A value of `[]` means the rule takes none (the Slack rules for mentions of you, your conversations and one-to-one DMs), and `requires_args` names arguments the call must also pass (`member_only` for a search under the conversations rule); Slack is not asked. Scoped tokens get it too. Makes no call and has no side effects. `pii_gate_may_apply` is true for `review` tools. `pii_gate` says whether the PII scan of real content can still stop the call: `none` (it never reaches the scan), `allowed_by_token` (the caller's scoped token lifts it), `allowed_unless_inline` (a Drive download, lifted unless the file comes back inside the result) or `applies`; `pii_gate_detail` says why. | `connector`, `tool`, `reason` (plus `args`) | read-only, idempotent |
 | `privacyfence_list_policy` | Lists every auto-accept rule (id, a readable sentence, verbs, the tools it covers) and the scope catalogue that `privacyfence_propose_policy_change` accepts. | `reason` | read-only, idempotent |
 | `privacyfence_propose_policy_change` | Proposes adding, updating or removing a rule. Always opens a confirmation on Approvals that you must accept, and needs the same passkey step-up as changing a rule in Settings. Refused in an unattended session. | `operation` (`add`, `update`, `remove`), `reason` | not read-only, non-destructive, idempotent |
 | `privacyfence_await_approval` | Waits for one or more pending approvals and reports each one's status (`pending`, `approved`, `denied`, `expired`, `unknown`), never content; a denial's intent and note, when you gave them, come under `denial_feedback` (see [When you deny a call](tools-reference.md#when-you-deny-a-call)). Waits at most 120 seconds per call (default 30). | `approval_ids` | read-only, idempotent |
 | `privacyfence_begin_unattended_session` | Declares this connection a scheduled run with nobody watching. See [Unattended sessions](#unattended-sessions). | `reason` | not read-only, non-destructive, idempotent |
 | `privacyfence_end_unattended_session` | Clears that declaration for this connection. | `reason` | not read-only, non-destructive, idempotent |
-| `privacyfence_propose_scoped_token` | Proposes a scoped token for a routine, built from the calls approved in this session (`from_session`) or from rules and tools it names. Returns a review link at once and nothing else: you review and can only narrow it in **Settings → Scoped tokens**, confirm by typing its name, and copy the token yourself. Claude never receives the token or learns whether it was created. With `deliver_to: {runtime: "n8n", workflow_id}` (organization servers with n8n delivery set up) PrivacyFence instead puts the token into n8n itself once you confirm. Not offered to a scoped token, refused in an unattended session. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md). | `reason`, `label` | not read-only, non-destructive, not idempotent |
+| `privacyfence_propose_scoped_token` | Proposes a scoped token for a routine, built from the calls approved in this session (`from_session`) or from rules and tools it names. Returns a review link at once and nothing else: you review and can only narrow it in **Settings → Scoped tokens**, confirm by typing its name, and copy the token yourself. Claude never receives the token or learns whether it was created. With `deliver_to: {runtime: "n8n", workflow_id}` (servers with n8n delivery set up) PrivacyFence instead puts the token into n8n itself once you confirm. Not offered to a scoped token, refused in an unattended session. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md). | `reason`, `label` | not read-only, non-destructive, not idempotent |
 | `privacyfence_runtime_credential_status` | Reports whether a proposal made with `deliver_to` was delivered to n8n, and the credential to use (`credential_id`, `credential_name`, `credential_type`, `mcp_url`, `token_expires_at`, and `node` for a [PrivacyFence node](n8n-node.md) credential); `pending` while you have not decided, `expired` (with `token_expired_at` and a message asking the person to extend the token) once the token has lapsed, `not_delivered` otherwise. Never returns the token. Only for an organization server with n8n delivery; not offered to a scoped token. See [ADR 0280](adr/0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md). | `proposal_id`, `reason` | read-only, non-destructive, idempotent |
-| `privacyfence_create_upload_slot` | Gives a client without the extension a one-time URL to upload a local file to. See [Files](#files). | `filename`, `reason` (plus `size_bytes`) | not read-only, non-destructive, not idempotent |
+| `privacyfence_create_upload_slot` | Gives a client a one-time URL to upload a file to. See [Files](#files). | `filename`, `reason` (plus `size_bytes`) | not read-only, non-destructive, not idempotent |
 
 `reason` is one sentence from the AI system on why it is making the call. It is logged, and it is
 self-reported and unverified, exactly like the `reason` every gated connector tool takes.
 
 ## Files
 
-Some tools read or write files on your computer: `drive_upload_file` (`local_path`),
-`drive_download_file` (`destination_dir`), the `gmail_*_with_attachments` tools, and the Gmail and
-Confluence attachment downloads. On a packaged install the daemon runs as its own account and
-cannot open files in your home folder, so the file travels a different way depending on the
-client ([ADR 0007](adr/0007-local-file-bridge.md),
-[ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)):
+Files move through PrivacyFence in three ways
+([ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)). The tools that take a file
+are `drive_upload_file`, the `gmail_*_with_attachments` tools and the other connectors' upload tools;
+they accept an `upload:<id>` reference, never a path on your computer.
 
-- **Claude Desktop with the extension.** The shim reads or writes the file as you and passes the
-  bytes to or from the daemon.
-- **Any other client.** For an upload, the AI system calls `privacyfence_create_upload_slot`, then
-  `PUT`s the file to the returned URL (no `Authorization` header: the URL is the one-time
-  credential; up to 50 MB, valid for 10 minutes, single use), then passes the returned `upload_id`
-  to the tool (`drive_upload_file`'s `upload_id`, or `"upload:<upload_id>"` in `attachments`). For
-  a download, the tool returns a one-time link instead of writing to `destination_dir`.
-- **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`, `jira_export_issues`) write a file to `destination_dir` and return only counts and a hash. On an organization-managed install nothing is saved: the result carries a one-time download link instead, unless the organization turned off `download_delivery.allow_disk_staging`; an organization can also turn the export tools off entirely with `download_delivery.allow_exports: false` ([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md))
-  ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
-- **An install that is not privilege-separated** (a source checkout, a `pip`/`pipx` install): the
-  daemon runs as you and reads and writes the file itself.
-
-- **Organization mode.** Small downloads come back inside the tool result, base64-encoded; larger
-  ones become a short-lived, one-time link. By default "small" means the whole tool result fits
-  100,000 bytes, a file of about 75 KB, because claude.ai and Claude Desktop truncate a tool result
-  over about 150,000 characters
+- **Upload.** The AI system calls `privacyfence_create_upload_slot`, then `PUT`s the file to the
+  returned URL (no `Authorization` header: the URL is the one-time credential; up to 50 MB, valid
+  for 10 minutes, single use), then passes the returned `upload:<id>` reference to the tool
+  (`drive_upload_file`'s `upload_id`, or `"upload:<upload_id>"` in `attachments`).
+- **Download.** Small downloads come back inside the tool result, base64-encoded; larger ones become
+  a short-lived, one-time link. By default "small" means the whole tool result fits 100,000 bytes, a
+  file of about 75 KB, because claude.ai and Claude Desktop truncate a tool result over about 150,000
+  characters
   ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)). A link
   only works for a client that can reach the server: claude.ai needs the host on its domain
   allowlist ([ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)). The
-  limits are organization bundle settings (`download_delivery.*`, see
+  limits are settings (`download_delivery.*`, see
   [Configuration reference](configuration-reference.md)).
-
-In local mode a downloaded file is held in the daemon's memory before it is handed over, so every
-local-mode download is limited to 200 MB by default (`file_bridge.max_download_bytes`).
+- **Exports.** The export tools (`grist_export_records`, `grist_export_sql`, `salesforce_export_report`,
+  `jira_export_issues`) return a one-time download link instead of saving a file, and only counts and
+  a hash in the result ([ADR 0160](adr/0160-org-mode-exports-are-delivered-by-a-one-time-link.md)).
+  An organization can turn the export tools off entirely with `download_delivery.allow_exports: false`
+  ([ADR 0197](adr/0197-an-organization-can-turn-the-export-tools-off.md)).
 
 Uploading or creating a slot approves nothing: the card for the tool that uses the file is where
 you decide.
@@ -253,24 +202,20 @@ The audit log records four fields: `agent_id`, `agent_name`, `agent_version` and
 
 | `agent_source` | Trust | Recorded when |
 |---|---|---|
-| `oauth_client` | attested | Organization mode only: the OAuth client registered only with a vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise), so its tokens were obtained by that vendor. No administrator step; see [AI systems](org-mode-setup-guide.md#11-ai-systems). This is the only attested source. |
-| `client_info` | claimed | The name the client itself sent: the MCP handshake's `clientInfo.name`, an OAuth client's registered name, or a local `agent_overrides` relabel. |
+| `oauth_client` | attested | The OAuth client registered only with a vendor's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise), so its tokens were obtained by that vendor. No administrator step; see [AI systems](org-mode-setup-guide.md#11-ai-systems). This is the only attested source. |
+| `client_info` | claimed | The name the client itself sent: the MCP handshake's `clientInfo.name`, an OAuth client's registered name, or an `agent_overrides` relabel. |
 | `""` (empty) | unknown | No usable name. Recorded as unknown, never guessed. |
 
 A call made with a [scoped token](security-and-compliance.md#scoped-tokens) is recorded as the
 agent `scoped-token:<id>`, named after the token, with source `override` (attested). The value
 `endpoint` is reserved and never recorded.
 
-- On a local install every card, approvals-list row and Audit Log row shows the caller as
-  **Undetected**, with no name and no badge, because nothing there can tell AI systems apart
-  ([ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md)). The fields above are
-  still recorded.
-- In organization mode a card calls a claimed name exactly that: the header says the caller *says*
+- A card calls a claimed name exactly that: the header says the caller *says*
   it is that system and marks it **Not verified**, and the rest of the card says "the AI system"
   ([ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md)).
 - `agent_overrides` in `settings.yaml` maps a client name PrivacyFence does not recognise to a
   known AI system. It changes only the recorded name, not what the card shows, and is always
-  recorded as `client_info`, because any program on your computer can send that name
+  recorded as `client_info`, because any program can send that name
   ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)).
 - Attribution is reporting only. The same call gets the same decision, the same rule match and the
   same data whatever name the client gives.

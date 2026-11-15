@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-24. Implemented by the `[cleanup P4]` pull request.
 
+Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+
 ## Context
 
 Telegram's `api_id`/`api_hash` identify the PrivacyFence *application* to Telegram's API, not a

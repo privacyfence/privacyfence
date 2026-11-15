@@ -4,9 +4,9 @@ authorize that actually works for the person reading them.
 The per-connector OAuth command-line flags only run as the service account
 on a packaged install (and a generic ``--oauth-setup`` never existed at all),
 so an error telling an end user to "re-run with --something-oauth" is a dead
-end. The working routes are Settings (Connectors) in local mode and
-``/connect`` in org mode; these tests pin both the absence of any CLI flag and
-the presence of those routes across every token-failure path.
+end. The working route is the Connect page (``/connect``); these tests pin both
+the absence of any CLI flag and the presence of that route across every
+token-failure path.
 """
 
 from __future__ import annotations
@@ -21,14 +21,14 @@ import pytest
 _CLI_FLAG = re.compile(r"--[a-z][a-z-]*")
 _OAUTH_FLAG_IN_SOURCE = re.compile(r"--[a-z-]*oauth[a-z-]*")
 
-# (module, client class, error class, whether its wording names /connect)
+# (module, client class, error class, the service name its wording uses)
 _CLIENTS = [
-    ("gmail_client", "GmailClient", "GmailClientError", True),
-    ("drive_client", "DriveClient", "DriveClientError", True),
-    ("calendar_client", "CalendarClient", "CalendarClientError", True),
-    ("contacts_client", "ContactsClient", "ContactsClientError", True),
-    ("tasks_client", "TasksClient", "TasksClientError", True),
-    ("apps_script_client", "AppsScriptClient", "AppsScriptClientError", True),
+    ("gmail_client", "GmailClient", "GmailClientError", "Gmail"),
+    ("drive_client", "DriveClient", "DriveClientError", "Google Drive"),
+    ("calendar_client", "CalendarClient", "CalendarClientError", "Google Calendar"),
+    ("contacts_client", "ContactsClient", "ContactsClientError", "Google Contacts"),
+    ("tasks_client", "TasksClient", "TasksClientError", "Google Tasks"),
+    ("apps_script_client", "AppsScriptClient", "AppsScriptClientError", "Apps Script"),
 ]
 
 
@@ -64,20 +64,18 @@ def _error_for(module_name, client_name, error_name, path, tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("path", ["missing", "refresh_failed", "unrefreshable"])
-@pytest.mark.parametrize(("module_name", "client_name", "error_name", "names_connect"), _CLIENTS)
-def test_credential_error_names_settings_not_a_cli_flag(
-    module_name, client_name, error_name, names_connect, path, tmp_path, monkeypatch
+@pytest.mark.parametrize(("module_name", "client_name", "error_name", "service"), _CLIENTS)
+def test_credential_error_names_the_connect_page_not_a_cli_flag(
+    module_name, client_name, error_name, service, path, tmp_path, monkeypatch
 ):
     message = _error_for(module_name, client_name, error_name, path, tmp_path, monkeypatch)
 
     assert not _CLI_FLAG.search(message), message
-    assert "PrivacyFence Settings (Connectors)" in message
-    if names_connect:
-        assert "/connect in org mode" in message
+    assert f"Connect {service} on the Connect page (/connect)" in message
 
 
-@pytest.mark.parametrize(("module_name", "client_name", "error_name", "names_connect"), _CLIENTS)
-def test_client_module_never_mentions_an_oauth_cli_flag(module_name, client_name, error_name, names_connect):
+@pytest.mark.parametrize(("module_name", "client_name", "error_name", "service"), _CLIENTS)
+def test_client_module_never_mentions_an_oauth_cli_flag(module_name, client_name, error_name, service):
     source = inspect.getsource(importlib.import_module(f"privacyfence.{module_name}"))
 
     assert not _OAUTH_FLAG_IN_SOURCE.search(source)

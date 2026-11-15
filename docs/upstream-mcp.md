@@ -18,7 +18,7 @@ Why it is built this way: [ADR 0285](adr/0285-upstream-mcp-servers-are-declared-
 
 ## For operators
 
-Organization servers only. In any other mode (single-user, desktop) a non-empty
+Organization servers only. In single-user mode a non-empty
 `PRIVACYFENCE_UPSTREAM_MCP_FILE` or `PRIVACYFENCE_UPSTREAM_MCP` refuses the start. On a Docker install
 see [Upstream MCP file](org-mode-docker.md#upstream-mcp-file).
 

@@ -35,8 +35,8 @@ def _offered(config):
     return sorted(name for name, service in config["services"].items() if service["offered"])
 
 
-def _import(bundle, *, mode="org", single_user=False):
-    return admin_config.import_from_bundle(bundle, mode=mode, single_user=single_user)
+def _import(bundle, *, single_user=False):
+    return admin_config.import_from_bundle(bundle, single_user=single_user)
 
 
 class TestLoadAndSave:
@@ -141,10 +141,6 @@ class TestImportOffered:
         config = _import({}, single_user=True)
         assert _offered(config) == sorted(["google", "slack", "salesforce", "atlassian", "miro", "telegram"])
 
-    def test_empty_bundle_local_mode_offers_only_telegram(self):
-        assert _offered(_import({}, mode="local")) == ["telegram"]
-        assert _offered(_import({}, mode="local", single_user=True)) == ["telegram"]
-
     def test_empty_bundle_multi_user_org_offers_nothing(self):
         assert _offered(_import({})) == []
 
@@ -154,18 +150,16 @@ class TestImportOffered:
         assert not config["services"]["grist"]["offered"]
         assert not config["services"]["peek"]["offered"]
 
-    @pytest.mark.parametrize("mode", ["local", "org"])
-    def test_bundle_sections_decide_what_is_offered(self, mode):
+    def test_bundle_sections_decide_what_is_offered(self):
         config = _import(
             {"slack": {"client_id": "a", "client_secret": "b"}, "peek": {"base_url": "https://peek.example.com"}},
-            mode=mode,
             single_user=True,
         )
         assert _offered(config) == ["peek", "slack"]
         assert config["services"]["peek"]["base_url"] == "https://peek.example.com"
 
     def test_empty_and_non_dict_sections_do_not_count(self):
-        config = _import({"google": {}, "slack": "oops", "telegram": {"enabled": True}}, mode="local")
+        config = _import({"google": {}, "slack": "oops", "telegram": {"enabled": True}})
         assert _offered(config) == ["telegram"]
 
 
@@ -233,7 +227,6 @@ class TestSingleUserStepUp:
 
     def test_other_installs_have_no_step_up_default(self):
         assert _import({})["step_up"] == {}
-        assert _import({}, mode="local")["step_up"] == {}
 
     def test_the_default_is_not_shared_between_configs(self):
         first = _import({}, single_user=True)
@@ -343,7 +336,7 @@ class TestLegacyKeysIn:
 
 class TestEnsure:
     def test_missing_file_imports_and_saves(self, tmp_path):
-        config, imported = admin_config.ensure({"slack": {"client_id": "a"}}, mode="org", single_user=False)
+        config, imported = admin_config.ensure({"slack": {"client_id": "a"}}, single_user=False)
         assert imported is True
         assert _offered(config) == ["slack"]
         assert admin_config.load() == config
@@ -354,7 +347,7 @@ class TestEnsure:
         before = path.read_bytes()
         mtime = path.stat().st_mtime_ns
         config, imported = admin_config.ensure(
-            {"slack": {"client_id": "a"}, "authz": {"x": 1}}, mode="org", single_user=False
+            {"slack": {"client_id": "a"}, "authz": {"x": 1}}, single_user=False
         )
         assert imported is False
         assert config == admin_config.load()
@@ -362,17 +355,17 @@ class TestEnsure:
 
     def test_an_empty_hash_with_a_credentials_only_bundle_is_left_alone(self):
         admin_config.save(_import({}))
-        _, imported = admin_config.ensure({"slack": {"client_id": "a"}}, mode="org", single_user=False)
+        _, imported = admin_config.ensure({"slack": {"client_id": "a"}}, single_user=False)
         assert imported is False
 
     def test_a_later_bundle_with_legacy_keys_reimports_exactly_once(self):
         admin_config.save(_import({}))
         bundle = {"slack": {"client_id": "a"}, "authz": {"allowed_domains": ["example.com"]}}
-        config, imported = admin_config.ensure(bundle, mode="org", single_user=False)
+        config, imported = admin_config.ensure(bundle, single_user=False)
         assert imported is True
         assert config["authz"] == {"allowed_domains": ["example.com"]}
         assert config["imported_from_bundle_sha256"] == _import(bundle)["imported_from_bundle_sha256"]
-        again, imported_again = admin_config.ensure(bundle, mode="org", single_user=False)
+        again, imported_again = admin_config.ensure(bundle, single_user=False)
         assert imported_again is False
         assert again == config
 
@@ -394,7 +387,7 @@ class TestReimportMerge:
             "rooms": [{"id": "r"}],
         }
         with caplog.at_level(logging.WARNING, logger="privacyfence.admin_config"):
-            merged, imported = admin_config.ensure(bundle, mode="org", single_user=False)
+            merged, imported = admin_config.ensure(bundle, single_user=False)
         assert imported is True
         assert merged["authz"] == {"allowed_domains": ["mine.example.com"]}
         assert merged["web_push"] == {"enabled": False}
@@ -407,7 +400,7 @@ class TestReimportMerge:
         config["services"]["google"]["offered"] = True
         admin_config.save(config)
         merged, _ = admin_config.ensure(
-            {"slack": {"client_id": "a"}, "authz": {"x": 1}}, mode="org", single_user=False
+            {"slack": {"client_id": "a"}, "authz": {"x": 1}}, single_user=False
         )
         assert merged["services"]["google"]["offered"] is True
         assert merged["services"]["slack"]["offered"] is True
@@ -416,7 +409,7 @@ class TestReimportMerge:
         config = _import({}, single_user=True)
         admin_config.save(config)
         merged, _ = admin_config.ensure(
-            {"step_up": {"enabled": True, "require_passkey": False, "scope": "writes"}}, mode="org", single_user=True
+            {"step_up": {"enabled": True, "require_passkey": False, "scope": "writes"}}, single_user=True
         )
         assert merged["step_up"] == {"enabled": True, "require_passkey": True, "scope": "writes_and_pii_reads"}
 
@@ -424,7 +417,6 @@ class TestReimportMerge:
         admin_config.save(_import({}))
         merged, _ = admin_config.ensure(
             {"step_up": {"enabled": True, "require_passkey": True, "scope": "writes_and_reads"}},
-            mode="org",
             single_user=False,
         )
         assert merged["step_up"]["scope"] == "writes_and_reads"
@@ -432,7 +424,7 @@ class TestReimportMerge:
     def test_step_up_with_an_unknown_scope_counts_as_the_narrowest(self):
         admin_config.save(_import({}, single_user=True))
         merged, _ = admin_config.ensure(
-            {"step_up": {"enabled": True, "require_passkey": True, "scope": "bogus"}}, mode="org", single_user=True
+            {"step_up": {"enabled": True, "require_passkey": True, "scope": "bogus"}}, single_user=True
         )
         assert merged["step_up"]["scope"] == "writes_and_pii_reads"
 
@@ -440,7 +432,7 @@ class TestReimportMerge:
         config = _import({})
         config["org_server"] = True
         admin_config.save(config)
-        merged, _ = admin_config.ensure({"authz": {"x": 1}}, mode="org", single_user=False)
+        merged, _ = admin_config.ensure({"authz": {"x": 1}}, single_user=False)
         assert merged["org_server"] is True
         assert admin_config.load()["org_server"] is True
 
@@ -454,7 +446,7 @@ class TestReimportMerge:
             "atlassian": {"assets": True, "assets_workspace_id": "w"},
         }
         with caplog.at_level(logging.WARNING, logger="privacyfence.admin_config"):
-            merged, _ = admin_config.ensure(bundle, mode="org", single_user=False)
+            merged, _ = admin_config.ensure(bundle, single_user=False)
         services = merged["services"]
         assert services["peek"]["base_url"] == "https://mine.example.com"
         assert services["grist"]["server_url"] == "https://grist.example.com"
@@ -479,7 +471,7 @@ class TestReimportMerge:
                 "auto_provision": {"enabled": True, "provisioner_url": "https://prov.example.com"},
             },
         }
-        merged, _ = admin_config.ensure(bundle, mode="org", single_user=False)
+        merged, _ = admin_config.ensure(bundle, single_user=False)
         peek, grist = merged["services"]["peek"], merged["services"]["grist"]
         assert peek["auto_provision"]["enabled"] is False
         assert grist["auto_provision"]["enabled"] is False
@@ -493,14 +485,14 @@ class TestReimportMerge:
         config["services"]["peek"]["auto_provision"]["key_env"] = "MINE"
         admin_config.save(config)
         merged, _ = admin_config.ensure(
-            {"peek": {"auto_provision": {"enabled": True, "key_env": "THEIRS"}}}, mode="org", single_user=False
+            {"peek": {"auto_provision": {"enabled": True, "key_env": "THEIRS"}}}, single_user=False
         )
         assert merged["services"]["peek"]["auto_provision"]["key_env"] == "MINE"
 
 
 class TestConfigFor:
     def test_without_a_file_it_imports_without_writing(self, tmp_path):
-        config = admin_config.config_for({"slack": {"client_id": "a"}}, mode="org", single_user=False)
+        config = admin_config.config_for({"slack": {"client_id": "a"}}, single_user=False)
         assert _offered(config) == ["slack"]
         assert not (tmp_path / "org" / "admin_config.json").exists()
 
@@ -508,7 +500,7 @@ class TestConfigFor:
         stored = _import({"google": {"client_id": "g"}})
         admin_config.save(stored)
         before = (tmp_path / "org" / "admin_config.json").read_bytes()
-        config = admin_config.config_for({"slack": {"client_id": "a"}}, mode="org", single_user=False)
+        config = admin_config.config_for({"slack": {"client_id": "a"}}, single_user=False)
         assert config == stored
         assert (tmp_path / "org" / "admin_config.json").read_bytes() == before
 
@@ -546,9 +538,9 @@ def public_dns(monkeypatch):
     )
 
 
-def _change(action, params=None, *, bundle=None, mode="org", single_user=False):
+def _change(action, params=None, *, bundle=None, single_user=False):
     return admin_config.apply_change(
-        action, params or {}, bundle=BUNDLE if bundle is None else bundle, mode=mode, single_user=single_user
+        action, params or {}, bundle=BUNDLE if bundle is None else bundle, single_user=single_user
     )
 
 
@@ -599,10 +591,6 @@ class TestServiceToggles:
     def test_unknown_action(self, clean_env):
         with pytest.raises(admin_config.AdminConfigError, match="Unknown action"):
             _change("toggle_pii_detection", {})
-
-    def test_org_only_action_in_local_mode(self, clean_env):
-        with pytest.raises(admin_config.AdminConfigError, match="organization servers only"):
-            _change("set_web_push", {"enabled": True}, mode="local")
 
     @pytest.mark.parametrize("params", [{}, {"service": 3}])
     def test_bad_parameters(self, clean_env, params):
@@ -749,8 +737,8 @@ class TestSalesforceLoginUrl:
         admin_config.save(config)
         assert _stored()["services"]["salesforce"]["login_url"] == ""
 
-    def test_available_in_both_modes(self, clean_env):
-        assert _change("set_salesforce_login_url", {"value": "https://test.salesforce.com"}, mode="local")[1] == ["services"]
+    def test_sets_the_login_url(self, clean_env):
+        assert _change("set_salesforce_login_url", {"value": "https://test.salesforce.com"})[1] == ["services"]
 
 
 class TestServerAddress:
@@ -797,11 +785,6 @@ class TestServerAddress:
         with pytest.raises(admin_config.AdminConfigError, match="public host name"):
             _change("set_server_address", {"service": "peek", "value": "https://nowhere.example.com"})
 
-    def test_local_mode_accepts_loopback_http_without_resolving(self, clean_env, monkeypatch):
-        monkeypatch.setattr(admin_config.socket, "getaddrinfo", lambda *a, **k: pytest.fail("resolved"))
-        summary, _ = _change("set_server_address", {"service": "peek", "value": "http://localhost:8080"}, mode="local")
-        assert summary == "Set the Peek server to http://localhost:8080"
-
     def test_refused_while_the_environment_sets_it(self, clean_env, monkeypatch, public_dns):
         monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://env.example.com")
         with pytest.raises(admin_config.AdminConfigError) as excinfo:
@@ -818,13 +801,6 @@ class TestServerAddress:
             "This address came from the signed configuration file; "
             "set PRIVACYFENCE_PEEK_BASE_URL on the server to change it."
         )
-
-    def test_refused_while_a_bundle_grist_app_owns_it(self, clean_env, public_dns):
-        bundle = {"grist": {"client_id": "id", "client_secret": "s", "server_url": "https://g.example.com"}}
-        with pytest.raises(admin_config.AdminConfigError, match="Grist app in the configuration file"):
-            _change(
-                "set_server_address", {"service": "grist", "value": "https://x.example.com"}, bundle=bundle, mode="local",
-            )
 
     def test_an_org_server_ignores_the_bundle_grist_app_so_the_address_is_settable(self, clean_env, public_dns):
         bundle = {"grist": {"client_id": "id", "client_secret": "s", "server_url": "https://g.example.com"}}
@@ -899,8 +875,6 @@ class TestAutoProvisioning:
             _change("set_auto_provisioning", self.PEEK, single_user=True)
         with pytest.raises(admin_config.AdminConfigError, match=r"^Unknown service\.$"):
             _change("set_auto_provisioning", {**self.PEEK, "service": "slack"})
-        with pytest.raises(admin_config.AdminConfigError, match="organization servers only"):
-            _change("set_auto_provisioning", self.PEEK, mode="local")
 
 
 class TestPlainSections:
@@ -913,13 +887,10 @@ class TestPlainSections:
         assert _change("set_unattended_sessions", {"enabled": True}) == ("", [])
         assert _change("set_unattended_sessions", {"enabled": False})[0] == "Turned unattended sessions off"
 
-    def test_unattended_sessions_work_in_local_mode(self, clean_env):
-        assert _change("set_unattended_sessions", {"enabled": True}, mode="local")[1] == ["unattended_sessions"]
-
     def test_clear_rooms(self, clean_env):
         assert _change("clear_rooms") == ("", [])
         replace = {"rooms": [{"resource_email": "a@x.com"}], "rooms_synced_at": "2026-01-01T00:00:00Z"}
-        admin_config.replace_rooms(replace, bundle=BUNDLE, mode="org", single_user=False)
+        admin_config.replace_rooms(replace, bundle=BUNDLE, single_user=False)
         assert _change("clear_rooms") == ("Cleared the room directory", ["rooms"])
         assert _stored()["rooms"] == [] and _stored()["rooms_synced_at"] == ""
 
@@ -976,10 +947,10 @@ class TestPlainSections:
         stored = _stored()["scoped_tokens"]
         assert stored == {"enabled": True, "max_days": 30, "allow_ai_proposals": True}
         assert _change("set_scoped_tokens", params) == ("", [])
-        assert scoped_tokens.policy_from_org_config({"scoped_tokens": stored}, org_mode=True).allow_ai_proposals is True
+        assert scoped_tokens.policy_from_org_config({"scoped_tokens": stored}).allow_ai_proposals is True
         off = _change("set_scoped_tokens", {**params, "enabled": False})
         assert off == ("Changed scoped tokens", ["scoped_tokens"])
-        policy = scoped_tokens.policy_from_org_config({"scoped_tokens": _stored()["scoped_tokens"]}, org_mode=True)
+        policy = scoped_tokens.policy_from_org_config({"scoped_tokens": _stored()["scoped_tokens"]})
         assert policy.allow_ai_proposals is False
 
     def test_imported_proposals_survive_the_import(self, clean_env):
@@ -1259,7 +1230,7 @@ class TestAuditForwarding:
 
 class TestReplaceRooms:
     def _replace(self, data):
-        return admin_config.replace_rooms(data, bundle=BUNDLE, mode="org", single_user=False)
+        return admin_config.replace_rooms(data, bundle=BUNDLE, single_user=False)
 
     def test_happy_path(self, clean_env):
         rooms = [
@@ -1333,14 +1304,14 @@ class TestServiceRows:
         # reads the stored connector configs.
         monkeypatch.setattr(connector_configs, "default_org_dir", lambda: tmp_path)
 
-    def _rows(self, bundle=None, admin=None, *, mode="org", single_user=False):
+    def _rows(self, bundle=None, admin=None, *, single_user=False):
         rows = admin_config.service_rows(
-            bundle or {}, admin or _import({}, mode=mode), mode=mode, single_user=single_user
+            bundle or {}, admin or _import({}), single_user=single_user
         )
         return {row["key"]: row for row in rows}
 
     def test_one_row_per_service_with_exact_fields(self):
-        rows = admin_config.service_rows({}, _import({}), mode="org")
+        rows = admin_config.service_rows({}, _import({}))
         assert [row["key"] for row in rows] == list(admin_config.SERVICES)
         assert all(set(row) == {"key", "label", "offered", "offered_locked_by", "app_source", "client_id", "relay", "options"} for row in rows)
         assert rows[0]["label"] == "Google" and rows[0]["offered"] is False
@@ -1385,17 +1356,6 @@ class TestServiceRows:
         assert row["app_source"] == "builtin" and row["options"]["reupload_needed"] is True
         assert "reupload_needed" not in self._rows()["google"]["options"]
 
-    def test_local_mode_has_no_builtin_apps_and_no_relay(self):
-        rows = self._rows(mode="local")
-        assert rows["google"]["app_source"] == "none" and rows["google"]["relay"] is False
-        assert rows["telegram"]["app_source"] == "builtin" and rows["telegram"]["relay"] is False
-
-    def test_bundle_apps_win_and_are_not_relayed(self):
-        bundle = {"slack": {"client_id": "own-slack", "client_secret": "x"}, "salesforce": {"consumer_key": "own-sf"}}
-        rows = self._rows(bundle, mode="local")
-        assert (rows["slack"]["app_source"], rows["slack"]["client_id"], rows["slack"]["relay"]) == ("bundle", "own-slack", False)
-        assert (rows["salesforce"]["app_source"], rows["salesforce"]["client_id"]) == ("bundle", "own-sf")
-
     def test_telegram_without_credentials(self, monkeypatch):
         monkeypatch.setattr(admin_config.app_credentials, "telegram_app_credentials", lambda: None)
         assert self._rows()["telegram"]["app_source"] == "none"
@@ -1423,15 +1383,6 @@ class TestServiceRows:
             assert rows[key]["client_id"] == ""
             options = rows[key]["options"]
             assert options[field] == "" and options["address_source"] == "admin" and options["locked"] is False
-
-    def test_grist_bundle_oauth_app_locks_the_row(self):
-        bundle = {"grist": {"client_id": "grist-id", "client_secret": "s", "server_url": "https://g.example.com"}}
-        row = self._rows(bundle, mode="local")["grist"]
-        assert row["client_id"] == "grist-id"
-        assert row["options"]["address_source"] == "bundle" and row["options"]["locked"] is True
-        assert row["options"]["server_url"] == "https://g.example.com"
-        assert row["options"]["auto_provision"]["available"] is False
-        assert "API keys" in row["options"]["auto_provision"]["reason"]
 
     def test_an_org_server_whose_grist_connector_is_gone_does_not_lock_on_the_bundle(self):
         bundle = {"grist": {"client_id": "grist-id", "client_secret": "s", "server_url": "https://g.example.com"}}
@@ -1468,10 +1419,8 @@ class TestServiceRows:
         monkeypatch.setenv("PRIVACYFENCE_GRIST_PROVISIONER_URL", "https://prov.example.com")
         assert self._rows()["grist"]["options"]["auto_provision"]["available"] is True
 
-    def test_auto_provisioning_is_unavailable_in_local_and_single_user_mode(self, monkeypatch):
+    def test_auto_provisioning_is_unavailable_in_single_user_mode(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_PEEK_BASE_URL", "https://env.example.com")
-        local = self._rows(mode="local")["peek"]["options"]["auto_provision"]
-        assert local["available"] is False and "organization server" in local["reason"]
         single = self._rows(single_user=True)["peek"]["options"]["auto_provision"]
         assert single["available"] is False and "identity provider" in single["reason"]
 
@@ -1549,8 +1498,8 @@ class TestConnectorConfigRows:
         connector_configs.accept(tmp_path, sign(provider, serial, **overrides), confirmed_fingerprint=fingerprint)
         return fingerprint
 
-    def _rows(self, mode="org"):
-        rows = admin_config.service_rows({}, _import({}, mode=mode), mode=mode)
+    def _rows(self):
+        rows = admin_config.service_rows({}, _import({}))
         return {row["key"]: row for row in rows}
 
     def test_a_signed_config_names_its_client_serial_date_and_key_but_not_the_secret(self, tmp_path):
@@ -1591,10 +1540,6 @@ class TestConnectorConfigRows:
         assert rows["google"]["app_source"] == "none" and "serial" not in rows["google"]["options"]
         assert rows["telegram"]["options"] == {} and "serial" not in rows["peek"]["options"]
 
-    def test_local_mode_ignores_stored_connector_configs(self, tmp_path):
-        self._store(tmp_path, "slack")
-        assert self._rows(mode="local")["slack"]["app_source"] == "none"
-
 
 class TestRemoveConnectorConfig:
     @pytest.fixture(autouse=True)
@@ -1625,10 +1570,6 @@ class TestRemoveConnectorConfig:
         for params in ({}, {"service": 3}):
             with pytest.raises(admin_config.AdminConfigError):
                 _change("remove_connector_config", params)
-
-    def test_a_desktop_install_has_no_connector_configs(self):
-        with pytest.raises(admin_config.AdminConfigError, match="organization servers only"):
-            _change("remove_connector_config", {"service": "slack"}, mode="local")
 
     def test_a_refusal_from_the_store_is_reported_as_an_admin_error(self, monkeypatch):
         def boom(org, provider):
@@ -1700,7 +1641,7 @@ class TestOrgServerFlag:
         config["org_server"] = True
         admin_config.save(config)
         merged, imported = admin_config.ensure(
-            {"authz": {"allowed_domains": ["x.example.com"]}}, mode="org", single_user=False
+            {"authz": {"allowed_domains": ["x.example.com"]}}, single_user=False
         )
         assert imported is True
         assert merged["org_server"] is True
@@ -1716,17 +1657,17 @@ class TestAllowedDomainsSeed:
 
     def test_the_first_import_seeds_lower_cased_and_de_duplicated(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", " Acme.com, acme.org ,ACME.COM,")
-        config, imported = admin_config.ensure({}, mode="org", single_user=False)
+        config, imported = admin_config.ensure({}, single_user=False)
         assert imported is True
         assert config["authz"] == {"allowed_domains": ["acme.com", "acme.org"]}
         assert admin_config.load()["authz"] == {"allowed_domains": ["acme.com", "acme.org"]}
 
     def test_the_seed_happens_once_and_later_starts_log_that_it_is_ignored(self, monkeypatch, caplog):
         monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
-        admin_config.ensure({}, mode="org", single_user=False)
+        admin_config.ensure({}, single_user=False)
         monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com,evil.com")
         with caplog.at_level(logging.INFO, logger="privacyfence.admin_config"):
-            config, imported = admin_config.ensure({}, mode="org", single_user=False)
+            config, imported = admin_config.ensure({}, single_user=False)
         assert imported is False
         assert config["authz"] == {"allowed_domains": ["acme.com"]}
         ignored = [r for r in caplog.records if "PRIVACYFENCE_ALLOWED_DOMAINS is ignored" in r.getMessage()]
@@ -1734,22 +1675,22 @@ class TestAllowedDomainsSeed:
 
     def test_an_admin_edit_survives_a_restart_with_the_variable_set(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
-        admin_config.ensure({}, mode="org", single_user=False)
+        admin_config.ensure({}, single_user=False)
         _change("set_authz", {"allowed_domains": "", "groups_claim": "", "required_groups": ""})
-        config, _ = admin_config.ensure({}, mode="org", single_user=False)
+        config, _ = admin_config.ensure({}, single_user=False)
         assert config["authz"]["allowed_domains"] == []
 
     def test_an_existing_config_without_the_seed_is_not_seeded(self, monkeypatch):
-        admin_config.ensure({}, mode="org", single_user=False)
+        admin_config.ensure({}, single_user=False)
         monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
-        config, _ = admin_config.ensure({}, mode="org", single_user=False)
+        config, _ = admin_config.ensure({}, single_user=False)
         assert config["authz"] == {}
 
     def test_a_later_legacy_bundle_is_merged_without_the_variable(self, monkeypatch):
-        admin_config.ensure({}, mode="org", single_user=False)
+        admin_config.ensure({}, single_user=False)
         monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "env.example.com")
         bundle = {"authz": {"allowed_domains": ["bundle.example.com"]}}
-        config, imported = admin_config.ensure(bundle, mode="org", single_user=False)
+        config, imported = admin_config.ensure(bundle, single_user=False)
         assert imported is True
         assert config["authz"] == {"allowed_domains": ["bundle.example.com"]}
 
@@ -1760,10 +1701,6 @@ class TestAllowedDomainsSeed:
         assert config["authz"] == {"allowed_domains": ["bundle.example.com"]}
         assert any("PRIVACYFENCE_ALLOWED_DOMAINS is ignored" in r.getMessage() for r in caplog.records)
 
-    def test_local_mode_is_not_seeded(self, monkeypatch):
-        monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
-        assert _import({}, mode="local")["authz"] == {}
-
     @pytest.mark.parametrize("value", [
         "*", "*.acme.com", "@acme.com", "alice@acme.com", "acme", "com", "acme..com", "-acme.com", "acme-.com",
         "acme.com/", "https://acme.com", "acme com", "1.2.3.4", "acme.cöm", "acKme.com", "acme.com,bad_domain.com",
@@ -1771,12 +1708,12 @@ class TestAllowedDomainsSeed:
     def test_a_value_that_is_not_a_domain_refuses_the_start(self, monkeypatch, value):
         monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", value)
         with pytest.raises(admin_config.ConfigurationError, match="PRIVACYFENCE_ALLOWED_DOMAINS"):
-            admin_config.ensure({}, mode="org", single_user=False)
+            admin_config.ensure({}, single_user=False)
         assert admin_config.load() is None
 
     def test_config_for_shows_the_seed_without_writing(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_ALLOWED_DOMAINS", "acme.com")
-        assert admin_config.config_for({}, mode="org", single_user=False)["authz"] == {"allowed_domains": ["acme.com"]}
+        assert admin_config.config_for({}, single_user=False)["authz"] == {"allowed_domains": ["acme.com"]}
         assert admin_config.load() is None
 
 
@@ -1831,4 +1768,4 @@ class TestLockedByEnvironment:
     def test_an_invalid_variable_value_locks_nothing_on_the_page(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "maybe")
         assert admin_config._env_auto_provision() == frozenset()
-        assert admin_config._locked_variable("peek", mode="org") == ""
+        assert admin_config._locked_variable("peek") == ""

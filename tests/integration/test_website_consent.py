@@ -5,32 +5,24 @@ promises more than the minimum: *no* request to Google at all before "Accept" (C
 basic implementation; see docs/adr/0050-website-analytics-is-ga4-behind-consent.md). This
 drives every page in headless Chromium and checks both halves:
 
-- with no stored choice, a page requests nothing from any origin but the site itself and the
-  project's own download Worker, and sets no cookie;
+- with no stored choice, a page requests nothing from any origin but the site itself, and sets
+  no cookie;
 - "Accept" loads googletagmanager.com, now and on the next page; "Decline" loads nothing, and
   that choice persists across pages; "Cookie settings" in the footer reopens the choice;
-- the GA4 config carries the page's content group, and a download button click sends
-  `download_click` only after consent.
-
-The download Worker (downloads.privacyfence.eu) is first-party: the project runs it and it
-stores counters only (see /privacy/). The homepage asks it for the download total and
-/download/ for the release list, so it is allowed on every page.
+- the GA4 config carries the page's content group.
 
 Google is never contacted: gtag.js is answered with an empty script, so what is tested is that
-the page *asks* for it, and when. Same skip posture as test_download_page.py.
+the page *asks* for it, and when. Same skip posture as test_install_page.py.
 """
 
 from __future__ import annotations
 
-import json
 from urllib.parse import urlsplit
 
 import pytest
 
 from tests.website_site import (
-    API_ORIGIN,
     GA_ORIGIN,
-    STABLE_MANIFEST,
     chromium_launch_kwargs,
     page_paths,
     serve,
@@ -47,7 +39,6 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 pytestmark = [pytest.mark.integration, pytest.mark.browser]
 
 PAGES = page_paths()
-FIRST_PARTY_HOSTS = {urlsplit(API_ORIGIN).netloc}
 BANNER = ".consent-banner"
 
 
@@ -85,12 +76,6 @@ class Visit:
         url = route.request.url
         if url.startswith(self.site_url):
             route.continue_()
-        elif url == f"{API_ORIGIN}/api/releases/stable":
-            route.fulfill(status=200, content_type="application/json", body=json.dumps(STABLE_MANIFEST))
-        elif url.startswith(f"{API_ORIGIN}/download/"):
-            route.fulfill(status=204, body="")
-        elif url.startswith(API_ORIGIN):
-            route.fulfill(status=404, content_type="application/json", body='{"error":"not found"}')
         elif url.startswith(GA_ORIGIN):
             route.fulfill(status=200, content_type="application/javascript", body="")
         else:
@@ -118,7 +103,7 @@ class Visit:
 
     def third_party(self) -> list[str]:
         site_host = urlsplit(self.site_url).netloc
-        return [url for url in self.requests if urlsplit(url).netloc not in {site_host, *FIRST_PARTY_HOSTS}]
+        return [url for url in self.requests if urlsplit(url).netloc not in {site_host}]
 
     def ga_requests(self) -> list[str]:
         return [url for url in self.requests if url.startswith(GA_ORIGIN)]
@@ -216,35 +201,3 @@ def test_accept_and_decline_carry_equal_weight(visit):
     assert accept.get_attribute("class") == decline.get_attribute("class")
     a, d = accept.bounding_box(), decline.bounding_box()
     assert abs(a["width"] - d["width"]) < 2 and abs(a["height"] - d["height"]) < 2
-
-
-def _download_click_events(page):
-    return page.evaluate(
-        "() => (window.dataLayer || []).map((e) => Array.from(e))"
-        ".filter((e) => e[0] === 'event' && e[1] === 'download_click').map((e) => e[2])"
-    )
-
-
-def _click_first_download(page):
-    # Stop the navigation so the page (and its dataLayer) survives the click.
-    page.evaluate("() => document.addEventListener('click', (e) => e.preventDefault())")
-    page.locator(".download-grid:not(.compact) .download-button").first.click()
-
-
-def test_download_click_is_sent_only_after_consent(visit):
-    declined = visit()
-    declined.goto("/download/")
-    declined.page.click(f"{BANNER} [data-consent=denied]")
-    _click_first_download(declined.page)
-    assert _download_click_events(declined.page) == []
-    declined.settle()
-    assert not declined.ga_requests()
-
-    accepted = visit()
-    accepted.goto("/download/")
-    accepted.accept()
-    _click_first_download(accepted.page)
-    events = _download_click_events(accepted.page)
-    assert len(events) == 1
-    first = STABLE_MANIFEST["artifacts"][0]
-    assert events[0] == {"platform": first["platform"], "architecture": first["architecture"], "channel": "stable"}

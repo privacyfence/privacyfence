@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -19,7 +18,7 @@ from ..atlassian_users import (
     storage_unrecognised_user_mentions,
 )
 from ..audit_log import AuditEntry, current_week, get_audit_logger
-from ..confluence_client import ConfluenceClient, ConfluenceClientError, resolve_attachment_destination
+from ..confluence_client import ConfluenceClient, ConfluenceClientError
 from ..connector import Connector, ToolParam, ToolSpec
 from ..download_staging import get_download_staging_store
 from ..gate import current_reason, gated_call
@@ -46,7 +45,6 @@ class ConfluenceConnector(Connector):
         self.my_email: str = ""
         self.my_account_id: str = ""
         # See connectors/drive.py's own DriveConnector.__init__ comment.
-        self.download_mode: str = "local"
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
 
@@ -199,16 +197,11 @@ class ConfluenceConnector(Connector):
                 description=(
                     "Download a Confluence page attachment's content. "
                     "Identify the attachment by the name returned from "
-                    "confluence_list_attachments. On a local install: saved "
-                    "to destination_dir, which is required (no default): pass "
-                    "~/Downloads (or a path the user asked for) for a "
-                    "deliverable, or your own scratch directory to just read or "
-                    "process it. On an organization-managed install: "
-                    "destination_dir is ignored -- a small attachment's bytes come "
-                    "back directly in the result, a larger one as a one-time link "
-                    "the human opens in their own browser. Returns {path, name, "
-                    "size_bytes} on a local install, or the inline or link delivery "
-                    "result on an organization-managed one. Requires user approval."
+                    "confluence_list_attachments. Returns {delivery: 'inline', name, mime_type, "
+                    "size_bytes, content_base64} for a small attachment, or {delivery: "
+                    "'link', name, size_bytes, download_url, expires_at, note} for a "
+                    "larger one: a one-time link the human opens in their own browser. "
+                    "Requires user approval."
                 ),
                 params=[
                     ToolParam("page_id", "str",
@@ -217,20 +210,6 @@ class ConfluenceConnector(Connector):
                     ToolParam("attachment_name", "str",
                               description="Exact file name of the attachment, as confluence_list_attachments "
                                           "returns it in its name field."),
-                    ToolParam(
-                        "destination_dir",
-                        "str",
-                        required=True,
-                        description=(
-                            "Local install only: where to save the attachment -- required, no default. "
-                            "On an organization-managed install it is ignored and nothing is "
-                            "saved to it; any value will do. "
-                            "Use ~/Downloads (or a path the user specified) if the "
-                            "user should find this file afterward; use your own "
-                            "working/scratch directory if it's only for you to read "
-                            "or process."
-                        ),
-                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             read_only=True,
@@ -518,35 +497,15 @@ class ConfluenceConnector(Connector):
             args={"space_key": space_key, "title": title},
         )
 
-    async def _download_attachment(
-        self, page_id: str, attachment_name: str, destination_dir: str = ""
-    ) -> Any:
+    async def _download_attachment(self, page_id: str, attachment_name: str) -> Any:
         page = await self._fetch(self._confluence.get_page, page_id)
         attachments = await self._fetch(self._confluence.list_attachments, page_id)
         attachment = next((a for a in attachments if a.name == attachment_name), None)
         if attachment is None:
             raise RuntimeError(f"No attachment named {attachment_name!r} on page {page_id}")
-        dest_path = resolve_attachment_destination(attachment.name, destination_dir)
-        name = os.path.basename(dest_path)
-        # ADR 0007: shown to the human, and handed to local_files.
-        # deliver_file(), exactly as the agent typed destination_dir --
-        # never the daemon-expanded dest_path above, which mixes in this
-        # process's own idea of "~" and is meaningless to a shim writing
-        # the file as a different, real user. See connectors/drive.py's
-        # _download_file's own displayed_dest.
-        displayed_dest = f"{destination_dir.strip().rstrip('/')}/{name}" if destination_dir.strip() else dest_path
         cfg = self.download_config or DownloadDeliveryConfig()
-        # ADR 0007: whether this download can still write straight to this
-        # process's own filesystem (a dev checkout or an unseparated pip/
-        # pipx install, where the daemon *is* the user) or needs the file
-        # bridge instead -- see local_files.can_access_user_files's own
-        # docstring.
-        direct_write = local_files.can_access_user_files(self.download_mode)
-        # Audit trail -- see connectors/drive.py's own `delivery`
-        # comment for the reasoning.
         delivery = (
-            ("local_disk" if direct_write else "client_bridge") if self.download_mode != "org"
-            else "inline_base64" if cfg.fits_inline(attachment.size, attachment.name, attachment.media_type)
+            "inline_base64" if cfg.fits_inline(attachment.size, attachment.name, attachment.media_type)
             else "staged_link"
         )
         # Title/Space are known for free via confluence_list_pages/
@@ -564,32 +523,22 @@ class ConfluenceConnector(Connector):
             "Type": attachment.media_type,
             "Size": f"{attachment.size:,} bytes",
         }
-        if self.download_mode == "org":
-            if cfg.fits_inline(attachment.size, attachment.name, attachment.media_type):
-                new_info = {
-                    "Content returned to {agent}": (
-                        f"Yes — file bytes are included in the tool result (attachment is "
-                        f"{attachment.size:,} bytes, {base64_length(attachment.size):,} once "
-                        f"base64-encoded, within this org's {cfg.inline_max_bytes:,}-byte "
-                        "inline-delivery limit)"
-                    ),
-                }
-            else:
-                new_info = {
-                    "Content returned to {agent}": (
-                        "None — a one-time link is generated for you to open in your own browser"
-                    ),
-                }
+        if cfg.fits_inline(attachment.size, attachment.name, attachment.media_type):
+            new_info = {
+                "Content returned to {agent}": (
+                    f"Yes — file bytes are included in the tool result (attachment is "
+                    f"{attachment.size:,} bytes, {base64_length(attachment.size):,} once "
+                    f"base64-encoded, within this org's {cfg.inline_max_bytes:,}-byte "
+                    "inline-delivery limit)"
+                ),
+            }
         else:
             new_info = {
-                "Content returned to {agent}": "None — file bytes are never sent",
-                "Will save to": displayed_dest,
+                "Content returned to {agent}": (
+                    "None — a one-time link is generated for you to open in your own browser"
+                ),
             }
-        details = (
-            "The attachment above will be delivered as described above."
-            if self.download_mode == "org"
-            else "The attachment above will be downloaded to the destination shown."
-        )
+        details = "The attachment above will be delivered as described above."
 
         # Confluence's attachment download link has no partial/range fetch --
         # previewing or PII-scanning means fully fetching the attachment
@@ -647,35 +596,7 @@ class ConfluenceConnector(Connector):
             args={"page_id": page_id, "attachment_name": attachment_name},
             delivery=delivery,
         )
-        if self.download_mode == "org":
-            return await self._deliver_org_attachment(page_id, attachment, fetched_bytes, cfg)
-        if direct_write:
-            # Unseparated install -- unchanged from before ADR 0007. Reuses
-            # the PII-scan prefetch exactly as it always did.
-            if fetched_bytes is not None:
-                return await self._fetch(
-                    self._confluence.save_attachment_bytes, fetched_bytes, attachment.name, destination_dir,
-                )
-            return await self._fetch(
-                self._confluence.download_attachment,
-                page_id, attachment.attachment_id, attachment.name, destination_dir,
-            )
-        # ADR 0007: privilege separation means this process cannot write
-        # into the real user's destination_dir -- reuse the bytes the PII
-        # scan/preview above already fetched when it had them (prefetch-
-        # worthy type, under _ATTACHMENT_PREFETCH_MAX_BYTES), otherwise
-        # fetch the full attachment now. local_files.deliver_file stages it
-        # for the shim (or, with no bridge-capable client, a one-time link
-        # -- ADR 0007 SS1.4). Mirrors connectors/gmail.py's _download_attachment.
-        data = fetched_bytes
-        mime_type = attachment.media_type or "application/octet-stream"
-        if data is None:
-            data = await self._fetch(
-                self._confluence.fetch_attachment_bytes, page_id, attachment.attachment_id,
-            )
-        return local_files.deliver_file(
-            destination_dir, name, data, mime_type, download_mode=self.download_mode,
-        )
+        return await self._deliver_org_attachment(page_id, attachment, fetched_bytes, cfg)
 
     async def _deliver_org_attachment(
         self, page_id: str, attachment: Any, fetched_bytes: bytes | None, cfg: DownloadDeliveryConfig,
@@ -709,6 +630,7 @@ class ConfluenceConnector(Connector):
             get_download_staging_store().stage, current_principal(), data, attachment.name, attachment.media_type,
             ttl_seconds=cfg.link_ttl_seconds,
         )
+        local_files.mark_staged_download()
         return cfg.link_result(attachment.name, size_bytes, f"{self.download_base_url}{cfg.staged_link_path(token)}")
 
     async def _create_page(

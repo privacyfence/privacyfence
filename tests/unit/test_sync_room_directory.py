@@ -11,7 +11,7 @@ token lifecycle all still work now that they live here instead.
 
 Imported by file path (importlib) rather than as a package, since scripts/
 isn't part of the installed ``privacyfence`` distribution -- same pattern as
-test_build_org_bundle.py.
+test_r2_release.py.
 """
 from __future__ import annotations
 

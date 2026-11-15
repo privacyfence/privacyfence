@@ -525,10 +525,9 @@ def _attendee_email(attendee: Any) -> str:
 
 # ── Per-principal state ──────────────────────────────────────────────────────
 #
-# One PrincipalRegistry entry per principal (local mode has exactly one; org mode one per signed-in
-# user) -- config path, write lock, the temp-accept grace window, the hot-reloaded v2 rule cache, and
+# One PrincipalRegistry entry per principal (one per signed-in user) -- config path, write lock, the temp-accept grace window, the hot-reloaded v2 rule cache, and
 # the rules-changed listener broadcast that lets a pending approval re-resolve the moment a rule
-# changes. Every accessor function below is what gate.py/settings_controller.py/daemon_main.py
+# changes. Every accessor function below is what gate.py/web/routes_settings.py/daemon_main.py
 # actually call; nothing outside this module reaches into _AutoAcceptState directly.
 
 
@@ -592,7 +591,7 @@ def is_temp_accepted(operation_key: str, file_key: str | None) -> bool:
 
 
 def set_policy_v2_store_rules(rules: "list[PolicyRule]") -> None:
-    """Hot-reload the current principal's rule set -- called by settings_controller.py after any
+    """Hot-reload the current principal's rule set -- called by web/routes_settings.py after any
     Auto-accept Settings page mutation, by this module's own add_policy_v2_rules/
     remove_policy_v2_rule after a bridge or popup write, and by daemon_main.py whenever it loads a
     principal's settings (at startup, and for each organization principal)."""
@@ -760,7 +759,7 @@ def set_policy_rule_verbs(rule_id: str, verbs: "list[Verb]") -> bool:
 
 def set_rules_changed_listener(callback: Callable[[], None] | None) -> None:
     """Register (or, with ``None``, clear) *the* single-slot listener -- kept for the one caller
-    that predates the multi-listener support below (settings_controller.py's own menu-bar refresh)
+    that predates the multi-listener support below (the old menu-bar refresh)
     and for tests that patch it directly. Implemented as "replace whatever this call previously
     added to add_rules_changed_listener's list", so calling this twice doesn't leave two menu-bar
     callbacks both firing.
@@ -794,7 +793,7 @@ def notify_rules_changed() -> None:
     approval that a rule change now covers is resolved immediately (approvals.PendingApprovalRegistry.
     reevaluate_all) and so a live Settings tab gets a fresh snapshot pushed. Called by this module's
     own add_policy_v2_rules/remove_policy_v2_rule after a bridge/popup write, and by
-    settings_controller.py after a Settings page mutation."""
+    web/routes_settings.py after a Settings page mutation."""
     state = _REGISTRY.get()
     for listener in list(state.rules_changed_listeners):
         try:

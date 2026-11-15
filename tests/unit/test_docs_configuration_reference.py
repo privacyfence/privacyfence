@@ -3,10 +3,8 @@
 The configuration reference is hand-written (each key needs prose: what it does, which Settings
 control writes it, how the code default and the seeded value differ), so it cannot be generated the
 way docs/tools-reference.md is. What can drift is coverage: a key added to
-src/privacyfence/resources/settings.yaml.example, or an option added to
-scripts/build_org_bundle.py, that nobody documents. A person who meets that key in their own
-settings.yaml, or in `build_org_bundle.py --help`, then finds nothing in the reference. These tests
-fail in that case.
+src/privacyfence/resources/settings.yaml.example that nobody documents. A person who meets that
+key in their own settings.yaml then finds nothing in the reference. This test fails in that case.
 
 settings.yaml.example is flattened to dotted key paths (`web.notifications.detail`). Three
 conventions keep that honest without listing every possible value:
@@ -20,15 +18,10 @@ conventions keep that honest without listing every possible value:
 - A map whose keys are chosen by the person rather than by PrivacyFence (`connectors`,
   `agent_overrides`) is documented with a placeholder (`connectors.<name>.enabled`); the example's
   concrete key is replaced with that placeholder before the check (_DYNAMIC_MAPS).
-
-build_org_bundle.py's options are read from its own argparse parser (`build_parser()`), so every
-long option, including both halves of a --x/--no-x pair, must appear in the doc.
 """
 from __future__ import annotations
 
-import argparse
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -37,10 +30,6 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DOC_PATH = REPO_ROOT / "docs" / "configuration-reference.md"
 EXAMPLE_PATH = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.yaml.example"
-
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
-
-import build_org_bundle  # noqa: E402
 
 # Top-level (or nested) prose comments in the example that the commented-key pattern below also
 # matches. Each is the first word of a wrapped sentence, not a setting.
@@ -123,34 +112,4 @@ def test_every_settings_yaml_example_key_is_documented():
     # appear literally, as a code span.
     leaves = sorted(p for p in paths if not _is_section(p, paths))
     missing = [p for p in leaves if f"`{p}`" not in doc]
-    assert missing == [], f"docs/configuration-reference.md does not document: {missing}"
-
-
-def _bundle_options() -> list[str]:
-    parser = build_org_bundle.build_parser()
-    options: list[str] = []
-    for action in parser._actions:
-        if action.help is argparse.SUPPRESS:
-            continue  # a refused option; it is documented where its setting went, not here
-        for option in action.option_strings:
-            if option.startswith("--") and option != "--help":
-                options.append(option)
-    return options
-
-
-def test_build_org_bundle_options_are_read_from_its_parser():
-    options = _bundle_options()
-    assert "--slack-client-id" in options
-    assert "--sign-key" in options
-    # Refused options are hidden from --help, so they are not part of what the reference must list.
-    assert "--server-bind-host" not in options
-    assert "--no-agent-links" not in options
-    assert len(options) > 15
-
-
-def test_every_build_org_bundle_option_is_documented():
-    doc = DOC_PATH.read_text(encoding="utf-8")
-    # An option counts as documented when it appears as the start of a code span or right after a
-    # separator inside one (`--slack-client-id`, `--slack-client-secret`).
-    missing = [o for o in _bundle_options() if not re.search(rf"`{re.escape(o)}[` =]", doc)]
     assert missing == [], f"docs/configuration-reference.md does not document: {missing}"

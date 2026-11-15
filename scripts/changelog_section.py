@@ -16,8 +16,7 @@ CHANGELOG.md to find out what version is being built. The workflow passes in the
 setuptools_scm already resolved.
 
 Stdlib only -- no PrivacyFence install required, matching scripts/r2_release.py. The build jobs
-call this before (or without) installing anything, and the Windows job calls it through `shell:
-bash` like every other cross-platform step there.
+call this before (or without) installing anything.
 
 Exits non-zero when the version has no section, which is deliberate: a stable tag whose notes
 nobody wrote should fail the release build loudly. The alternative is worse than an error --

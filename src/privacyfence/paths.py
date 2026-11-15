@@ -2,21 +2,12 @@
 
 In a source checkout (editable dev install, or no install at all): data
 lives in the project root. In a bundled .app, or a real (non-editable)
-``pip``/``pipx install privacyfence``: data lives under a per-user data
+the wheel the organization image installs into site-packages: data lives under a per-user data
 directory so it survives app updates/reinstalls -- see is_bundled() and
 _is_installed_package(). On POSIX that's ``~/.privacyfence``; on Windows
 it's ``%LOCALAPPDATA%\\PrivacyFence`` -- see windows_data_dir() for why
 that's a different convention rather than the same dotfile name reused
 under ``%USERPROFILE%``.
-
-A third answer sits on top of those two: an install that has
-opted into privilege separation (all three desktop platforms) keeps
-everything under a system root owned by a dedicated service account instead
--- ``%ProgramData%\\PrivacyFence`` on Windows, where a service account cannot
-sensibly own something inside a user profile -- with a small
-``handoff_dir()`` the logged-in user's own session can still reach. See
-privilege_separation.py for the layout and for what that boundary does and
-does not claim.
 """
 from __future__ import annotations
 
@@ -27,14 +18,13 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import privilege_separation
 from .secure_files import secure_mkdir
 
 if TYPE_CHECKING:
     from .principal import Principal
 
 # Deliberately strict -- principal ids reach here from an OAuth 2.1/OIDC
-# `sub` claim in org mode (in local mode it's always "local"), and this is the one
+# `sub` claim (or the fixed "local" id), and this is the one
 # place that string becomes a filesystem path component. Anything outside
 # this set (a "/", a leading "." that could hide a directory, ...) is
 # rejected rather than sanitized, so a hostile or malformed id fails loudly
@@ -80,8 +70,8 @@ def is_windows() -> bool:
 
 
 def _is_installed_package() -> bool:
-    """True for a normal (non-editable) ``pip``/``pipx install privacyfence``
-    -- i.e. this file living under some ``site-packages``/``dist-packages``
+    """True for a normal (non-editable) install of the wheel, which is how the organization
+    image installs PrivacyFence -- i.e. this file living under some ``site-packages``/``dist-packages``
     -- as opposed to a source checkout, editable dev install included: an
     editable install (``pip install -e .``, what every documented dev/source
     setup in this repo uses) keeps the real ``.py`` files at their original
@@ -90,7 +80,7 @@ def _is_installed_package() -> bool:
     rather than "is this package installed" is what makes that distinction
     -- ``importlib.metadata`` reports a distribution as installed either
     way. Without this, ``data_dir()`` would fall to its ``else`` branch for
-    a real PyPI install too, landing config/credentials/logs somewhere
+    the installed wheel too, landing config/credentials/logs somewhere
     inside site-packages instead of a real per-user data directory."""
     return "site-packages" in Path(__file__).resolve().parts or "dist-packages" in Path(__file__).resolve().parts
 
@@ -130,77 +120,12 @@ def data_dir() -> Path:
     section for what this closes. (``secure_mkdir``'s ``chmod`` is a no-op
     best-effort on Windows, which has no POSIX permission bits to set --
     see that function's own docstring.)
-
-    On an install that has opted into privilege separation
-    (``scripts/{macos,linux}_privilege_separation.sh``,
-    ``scripts/windows_privilege_separation.ps1``), every branch below is
-    bypassed for the service-owned system root instead. A
-    service account cannot sensibly own a directory inside a human's home,
-    so the whole data directory lives under the system root rather than just
-    the authority subtree. The root is ``0711`` there, not ``0700``: the
-    logged-in user has to be able to traverse it to reach ``handoff_dir()``, and must not be able to list
-    anything else. (Windows has no mode to set -- ``secure_mkdir``'s ``chmod``
-    is the documented no-op there -- so the same intent is an NTFS ACL the
-    installer writes and ``windows_acl.py`` audits; the mode passed here is
-    simply inert on that platform.) See
-    privilege_separation.py's own module docstring for
-    the full layout, and ``handoff_dir()`` below for the files that stay
-    reachable from the user's own session.
     """
-    override = privilege_separation.data_dir_override()
-    if override is not None:
-        return secure_mkdir(override, mode=privilege_separation.SYSTEM_ROOT_MODE, foreign_owner_ok=True)
     if is_bundled() or _is_installed_package():
         d = windows_data_dir() if is_windows() else Path.home() / ".privacyfence"
     else:
         d = Path(__file__).parent.parent.parent
     return secure_mkdir(d)
-
-
-def handoff_dir() -> Path:
-    """Where the files the *user's own desktop session* has to reach live:
-    the ``mcp_url`` the MCPB shim discovers the daemon by, the
-    ``web_base_url``/``*_url`` discovery files the companion and a human
-    read, and both ends of the control channels (``control.sock``,
-    ``companion.sock``). On an unseparated install the agent's ``mcp_token``
-    is here too; a separated install keeps it under the authority directory
-    and clients mint it over the control channel instead.
-
-    ``data_dir()`` itself on an unseparated install.
-    On a separated install it's ``data_dir()/handoff``, group-owned by the
-    service account with the setgid bit (``3770``) and the installing human
-    added to that group, which is what lets the daemon (one account) and the
-    companion and agent (another) still hand each other a token and a socket
-    while everything else under ``data_dir()`` stays ``0700`` and unreadable
-    to them.
-
-    This directory is deliberately *not* a security boundary: ADR 0002
-    decision 6 chose to make a minted session insufficient (via a passkey
-    step-up) rather than to make minting uncallable, precisely because the
-    companion and the agent share a uid and no permission bit can separate
-    them. What privilege separation takes away from the agent is ``authority_dir()`` --
-    policy, enrolled passkeys, the audit log and its HMAC key -- and that is
-    the whole of what it claims.
-    """
-    if not privilege_separation.is_enabled():
-        return data_dir()
-    return secure_mkdir(
-        data_dir() / privilege_separation.HANDOFF_DIR_NAME,
-        mode=privilege_separation.HANDOFF_DIR_MODE,
-        foreign_owner_ok=True,
-    )
-
-
-def control_socket_dir() -> Path:
-    """Which directory ``web/control_channel.py`` binds ``control.sock`` in.
-
-    ``authority_dir()`` on an unseparated install. ``handoff_dir()`` on a
-    separated one, because there ``authority_dir()`` is ``0700`` under the
-    service account and the companion -- running as the human -- has to be
-    able to connect. That is not a downgrade of anything privilege separation
-    claims: see ``handoff_dir()`` above and ADR 0002 decision 6.
-    """
-    return handoff_dir() if privilege_separation.is_enabled() else authority_dir()
 
 
 # The signed organization bundle. 7.x reads and writes ``org_bundle.json``;
@@ -248,26 +173,16 @@ def user_dir(principal: "Principal | None" = None) -> Path:
 
 
 def authority_dir(principal: "Principal | None" = None) -> Path:
-    """Directory root for the files that back the *human's* authority in
-    local mode -- the control channel's socket (macOS/Linux; Windows' named
-    pipe lives outside the filesystem, see web/control_channel.py -- which is
-    also why the separated Windows layout can keep ``handoff_dir()``
-    read-only to the shared group where POSIX has to make it writable), the
+    """Directory root for the files that back the *human's* authority -- the
     privacy policy (``config/settings.yaml``), enrolled WebAuthn credentials,
-    and local mode's audit log and its HMAC key -- as distinct from
+    scoped tokens, and the audit log and its HMAC key -- as distinct from
     ``user_dir()``, which stays reachable by the agent for its connector
     caches/credentials.
-
-    On a privilege-separated install this subtree is owned by the service
-    account and unreadable to the agent; on an unseparated one it lives at
-    the same uid as everything else under ``user_dir()``.
 
     A subdirectory of ``user_dir(principal)``, not a sibling of it: the
     local principal's authority root is ``data_dir()/authority`` (since
     ``user_dir(LOCAL_PRINCIPAL_ID)`` *is* ``data_dir()``), and any other
-    principal's is ``user_dir(principal)/authority``. Org mode's daemon
-    already runs where the agent has no access, but the non-local branch
-    costs nothing extra to keep correct.
+    principal's is ``user_dir(principal)/authority``.
     """
     return authority_root(user_dir(principal))
 
@@ -369,17 +284,3 @@ def all_downloads_dirs() -> list[Path]:
             if candidate.is_dir():
                 dirs.append(candidate)
     return dirs
-
-
-def bundle_macos_dir() -> Path | None:
-    """Path to Contents/MacOS inside the .app bundle, or None in dev."""
-    if is_bundled():
-        return Path(sys.executable).parent
-    return None
-
-
-def app_bundle_path() -> Path | None:
-    """Path to PrivacyFenceApp.app itself, or None in dev."""
-    if is_bundled():
-        return Path(sys.executable).parent.parent.parent
-    return None

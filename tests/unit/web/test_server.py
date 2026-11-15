@@ -1,92 +1,107 @@
 """Tests for web/server.py -- the Host allowlist and security-header
-middleware, and the bootstrap-code flow that authenticates a browser.
+middleware, the WebServer lifecycle and the audience separation of ``/mcp``.
 Covers the Host allowlist against DNS rebinding, CSP/X-Frame-Options,
 Cache-Control -- the last one is per-route, tested in test_routes_approvals.py
 instead.
 """
 from __future__ import annotations
 
-import asyncio
 import sys
 
 import pytest
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 
-from privacyfence.policy import scope_rows
-from privacyfence.policy.registry import Verb
+from privacyfence import org_identity as oi
 from privacyfence.principal import LOCAL_PRINCIPAL_ID, Principal, current_principal, principal_scope
+from privacyfence.web import org_session
 from privacyfence.web.csp import build_csp
+from privacyfence.web.mcp_dispatch import McpDispatcher
+from privacyfence.web.oauth_provider import OrgOAuthProvider
+from privacyfence.web.org_session import OrgSessionStore
 from privacyfence.web.server import (
     DEFAULT_PORT,
-    SHUTDOWN_GRACE_SECONDS,
+    OrgAuth,
     WebServer,
-    _local_principal_resolver,
     _parse_host_header,
     _PrincipalScopeMiddleware,
     _SecurityHeadersMiddleware,
     build_app,
 )
-from privacyfence.web.session_auth import (
-    PROVENANCE_HUMAN,
-    PROVENANCE_UNATTESTED,
-    SESSION_COOKIE,
-    BootstrapStore,
-    LocalSessionStore,
-)
 from privacyfence.web_approval_ui import WebApprovalUI
 
+ISSUER = "https://pf.example.com"
+ALICE = Principal(id="alice", email="alice@example.com")
 
-def _signed_in(client: TestClient, sessions: LocalSessionStore) -> str:
-    """Mirrors test_routes_org_approvals.py's own ``_signed_in`` for
-    OrgSessionStore -- creates a real session directly (bypassing the HTTP
-    bootstrap exchange, which TestBootstrapFlow below exercises on its
-    own) and sets it as the cookie, for tests that only care about what
-    happens *after* authentication."""
-    session_id = sessions.create()
-    client.cookies.set(SESSION_COOKIE, session_id)
+
+def _idp() -> oi.IdpConfig:
+    return oi.IdpConfig(
+        issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
+        authorization_endpoint="https://idp.example.com/authorize",
+        token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
+    )
+
+
+def _org_auth(tmp_path, monkeypatch) -> OrgAuth:
+    monkeypatch.setattr("privacyfence.paths.data_dir", lambda: tmp_path)
+    monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
+    monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
+    provider = OrgOAuthProvider(_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
+    return OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=_idp(), issuer_url=ISSUER)
+
+
+def _signed_in(client: TestClient, org: OrgAuth) -> str:
+    """Creates a real organization session directly and sets it as the cookie, for tests that only
+    care about what happens after sign-in."""
+    session_id = org.sessions.create(ALICE)
+    client.cookies.set(org_session.SESSION_COOKIE, session_id)
     return session_id
 
 
-class TestHostAllowlist:
-    def _client(self, allowed_hosts=frozenset({"localhost"})):
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, allowed_hosts=allowed_hosts)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-        return client
+def _client(tmp_path, monkeypatch, *, allowed_hosts=frozenset({"pf.example.com"}), signed_in=True, **kwargs):
+    org = _org_auth(tmp_path, monkeypatch)
+    app = build_app(WebApprovalUI(), org=org, allowed_hosts=allowed_hosts, **kwargs)
+    client = TestClient(app, base_url=ISSUER, follow_redirects=False)
+    if signed_in:
+        _signed_in(client, org)
+    return client, org
 
-    def test_allowed_host_passes_through(self):
-        r = self._client().get("/approvals")
+
+class TestHostAllowlist:
+    def _client(self, tmp_path, monkeypatch, allowed_hosts=frozenset({"pf.example.com"})):
+        return _client(tmp_path, monkeypatch, allowed_hosts=allowed_hosts)[0]
+
+    def test_allowed_host_passes_through(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
         assert r.status_code == 200
 
-    def test_disallowed_host_is_rejected_before_reaching_any_route(self):
-        r = self._client().get("/approvals", headers={"Host": "evil.example.com"})
+    def test_disallowed_host_is_rejected_before_reaching_any_route(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals", headers={"Host": "evil.example.com"})
         assert r.status_code == 400
 
-    def test_port_suffix_on_the_host_header_is_ignored_for_matching(self):
-        r = self._client().get("/approvals", headers={"Host": "localhost:9999"})
+    def test_port_suffix_on_the_host_header_is_ignored_for_matching(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals", headers={"Host": "pf.example.com:9999"})
         assert r.status_code == 200
 
-    def test_ipv4_host_with_port_matches_the_bare_address(self):
-        client = self._client(allowed_hosts=frozenset({"127.0.0.1"}))
+    def test_ipv4_host_with_port_matches_the_bare_address(self, tmp_path, monkeypatch):
+        client = self._client(tmp_path, monkeypatch, allowed_hosts=frozenset({"127.0.0.1"}))
         r = client.get("/approvals", headers={"Host": "127.0.0.1:9999"})
         assert r.status_code == 200
 
-    def test_ipv6_literal_host_matches_after_stripping_brackets(self):
+    def test_ipv6_literal_host_matches_after_stripping_brackets(self, tmp_path, monkeypatch):
         # A naive split(":", 1)[0] returns "[" for this, which could never
         # be in any real allowlist.
-        client = self._client(allowed_hosts=frozenset({"::1"}))
+        client = self._client(tmp_path, monkeypatch, allowed_hosts=frozenset({"::1"}))
         r = client.get("/approvals", headers={"Host": "[::1]"})
         assert r.status_code == 200
 
-    def test_ipv6_literal_host_with_port_matches_after_stripping_brackets(self):
-        client = self._client(allowed_hosts=frozenset({"::1"}))
+    def test_ipv6_literal_host_with_port_matches_after_stripping_brackets(self, tmp_path, monkeypatch):
+        client = self._client(tmp_path, monkeypatch, allowed_hosts=frozenset({"::1"}))
         r = client.get("/approvals", headers={"Host": "[::1]:9999"})
         assert r.status_code == 200
 
-    def test_malformed_host_header_is_rejected(self):
-        r = self._client().get("/approvals", headers={"Host": "[::1"})
+    def test_malformed_host_header_is_rejected(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals", headers={"Host": "[::1"})
         assert r.status_code == 400
 
 
@@ -167,7 +182,7 @@ class TestPrincipalScopeMiddleware:
         # And the scope doesn't leak past the request that opened it.
         assert current_principal().id == LOCAL_PRINCIPAL_ID
 
-    def test_build_app_wires_a_custom_principal_resolver_through_over_real_http(self):
+    def test_build_app_wires_a_custom_principal_resolver_through_over_real_http(self, tmp_path, monkeypatch):
         # Exercises build_app()'s own principal_resolver parameter (not the
         # middleware in isolation, which the two tests above already cover)
         # against a plain, non-streaming route -- what's being checked is
@@ -179,252 +194,12 @@ class TestPrincipalScopeMiddleware:
             seen.append(1)
             return Principal(id="alice")
 
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, principal_resolver=resolver)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
+        client, _org = _client(tmp_path, monkeypatch, principal_resolver=resolver)
 
         r = client.get("/approvals")
 
         assert r.status_code == 200
         assert seen  # the custom resolver was actually consulted
-
-
-class TestLocalPrincipalResolver:
-    """ADR 0008: real local-mode traffic's own resolver -- a session
-    resolves to whichever principal minted it; anything else (no cookie,
-    an unknown one) is LOCAL_PRINCIPAL, byte-identical to every session
-    before this ADR."""
-
-    def test_no_cookie_is_local_principal(self):
-        sessions = LocalSessionStore()
-        resolver = _local_principal_resolver(sessions)
-        client = TestClient(_PrincipalScopeMiddleware(
-            lambda scope, receive, send: JSONResponse({"id": current_principal().id})(scope, receive, send),
-            resolver,
-        ))
-
-        r = client.get("/")
-
-        assert r.json() == {"id": LOCAL_PRINCIPAL_ID}
-
-    def test_a_session_minted_for_another_principal_resolves_to_it(self):
-        sessions = LocalSessionStore()
-        session_id = sessions.create(principal_id="os-1002")
-        resolver = _local_principal_resolver(sessions)
-        client = TestClient(_PrincipalScopeMiddleware(
-            lambda scope, receive, send: JSONResponse({"id": current_principal().id})(scope, receive, send),
-            resolver,
-        ))
-        client.cookies.set(SESSION_COOKIE, session_id)
-
-        r = client.get("/")
-
-        assert r.json() == {"id": "os-1002"}
-
-    @staticmethod
-    def _request(session_id: str):
-        from starlette.requests import Request
-
-        async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        headers = [(b"cookie", f"{SESSION_COOKIE}={session_id}".encode())]
-        scope = {
-            "type": "http", "headers": headers, "method": "GET", "path": "/",
-            "scheme": "http", "server": ("localhost", 8765),
-        }
-        return Request(scope, receive=receive)
-
-    def test_a_session_explicitly_minted_for_local_stays_the_local_principal_object(self):
-        from privacyfence.principal import LOCAL_PRINCIPAL
-
-        sessions = LocalSessionStore()
-        session_id = sessions.create(principal_id=LOCAL_PRINCIPAL_ID)
-        resolver = _local_principal_resolver(sessions)
-
-        assert resolver(self._request(session_id)) is LOCAL_PRINCIPAL
-
-    def test_an_unknown_session_id_falls_back_to_local(self):
-        sessions = LocalSessionStore()
-        resolver = _local_principal_resolver(sessions)
-
-        assert resolver(self._request("not-a-real-session")).id == LOCAL_PRINCIPAL_ID
-
-
-class TestSettingsIsOwnerOnly:
-    """ADR 0008's own scoping decision: /settings still administers the
-    one owner's SettingsController/connector set -- a non-owner principal
-    gets a 404, the same "don't confirm existence" shape every other
-    cross-principal lookup in this codebase already uses."""
-
-    def _app(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, controller=controller)
-        return TestClient(app, base_url="http://localhost"), sessions
-
-    def test_the_owner_reaches_settings(self, tmp_path, monkeypatch):
-        client, sessions = self._app(tmp_path, monkeypatch)
-        _signed_in(client, sessions)
-
-        r = client.get("/settings")
-
-        assert r.status_code == 200
-
-    def test_a_non_owner_principal_gets_a_plain_404(self, tmp_path, monkeypatch):
-        client, sessions = self._app(tmp_path, monkeypatch)
-        session_id = sessions.create(principal_id="os-1002")
-        client.cookies.set(SESSION_COOKIE, session_id)
-
-        r = client.get("/settings")
-
-        assert r.status_code == 404
-
-    def test_a_non_owner_principal_cannot_reach_settings_actions_either(self, tmp_path, monkeypatch):
-        client, sessions = self._app(tmp_path, monkeypatch)
-        session_id = sessions.create(principal_id="os-1002")
-        client.cookies.set(SESSION_COOKIE, session_id)
-
-        r = client.post("/api/settings/quit_app", json={"csrf": session_id})
-
-        assert r.status_code == 404
-
-
-class TestSecurityHeaders:
-    def _client(self):
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-        return client
-
-    def test_content_security_policy_is_present_and_locked_down(self):
-        r = self._client().get("/approvals")
-        csp = r.headers.get("content-security-policy", "")
-        assert "default-src 'none'" in csp
-        assert "frame-ancestors 'none'" in csp
-        assert "form-action 'none'" in csp  # local mode has no native form (ADR 0082)
-
-    def test_frame_options_deny(self):
-        r = self._client().get("/approvals")
-        assert r.headers.get("x-frame-options") == "DENY"
-
-    def test_content_type_options_nosniff(self):
-        r = self._client().get("/approvals")
-        assert r.headers.get("x-content-type-options") == "nosniff"
-
-    def test_headers_are_present_even_on_an_error_response(self):
-        app = build_app(WebApprovalUI())
-        r = TestClient(app, base_url="http://localhost").get("/approvals")  # unauthenticated -> 401
-        assert r.status_code == 401
-        assert r.headers.get("x-frame-options") == "DENY"
-
-    def test_permissions_policy_denies_unused_powerful_features(self):
-        r = self._client().get("/approvals")
-        policy = r.headers.get("permissions-policy", "")
-        assert "camera=()" in policy
-        assert "microphone=()" in policy
-        assert "geolocation=()" in policy
-
-    def test_permissions_policy_leaves_webauthn_at_its_self_default(self):
-        # web/routes_security.py's step-up flow needs these from this same
-        # origin -- see _PERMISSIONS_POLICY's own comment.
-        r = self._client().get("/approvals")
-        policy = r.headers.get("permissions-policy", "")
-        assert "publickey-credentials-get=(self)" in policy
-        assert "publickey-credentials-create=(self)" in policy
-
-    def test_cross_origin_opener_policy_is_same_origin(self):
-        r = self._client().get("/approvals")
-        assert r.headers.get("cross-origin-opener-policy") == "same-origin"
-
-    def test_no_strict_transport_security_in_local_mode(self):
-        # Local mode is plain http://localhost by design (module docstring)
-        # -- sending HSTS there would be at best inert, at worst harmful
-        # (see _SecurityHeadersMiddleware's own docstring).
-        r = self._client().get("/approvals")
-        assert "strict-transport-security" not in r.headers
-
-
-class TestCacheControlOnSensitivePages:
-    """A sweep across every local-mode page that carries session-
-    or approval-specific content, rather than trusting that each route author remembered
-    Cache-Control: no-store on their own -- a future new page that forgets
-    it fails here instead of shipping silently cacheable."""
-
-    def test_the_approvals_page_is_no_store(self):
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-        r = client.get("/approvals")
-        assert r.status_code == 200
-        assert r.headers.get("cache-control") == "no-store"
-
-    def test_the_settings_page_is_no_store(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, controller=controller)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-        r = client.get("/settings")
-        assert r.status_code == 200
-        assert r.headers.get("cache-control") == "no-store"
-
-    def test_the_unauthorized_landing_page_is_no_store(self):
-        # Regression test: this page names a live bearer-secret command
-        # (session_auth.unauthorized_html), so it must never be cached.
-        app = build_app(WebApprovalUI())
-        r = TestClient(app, base_url="http://localhost").get("/approvals")
-        assert r.status_code == 401
-        assert r.headers.get("cache-control") == "no-store"
-
-
-class TestCspNonce:
-    """A fresh CSP nonce per response, matching the one in the document
-    (ADR 0063)."""
-
-    def _client(self):
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-        return client
-
-    def test_script_src_and_style_src_elem_carry_a_nonce_not_unsafe_inline(self):
-        r = self._client().get("/approvals")
-        csp = r.headers.get("content-security-policy", "")
-        directives = dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
-        assert "'nonce-" in directives["script-src"]
-        assert "unsafe-inline" not in directives["script-src"]
-        assert "'nonce-" in directives["style-src-elem"]
-        assert "unsafe-inline" not in directives["style-src-elem"]
-        # style-src-attr keeps 'unsafe-inline' deliberately -- see
-        # web/csp.py's own module docstring for why.
-        assert directives["style-src-attr"] == "'unsafe-inline'"
-
-    def test_object_src_and_frame_src_allow_data_uris(self):
-        r = self._client().get("/approvals")
-        csp = r.headers.get("content-security-policy", "")
-        directives = dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
-        assert directives["object-src"] == "data:"
-        assert directives["frame-src"] == "data:"
-
-    def test_nonce_differs_across_separate_requests(self):
-        client = self._client()
-        first = client.get("/approvals").headers["content-security-policy"]
-        second = client.get("/approvals").headers["content-security-policy"]
-        assert first != second
-
-    def test_body_style_and_script_tags_carry_the_response_own_nonce(self):
-        r = self._client().get("/approvals")
-        csp = r.headers.get("content-security-policy", "")
-        nonce = next(
-            part.split("'nonce-", 1)[1].rstrip("'") for part in csp.split(";") if part.strip().startswith("script-src")
-        )
-        assert f'<style nonce="{nonce}">' in r.text
-        assert f'<script nonce="{nonce}">' in r.text
 
 
 class TestSecurityHeadersMiddlewareReplacesNotExtends:
@@ -471,7 +246,7 @@ class TestBuildCsp:
         return dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
 
     def test_local_mode_allows_no_form_submission(self):
-        """ADR 0082: local mode renders no native form, so it keeps form-action 'none'."""
+        """ADR 0082: without an org, no native form is rendered, so form-action stays 'none'."""
         directives = self._directives(build_csp("n"))
         assert directives["form-action"] == "'none'"
         assert directives["base-uri"] == "'none'"
@@ -486,56 +261,297 @@ class TestBuildCsp:
         assert directives["frame-ancestors"] == "'none'"
 
 
+# --------------------------------------------------------------------------- #
+# Audience separation (ADR 0061): the MCP bearer token and the approval
+# surface's session cookie/CSRF token are different secrets, checked in
+# different middleware, and neither is ever accepted on the other's routes.
+# One test in this class is there to fail loudly if the middleware is ever
+# reordered.
+# --------------------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# /settings and /api/state/stream folded into the same combined app,
+# sharing the approval surface's own session -- see build_app()'s own docstring for why
+# this is the deliberate contrast with MCP's separate audience.
+# --------------------------------------------------------------------------- #
+
+
+
+def test_a_tokens_rules_come_from_its_own_rows(tmp_path, monkeypatch):
+    """Each of a token's rules is drawn from the token's own row (ADR 0236), named like the
+    Auto-accept page names a row; widening the person's row afterwards does not change it, and
+    there is no "missing" or "limited_to" key any more."""
+    from privacyfence import auto_accept, paths, scoped_tokens
+    from privacyfence.policy import catalogue as policy_catalogue
+    from privacyfence.policy.registry import Verb
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+
+    def page():
+        return scoped_token_page_data(alice, policy=policy, connector_names={"drive"})
+
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+        auto_accept.add_policy_v2_rules(policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.READ]))
+        (row,) = auto_accept.get_policy_rows()
+        store.create(alice, label="sync", days=30, rules=[{"kind": "copy", "rule_id": row.id}], tools=[], policy=policy)
+        before = page()
+
+        auto_accept.add_policy_v2_rules(
+            policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.DOWNLOAD])
+        )
+        after = page()
+
+    (entry,) = before["tokens"][0]["rules"]
+    assert entry == before["rules"][0]  # named the way the Auto-accept page names the row
+    assert entry["id"] == row.id and entry["title"] and entry["sentence"]
+    assert not {"missing", "limited_to"} & set(entry)
+    assert "drive_download_file" in after["rules"][0]["tools"]
+    assert after["tokens"][0]["rules"] == [entry]
+    assert "drive_download_file" not in entry["tools"]
+
+
+def _page_data(tmp_path, monkeypatch, connector_names):
+    from privacyfence import auto_accept, paths, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+        return scoped_token_page_data(alice, policy=policy, connector_names=connector_names)
+
+
+def test_scope_groups_list_only_enabled_connectors(tmp_path, monkeypatch):
+    data = _page_data(tmp_path, monkeypatch, {"drive"})
+
+    ids = {g["id"] for g in data["scope_groups"]}
+    assert "drive.folder" in ids
+    assert not any(i.startswith("gmail.") for i in ids)
+    assert all(g["connector"] == "drive" for g in data["scope_groups"])
+
+
+def test_scope_groups_say_which_tools_each_verb_covers(tmp_path, monkeypatch):
+    data = _page_data(tmp_path, monkeypatch, {"drive"})
+
+    (folder,) = [g for g in data["scope_groups"] if g["id"] == "drive.folder"]
+    assert "drive_get_file_content" in folder["verb_tools"]["read"]
+    assert set(folder["verb_tools"]) == set(folder["verbs"])
+
+
+def test_tools_are_grouped_under_the_longest_connector_name(tmp_path, monkeypatch):
+    data = _page_data(tmp_path, monkeypatch, {"apps_script"})
+
+    (group,) = data["tools"]
+    assert group["connector"] == "apps_script"
+    assert group["tools"] and all(t.startswith("apps_script_") for t in group["tools"])
+    assert all(t.startswith("apps_script_") for t in data["auto_tools"])
+
+
+def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    alice = Principal(id="alice", email="alice@example.com")
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(alice):
+        auto_accept.init_config_path(str(config_path))
+    idle, _ = store.create(alice, label="idle", days=30, rules=[], tools=["drive_list_files"], policy=policy)
+    busy, _ = store.create(alice, label="busy", days=30, rules=[], tools=["drive_list_files"], policy=policy)
+
+    def page():
+        with principal_scope(alice):
+            data = scoped_token_page_data(alice, policy=policy, connector_names={"drive"})
+        return {t["label"]: t for t in data["tokens"]}
+
+    before = page()["idle"]
+    assert (before["last_used_at"], before["last_denied_at"], before["last_denied_tool"]) == (None, None, "")
+
+    store.note_use(busy, now=1000.0)
+    store.note_denial(busy, "drive_download_file", now=2000.0)
+    tokens = page()
+    assert (tokens["busy"]["last_used_at"], tokens["busy"]["last_denied_at"], tokens["busy"]["last_denied_tool"]) == (
+        1000.0, 2000.0, "drive_download_file",
+    )
+    assert (tokens["idle"]["last_used_at"], tokens["idle"]["last_denied_at"], tokens["idle"]["last_denied_tool"]) == (
+        None, None, "",
+    )
+
+
+class TestSecurityHeaders:
+    def _client(self, tmp_path, monkeypatch):
+        return _client(tmp_path, monkeypatch)[0]
+
+    def test_content_security_policy_is_present_and_locked_down(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        csp = r.headers.get("content-security-policy", "")
+        assert "default-src 'none'" in csp
+        assert "frame-ancestors 'none'" in csp
+        assert "form-action 'self'" in csp  # /connect's native forms post back to this origin (ADR 0082)
+
+    def test_frame_options_deny(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        assert r.headers.get("x-frame-options") == "DENY"
+
+    def test_content_type_options_nosniff(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        assert r.headers.get("x-content-type-options") == "nosniff"
+
+    def test_headers_are_present_even_on_an_error_response(self, tmp_path, monkeypatch):
+        client, _org = _client(tmp_path, monkeypatch, signed_in=False)
+        r = client.get("/approvals", headers={"Host": "evil.example.com"})  # rejected by the allowlist
+        assert r.status_code == 400
+        assert r.headers.get("x-frame-options") == "DENY"
+
+    def test_permissions_policy_denies_unused_powerful_features(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        policy = r.headers.get("permissions-policy", "")
+        assert "camera=()" in policy
+        assert "microphone=()" in policy
+        assert "geolocation=()" in policy
+
+    def test_permissions_policy_leaves_webauthn_at_its_self_default(self, tmp_path, monkeypatch):
+        # web/routes_security.py's step-up flow needs these from this same
+        # origin -- see _PERMISSIONS_POLICY's own comment.
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        policy = r.headers.get("permissions-policy", "")
+        assert "publickey-credentials-get=(self)" in policy
+        assert "publickey-credentials-create=(self)" in policy
+
+    def test_cross_origin_opener_policy_is_same_origin(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        assert r.headers.get("cross-origin-opener-policy") == "same-origin"
+
+    def test_strict_transport_security_is_sent(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        assert r.headers.get("strict-transport-security") == "max-age=31536000; includeSubDomains"
+
+
+class TestCacheControlOnSensitivePages:
+    """A sweep across every page that carries session- or approval-specific content, rather than
+    trusting that each route author remembered Cache-Control: no-store on their own -- a future
+    new page that forgets it fails here instead of shipping silently cacheable."""
+
+    def test_the_approvals_page_is_no_store(self, tmp_path, monkeypatch):
+        client, _org = _client(tmp_path, monkeypatch)
+        r = client.get("/approvals")
+        assert r.status_code == 200
+        assert r.headers.get("cache-control") == "no-store"
+
+    def test_the_settings_page_is_no_store(self, tmp_path, monkeypatch):
+        client, _org = _client(tmp_path, monkeypatch)
+        r = client.get("/settings")
+        assert r.status_code == 200
+        assert r.headers.get("cache-control") == "no-store"
+
+    def test_the_sign_in_redirect_is_no_store(self, tmp_path, monkeypatch):
+        client, _org = _client(tmp_path, monkeypatch, signed_in=False)
+        r = client.get("/approvals")
+        assert r.status_code == 302
+        assert r.headers.get("cache-control") == "no-store"
+
+
+class TestCspNonce:
+    """A fresh CSP nonce per response, matching the one in the document
+    (ADR 0063)."""
+
+    def _client(self, tmp_path, monkeypatch):
+        return _client(tmp_path, monkeypatch)[0]
+
+    def test_script_src_and_style_src_elem_carry_a_nonce_not_unsafe_inline(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        csp = r.headers.get("content-security-policy", "")
+        directives = dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
+        assert "'nonce-" in directives["script-src"]
+        assert "unsafe-inline" not in directives["script-src"]
+        assert "'nonce-" in directives["style-src-elem"]
+        assert "unsafe-inline" not in directives["style-src-elem"]
+        # style-src-attr keeps 'unsafe-inline' deliberately -- see
+        # web/csp.py's own module docstring for why.
+        assert directives["style-src-attr"] == "'unsafe-inline'"
+
+    def test_object_src_and_frame_src_allow_data_uris(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        csp = r.headers.get("content-security-policy", "")
+        directives = dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
+        assert directives["object-src"] == "data:"
+        assert directives["frame-src"] == "data:"
+
+    def test_nonce_differs_across_separate_requests(self, tmp_path, monkeypatch):
+        client = self._client(tmp_path, monkeypatch)
+        first = client.get("/approvals").headers["content-security-policy"]
+        second = client.get("/approvals").headers["content-security-policy"]
+        assert first != second
+
+    def test_body_style_and_script_tags_carry_the_response_own_nonce(self, tmp_path, monkeypatch):
+        r = self._client(tmp_path, monkeypatch).get("/approvals")
+        csp = r.headers.get("content-security-policy", "")
+        nonce = next(
+            part.split("'nonce-", 1)[1].rstrip("'") for part in csp.split(";") if part.strip().startswith("script-src")
+        )
+        assert f'<style nonce="{nonce}">' in r.text
+        assert f'<script nonce="{nonce}">' in r.text
+
+
 class TestWebServerConstruction:
-    def test_binds_to_localhost_by_default(self):
-        server = WebServer(WebApprovalUI(), port=0)
+    def test_binds_to_localhost_by_default(self, tmp_path, monkeypatch):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), port=0)
         assert server.host == "localhost"
 
-    def test_uses_the_default_port_constant(self):
-        server = WebServer(WebApprovalUI())
+    def test_uses_the_default_port_constant(self, tmp_path, monkeypatch):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch))
         assert server.port == DEFAULT_PORT
 
-    def test_base_url_reflects_host_and_port(self):
-        server = WebServer(WebApprovalUI(), host="localhost", port=1234)
-        assert server.base_url == "http://localhost:1234"
+    def test_base_url_is_the_issuer_url_not_the_bind_address(self, tmp_path, monkeypatch):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="0.0.0.0", port=1234)
+        assert server.base_url == ISSUER
 
-    def test_mcp_url_is_none_without_an_mcp_dispatcher(self):
-        server = WebServer(WebApprovalUI())
+    def test_mcp_url_is_none_without_an_mcp_dispatcher(self, tmp_path, monkeypatch):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch))
         assert server.mcp_url is None
-        assert server.mcp_token is None
 
-    def test_mcp_url_is_set_when_an_mcp_dispatcher_is_given(self):
-        from privacyfence.web.mcp_dispatch import McpDispatcher
+    def test_mcp_url_is_set_when_an_mcp_dispatcher_is_given(self, tmp_path, monkeypatch):
+        server = WebServer(
+            WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), mcp_dispatcher=McpDispatcher(lambda: {}),
+        )
+        assert server.mcp_url == f"{ISSUER}/mcp"
+
+    def test_the_event_loop_is_never_exposed(self, tmp_path, monkeypatch):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch))
+        assert server.wait_until_ready() is None
+
+    def test_a_trusted_proxy_list_wraps_the_app(self, tmp_path, monkeypatch):
+        from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
         server = WebServer(
-            WebApprovalUI(), host="localhost", port=1234,
-            mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok",
+            WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), trusted_proxies=("10.0.0.1",),
         )
-        assert server.mcp_url == "http://localhost:1234/mcp"
+        assert isinstance(server._server.config.app, ProxyHeadersMiddleware)
 
-    def test_build_app_requires_a_token_or_a_verifier_for_an_mcp_dispatcher(self):
-        from privacyfence.web.mcp_dispatch import McpDispatcher
-
-        with pytest.raises(ValueError, match="mcp_token or mcp_verifier"):
-            build_app(WebApprovalUI(), mcp_dispatcher=McpDispatcher(lambda: {}))
-
-
-# --------------------------------------------------------------------------- #
-# WebServer owns a ControlChannelServer alongside the ASGI app
-# in local mode -- test_control_channel.py covers the channel's own protocol
-# and socket handling; this is just the wiring (built in __init__, started/
-# stopped alongside the rest of WebServer's own lifecycle).
-# --------------------------------------------------------------------------- #
 
 def test_org_tokens_load_after_a_restart_on_an_unseparated_install(tmp_path, monkeypatch):
     """An org server is not privilege-separated; its people's scoped tokens,
     under data_dir()/users/<id>/authority, must still load at startup
-    (ADR 0165), unlike preload_verifier's local-token walk."""
-    from privacyfence import paths, privilege_separation, scoped_tokens
-    from privacyfence.web.mcp_dispatch import McpDispatcher
+    (ADR 0165)."""
+    from privacyfence import paths, scoped_tokens
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     alice = Principal(id="alice", email="alice@example.com")
     previous_run = scoped_tokens.ScopedTokenStore(lambda: [alice])
     token, secret = previous_run.create(
@@ -545,416 +561,23 @@ def test_org_tokens_load_after_a_restart_on_an_unseparated_install(tmp_path, mon
     assert (tmp_path / "users" / "alice" / "authority" / scoped_tokens.STORE_FILE_NAME).is_file()
     scoped_tokens.set_store(None)
 
-    WebServer(WebApprovalUI(), host="localhost", port=0, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="t")
+    WebServer(
+        WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=0,
+        mcp_dispatcher=McpDispatcher(lambda: {}),
+    )
 
     found = scoped_tokens.get_store().find(secret)
     assert found is not None and found.id == token.id and found.principal_id == "alice"
 
 
-class TestWebServerControlChannel:
-    def test_local_mode_builds_a_control_channel(self):
-        server = WebServer(WebApprovalUI(), port=0)
-        assert server.control_channel is not None
-        assert server.control_channel.address is None  # not started yet
-
-    def test_local_mode_wires_a_status_callback(self, monkeypatch):
-        # daemon_status.py's "the
-        # control channel answered" source is this callback, wired to
-        # local_status_payload() -- checked here rather than only through a
-        # real round trip, since TestWebServerControlChannel's other tests
-        # already prove the channel itself binds and tears down correctly.
-        import json
-
-        server = WebServer(WebApprovalUI(), port=0)
-
-        payload = json.loads(server.control_channel._status())
-
-        assert set(payload) == {"version", "pid", "started_at", "mode", "separated", "connectors"}
-        assert payload["mode"] == "local"
-
-    def test_mint_mcp_token_is_wired_only_when_mcp_is_enabled(self):
-        server = WebServer(WebApprovalUI(), port=0)  # no mcp_dispatcher
-
-        assert server.mcp_verifier is None
-        assert server.control_channel._mint_mcp_token is None
-
-    def test_mint_mcp_token_is_wired_when_mcp_is_enabled(self):
-        from privacyfence.web.mcp_dispatch import McpDispatcher
-
-        server = WebServer(
-            WebApprovalUI(), port=0, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok",
-        )
-
-        assert server.mcp_verifier is not None
-        assert server.control_channel._mint_mcp_token == server._mint_mcp_token
-
-    async def test_mint_for_the_owner_returns_the_same_token_already_registered(self, tmp_path, monkeypatch):
-        # No explicit mcp_token -- server.mcp_token is load_or_create_mcp_token()'s
-        # own real (disk-backed) value here, exactly like every real caller,
-        # so MINT MCP for the owner reads back the identical value rather
-        # than minting a second one alongside it. Sandboxed to tmp_path:
-        # this is the one real (unmocked) load_or_create_mcp_token() call in
-        # this class, and paths.data_dir() defaults to this checkout's own
-        # root in a dev install, which must never be written to by a test.
-        from privacyfence import paths
-        from privacyfence.web.mcp_dispatch import McpDispatcher
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        server = WebServer(WebApprovalUI(), port=0, mcp_dispatcher=McpDispatcher(lambda: {}))
-
-        minted = server._mint_mcp_token(False)
-
-        assert minted == server.mcp_token
-        result = await server.mcp_verifier.verify_token(minted)
-        assert result is not None and result.subject == LOCAL_PRINCIPAL_ID
-
-    async def test_mint_for_a_different_principal_registers_a_distinct_token(self, monkeypatch):
-        from privacyfence.principal import Principal, principal_scope
-        from privacyfence.web.mcp_dispatch import McpDispatcher
-
-        server = WebServer(
-            WebApprovalUI(), port=0, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok",
-        )
-        monkeypatch.setattr(
-            "privacyfence.web.server.mcp_auth._mcp_token_path",
-            lambda principal: __import__("pathlib").Path(f"/tmp/nonexistent-{principal.id}"),
-        )
-        monkeypatch.setattr(
-            "privacyfence.web.server.mcp_auth._write_new_token",
-            lambda principal, path: f"generated-for-{principal.id}",
-        )
-
-        with principal_scope(Principal(id="os-1002")):
-            minted = server._mint_mcp_token(False)
-
-        assert minted == "generated-for-os-1002"
-        assert minted != "mcp-tok"
-        result = await server.mcp_verifier.verify_token(minted)
-        assert result is not None and result.subject == "os-1002"
-
-    def test_org_mode_builds_no_control_channel(self, tmp_path, monkeypatch):
-        from privacyfence import org_identity as oi
-        from privacyfence import paths
-        from privacyfence.web.oauth_provider import OrgOAuthProvider
-        from privacyfence.web.org_session import OrgSessionStore
-        from privacyfence.web.server import OrgAuth
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        monkeypatch.setattr(
-            "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"),
-        )
-        monkeypatch.setattr(
-            "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"),
-        )
-        idp = oi.IdpConfig(
-            issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
-            authorization_endpoint="https://idp.example.com/authorize",
-            token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
-        )
-        issuer_url = "https://org.example.com"
-        provider = OrgOAuthProvider(idp, idp_callback_url=f"{issuer_url}/oauth/idp/callback")
-        org = OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=idp, issuer_url=issuer_url)
-
-        server = WebServer(WebApprovalUI(), host="localhost", port=0, org=org)
-
-        assert server.control_channel is None
-
-    def _channel_exists(self, address: str) -> bool:
-        # Named pipes aren't filesystem objects the way a POSIX socket path
-        # is -- Path.exists() on Windows ends up doing a GetFileAttributes-
-        # style probe against the pipe that can itself raise WinError 231
-        # ("all pipe instances are busy") rather than cleanly returning
-        # False, since it's effectively a connection attempt racing the
-        # accept loop's own. tests.control_channel_client's
-        # windows_pipe_exists() (open-then-close, OSError caught) is the
-        # liveness check that's actually safe to make on that platform.
-        if sys.platform == "win32":
-            from tests.control_channel_client import windows_pipe_exists
-
-            return windows_pipe_exists(address)
-        from pathlib import Path
-
-        return Path(address).exists()
-
-    def test_start_binds_the_channel_and_stop_tears_it_down(self, tmp_path, monkeypatch):
-        from privacyfence import paths
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        server = WebServer(WebApprovalUI(), port=0)
-        try:
-            server.start()
-            assert server.control_channel.address is not None
-            assert self._channel_exists(server.control_channel.address)
-        finally:
-            server.stop()
-        assert not self._channel_exists(server.control_channel.address)
-
-    def test_a_code_minted_through_the_channel_authenticates_the_real_server(self, tmp_path, monkeypatch):
-        import socket
-
-        import httpx
-
-        from privacyfence import paths
-        from tests.control_channel_client import mint_bootstrap_code
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        # uvicorn.Config binds a fixed port at WebServer construction time,
-        # so ``port=0`` (let the OS pick) isn't observable afterwards the
-        # way it is for a bare socket -- pick a real free port up front
-        # instead, the same way every other real-socket test in this module
-        # already has to.
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            probe.bind(("127.0.0.1", 0))
-            free_port = probe.getsockname()[1]
-        server = WebServer(WebApprovalUI(), host="127.0.0.1", port=free_port)
-        server.start()
-        try:
-            code = mint_bootstrap_code(tmp_path)
-
-            resp = httpx.get(
-                f"http://127.0.0.1:{free_port}/approvals", params={"bootstrap": code}, follow_redirects=False,
-            )
-            assert "pf_session" in resp.headers.get("set-cookie", "")
-        finally:
-            server.stop()
-
-
-class TestHumanSessionWiring:
-    """The human-session gate, at the one place that decides
-    whether the gate is on: privilege separation. It is what ADR 0003 makes
-    mandatory for every packaged install (decision 6), and what guarantees
-    the companion an attested session is minted through exists at all
-    (decisions 3-5) -- on an unseparated build-from-source install neither
-    holds, and an agent that can rewrite the credential store directly (ADR
-    0002 decision 6) gains nothing from a session check anyway. ADR 0062
-    records the gate itself.
-
-    The decide route's own behavior is web/routes_approvals.py's to test
-    (TestHumanSessionRequiredToApprove there); what is checked here is that
-    ``build_app`` actually turns it on, which nothing else would notice.
-    """
-
-    def _decide_status(self, monkeypatch, *, separated: bool) -> int:
-        from privacyfence import privilege_separation
-
-        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: separated)
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions)
-        client = TestClient(app, base_url="http://localhost")
-        session_id = sessions.create(provenance=PROVENANCE_UNATTESTED)
-        client.cookies.set(SESSION_COOKIE, session_id)
-        return client.post(
-            "/api/approvals/no-such-approval/decide",
-            json={"action": "resolve", "result": "accept", "csrf": session_id},
-        ).status_code
-
-    def test_a_separated_install_refuses_an_unattested_approval(self, monkeypatch):
-        assert self._decide_status(monkeypatch, separated=True) == 403
-
-    def test_an_unseparated_install_is_unchanged(self, monkeypatch):
-        # 409, not 200: the id does not exist, which is the answer this
-        # route has always given past the gate -- the point is that it got
-        # past the gate at all.
-        assert self._decide_status(monkeypatch, separated=False) == 409
-
-
-class TestBootstrapFlow:
-    def _app(self):
-        sessions = LocalSessionStore()
-        bootstrap = BootstrapStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, bootstrap=bootstrap)
-        return app, sessions, bootstrap
-
-    def test_valid_code_mints_a_session_and_redirects_with_no_query_string(self):
-        app, _sessions, bootstrap = self._app()
-        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
-        code = bootstrap.mint()
-
-        r = client.get(f"/approvals?bootstrap={code}")
-
-        assert r.status_code == 303
-        assert r.headers["location"] == "/approvals"
-        assert "pf_session" in r.headers.get("set-cookie", "")
-
-    @pytest.mark.parametrize("path", ["//evil.example.com", "/\\evil.example.com", "//evil.example.com/%2e%2e"])
-    async def test_double_slash_path_never_redirects_off_origin(self, path):
-        app, _sessions, bootstrap = self._app()
-        code = bootstrap.mint()
-        scope = {
-            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "GET",
-            "scheme": "http", "path": path, "raw_path": path.encode(), "root_path": "",
-            "query_string": f"bootstrap={code}".encode(), "headers": [(b"host", b"localhost")],
-            "client": ("127.0.0.1", 5000), "server": ("localhost", 8765),
-        }
-        sent: list[dict] = []
-
-        async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        async def send(message):
-            sent.append(message)
-
-        await app(scope, receive, send)
-
-        start = next(m for m in sent if m["type"] == "http.response.start")
-        location = dict(start["headers"])[b"location"].decode()
-        assert location.startswith("/")
-        assert not location.startswith("//")
-        assert not location.startswith("/\\")
-
-    def test_the_session_inherits_the_code_s_own_provenance(self):
-        """The mint is the only moment
-        anything knew how this credential came to exist (web/session_auth.py's
-        ``PROVENANCE_*``), so the exchange carries it across rather than
-        deciding it here."""
-        app, sessions, bootstrap = self._app()
-        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
-
-        for provenance in (PROVENANCE_HUMAN, PROVENANCE_UNATTESTED):
-            client.cookies.clear()
-            r = client.get(f"/approvals?bootstrap={bootstrap.mint(provenance=provenance)}")
-            session_id = client.cookies.get("pf_session")
-            assert r.status_code == 303
-            assert sessions.provenance(session_id) == provenance
-
-    def test_a_code_with_no_provenance_of_its_own_mints_an_unattested_session(self):
-        app, sessions, bootstrap = self._app()
-        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
-
-        client.get(f"/approvals?bootstrap={bootstrap.mint()}")
-
-        assert sessions.provenance(client.cookies.get("pf_session")) == PROVENANCE_UNATTESTED
-
-    def test_code_is_single_use(self):
-        app, _sessions, bootstrap = self._app()
-        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
-        code = bootstrap.mint()
-        client.get(f"/approvals?bootstrap={code}")
-        client.cookies.clear()
-
-        r = client.get(f"/approvals?bootstrap={code}")
-
-        assert "pf_session" not in r.headers.get("set-cookie", "")
-
-    def test_unknown_code_mints_no_session(self):
-        app, _sessions, _bootstrap = self._app()
-        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
-
-        r = client.get("/approvals?bootstrap=not-a-real-code")
-
-        assert r.status_code == 303
-        assert r.headers["location"] == "/approvals"
-        assert "pf_session" not in r.headers.get("set-cookie", "")
-        follow = client.get(r.headers["location"])
-        assert follow.status_code == 401
-
-    def test_following_the_redirect_reaches_an_authenticated_page(self):
-        app, _sessions, bootstrap = self._app()
-        client = TestClient(app, base_url="http://localhost", follow_redirects=True)
-        code = bootstrap.mint()
-
-        r = client.get(f"/approvals?bootstrap={code}")
-
-        assert r.status_code == 200
-        assert "Nothing is waiting" in r.text
-
-    def test_the_old_token_query_param_no_longer_authenticates(self):
-        # No route honors a ?token=<persistent secret>, only
-        # ?bootstrap=<one-time code>.
-        app, _sessions, _bootstrap = self._app()
-        client = TestClient(app, base_url="http://localhost")
-
-        r = client.get("/approvals?token=some-old-style-token")
-
-        assert r.status_code == 401
-
-    def test_api_bootstrap_no_longer_exists_as_an_http_route(self):
-        # Minting a fresh code on demand is not on this loopback-HTTP
-        # surface at all but on web/control_channel.py's
-        # ControlChannelServer -- there is no HTTP route to authenticate
-        # at all, correct or incorrect Bearer header alike.
-        app, _sessions, _bootstrap = self._app()
-        client = TestClient(app, base_url="http://localhost")
-
-        r = client.post("/api/bootstrap")
-
-        assert r.status_code == 404
-
-
-# --------------------------------------------------------------------------- #
-# No sign-in link is ever written to a discovery file: handoff/ is
-# group-shared with the logged-in user by design, so such a file would be a
-# session for the taking by anything running as that user.
-# --------------------------------------------------------------------------- #
-
-class TestNoBootstrapUrlFiles:
-    def _server(self, tmp_path, monkeypatch):
-        from privacyfence import paths
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        return WebServer(WebApprovalUI(), host="localhost", port=0)
-
-    def test_nothing_mints_a_link_into_the_handoff_directory(self, tmp_path, monkeypatch):
-        server = self._server(tmp_path, monkeypatch)
-        server.start()
-        try:
-            # ``web_base_url`` is the companion's own discovery file and
-            # carries no credential -- just "http://127.0.0.1:<port>".
-            written = sorted(
-                p.name for p in tmp_path.iterdir()
-                if p.name.endswith("_url") and p.name != "web_base_url"
-            )
-        finally:
-            server.stop()
-
-        assert written == []
-        # Belt and braces: no file anywhere under the data directory carries
-        # a live code, whatever it is called.
-        for path in tmp_path.rglob("*"):
-            if path.is_file():
-                assert "bootstrap=" not in path.read_text(encoding="utf-8", errors="replace")
-
-    def test_files_it_does_not_write_are_left_alone(self, tmp_path, monkeypatch):
-        """ADR 0041: the daemon only manages the current layout's files, so
-        a file with an unrelated name in the handoff directory survives a
-        start/stop cycle untouched."""
-        server = self._server(tmp_path, monkeypatch)
-        stray = tmp_path / "approvals_url"
-        stray.write_text("not the daemon's", encoding="utf-8")
-
-        server.start()
-        server.stop()
-
-        assert stray.read_text(encoding="utf-8") == "not the daemon's"
-
-    def test_the_minting_method_is_gone_from_the_server_itself(self, tmp_path, monkeypatch):
-        """Minting is the control channel's business now, and who may ask
-        for an *attested* code is decided there (web/control_channel.py).
-        Asserted so that reintroducing a convenience method here -- which is
-        what fed both the discovery files and the retired MCP tool -- fails
-        rather than passes quietly."""
-        server = self._server(tmp_path, monkeypatch)
-        assert not hasattr(server, "mint_bootstrap_url")
-
-
-# --------------------------------------------------------------------------- #
-# The mcp_url discovery file mcpb/shim reads to find /mcp without any
-# config the user has to edit. Only written/cleared
-# when this WebServer actually has an mcp_dispatcher (i.e. web.mcp.enabled);
-# a server started for the approval UI alone must not claim /mcp exists.
-# --------------------------------------------------------------------------- #
-
+# The mcp_url discovery file is only written/cleared when this WebServer actually has an
+# mcp_dispatcher; a server started for the approval UI alone must not claim /mcp exists.
 class TestMcpUrlFile:
     def _server(self, tmp_path, monkeypatch, *, with_mcp: bool):
-        from privacyfence import paths
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        kwargs = {}
-        if with_mcp:
-            from privacyfence.web.mcp_dispatch import McpDispatcher
-
-            kwargs = {"mcp_dispatcher": McpDispatcher(lambda: {}), "mcp_token": "mcp-tok"}
-        return WebServer(WebApprovalUI(), host="localhost", port=0, **kwargs)
+        kwargs = {"mcp_dispatcher": McpDispatcher(lambda: {})} if with_mcp else {}
+        return WebServer(
+            WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=0, **kwargs,
+        )
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
@@ -1008,158 +631,58 @@ class TestStop:
                 time.sleep(0.05)
         raise TimeoutError(f"{host}:{port} never became connectable")
 
-    def test_an_open_event_stream_does_not_keep_the_server_running(self, tmp_path, monkeypatch, caplog):
-        import socket
-        import time
-
-        from privacyfence import paths
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        port = self._free_port()
-        server = WebServer(WebApprovalUI(), host="localhost", port=port)
+    def test_stop_ends_the_server_thread(self, tmp_path, monkeypatch):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=self._free_port())
         server.start()
-        self._wait_until_connectable("localhost", port)
-        session = server.sessions.create(provenance=PROVENANCE_HUMAN)
-        with socket.create_connection(("localhost", port)) as stream:
-            stream.sendall((
-                f"GET /api/state/stream HTTP/1.1\r\nHost: localhost:{port}\r\n"
-                f"Cookie: {SESSION_COOKIE}={session}\r\n\r\n"
-            ).encode())
-            assert stream.recv(64).startswith(b"HTTP/1.1 200")
-
-            started = time.monotonic()
-            with caplog.at_level("WARNING", logger="privacyfence.web.server"):
-                server.stop()
-
-            assert server.stopped
-            assert time.monotonic() - started < SHUTDOWN_GRACE_SECONDS
-            assert "The web server took" not in caplog.text
-            # The server closed the stream rather than leaving the client waiting on it.
-            stream.settimeout(5)
-            while stream.recv(4096):
-                pass
+        self._wait_until_connectable("localhost", server.port)
+        assert not server.stopped
+        server.stop()
+        assert server.stopped
 
     def test_a_slow_stop_is_logged_with_the_open_connection_count(self, tmp_path, monkeypatch, caplog):
         import socket
+        import time
 
-        from privacyfence import paths
         from privacyfence.web import server as server_module
 
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         monkeypatch.setattr(server_module, "SHUTDOWN_GRACE_SECONDS", 0)
-        port = self._free_port()
-        server = WebServer(WebApprovalUI(), host="localhost", port=port)
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=self._free_port())
         server.start()
-        self._wait_until_connectable("localhost", port)
-        session = server.sessions.create(provenance=PROVENANCE_HUMAN)
-        with socket.create_connection(("localhost", port)) as stream:
-            stream.sendall((
-                f"GET /api/state/stream HTTP/1.1\r\nHost: localhost:{port}\r\n"
-                f"Cookie: {SESSION_COOKIE}={session}\r\n\r\n"
-            ).encode())
-            assert stream.recv(64).startswith(b"HTTP/1.1 200")
-
+        self._wait_until_connectable("localhost", server.port)
+        with socket.create_connection(("localhost", server.port)):
+            deadline = time.monotonic() + 5
+            while not server._server.server_state.connections and time.monotonic() < deadline:
+                time.sleep(0.02)
             with caplog.at_level("WARNING", logger="privacyfence.web.server"):
                 server.stop()
 
             assert "The web server took" in caplog.text
-            assert "1 connection(s) were open" in caplog.text
+            assert "connection(s) were open when it was asked to" in caplog.text
 
-    def test_a_server_never_started_counts_as_stopped(self):
-        assert WebServer(WebApprovalUI(), host="localhost", port=0).stopped
-
-
-class TestEachServerKeepsItsOwnLoop:
-    def test_a_late_shutdown_does_not_clear_a_newer_servers_loop(self, tmp_path, monkeypatch):
-        from privacyfence import paths
-        from privacyfence.web import state_stream
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        a = WebServer(WebApprovalUI(), host="localhost", port=TestStop._free_port())
-        b = WebServer(WebApprovalUI(), host="localhost", port=TestStop._free_port())
-        a_stopped = False
-        try:
-            a.start()
-            TestStop._wait_until_connectable("localhost", a.port)
-            loop_a = a.wait_until_ready()
-            b.start()
-            TestStop._wait_until_connectable("localhost", b.port)
-            loop_b = b.wait_until_ready()
-            a.stop()
-            a_stopped = True
-            assert b.wait_until_ready() is loop_b
-            assert loop_b is not loop_a
-            assert loop_b.is_running()
-            assert state_stream.get_loop() is loop_b
-        finally:
-            b.stop()
-            if not a_stopped:
-                a.stop()
+    def test_a_server_never_started_counts_as_stopped(self, tmp_path, monkeypatch):
+        assert WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=0).stopped
 
 
 # --------------------------------------------------------------------------- #
 # Audience separation (ADR 0061): the MCP bearer token and the approval
 # surface's session cookie/CSRF token are different secrets, checked in
 # different middleware, and neither is ever accepted on the other's routes.
-# One test in this class is there to fail loudly if the middleware is ever
-# reordered.
 # --------------------------------------------------------------------------- #
 
 class TestAudienceSeparation:
-    MCP_TOKEN = "mcp-token-0123456789"
+    INITIALIZE = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
 
-    def _app(self):
-        from privacyfence.web.mcp_dispatch import McpDispatcher
-
-        self.sessions = LocalSessionStore()
-        return build_app(
-            WebApprovalUI(), sessions=self.sessions,
-            mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token=self.MCP_TOKEN,
+    def _app(self, tmp_path, monkeypatch):
+        org = _org_auth(tmp_path, monkeypatch)
+        app = build_app(
+            WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}),
+            allowed_hosts=frozenset({"pf.example.com"}),
         )
-
-    def test_mcp_rejects_the_approval_surfaces_own_session_id_as_bearer_auth(self):
-        app = self._app()
-        session_id = self.sessions.create()
-        client = TestClient(app, base_url="http://localhost")
-        resp = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
-                            headers={"Authorization": f"Bearer {session_id}"})
-        assert resp.status_code == 401
-
-    def test_mcp_accepts_only_its_own_token(self):
-        # Unlike the 401 checks above (rejected in auth middleware, before
-        # ever reaching the session manager), a real "initialize" needs the
-        # session manager's task group running -- hence `with`, which is
-        # what makes TestClient run the app's ASGI lifespan.
-        with TestClient(self._app(), base_url="http://localhost") as client:
-            resp = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
-                                headers={"Authorization": f"Bearer {self.MCP_TOKEN}"})
-        assert resp.status_code != 401
-
-    def test_capability_routes_need_no_bearer_token_at_all(self):
-        # ADR 0028: /mcp-files/slots/<token> and /mcp-files/fetch/<token>
-        # are mounted alongside /mcp and /mcp-files/uploads|downloads, but
-        # deliberately outside the bearer-auth stack -- a malformed/unknown
-        # token is a 404 (the route exists, the token just isn't live),
-        # never a 401 (which would mean the route demanded a credential
-        # this caller has no way to present).
-        client = TestClient(self._app(), base_url="http://localhost")
-        put_resp = client.put("/mcp-files/slots/not-a-real-slot", content=b"data")
-        assert put_resp.status_code == 404
-        get_resp = client.get("/mcp-files/fetch/not-a-real-token")
-        assert get_resp.status_code == 404
-        # The bearer-authenticated siblings, by contrast, refuse outright
-        # with no credential at all.
-        assert client.put("/mcp-files/uploads/not-a-real-slot", content=b"data").status_code == 401
-        assert client.get("/mcp-files/downloads/not-a-real-token").status_code == 401
-
-    # ADR 0164: a scoped token is an /mcp credential only. The helpers
-    # below give one owned by the local principal (local builds) or by
-    # "alice" (org builds), from a store over tmp_path.
+        return app, org
 
     @staticmethod
-    def _scoped_secret(tmp_path, monkeypatch, principal=None) -> str:
+    def _scoped_secret(tmp_path, monkeypatch, principal) -> str:
         from privacyfence import paths, scoped_tokens
-        from privacyfence.principal import LOCAL_PRINCIPAL
         from privacyfence.web import mcp_auth
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
@@ -1167,1268 +690,107 @@ class TestAudienceSeparation:
         store.load()
         scoped_tokens.set_store(store)
         _, secret = store.create(
-            principal or LOCAL_PRINCIPAL, label="sales-sync", days=90, rules=[],
+            principal, label="sales-sync", days=90, rules=[],
             tools=["gmail_list_messages"], policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
         )
         return secret
 
-    @staticmethod
-    def _org_app(tmp_path, monkeypatch):
-        from privacyfence import org_identity as oi
-        from privacyfence.web.mcp_dispatch import McpDispatcher
-        from privacyfence.web.oauth_provider import OrgOAuthProvider
-        from privacyfence.web.org_session import OrgSessionStore
-        from privacyfence.web.server import OrgAuth
+    def test_mcp_rejects_the_approval_surfaces_own_session_id_as_bearer_auth(self, tmp_path, monkeypatch):
+        app, org = self._app(tmp_path, monkeypatch)
+        session_id = org.sessions.create(ALICE)
+        client = TestClient(app, base_url=ISSUER)
+        resp = client.post("/mcp", json=self.INITIALIZE, headers={"Authorization": f"Bearer {session_id}"})
+        assert resp.status_code == 401
 
-        monkeypatch.setattr(
-            "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"),
-        )
-        monkeypatch.setattr(
-            "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"),
-        )
-        idp = oi.IdpConfig(
-            issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
-            authorization_endpoint="https://idp.example.com/authorize",
-            token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
-        )
-        issuer_url = "https://org.example.com"
-        provider = OrgOAuthProvider(idp, idp_callback_url=f"{issuer_url}/oauth/idp/callback")
-        org = OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=idp, issuer_url=issuer_url)
-        return build_app(
-            WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}),
-            allowed_hosts=frozenset({"org.example.com"}),
-        ), issuer_url
+    def test_capability_routes_need_no_bearer_token_at_all(self, tmp_path, monkeypatch):
+        # ADR 0028: /mcp-files/slots/<token> and /mcp-files/fetch/<token> are mounted alongside
+        # /mcp but deliberately outside the bearer-auth stack -- a malformed/unknown token is a
+        # 404 (the route exists, the token just isn't live), never a 401.
+        app, _org = self._app(tmp_path, monkeypatch)
+        client = TestClient(app, base_url=ISSUER)
+        assert client.put("/mcp-files/slots/not-a-real-slot", content=b"data").status_code == 404
+        assert client.get("/mcp-files/fetch/not-a-real-token").status_code == 404
 
     def test_a_scoped_token_is_refused_on_settings_and_approvals(self, tmp_path, monkeypatch):
-        from privacyfence.web.mcp_dispatch import McpDispatcher
-
-        controller = _controller(tmp_path, monkeypatch)
-        secret = self._scoped_secret(tmp_path, monkeypatch)
-        sessions = LocalSessionStore()
-        app = build_app(
-            WebApprovalUI(), sessions=sessions, controller=controller,
-            mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token=self.MCP_TOKEN,
-        )
-        client = TestClient(app, base_url="http://localhost")
+        # ADR 0164: a scoped token is an /mcp credential only.
+        secret = self._scoped_secret(tmp_path, monkeypatch, ALICE)
+        app, org = self._app(tmp_path, monkeypatch)
+        client = TestClient(app, base_url=ISSUER, follow_redirects=False)
         bearer = {"Authorization": f"Bearer {secret}"}
 
-        settings = client.get("/settings", headers=bearer)
-        assert settings.status_code != 200
-        assert "PrivacyFence — Settings" not in settings.text
-        assert client.post("/api/settings/quit_app", json={"csrf": secret}, headers=bearer).status_code in (401, 403)
-        assert client.get("/api/approvals/some-id/preview", headers=bearer).status_code == 401
+        assert client.get("/settings", headers=bearer).status_code in (302, 401, 403)
+        assert client.get("/api/approvals/some-id/preview", headers=bearer).status_code in (302, 401, 403)
         # Nor does it pass as the CSRF value next to a real session cookie.
-        _signed_in(client, sessions)
+        _signed_in(client, org)
         decide = client.post(
             "/api/approvals/some-id/decide", json={"result": "deny", "csrf": secret}, headers=bearer,
         )
-        assert decide.status_code == 401
+        assert decide.status_code in (401, 403)
 
-    def test_a_scoped_token_is_refused_on_the_bearer_file_bridge(self, tmp_path, monkeypatch):
-        secret = self._scoped_secret(tmp_path, monkeypatch)
-        client = TestClient(self._app(), base_url="http://localhost")
-        bearer = {"Authorization": f"Bearer {secret}"}
-
-        assert client.put("/mcp-files/uploads/not-a-real-slot", content=b"data", headers=bearer).status_code == 401
-        assert client.get("/mcp-files/downloads/not-a-real-token", headers=bearer).status_code == 401
-        # The main token is still accepted there (past auth, the slot is simply unknown).
-        main = {"Authorization": f"Bearer {self.MCP_TOKEN}"}
-        assert client.get("/mcp-files/downloads/not-a-real-token", headers=main).status_code != 401
-
-    @pytest.mark.parametrize("mode", ["local", "org"])
-    def test_a_scoped_token_is_accepted_on_mcp(self, mode, tmp_path, monkeypatch):
+    def test_a_scoped_token_is_accepted_on_mcp(self, tmp_path, monkeypatch):
         from privacyfence import scoped_tokens
 
-        initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
-        if mode == "local":
-            secret = self._scoped_secret(tmp_path, monkeypatch)
-            app, base_url = self._app(), "http://localhost"
-        else:
-            secret = self._scoped_secret(tmp_path, monkeypatch, Principal(id="alice", email="alice@example.com"))
-            app, base_url = self._org_app(tmp_path, monkeypatch)
-        with TestClient(app, base_url=base_url) as client:
-            accepted = client.post("/mcp", json=initialize, headers={"Authorization": f"Bearer {secret}"})
+        secret = self._scoped_secret(tmp_path, monkeypatch, ALICE)
+        app, _org = self._app(tmp_path, monkeypatch)
+        with TestClient(app, base_url=ISSUER) as client:
+            accepted = client.post("/mcp", json=self.INITIALIZE, headers={"Authorization": f"Bearer {secret}"})
             unknown = client.post(
-                "/mcp", json=initialize, headers={"Authorization": f"Bearer {scoped_tokens.mint_secret()}"},
+                "/mcp", json=self.INITIALIZE, headers={"Authorization": f"Bearer {scoped_tokens.mint_secret()}"},
             )
         assert accepted.status_code != 401
         assert unknown.status_code == 401
 
-    def test_approvals_decide_rejects_the_mcp_token_as_csrf(self):
-        client = TestClient(self._app(), base_url="http://localhost")
-        # A valid *session cookie* (a real local-mode session, not the raw
-        # secret) but the *MCP* token presented as the CSRF value -- the
-        # double-submit check must still fail, since these are different
-        # secrets.
-        _signed_in(client, self.sessions)
+    def test_approvals_decide_rejects_a_bearer_token_as_csrf(self, tmp_path, monkeypatch):
+        app, org = self._app(tmp_path, monkeypatch)
+        client = TestClient(app, base_url=ISSUER, follow_redirects=False)
+        # A valid *session cookie* but a bearer token presented as the CSRF value -- the
+        # double-submit check must still fail, since these are different secrets.
+        _signed_in(client, org)
         resp = client.post(
             "/api/approvals/some-id/decide",
-            json={"result": "deny", "csrf": self.MCP_TOKEN},
-            headers={"Authorization": f"Bearer {self.MCP_TOKEN}"},
+            json={"result": "deny", "csrf": "mcp-token-0123456789"},
+            headers={"Authorization": "Bearer mcp-token-0123456789"},
         )
-        assert resp.status_code == 401
+        assert resp.status_code in (401, 403)
 
 
-# --------------------------------------------------------------------------- #
-# /settings and /api/state/stream folded into the same combined app,
-# sharing the approval surface's own session -- see build_app()'s own docstring for why
-# this is the deliberate contrast with MCP's separate audience.
-# --------------------------------------------------------------------------- #
+def test_a_row_that_compiles_to_no_rule_is_titled_by_its_scope_and_has_no_value_to_toggle():
+    from privacyfence.policy import scope_rows
+    from privacyfence.web.server import _scoped_rule_entry
 
-def _controller(tmp_path, monkeypatch):
-    from types import SimpleNamespace
+    row = scope_rows.ScopeRow(
+        id="r-empty", scope="drive.folder", value=["f"], verbs=frozenset(), operations=frozenset(),
+    )
+    entry = _scoped_rule_entry(row, "f", [])
 
-    from privacyfence import daemon_main, resource_names, settings_controller as sc, update_checker
+    assert entry["title"] == "drive.folder"
+    assert entry["title_parts"] is None
+    assert entry["value_items"] == []
 
-    monkeypatch.setattr(resource_names, "_cache_file", lambda: tmp_path / "resource_name_cache.json")
-    monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "update_check_cache.json")
-    monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
-    monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
-    org_dir_path = tmp_path / "org"
-    org_dir_path.mkdir()
-    monkeypatch.setattr(sc, "org_dir", lambda: org_dir_path)
-    data_dir_path = tmp_path / "data"
-    data_dir_path.mkdir()
-    monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
-    config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept: {}\nconnectors: {}\n", encoding="utf-8")
-    connector_host = SimpleNamespace(set_connectors=lambda conns: None)
-    return sc.SettingsController(str(config_path), connectors=[], connector_host=connector_host)
 
-
-class TestSettingsFoldedIntoTheCombinedApp:
-    def test_settings_page_shares_the_approval_surfaces_session(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, controller=controller)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-
-        r = client.get("/settings")
-
-        assert r.status_code == 200
-        assert "PrivacyFence — Settings" in r.text
-
-    def test_the_owner_reaches_the_admin_state(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, controller=controller, startup_admin={}, org_config={})
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-
-        r = client.get("/api/admin/state")
-
-        assert r.status_code == 200
-        assert "services" in r.json() and r.json()["error"] == ""
-
-    def test_a_non_owner_principal_gets_a_404_from_the_admin_api(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions, controller=controller)
-        client = TestClient(app, base_url="http://localhost")
-        session_id = sessions.create(principal_id="os-1002")
-        client.cookies.set(SESSION_COOKIE, session_id)
-
-        assert client.get("/api/admin/state").status_code == 404
-        assert client.post("/api/admin/clear_rooms", json={"csrf": session_id}).status_code == 404
-
-    def test_no_controller_means_no_admin_api(self):
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-
-        assert client.get("/api/admin/state").status_code == 404
-
-    def test_no_controller_means_no_settings_route(self):
-        sessions = LocalSessionStore()
-        app = build_app(WebApprovalUI(), sessions=sessions)
-        client = TestClient(app, base_url="http://localhost")
-        _signed_in(client, sessions)
-
-        r = client.get("/settings")
-
-        assert r.status_code == 404
-
-    # No 200-success request test against a real GET here -- the stream's
-    # generator never terminates (same reasoning web/test_routes_approvals.
-    # py's own TestApprovalsStream documents: TestClient's synchronous,
-    # fully-buffering client.get() can't drive an endless SSE response
-    # without hanging). Only the auth boundary -- which short-circuits
-    # before the generator is ever entered -- is exercised here; the real
-    # streaming behavior needs a real browser to observe.
-
-    def test_state_stream_requires_auth(self):
-        from privacyfence.web.state_stream import StateStream
-
-        web_ui = WebApprovalUI()
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=web_ui.deferred_registry.list_pending)
-        app = build_app(web_ui, state_stream=stream)
-        client = TestClient(app, base_url="http://localhost")
-
-        r = client.get("/api/state/stream")
-
-        assert r.status_code == 401
-
-    def test_web_server_provisions_the_state_stream_automatically(self):
-        # Unlike build_app() (tested directly above), WebServer always
-        # builds and wires a StateStream -- see its own __init__.
-        server = WebServer(WebApprovalUI(), port=0)
-        assert server.state_stream is not None
-
-
-class TestStateStreamTouchesItsOwnSession:
-    """``_state_stream_route`` must not authenticate only once, at connect
-    time, and never touch the session again for the life of the
-    connection -- a tab watching it past the idle timeout would be evicted
-    anyway. Driving the route's generator directly (same reasoning
-    TestSettingsFoldedIntoTheCombinedApp gives above for not going through
-    a real GET) proves the ``touch`` callback threaded into
-    ``stream.subscribe`` is bound to *this* request's own cookie, not a
-    shared or wrong session id."""
-
-    @staticmethod
-    async def _receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    def _request(self, session_id: str):
-        from starlette.requests import Request
-
-        headers = [(b"cookie", f"{SESSION_COOKIE}={session_id}".encode())]
-        scope = {
-            "type": "http", "headers": headers, "method": "GET", "path": "/api/state/stream",
-            "scheme": "http", "server": ("localhost", 8765),
-        }
-        return Request(scope, receive=self._receive)
-
-    async def test_destroying_the_sessions_store_entry_ends_this_stream(self):
-        from privacyfence.web.server import _state_stream_route
-        from privacyfence.web.state_stream import StateStream
-
-        sessions = LocalSessionStore()
-        session_id = sessions.create()
-        web_ui = WebApprovalUI()
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=web_ui.deferred_registry.list_pending)
-        route = _state_stream_route(stream, sessions=sessions)
-
-        response = await route.endpoint(self._request(session_id))
-        assert response.status_code == 200
-
-        agen = response.body_iterator
-        await agen.__anext__()  # the initial full-state flush
-
-        sessions.destroy(session_id)
-        with pytest.raises(StopAsyncIteration):
-            # The loop's own touch() call, on the very next tick, finds the
-            # session gone and breaks -- exactly as a client disconnect
-            # would, rather than streaming on to an evicted session.
-            await agen.__anext__()
-
-    async def test_a_different_sessions_eviction_leaves_this_stream_running(self):
-        from privacyfence.web.server import _state_stream_route
-        from privacyfence.web.state_stream import StateStream
-
-        sessions = LocalSessionStore()
-        session_id = sessions.create()
-        other_id = sessions.create()
-        web_ui = WebApprovalUI()
-        stream = StateStream(settings_snapshot=lambda: None, list_pending=web_ui.deferred_registry.list_pending)
-        route = _state_stream_route(stream, sessions=sessions)
-
-        response = await route.endpoint(self._request(session_id))
-        agen = response.body_iterator
-        await agen.__anext__()
-
-        sessions.destroy(other_id)
-        stream.push_settings({"a": 1})
-        # This connection's own session is still live, so its next tick's
-        # touch() succeeds and the push comes through rather than the
-        # generator breaking.
-        chunk = await agen.__anext__()
-        assert "settings" in chunk
-        assert '{"a": 1}' in chunk
-
-
-class TestStateStreamIsScopedToTheRequestingPrincipal:
-    """Driven through ``WebServer``'s own wiring (its ``list_pending`` lambda and the settings
-    snapshot), not a ``StateStream`` the test builds itself, so a regression in that wiring shows."""
-
-    OTHER = Principal(id="os-1001")
-
-    @staticmethod
-    async def _receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    def _request(self, session_id: str):
-        from starlette.requests import Request
-
-        headers = [(b"cookie", f"{SESSION_COOKIE}={session_id}".encode())]
-        scope = {
-            "type": "http", "headers": headers, "method": "GET", "path": "/api/state/stream",
-            "scheme": "http", "server": ("localhost", 8765),
-        }
-        return Request(scope, receive=self._receive)
-
-    def _setup(self, tmp_path, monkeypatch):
-        from privacyfence.principal import LOCAL_PRINCIPAL
-        from privacyfence.web.server import _state_stream_route
-
-        web_ui = WebApprovalUI()
-        server = WebServer(web_ui, port=0, controller=_controller(tmp_path, monkeypatch))
-        ids = {}
-        for principal in (LOCAL_PRINCIPAL, self.OTHER):
-            with principal_scope(principal):
-                approval, _ = web_ui.deferred_registry.register_or_coalesce(
-                    dedupe_key=f"k-{principal.id}", connector="gmail", tool="gmail_get_message",
-                    gate_kind="review", request_id=f"r-{principal.id}", summary="s", tool_name="t",
-                )
-            ids[principal.id] = approval.id
-        sessions = LocalSessionStore()
-        route = _state_stream_route(server.state_stream, sessions=sessions)
-        return server, sessions, route, ids
-
-    async def _events(self, route, sessions, principal, server, *, push=None, count=3) -> list[tuple[str, str]]:
-        session_id = sessions.create(principal_id=principal.id)
-        out: list[tuple[str, str]] = []
-        with principal_scope(principal):
-            response = await route.endpoint(self._request(session_id))
-            agen = response.body_iterator
-            try:
-                for i in range(count):
-                    if i == 1 and push is not None:
-                        server.state_stream.push_settings(push)
-                    try:
-                        chunk = await asyncio.wait_for(agen.__anext__(), 1.5)
-                    except (asyncio.TimeoutError, StopAsyncIteration):
-                        break
-                    event, _, data = chunk.strip("\n").partition("\n")
-                    out.append((event.removeprefix("event: "), data))
-            finally:
-                await agen.aclose()
-        return out
-
-    async def test_stream_carries_only_the_requesting_principals_approvals(self, tmp_path, monkeypatch):
-        server, sessions, route, ids = self._setup(tmp_path, monkeypatch)
-
-        events = await self._events(route, sessions, self.OTHER, server, count=1)
-
-        approvals = [data for event, data in events if event == "approvals"]
-        assert len(approvals) == 1
-        assert ids["os-1001"] in approvals[0]
-        assert ids["local"] not in approvals[0]
-
-    async def test_non_owner_stream_carries_no_settings_event(self, tmp_path, monkeypatch):
-        server, sessions, route, _ids = self._setup(tmp_path, monkeypatch)
-
-        events = await self._events(route, sessions, self.OTHER, server, push={"a": 1})
-
-        assert events  # the approvals event did arrive
-        assert all(event != "settings" for event, _ in events)
-
-    async def test_owner_stream_still_carries_settings(self, tmp_path, monkeypatch):
-        from privacyfence.principal import LOCAL_PRINCIPAL
-
-        server, sessions, route, _ids = self._setup(tmp_path, monkeypatch)
-
-        events = await self._events(route, sessions, LOCAL_PRINCIPAL, server, push={"a": 1})
-
-        assert [event for event, _ in events].count("settings") == 2
-
-
-class TestWebServerWiresTheStateStream:
-    def test_controller_is_registered_as_a_change_listener(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        server = WebServer(WebApprovalUI(), port=0, controller=controller)
-
-        assert server.state_stream is not None
-        # Wrapped (routes_settings.settings_page_state adds the connector icons), so what is
-        # registered is not push_settings itself; the next test follows a change through it.
-        assert len(controller._change_listeners) == 1
-
-    def test_controller_mutation_reaches_the_stream(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        server = WebServer(WebApprovalUI(), port=0, controller=controller)
-        pushed = []
-        monkeypatch.setattr(server.state_stream, "_broadcast", lambda event, data: pushed.append((event, data)))
-
-        # _push_snapshot -- not every mutating method, which already
-        # returns its own snapshot directly to its own caller -- is what
-        # notifies out-of-band listeners (a rule reloaded from the IPC
-        # thread, an async op finishing on its own background thread; see
-        # settings_controller.py's own docstring on _push_snapshot/
-        # on_change). This proves the wiring reaches state_stream, the
-        # same path any of those real triggers goes through.
-        controller._push_snapshot()
-
-        assert pushed and pushed[0][0] == "settings"
-
-    def test_main_dispatcher_is_registered_for_headless_call_on_main(self, tmp_path, monkeypatch):
-        from privacyfence import settings_controller as sc
-        from privacyfence.web import state_stream as ss
-
-        controller = _controller(tmp_path, monkeypatch)
-        WebServer(WebApprovalUI(), port=0, controller=controller)
-
-        recorded = []
-        monkeypatch.setattr(ss, "_loop", None)  # no real loop running in this test
-        sc.call_on_main(lambda x: recorded.append(x), "hi")
-        assert recorded == ["hi"]  # falls back to running inline with no loop captured yet
-
-
-class TestConfirmFirstPasskeyEnrollment:
-    """the enrollment gate: local mode's own
-    ``confirm_first_enrollment``, which web/routes_security.py calls when an
-    enrollment has no already-enrolled credential to be gated on asserting
-    with. Two behaviors live here and nowhere else -- that the ask goes to the
-    companion, and that the one bypass is the developer escape hatch ADR 0003
-    decision 7 already names, on a non-packaged build only.
-    """
-
-    def _server_module(self):
-        from privacyfence.web import server as srv
-
-        return srv
-
-    def test_it_asks_the_companion(self, monkeypatch):
-        from privacyfence import paths, privilege_separation
-
-        srv = self._server_module()
-        monkeypatch.setattr(paths, "is_bundled", lambda: False)
-        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
-        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (True, ""))
-
-        assert srv.confirm_first_passkey_enrollment() == (True, "")
-
-    def test_a_refusal_from_the_companion_is_passed_through(self, monkeypatch):
-        from privacyfence import paths, privilege_separation
-
-        srv = self._server_module()
-        monkeypatch.setattr(paths, "is_bundled", lambda: True)
-        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
-        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "start the companion"))
-
-        assert srv.confirm_first_passkey_enrollment() == (False, "start the companion")
-
-    def test_a_refusal_on_a_source_checkout_also_names_the_developer_paths(self, monkeypatch):
-        # A checkout autostarts no companion, so "start the companion" is not
-        # the whole answer there -- and a packaged install must never be told
-        # about a variable it does not honor (the test above).
-        from privacyfence import paths, privilege_separation
-
-        srv = self._server_module()
-        monkeypatch.setattr(paths, "is_bundled", lambda: False)
-        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
-        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "no companion"))
-
-        _confirmed, reason = srv.confirm_first_passkey_enrollment()
-
-        assert reason.startswith("no companion")
-        assert "privacyfence-companion --serve" in reason
-        assert privilege_separation.DEV_ALLOW_UNSEPARATED_ENV in reason
-
-    def test_the_dev_escape_hatch_skips_the_companion_on_a_non_packaged_build(self, monkeypatch):
-        from privacyfence import paths, privilege_separation
-
-        srv = self._server_module()
-        monkeypatch.setattr(paths, "is_bundled", lambda: False)
-        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
-        asked = []
-        monkeypatch.setattr(
-            srv, "request_enrollment_confirmation", lambda: asked.append(1) or (False, "no"),
-        )
-
-        assert srv.confirm_first_passkey_enrollment() == (True, "")
-        assert asked == []
-
-    def test_the_dev_escape_hatch_is_ignored_on_a_packaged_build(self, monkeypatch):
-        # The whole reason is_bundled() is checked first: a packaged install
-        # always has a companion autostarted for it (ADR 0003 decisions 3-5),
-        # so honoring an environment variable there would hand a real shipped
-        # product a way around its own gate.
-        from privacyfence import paths, privilege_separation
-
-        srv = self._server_module()
-        monkeypatch.setattr(paths, "is_bundled", lambda: True)
-        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
-        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "companion said no"))
-
-        assert srv.confirm_first_passkey_enrollment() == (False, "companion said no")
-
-
-class TestLocalModeWiresTheFirstEnrollmentGate:
-    def test_build_app_passes_the_companion_confirmation_to_security_routes(self, tmp_path, monkeypatch):
-        """The wiring itself, since nothing else would notice it going
-        missing: ``/security``'s own tests construct their routes directly
-        (tests/unit/web/test_routes_security.py's ``_local_app``), so this is
-        the only place that checks local mode's real ``build_app`` hands the
-        gate over."""
-        from privacyfence import paths
-        from privacyfence.step_up_config import StepUpConfig
-        from privacyfence.web import routes_security, server as srv
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        passed = {}
-        real_build_routes = routes_security.build_routes
-
-        def _spy(**kwargs):
-            passed.update(kwargs)
-            return real_build_routes(**kwargs)
-
-        monkeypatch.setattr(routes_security, "build_routes", _spy)
-        srv.build_app(
-            WebApprovalUI(), sessions=LocalSessionStore(),
-            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
-        )
-
-        assert passed["confirm_first_enrollment"] is srv.confirm_first_passkey_enrollment
-
-    @pytest.mark.parametrize("separated", [True, False], ids=["separated", "unseparated"])
-    def test_build_app_gates_recovery_on_a_human_session_only_when_separated(
-        self, tmp_path, monkeypatch, separated,
-    ):
-        """The recovery-code route asks the human-session question on exactly
-        the installs the approvals and settings routes do -- a
-        privilege-separated one -- and not on an unseparated one, which has
-        no companion to mint a human session at all. Driven through the real
-        ``build_app`` so the wiring, not just the route, is what is tested."""
-        from starlette.testclient import TestClient
-
-        from privacyfence import paths, privilege_separation
-        from privacyfence.step_up_config import StepUpConfig
-        from privacyfence.web import server as srv
-        from privacyfence.web.session_auth import PROVENANCE_HUMAN, SESSION_COOKIE
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: separated)
-        sessions = LocalSessionStore()
-        app = srv.build_app(
-            WebApprovalUI(), sessions=sessions,
-            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
-            step_up_issuer_url="http://localhost",
-        )
-        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
-
-        unattested = sessions.create()
-        client.cookies.set(SESSION_COOKIE, unattested)
-        r = client.post("/security/recover", json={"csrf": unattested, "code": "0000-0000-0000-0000"})
-        if separated:
-            assert r.status_code == 403
-            assert r.json()["error"] == "human_session_required"
-        else:
-            # Past the gate: refused only because the code is wrong.
-            assert r.status_code == 401
-
-        human = sessions.create(provenance=PROVENANCE_HUMAN)
-        client.cookies.set(SESSION_COOKIE, human)
-        r = client.post("/security/recover", json={"csrf": human, "code": "0000-0000-0000-0000"})
-        assert r.status_code == 401
-
-
-class TestLocalEnrollmentState:
-    """The first-enrollment offer's daemon-side answer: the one question the companion
-    cannot answer for itself, because on a separated install the credential
-    store is unreadable to the logged-in user."""
-
-    def _server_module(self):
-        from privacyfence.web import server as srv
-
-        return srv
-
-    def test_pending_when_a_passkey_is_required_and_none_is_enrolled(self, monkeypatch):
-        from privacyfence.step_up_config import StepUpConfig
-
-        srv = self._server_module()
-        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", lambda principal: False)
-
-        state = srv.local_enrollment_state(StepUpConfig(enabled=True, require_passkey=True))
-
-        assert state == "pending"
-
-    def test_ok_once_something_is_enrolled(self, monkeypatch):
-        from privacyfence.step_up_config import StepUpConfig
-
-        srv = self._server_module()
-        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", lambda principal: True)
-
-        assert srv.local_enrollment_state(StepUpConfig(enabled=True, require_passkey=True)) == "ok"
-
-    def test_an_install_not_using_step_up_is_not_waiting_for_anything(self, monkeypatch):
-        # "Requires" is enabled *and* require_passkey together, the same
-        # pairing every other consumer treats as in force. An install with
-        # step-up off is not waiting for an enrollment, and the companion
-        # must not nag about one.
-        from privacyfence.step_up_config import StepUpConfig
-
-        srv = self._server_module()
-
-        def _unexpected(principal):
-            raise AssertionError("read the credential store for an install with step-up off")
-
-        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", _unexpected)
-
-        assert srv.local_enrollment_state(None) == "ok"
-        assert srv.local_enrollment_state(StepUpConfig()) == "ok"
-        assert srv.local_enrollment_state(StepUpConfig(enabled=True)) == "ok"
-        assert srv.local_enrollment_state(StepUpConfig(require_passkey=True)) == "ok"
-
-
-class TestLocalStatusPayload:
-    """The daemon's own answer to the
-    companion's ``STATUS`` command."""
-
-    def _server_module(self):
-        from privacyfence.web import server as srv
-
-        return srv
-
-    def test_reports_version_pid_mode_and_separation(self, monkeypatch):
-        import json
-
-        srv = self._server_module()
-        monkeypatch.setattr(srv, "__version__", "4.2.0-test")
-        monkeypatch.setattr(srv.os, "getpid", lambda: 4242)
-        monkeypatch.setattr(srv.privilege_separation, "is_enabled", lambda: True)
-        monkeypatch.setattr(srv.routes_connect, "_is_connected", lambda principal, service: False)
-
-        payload = json.loads(srv.local_status_payload("2026-09-23T00:00:00+00:00"))
-
-        assert payload["version"] == "4.2.0-test"
-        assert payload["pid"] == 4242
-        assert payload["mode"] == "local"
-        assert payload["separated"] is True
-        assert payload["started_at"] == "2026-09-23T00:00:00+00:00"
-
-    def test_connectors_reflect_is_connected(self, monkeypatch):
-        import json
-
-        srv = self._server_module()
-        monkeypatch.setattr(srv.privilege_separation, "is_enabled", lambda: False)
-        monkeypatch.setattr(
-            srv.routes_connect, "_is_connected",
-            lambda principal, service: service == "gmail",
-        )
-
-        payload = json.loads(srv.local_status_payload("2026-09-23T00:00:00+00:00"))
-
-        assert payload["connectors"]["gmail"] == "ok"
-        assert payload["connectors"]["drive"] == "needs_auth"
-        assert set(payload["connectors"]) == set(srv.routes_connect.SERVICE_LABELS)
-
-    def test_the_payload_is_one_compact_json_line(self, monkeypatch):
-        # It travels over the same one-line-per-message control channel
-        # every other command here does -- a stray newline in the payload
-        # would truncate the reply.
-        srv = self._server_module()
-        monkeypatch.setattr(srv.routes_connect, "_is_connected", lambda principal, service: False)
-
-        payload = srv.local_status_payload("2026-09-23T00:00:00+00:00")
-
-        assert "\n" not in payload
-        assert " " not in payload
-
-
-class TestRecoveryCodeDelivery:
-    """A credential-store reset token is never a value a process holding a
-    ``pf_session`` can read out of an HTTP response."""
-
-    def _server_module(self):
-        from privacyfence.web import server as srv
-
-        return srv
-
-    def test_present_recovery_code_hands_it_to_the_companion(self, monkeypatch):
-        srv = self._server_module()
-        sent = []
-        monkeypatch.setattr(srv, "send_recovery_code", lambda code: sent.append(code) or (True, ""))
-
-        assert srv.present_recovery_code("A1B2-C3D4-E5F6-1789") == (True, "")
-        assert sent == ["A1B2-C3D4-E5F6-1789"]
-
-    def test_a_reissue_confirms_then_shows_then_stores(self, monkeypatch, tmp_path):
-        from privacyfence import paths, webauthn_stepup
-        from privacyfence.principal import LOCAL_PRINCIPAL
-
-        srv = self._server_module()
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        order = []
-        monkeypatch.setattr(
-            srv, "request_recovery_confirmation", lambda: order.append("confirm") or (True, ""),
-        )
-        shown = []
-        monkeypatch.setattr(
-            srv, "send_recovery_code",
-            lambda code: (order.append("show"), shown.append(code), (True, ""))[-1],
-        )
-
-        assert srv.reissue_local_recovery_code() == (True, "")
-        assert order == ["confirm", "show"]
-        assert webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
-        # And it is the code that was shown, not some other one.
-        assert webauthn_stepup.consume_recovery_code(LOCAL_PRINCIPAL, shown[0])
-
-    def test_a_denied_confirmation_stores_nothing(self, monkeypatch, tmp_path):
-        from privacyfence import paths, webauthn_stepup
-        from privacyfence.principal import LOCAL_PRINCIPAL
-
-        srv = self._server_module()
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        monkeypatch.setattr(srv, "request_recovery_confirmation", lambda: (False, "denied"))
-
-        def _unexpected(code):
-            raise AssertionError("showed a code after the confirmation was denied")
-
-        monkeypatch.setattr(srv, "send_recovery_code", _unexpected)
-
-        assert srv.reissue_local_recovery_code() == (False, "denied")
-        assert not webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
-
-    def test_a_code_nobody_could_be_shown_is_never_stored(self, monkeypatch, tmp_path):
-        # The whole reason minting and storing are two calls: a stored code
-        # nobody has would make has_recovery_code() true forever, and no
-        # later enrollment would ever issue another.
-        from privacyfence import paths, webauthn_stepup
-        from privacyfence.principal import LOCAL_PRINCIPAL
-
-        srv = self._server_module()
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        monkeypatch.setattr(srv, "request_recovery_confirmation", lambda: (True, ""))
-        monkeypatch.setattr(srv, "send_recovery_code", lambda code: (False, "no display"))
-
-        assert srv.reissue_local_recovery_code() == (False, "no display")
-        assert not webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
-
-    def test_build_app_wires_the_companion_delivery_on_a_packaged_build(self, tmp_path, monkeypatch):
-        from privacyfence import paths
-        from privacyfence.step_up_config import StepUpConfig
-        from privacyfence.web import routes_security, server as srv
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        monkeypatch.setattr(paths, "is_bundled", lambda: True)
-        passed = {}
-        real_build_routes = routes_security.build_routes
-
-        def _spy(**kwargs):
-            passed.update(kwargs)
-            return real_build_routes(**kwargs)
-
-        monkeypatch.setattr(routes_security, "build_routes", _spy)
-        srv.build_app(
-            WebApprovalUI(), sessions=LocalSessionStore(),
-            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
-        )
-
-        assert passed["deliver_recovery_code"] is srv.present_recovery_code
-
-    def test_a_source_checkout_keeps_the_pre_1_3_behavior(self, tmp_path, monkeypatch):
-        # Nothing autostarts a companion for a checkout (ADR 0003 decisions
-        # 3-5 are the packaged installers' half), so routing the code through
-        # one there would mean a dev could never get a recovery code at all.
-        from privacyfence import paths
-        from privacyfence.step_up_config import StepUpConfig
-        from privacyfence.web import routes_security, server as srv
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        monkeypatch.setattr(paths, "is_bundled", lambda: False)
-        passed = {}
-        real_build_routes = routes_security.build_routes
-
-        def _spy(**kwargs):
-            passed.update(kwargs)
-            return real_build_routes(**kwargs)
-
-        monkeypatch.setattr(routes_security, "build_routes", _spy)
-        srv.build_app(
-            WebApprovalUI(), sessions=LocalSessionStore(),
-            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
-        )
-
-        assert passed["deliver_recovery_code"] is None
-
-
-class TestAiClientTokenDelivery:
-    """The Settings page's Copy token / Rotate token (ADR 0104): the owner's
-    token goes to the owner's companion and never comes back to the route."""
-
-    TOKEN = "cd" * 32
-
-    def test_copy_mints_under_the_owner_and_hands_the_token_to_the_companion(self, monkeypatch):
-        from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
-        from privacyfence.web import server as srv
-
-        minted, sent = [], []
-
-        def _mint(rotate):
-            minted.append((rotate, current_principal().id))
-            return self.TOKEN
-
-        monkeypatch.setattr(
-            srv, "send_mcp_token", lambda token: sent.append((token, current_principal().id)) or (True, ""),
-        )
-        result = srv.copy_local_mcp_token(_mint)
-        assert result == (True, "")
-        assert minted == [(False, LOCAL_PRINCIPAL.id)]
-        assert sent == [(self.TOKEN, LOCAL_PRINCIPAL.id)]
-
-    def test_rotate_rotates(self, monkeypatch):
-        from privacyfence.web import server as srv
-
-        minted = []
-        monkeypatch.setattr(srv, "send_mcp_token", lambda token: (True, ""))
-        result = srv.copy_local_mcp_token(lambda rotate: minted.append(rotate) or self.TOKEN, rotate=True)
-        assert result == (True, "")
-        assert minted == [True]
-
-    def test_a_rotation_nobody_received_says_it_still_happened(self, monkeypatch):
-        from privacyfence.web import server as srv
-
-        monkeypatch.setattr(srv, "send_mcp_token", lambda token: (False, "PrivacyFence could not reach its companion app."))
-        ok, reason = srv.copy_local_mcp_token(lambda rotate: self.TOKEN, rotate=True)
-        assert ok is False
-        assert "was rotated" in reason
-        assert "Copy AI Client Token" in reason
-        assert self.TOKEN not in reason
-
-    def test_build_app_shows_the_section_only_with_an_mcp_endpoint(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        sessions = LocalSessionStore()
-        without = TestClient(build_app(WebApprovalUI(), sessions=sessions, controller=controller), base_url="http://localhost")
-        _signed_in(without, sessions)
-        assert 'window.__pfAiClient = ' not in without.get("/settings").text
-
-        with_mcp = TestClient(build_app(
-            WebApprovalUI(), sessions=sessions, controller=controller,
-            mint_mcp_token=lambda rotate: self.TOKEN, mcp_url="http://127.0.0.1:8765/mcp",
-        ), base_url="http://localhost")
-        _signed_in(with_mcp, sessions)
-        page = with_mcp.get("/settings").text
-        assert 'window.__pfAiClient = {"mcp_url": "http://127.0.0.1:8765/mcp"};' in page
-        assert self.TOKEN not in page
-
-    def test_the_web_server_passes_its_own_mint_and_url(self, monkeypatch):
-        from privacyfence.web import server as srv
-        from privacyfence.web.mcp_dispatch import McpDispatcher
-
-        passed = {}
-        real_build_app = srv.build_app
-
-        def _spy(*args, **kwargs):
-            passed.update(kwargs)
-            return real_build_app(*args, **kwargs)
-
-        monkeypatch.setattr(srv, "build_app", _spy)
-        server = WebServer(WebApprovalUI(), host="127.0.0.1", port=8765, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="t" * 64)
-        assert passed["mcp_url"] == "http://127.0.0.1:8765/mcp" == server.mcp_url
-        assert passed["mint_mcp_token"] == server._mint_mcp_token
-
-
-from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
-
-
-class TestScopedTokenWiring:
-    """The Settings page's Scoped tokens section in local mode (ADR 0164)."""
-
-    @staticmethod
-    def _store(tmp_path, monkeypatch):
-        from privacyfence import paths, scoped_tokens
-        from privacyfence.web import mcp_auth
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        store = scoped_tokens.ScopedTokenStore(mcp_auth.scoped_token_principals)
-        store.load()
-        scoped_tokens.set_store(store)
-        return store
-
-    @staticmethod
-    def _rules(monkeypatch):
-        from privacyfence import auto_accept
-        from privacyfence.policy.engine import PolicyRule
-
-        rule = PolicyRule(
-            id="r-sender", predicate="i_am_sender", value=None, operations=frozenset({"gmail.read_message"}),
-        )
-        row = scope_rows.ScopeRow(
-            id="r-sender", scope=None, value=None, verbs=frozenset({Verb.READ}), predicate="i_am_sender",
-            operations=frozenset({"gmail.read_message"}),
-        )
-        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
-        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [row])
-        return rule
-
-    def test_the_scoped_token_wiring_is_built_only_with_an_mcp_endpoint(self, tmp_path, monkeypatch):
-        controller = _controller(tmp_path, monkeypatch)
-        body = {"csrf": "x", "confirmed": True, "token_id": "st-1"}
-
-        def _status(**kwargs):
-            sessions = LocalSessionStore()
-            app = build_app(WebApprovalUI(), sessions=sessions, controller=controller, **kwargs)
-            client = TestClient(app, base_url="http://localhost")
-            session_id = _signed_in(client, sessions)
-            return client.post(
-                "/api/settings/scoped_tokens/revoke", json={**body, "csrf": session_id},
-            ).text
-
-        assert "No such token." not in _status()
-        self._store(tmp_path, monkeypatch)
-        assert _status(mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok").count("No such token.") == 1
-
-    def test_a_row_that_compiles_to_no_rule_is_titled_by_its_scope_and_has_no_value_to_toggle(self):
-        from privacyfence.web.server import _scoped_rule_entry
-
-        row = scope_rows.ScopeRow(
-            id="r-empty", scope="drive.folder", value=["f"], verbs=frozenset(), operations=frozenset(),
-        )
-        entry = _scoped_rule_entry(row, "f", [])
-
-        assert entry["title"] == "drive.folder"
-        assert entry["title_parts"] is None
-        assert entry["value_items"] == []
-
-    def test_scoped_rule_title_says_except_for_an_exclusion_scope(self):
-        from privacyfence.web.server import _scoped_rule_entry
-
-        row = scope_rows.ScopeRow(
-            id="r-mc", scope="slack.my_conversations", value=["C1"],
-            verbs=frozenset({Verb.READ, Verb.SEARCH}), operations=frozenset({"slack.read_messages"}),
-        )
-        assert "my conversations except C1" in _scoped_rule_entry(row, "C1", ["C1"])["title"]
-        no_value = scope_rows.ScopeRow(
-            id="r-mc", scope="slack.my_conversations", value=None,
-            verbs=frozenset({Verb.READ}), operations=frozenset({"slack.read_messages"}),
-        )
-        title = _scoped_rule_entry(no_value, "", [])["title"]
-        assert "my conversations" in title and "except" not in title
-
-    def test_page_data_names_rules_by_their_cached_resource_names(self, tmp_path, monkeypatch):
-        from privacyfence import auto_accept
-        from privacyfence.policy.engine import PolicyRule
-        from privacyfence.web import server as server_module
-        from privacyfence.web.server import build_scoped_token_wiring
-
-        self._store(tmp_path, monkeypatch)
-        rule = PolicyRule(
-            id="r-doc", predicate="grist.document", value=["8CAN8gKdxY7z"],
-            operations=frozenset({"grist.read_records", "grist.update_csv"}),
-        )
-        row = scope_rows.ScopeRow(
-            id="r-doc", scope="grist.document", value=["8CAN8gKdxY7z"], verbs=frozenset({Verb.READ, Verb.UPDATE}),
-            operations=frozenset({"grist.read_records", "grist.update_csv"}),
-        )
-        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [rule])
-        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [row])
-
-        class _Names:
-            def cached_name(self, rt, resource_id):
-                return "Salesforce mirror" if resource_id == "8CAN8gKdxY7z" else None
-
-            def is_invalid(self, rt, resource_id):
-                return False
-
-        monkeypatch.setattr(server_module, "get_resolver", lambda: _Names())
-        [entry] = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()["rules"]
-
-        assert entry["title"] == "Grist — document Salesforce mirror"
-        assert "8CAN8gKdxY7z" not in entry["title"] and "8CAN8gKdxY7z" not in entry["sentence"]
-        assert "allow" not in entry["title"]
-        assert entry["verbs"] == ["read", "update"]
-        assert "Salesforce mirror" in entry["sentence"]
-        assert "grist_update_csv" in entry["tools"]
-        assert entry["title_parts"] == ["Grist — document ", ""]
-        assert entry["sentence_parts"] == ["Grist - document ", ": allow read, update"]
-        assert entry["value_items"] == [
-            {"id": "8CAN8gKdxY7z", "short_id": "8CAN8gKdxY7z", "name": "Salesforce mirror", "status": "resolved"},
-        ]
-
-    def test_page_data_lists_the_tools_that_need_no_rule(self, tmp_path, monkeypatch):
-        from privacyfence import auto_accept
-        from privacyfence.web.server import build_scoped_token_wiring
-
-        self._store(tmp_path, monkeypatch)
-        monkeypatch.setattr(auto_accept, "get_policy_v2_store_rules", lambda: [])
-        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
-        data = build_scoped_token_wiring(McpDispatcher(lambda: {"grist": object()})).page_data()
-
-        assert "grist_list_tables" in data["auto_tools"]
-        assert "grist_update_csv" not in data["auto_tools"]
-        assert all(name.startswith("grist_") for name in data["auto_tools"])
-        assert all(auto_accept.TOOL_TO_GATE[name] == "auto" for name in data["auto_tools"])
-
-    def test_the_wiring_passes_the_personal_data_flag_to_the_store_and_the_page(self, tmp_path, monkeypatch):
-        from privacyfence import scoped_tokens
-        from privacyfence.web.server import build_scoped_token_wiring
-
-        self._store(tmp_path, monkeypatch)
-        rule = self._rules(monkeypatch)
-        monkeypatch.setattr(
-            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
-        )
-        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
-
-        flagged, _ = wiring.store_create("flagged", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], True, False)
-        plain, _ = wiring.store_create("plain", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], False, False)
-
-        assert (flagged.allow_personal_data, plain.allow_personal_data) == (True, False)
-        tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
-        assert (tokens["flagged"]["allow_personal_data"], tokens["plain"]["allow_personal_data"]) == (True, False)
-
-    def test_local_wiring_stores_the_reads_flag(self, tmp_path, monkeypatch):
-        from privacyfence import scoped_tokens
-        from privacyfence.web.server import build_scoped_token_wiring
-
-        self._store(tmp_path, monkeypatch)
-        rule = self._rules(monkeypatch)
-        monkeypatch.setattr(
-            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
-        )
-        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
-
-        reads, _ = wiring.store_create("reads", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], False, True)
-        plain, _ = wiring.store_create("plain", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], True, False)
-
-        assert (reads.allow_personal_data_reads, plain.allow_personal_data_reads) == (True, False)
-        assert (reads.allow_personal_data, plain.allow_personal_data) == (False, True)
-        tokens = {t["label"]: t for t in wiring.page_data()["tokens"]}
-        assert (tokens["reads"]["allow_personal_data_reads"], tokens["plain"]["allow_personal_data_reads"]) == (True, False)
-
-    def test_the_wiring_renames_in_the_store(self, tmp_path, monkeypatch):
-        import dataclasses
-
-        from privacyfence import scoped_tokens
-        from privacyfence.web.server import build_scoped_token_wiring
-
-        self._store(tmp_path, monkeypatch)
-        rule = self._rules(monkeypatch)
-        monkeypatch.setattr(
-            scoped_tokens, "policy_from_org_config", lambda *a, **k: scoped_tokens.ScopedTokenPolicy(True, 365),
-        )
-        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()}))
-        token, _ = wiring.store_create("old", 30, [{"kind": "copy", "rule_id": rule.id}], ["gmail_list_messages"], False, False)
-
-        old_label, renamed = wiring.store_rename(token.id, "new")
-
-        assert old_label == "old"
-        assert renamed == dataclasses.replace(token, label="new")
-        assert wiring.store_rename("st-missing", "x") is None
-        assert [t["label"] for t in wiring.page_data()["tokens"]] == ["new"]
-
-    def test_page_data_lists_pending_proposals(self, tmp_path, monkeypatch):
-        from privacyfence import scoped_token_proposals as stp
-        from privacyfence import scoped_tokens
-        from privacyfence.agent_identity import AgentIdentity, AgentSource
-        from privacyfence.principal import LOCAL_PRINCIPAL, Principal
-        from privacyfence.web.server import build_scoped_token_wiring
-
-        self._store(tmp_path, monkeypatch)
-        self._rules(monkeypatch)
-        agent = AgentIdentity(id="claude-code", name="Claude Code", version="1", source=AgentSource.NONE)
-        request = scoped_tokens.normalise_create_request(
-            {"label": "weekly", "days": 30, "rules": [], "tools": ["gmail_list_messages"]},
-        )
-        mine = stp.new_proposal(principal=LOCAL_PRINCIPAL, request=request, source="bundle", agent=agent, reason="r")
-        theirs = stp.new_proposal(
-            principal=Principal(id="bob", email="b@example.com", display_name="Bob"), request=request,
-            source="bundle", agent=agent, reason="r",
-        )
-        stp.get_registry().add(mine)
-        stp.get_registry().add(theirs)
-
-        data = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object()})).page_data()
-
-        from privacyfence import agent_label
-
-        assert data["proposals"] == [{
-            "id": mine.id, "label": "weekly", "agent_label": agent_label.label_for(agent).text,
-            "expires_at": mine.expires_at,
-        }]
-
-    def test_page_data_proposals_enabled_follows_the_policy(self, tmp_path, monkeypatch):
-        from privacyfence import scoped_tokens
-        from privacyfence.principal import LOCAL_PRINCIPAL
-        from privacyfence.web.server import build_scoped_token_wiring, scoped_token_page_data
-
-        self._store(tmp_path, monkeypatch)
-        self._rules(monkeypatch)
-        assert build_scoped_token_wiring(McpDispatcher(lambda: {})).page_data()["proposals_enabled"] is True
-        for allowed in (True, False):
-            policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365, allow_ai_proposals=allowed)
-            data = scoped_token_page_data(LOCAL_PRINCIPAL, policy=policy, delivery="once", connector_names=set())
-            assert data["proposals_enabled"] is allowed
-
-    def test_page_data_marks_expiring_expired_and_missing_rules(self, tmp_path, monkeypatch):
-        import time
-
-        from privacyfence import scoped_tokens
-        from privacyfence.principal import LOCAL_PRINCIPAL
-        from privacyfence.web.server import build_scoped_token_wiring
-
-        store = self._store(tmp_path, monkeypatch)
-        rule = self._rules(monkeypatch)
-        policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-        now = time.time()
-        copy = [{"kind": "copy", "rule_id": rule.id}]
-
-        def _make(label, days_ago, days, rules):
-            token, _ = store.create(
-                LOCAL_PRINCIPAL, label=label, days=days, rules=rules, tools=["gmail_list_messages"],
-                policy=policy, now=now - days_ago * 86400,
-            )
-            return token
-
-        fresh = _make("fresh", 0, 90, copy)
-        soon = _make("soon", 80, 90, copy)
-        gone = _make("gone", 100, 90, copy)
-        wiring = build_scoped_token_wiring(McpDispatcher(lambda: {"gmail": object(), "drive": object()}))
-        data = wiring.page_data()
-
-        assert (data["delivery"], data["max_days"], data["default_days"], data["warn_days"]) == (
-            "companion", 365, 90, 14,
-        )
-        tokens = {t["label"]: t for t in data["tokens"]}
-        assert tokens["fresh"]["id"] == fresh.id
-        assert (tokens["fresh"]["expiring_soon"], tokens["fresh"]["expired"]) == (False, False)
-        assert (tokens["soon"]["expiring_soon"], tokens["soon"]["expired"]) == (True, False)
-        assert tokens["soon"]["days_left"] <= 10
-        assert (tokens["gone"]["expiring_soon"], tokens["gone"]["expired"]) == (False, True)
-        assert {tokens["gone"]["id"], tokens["soon"]["id"]} == {gone.id, soon.id}
-        assert tokens["fresh"]["rules"][0]["id"] == rule.id and "sentence" in tokens["fresh"]["rules"][0]
-        assert tokens["fresh"]["tools"] == ["gmail_list_messages"]
-        assert data["rules"][0]["id"] == rule.id
-        assert "gmail_get_message" in data["rules"][0]["tools"]
-        assert [group["connector"] for group in data["tools"]] == ["drive", "gmail"]
-        assert "gmail_list_messages" in data["tools"][1]["tools"]
-
-        # The token's rules are its own rows (ADR 0236): deleting the Auto-accept rule changes nothing.
-        before = wiring.page_data()["tokens"][0]["rules"]
-        monkeypatch.setattr("privacyfence.auto_accept.get_policy_v2_store_rules", lambda: [])
-        monkeypatch.setattr("privacyfence.auto_accept.get_policy_rows", lambda: [])
-        assert wiring.page_data()["tokens"][0]["rules"] == before
-
-
-def test_a_tokens_rules_come_from_its_own_rows(tmp_path, monkeypatch):
-    """Each of a token's rules is drawn from the token's own row (ADR 0236), named like the
-    Auto-accept page names a row; widening the person's row afterwards does not change it, and
-    there is no "missing" or "limited_to" key any more."""
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
-    from privacyfence.policy import catalogue as policy_catalogue
+def test_scoped_rule_title_says_except_for_an_exclusion_scope():
+    from privacyfence.policy import scope_rows
     from privacyfence.policy.registry import Verb
-    from privacyfence.web.server import scoped_token_page_data
+    from privacyfence.web.server import _scoped_rule_entry
 
-    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
-    config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
-    alice = Principal(id="alice", email="alice@example.com")
-    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
-    scoped_tokens.set_store(store)
-    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-
-    def page():
-        return scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
-
-    with principal_scope(alice):
-        auto_accept.init_config_path(str(config_path))
-        auto_accept.add_policy_v2_rules(policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.READ]))
-        (row,) = auto_accept.get_policy_rows()
-        store.create(alice, label="sync", days=30, rules=[{"kind": "copy", "rule_id": row.id}], tools=[], policy=policy)
-        before = page()
-
-        auto_accept.add_policy_v2_rules(
-            policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.DOWNLOAD])
-        )
-        after = page()
-
-    (entry,) = before["tokens"][0]["rules"]
-    assert entry == before["rules"][0]  # named the way the Auto-accept page names the row
-    assert entry["id"] == row.id and entry["title"] and entry["sentence"]
-    assert not {"missing", "limited_to"} & set(entry)
-    assert "drive_download_file" in after["rules"][0]["tools"]
-    assert after["tokens"][0]["rules"] == [entry]
-    assert "drive_download_file" not in entry["tools"]
-
-
-def _page_data(tmp_path, monkeypatch, connector_names):
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
-    from privacyfence.web.server import scoped_token_page_data
-
-    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
-    config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
-    alice = Principal(id="alice", email="alice@example.com")
-    scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
-    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-    with principal_scope(alice):
-        auto_accept.init_config_path(str(config_path))
-        return scoped_token_page_data(alice, policy=policy, delivery="once", connector_names=connector_names)
-
-
-def test_scope_groups_list_only_enabled_connectors(tmp_path, monkeypatch):
-    data = _page_data(tmp_path, monkeypatch, {"drive"})
-
-    ids = {g["id"] for g in data["scope_groups"]}
-    assert "drive.folder" in ids
-    assert not any(i.startswith("gmail.") for i in ids)
-    assert all(g["connector"] == "drive" for g in data["scope_groups"])
-
-
-def test_scope_groups_say_which_tools_each_verb_covers(tmp_path, monkeypatch):
-    data = _page_data(tmp_path, monkeypatch, {"drive"})
-
-    (folder,) = [g for g in data["scope_groups"] if g["id"] == "drive.folder"]
-    assert "drive_get_file_content" in folder["verb_tools"]["read"]
-    assert set(folder["verb_tools"]) == set(folder["verbs"])
-
-
-def test_tools_are_grouped_under_the_longest_connector_name(tmp_path, monkeypatch):
-    data = _page_data(tmp_path, monkeypatch, {"apps_script"})
-
-    (group,) = data["tools"]
-    assert group["connector"] == "apps_script"
-    assert group["tools"] and all(t.startswith("apps_script_") for t in group["tools"])
-    assert all(t.startswith("apps_script_") for t in data["auto_tools"])
-
-
-def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
-    from privacyfence.web.server import scoped_token_page_data
-
-    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
-    config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
-    alice = Principal(id="alice", email="alice@example.com")
-    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
-    scoped_tokens.set_store(store)
-    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-    with principal_scope(alice):
-        auto_accept.init_config_path(str(config_path))
-    idle, _ = store.create(alice, label="idle", days=30, rules=[], tools=["drive_list_files"], policy=policy)
-    busy, _ = store.create(alice, label="busy", days=30, rules=[], tools=["drive_list_files"], policy=policy)
-
-    def page():
-        with principal_scope(alice):
-            data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
-        return {t["label"]: t for t in data["tokens"]}
-
-    before = page()["idle"]
-    assert (before["last_used_at"], before["last_denied_at"], before["last_denied_tool"]) == (None, None, "")
-
-    store.note_use(busy, now=1000.0)
-    store.note_denial(busy, "drive_download_file", now=2000.0)
-    tokens = page()
-    assert (tokens["busy"]["last_used_at"], tokens["busy"]["last_denied_at"], tokens["busy"]["last_denied_tool"]) == (
-        1000.0, 2000.0, "drive_download_file",
+    row = scope_rows.ScopeRow(
+        id="r-mc", scope="slack.my_conversations", value=["C1"],
+        verbs=frozenset({Verb.READ, Verb.SEARCH}), operations=frozenset({"slack.read_messages"}),
     )
-    assert (tokens["idle"]["last_used_at"], tokens["idle"]["last_denied_at"], tokens["idle"]["last_denied_tool"]) == (
-        None, None, "",
+    assert "my conversations except C1" in _scoped_rule_entry(row, "C1", ["C1"])["title"]
+    no_value = scope_rows.ScopeRow(
+        id="r-mc", scope="slack.my_conversations", value=None,
+        verbs=frozenset({Verb.READ}), operations=frozenset({"slack.read_messages"}),
     )
+    title = _scoped_rule_entry(no_value, "", [])["title"]
+    assert "my conversations" in title and "except" not in title
 
 
 def test_scoped_token_page_data_lists_upstreams_with_the_audiences_the_person_holds(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens, upstream_mcp_runtime
+    from privacyfence import auto_accept, paths, scoped_tokens, upstream_mcp_runtime
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     (tmp_path / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com", email_verified=True)
     store = scoped_tokens.ScopedTokenStore(lambda: [alice])
@@ -2453,7 +815,7 @@ def test_scoped_token_page_data_lists_upstreams_with_the_audiences_the_person_ho
     )
     with principal_scope(alice):
         auto_accept.init_config_path(str(tmp_path / "settings.yaml"))
-        data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive", "kh"})
+        data = scoped_token_page_data(alice, policy=policy, connector_names={"drive", "kh"})
 
     assert data["upstreams"] == [
         {"id": "kh", "label": "Knowledge hub", "tools": ["kh_search"], "audiences": ["general", "hr"],
@@ -2464,28 +826,26 @@ def test_scoped_token_page_data_lists_upstreams_with_the_audiences_the_person_ho
 
 
 def test_scoped_token_page_data_has_no_upstreams_key_when_none_is_configured(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence import auto_accept, paths, scoped_tokens
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     (tmp_path / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com")
     scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
     policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
     with principal_scope(alice):
         auto_accept.init_config_path(str(tmp_path / "settings.yaml"))
-        data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
+        data = scoped_token_page_data(alice, policy=policy, connector_names={"drive"})
 
     assert "upstreams" not in data
 
 
 def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_token(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, runtime_credentials, scoped_tokens
+    from privacyfence import auto_accept, paths, runtime_credentials, scoped_tokens
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     config_path = tmp_path / "settings.yaml"
     config_path.write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com")
@@ -2512,7 +872,7 @@ def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_to
     records.add(record(pending, runtime_credentials.CREATING, "fedcba9876543210"))
 
     with principal_scope(alice):
-        data = scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive"})
+        data = scoped_token_page_data(alice, policy=policy, connector_names={"drive"})
     tokens = {t["label"]: t for t in data["tokens"]}
     assert tokens["sent"]["runtime_credential"] == {
         "runtime": "n8n", "credential_name": "PrivacyFence sent", "workflow_id": "wf1",
@@ -2521,42 +881,17 @@ def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_to
     assert tokens["pending"]["runtime_credential"] is None
 
 
-def test_scoped_token_page_data_does_not_touch_the_org_directory_on_a_local_install(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, runtime_credentials, scoped_tokens
-    from privacyfence.web.server import scoped_token_page_data
-
-    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
-    runtime_credentials.set_store(None)
-    config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
-    alice = Principal(id="alice", email="alice@example.com")
-    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
-    scoped_tokens.set_store(store)
-    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-    with principal_scope(alice):
-        auto_accept.init_config_path(str(config_path))
-    store.create(alice, label="one", days=30, rules=[], tools=["drive_list_files"], policy=policy)
-
-    with principal_scope(alice):
-        data = scoped_token_page_data(alice, policy=policy, delivery="companion", connector_names={"drive"})
-
-    assert [t["runtime_credential"] for t in data["tokens"]] == [None]
-    assert not (tmp_path / "org").exists()
-
-
 class TestScopedTokenPageData:
     """The New token form's gated upstream tools and the token list's approvals (ADR 0300)."""
 
     @staticmethod
     def _setup(tmp_path, monkeypatch, *, is_admin):
-        from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens, upstream_mcp_registry
+        from privacyfence import auto_accept, paths, scoped_tokens, upstream_mcp_registry
         from privacyfence import upstream_mcp_runtime
         from privacyfence.policy import scopes as policy_scopes
         from privacyfence.upstream_mcp_config import parse_upstreams
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
         (tmp_path / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
         upstream_mcp_registry.register(parse_upstreams({
             "version": 1,
@@ -2586,7 +921,7 @@ class TestScopedTokenPageData:
 
         with principal_scope(alice):
             auto_accept.init_config_path(str(tmp_path / "settings.yaml"))
-            return scoped_token_page_data(alice, policy=policy, delivery="once", connector_names={"drive", "kh"})
+            return scoped_token_page_data(alice, policy=policy, connector_names={"drive", "kh"})
 
     def test_an_administrator_page_lists_gated_tools_with_effect_and_digest(self, tmp_path, monkeypatch):
         alice, _store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
@@ -2612,6 +947,30 @@ class TestScopedTokenPageData:
         assert "kh_list_topics" in listed and "kh_list_topics" in data["auto_tools"]
         assert not {"kh_propose_change", "kh_search"} & (listed | set(data["auto_tools"]))
         assert data["upstreams"][0]["tools"] == ["kh_list_topics"]
+
+    def test_a_tool_whose_operation_belongs_to_another_upstream_is_not_offered(self, tmp_path, monkeypatch):
+        alice, _store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
+        # Named with this upstream's prefix, but declared for another operation: never offered for kh.
+        monkeypatch.setitem(auto_accept.TOOL_TO_GATE, "kh_shadow", "popup")
+        monkeypatch.setitem(auto_accept.TOOL_TO_OPERATION, "kh_shadow", "wiki.shadow")
+        monkeypatch.setitem(scopes.UPSTREAM_DECLARATIONS, "wiki.shadow", "d")
+        data = self._page(alice, policy, auto_accept, tmp_path)
+        assert [t["name"] for t in data["upstreams"][0]["gated_tools"]] == ["kh_propose_change", "kh_search"]
+
+    def test_an_approval_of_a_tool_no_longer_declared_lists_nothing(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_registry
+
+        alice, store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
+        store.create(
+            alice, label="kh", days=30, rules=[], tools=["kh_propose_change"], policy=policy, is_admin=True,
+            upstream_approvals=[
+                {"tool": "kh_propose_change", "digest": scopes.UPSTREAM_DECLARATIONS["kh.propose_change"]},
+            ],
+        )
+        upstream_mcp_registry.unregister_all()
+        (token,) = self._page(alice, policy, auto_accept, tmp_path)["tokens"]
+        assert token["rules"] == []
+        assert token["approved_upstream_tools"] == []
 
     def test_approval_rows_are_left_out_of_a_tokens_rules(self, tmp_path, monkeypatch):
         alice, store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)

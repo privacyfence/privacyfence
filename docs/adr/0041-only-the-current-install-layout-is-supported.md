@@ -15,6 +15,8 @@ kept the one-time v1 → v2 settings conversion (`policy/compat.py`'s `migrate_t
 last caller of the v1 compiler and of `policy/resource_registry.py`'s grant expansion. That
 conversion is removed. ADR 0004's other decisions are unchanged.
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 PrivacyFence has no existing users. Every install that exists is a maintainer's or a tester's, and

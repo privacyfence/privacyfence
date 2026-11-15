@@ -388,9 +388,8 @@ async def _run_in_popup_executor(func, *args, **kwargs) -> Any:
     than letting ``loop.run_in_executor`` submit ``func`` to the thread pool
     directly -- unlike ``loop.call_soon``, ``run_in_executor`` does *not*
     copy context on its own, so a bare submit would run ``func`` in that
-    worker thread's own (empty) context instead of this call's. That's
-    invisible in local mode (there's only ever one principal), but in org
-    mode it silently resolved ``current_principal()`` back to the default
+    worker thread's own (empty) context instead of this call's. That
+    silently resolved ``current_principal()`` back to the default
     principal for every popup this function drives that registers its own
     ``PendingApproval`` with no pre-registered one handed in --
     ``show_rule_confirmation_popup`` (propose_policy_change's confirmation,
@@ -1564,7 +1563,7 @@ async def propose_policy_change(
     ``privacyfence_list_policy``'s own rule ids: required for ``remove``, and for ``update`` names
     the existing rule being replaced (removed, then re-added under the new ``group``/``value``/
     ``verbs`` -- the same "narrowing is always remove-and-re-add-narrower" posture
-    ``SettingsController.remove_policy_rule``'s own docstring gives the Auto-accept Settings page,
+    the Auto-accept Settings page's rule removal follows,
     since v2 rules are additive-only by construction).
 
     Raises ``ValueError`` -- before any popup is shown -- for an unknown ``rule_id``, or for a

@@ -133,7 +133,7 @@ REGISTRY: tuple[RegistryEntry, ...] = (
     RegistryEntry(
         "claude", "Claude", ("Claude",), redirect_uris=("https://claude.ai/api/mcp/auth_callback",),
     ),
-    # Claude Desktop's handshake through the .mcpb extension, "local-agent-mode-<server>".
+    # Claude Desktop's local-agent handshake name, "local-agent-mode-<server>".
     RegistryEntry("claude-desktop", "Claude Desktop", (), ("local-agent-mode-{server}",)),
     # ChatGPT's DCR client_name for a Developer Mode connector. Its handshake clientInfo name has
     # not been observed, and it is not the "openai-mcp" ADR 0035 guessed (ADR 0103).

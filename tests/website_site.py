@@ -7,8 +7,7 @@ as it sits in the repository, because the deployed site is assembled from more t
 (the partials, the icon and screenshots from elsewhere in the repo, the docs), and because a file
 the build manifest forgets is then missing here too.
 
-Built once per test session, offline: `/download/` is not pre-rendered from the live Worker, so
-what the browser tests see is download.js rendering the manifest they stub. `/docs/` is rendered
+Built once per test session. `/docs/` is rendered
 from the working tree when the `docs` extra is installed (the website-build workflow installs it)
 and left out otherwise. `PRIVACYFENCE_SITE_DIR` points the tests at a site built beforehand
 instead, which is how .github/workflows/website-build.yml runs them on its own build.
@@ -41,7 +40,6 @@ sys.path.insert(0, str(REPO / "scripts"))
 import build_site  # noqa: E402 -- scripts/ is not a package
 from site_security_headers import headers_for_path  # noqa: E402
 
-API_ORIGIN = "https://downloads.privacyfence.eu"
 GA_ORIGIN = "https://www.googletagmanager.com"
 
 
@@ -51,14 +49,14 @@ def docs_generator_installed() -> bool:
 
 @functools.cache
 def built_site() -> Path:
-    """The built site's directory: `PRIVACYFENCE_SITE_DIR`, or a fresh offline build."""
+    """The built site's directory: `PRIVACYFENCE_SITE_DIR`, or a fresh build."""
     prebuilt = os.environ.get("PRIVACYFENCE_SITE_DIR")
     if prebuilt:
         return Path(prebuilt).resolve()
     tmp = Path(tempfile.mkdtemp(prefix="pf-site-"))
     atexit.register(shutil.rmtree, tmp, ignore_errors=True)
     out = tmp / "_site"
-    build_site.build(out, docs_ref="worktree" if docs_generator_installed() else None, fetch_manifest=False)
+    build_site.build(out, docs_ref="worktree" if docs_generator_installed() else None)
     return out
 
 
@@ -118,39 +116,3 @@ def chromium_launch_kwargs() -> dict:
     path = os.environ.get("PRIVACYFENCE_TEST_CHROMIUM")
     return {"executable_path": path} if path else {}
 
-
-STABLE_MANIFEST = {
-    "schema": 1,
-    "version": "4.5.0",
-    "channel": "stable",
-    "published_at": "2026-09-25T12:00:00Z",
-    "artifacts": [
-        {
-            "id": "macos-arm64",
-            "kind": "installer",
-            "platform": "macos",
-            "architecture": "arm64",
-            "filename": "PrivacyFence-4.5.0.dmg",
-            "size": 104857600,
-            "sha256": "a" * 64,
-        },
-        {
-            "id": "windows-x64",
-            "kind": "installer",
-            "platform": "windows",
-            "architecture": "x64",
-            "filename": "PrivacyFence-4.5.0-setup.exe",
-            "size": 89128960,
-            "sha256": "b" * 64,
-        },
-        {
-            "id": "linux-x64",
-            "kind": "installer",
-            "platform": "linux",
-            "architecture": "x64",
-            "filename": "privacyfence_4.5.0_amd64.deb",
-            "size": 47028460,
-            "sha256": "c" * 64,
-        },
-    ],
-}

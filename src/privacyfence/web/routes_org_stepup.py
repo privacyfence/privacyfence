@@ -1,10 +1,7 @@
-"""Org mode's IdP re-authentication fallback for decide-time step-up -- the
-one piece of web/routes_org_approvals.py's former surface with no
-local-mode analogue at all (local mode has no IdP to re-authenticate
-against), so merging the rest of that module into
-web/routes_approvals.py (ADR 0033) left this behind as its own small module rather than
-forcing it behind a mode adapter with nothing on the other side. Why org
-mode falls back to the IdP at all, and local mode does not, is ADR 0066.
+"""The IdP re-authentication fallback for decide-time step-up -- the one
+piece of web/routes_org_approvals.py's former surface that merging the rest
+into web/routes_approvals.py (ADR 0033) left behind as its own small module.
+Why step-up falls back to the IdP at all is ADR 0066.
 
 ``POST /api/approvals/{id}/stepup/idp`` -> ``GET /oauth/stepup/callback``
 mirrors web/routes_org_identity.py's own ``/login`` flow almost exactly

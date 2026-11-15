@@ -12,6 +12,8 @@ Linux phase). Implemented on Linux (`scripts/linux_privilege_separation.sh`, `de
 Records the per-platform mechanics that [ADR 0041](0041-only-the-current-install-layout-is-supported.md)
 decision 3 left to this phase.
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 Every shipped install is privilege-separated ([ADR 0003](0003-separated-installs-only.md)): the

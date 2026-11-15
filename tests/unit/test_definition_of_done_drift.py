@@ -49,7 +49,7 @@ def test_section_2_7_names_the_commands_this_guard_depends_on():
     # If the extraction ever matched nothing, every parametrized case below would vanish silently.
     commands = _commands(_section_2_7())
     assert "ruff check ." in commands
-    assert "npm run dry-run" in commands
+    assert "npm run lint" in commands
     assert any(command.startswith("pytest -v --cov=") for command in commands)
 
 

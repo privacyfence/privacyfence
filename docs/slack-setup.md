@@ -57,14 +57,11 @@ Switching to your own app, or back with **Remove our own app**, makes everyone w
 sign in again. An internal app serves one workspace, so people in any other Slack workspace
 cannot sign in with it.
 
-On a desktop install the app is a `slack` section in the bundle instead; see below.
-
 ## What you need
 
 - Permission to create apps in your Slack workspace (and, if your workspace requires it, an admin
   who approves app installs).
-- Python 3 to run `scripts/sign_connector_config.py` (organization server) or
-  `scripts/build_org_bundle.py` (desktop install), or a browser for the offline signing page.
+- Python 3 to run `scripts/sign_connector_config.py`, or a browser for the offline signing page.
 
 ## Register the app
 
@@ -74,15 +71,13 @@ If you did not use the Admin button, register the app by hand:
    Name it (for example `PrivacyFence`), pick your workspace and click **Create App**.
 2. **OAuth & Permissions → Scopes → User Token Scopes** (not Bot Token Scopes): add every scope
    in the [values table](#values). Add no bot scopes.
-3. **OAuth & Permissions → Redirect URLs:** add the redirect for each kind of deployment you run
-   (see [Values](#values)): the local redirect for desktop installs, the org redirect for an
-   organization server. Click **Add**, then **Save URLs**; a URL that was added but not saved is
-   not registered. One app can carry both, and the same client ID and secret serve both kinds of
-   deployment.
+3. **OAuth & Permissions → Redirect URLs:** add the redirect URL for your server (see
+   [Values](#values)). Click **Add**, then **Save URLs**; a URL that was added but not saved is
+   not registered.
 4. **Basic Information → App Credentials:** copy the **Client ID** and **Client Secret**.
 
 **Never activate public distribution** (**Manage Distribution → Activate Public Distribution**),
-and never share the connector config or bundle outside your workspace. An app created from scratch
+and never share the connector config outside your workspace. An app created from scratch
 and left undistributed is an internal app. Slack restricts apps distributed outside the Slack
 Marketplace to 1 request per minute and 15 messages per call on `conversations.history` and
 `conversations.replies`, which `slack_get_channel_history`, `slack_get_thread_replies` and
@@ -146,42 +141,23 @@ See [ADR 0234](adr/0234-slack-reads-report-the-users-own-read-state.md) and
 
 | Item | Value |
 |---|---|
-| Local redirect (desktop installs) | `http://127.0.0.1:53682/callback` — exactly this; Slack requires an exact match |
-| Org redirect (organization server) | `<server>/oauth/callback/slack`, with `<server>` your server's public address, `PRIVACYFENCE_ISSUER_URL` (for example `https://pf.acme.example.com/oauth/callback/slack`) |
+| Redirect URL | `<server>/oauth/callback/slack`, with `<server>` your server's public address, `PRIVACYFENCE_ISSUER_URL` (for example `https://pf.acme.example.com/oauth/callback/slack`) |
 | User token scopes | `channels:read`, `groups:read`, `im:read`, `mpim:read`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`, `users:read.email`, `search:read`, `chat:write`, `im:write`, `channels:write`, `groups:write`, `mpim:write` |
-| Connector config (organization server) | `sign_connector_config.py sign --provider slack --client-id <Client ID> --client-secret-file <file holding the Client Secret>` |
-| Bundle flags (desktop install) | `--slack-client-id <Client ID>` and `--slack-client-secret <Client Secret>` (both required together); optional `--slack-scopes <scope> …` |
+| Connector config | `sign_connector_config.py sign --provider slack --client-id <Client ID> --client-secret-file <file holding the Client Secret>` |
 
 What the less obvious scopes are for: `users:read.email` resolves authors' email addresses;
 `im:write` and `mpim:write` open a new direct or group message (`slack_create_group_chat`);
 `im:write`, `channels:write`, `groups:write` and `mpim:write` mark a conversation unread (the
 `mark_unread` option of `slack_send_message`), depending on the conversation type.
 
-`--slack-scopes` replaces the requested scope list with your own, for desktop installs and an
-organization server alike. A scope you leave out breaks the tools that need it, so leave it unset
-unless you have a reason.
-
 ## Give PrivacyFence the app
 
-On an organization server, sign the Client ID and Client Secret as a connector config and upload it
-on **Admin → Services** (see [above](#your-workspaces-own-app-in-one-click)). On a desktop install,
-put them in the bundle:
-
-```bash
-python3 scripts/build_org_bundle.py \
-  --slack-client-id 1234567890.1234567890 \
-  --slack-client-secret abcdef0123456789abcdef0123456789 \
-  -o org_bundle.json --merge
-```
-
-`--merge` adds Slack to an existing bundle; drop it if this is the first service in the bundle.
-Install the bundle on **Admin → Organization configuration**
-([connecting-a-service.md](connecting-a-service.md)).
+Sign the Client ID and Client Secret as a connector config and upload it on **Admin → Services**
+(see [above](#your-workspaces-own-app-in-one-click)).
 
 ## Users connect
 
-Users click **Authenticate…** next to Slack (desktop install, after the bundle is installed) or **Connect**
-(organization server), then review the permissions on Slack's page and click **Allow**. The shared
+Users click **Connect** next to Slack on the Connect page (**/connect**), then review the permissions on Slack's page and click **Allow**. The shared
 flow is described in [connecting-a-service.md](connecting-a-service.md).
 
 ## Troubleshooting
@@ -197,11 +173,9 @@ admin uninstalled it). **Reconnect…**.
 
 **Slack says `redirect_uri did not match any configured URIs`, or the browser does not come
 back** — the URL Slack names after `Passed URI:` is missing from the app's **Redirect URLs**. Add
-exactly that URL and click **Save URLs**, then connect again; no bundle rebuild or restart is
-needed. It must be exactly `http://127.0.0.1:53682/callback` for desktop installs, or
-`<server>/oauth/callback/slack` for an organization server; `localhost` in place of
-`127.0.0.1` does not match. If the URL is already listed, check that the app you edited is the one
-whose Client ID is in the connector config or bundle.
+exactly that URL and click **Save URLs**, then connect again; no restart is needed. It must be
+exactly `<server>/oauth/callback/slack`. If the URL is already listed, check that the app you
+edited is the one whose Client ID is in the connector config.
 
 **Channel history reads through search, or thread replies stop at 15** — the server uses the built-in
 app, which Slack limits until PrivacyFence is in the Marketplace. Switch to your workspace's own app

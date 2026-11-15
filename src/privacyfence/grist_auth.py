@@ -22,14 +22,10 @@ from urllib.parse import quote, urlencode, urlsplit
 
 import requests
 
-from . import oauth_loopback
-from .oauth_loopback import OAuthLoopbackError
 from .secure_files import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
-GRIST_OAUTH_PORT = 53685
-GRIST_REDIRECT_PATH = "/callback"
 GRIST_SCOPES = "doc:read doc:write doc.schema:write offline_access"
 DEFAULT_SERVER_URL = "https://docs.getgrist.com"
 
@@ -39,19 +35,19 @@ _REFRESH_MARGIN_SECONDS = 60
 _DEFAULT_EXPIRES_IN = 3600
 _DETAIL_LIMIT = 200
 
-_NOT_AUTHENTICATED = "Grist is not authenticated. Use Authenticate… in PrivacyFence Settings."
+_NOT_AUTHENTICATED = "Grist is not authenticated. Connect Grist on the Connect page (/connect)."
 _UNREADABLE = (
-    "Grist's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect again."
+    "Grist's saved sign-in could not be read. Connect Grist on the Connect page (/connect) to connect again."
 )
 _OAUTH_REQUIRED = (
-    "Your organization connects to Grist with OAuth. Use Authenticate… in PrivacyFence Settings."
+    "Your organization connects to Grist with OAuth. Connect Grist on the Connect page (/connect)."
 )
 _DIFFERENT_SERVER = (
     "Grist was connected to a different server than your organization uses. "
-    "Use Authenticate… in PrivacyFence Settings to connect again."
+    "Connect Grist on the Connect page (/connect) to connect again."
 )
 _EXPIRED = (
-    "Your Grist sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again."
+    "Your Grist sign-in has expired or was revoked. Connect Grist on the Connect page (/connect) to sign in again."
 )
 _SCHEME_RULE = "The Grist server address must start with https:// (http:// is allowed only for localhost)."
 
@@ -120,7 +116,7 @@ def _text(section: dict[str, Any], key: str) -> str:
     return str(section.get(key) or "").strip()
 
 
-def bundle_settings(section: dict[str, Any], *, org_mode: bool) -> GristBundle:
+def bundle_settings(section: dict[str, Any]) -> GristBundle:
     """Read the organization bundle's ``grist`` section."""
     client_id = _text(section, "client_id")
     client_secret = _text(section, "client_secret")
@@ -140,7 +136,7 @@ def bundle_settings(section: dict[str, Any], *, org_mode: bool) -> GristBundle:
             client_secret=client_secret,
             auth_server_url=normalize_server_url(raw_auth) if raw_auth else server_url,
         )
-    if org_mode and not server_url:
+    if not server_url:
         raise GristClientError("Grist organization config not installed")
     return GristBundle(server_url=server_url, oauth=oauth)
 
@@ -500,23 +496,3 @@ class GristTokenProvider:
 
     def __repr__(self) -> str:
         return f"GristTokenProvider({_host(self._config.server_url)})"
-
-
-def authorize_interactive(config: GristOAuthConfig, token_file: str) -> dict[str, Any]:
-    """Sign in through the browser (loopback redirect), save and return the record."""
-    endpoints = discover(config.auth_server_url, config.server_url)
-
-    def _build(redirect_uri: str, state: str, code_challenge: str) -> str:
-        return build_authorize_url(endpoints, config.client_id, redirect_uri, state, code_challenge)
-
-    def _exchange(code: str, redirect_uri: str, code_verifier: str) -> dict[str, Any]:
-        return exchange_code(config, endpoints, code, redirect_uri, code_verifier)
-
-    try:
-        record = oauth_loopback.run_browser_oauth(
-            _build, _exchange, port=GRIST_OAUTH_PORT, path=GRIST_REDIRECT_PATH, redirect_host="localhost",
-        )
-    except OAuthLoopbackError as exc:
-        raise GristClientError(f"Grist sign-in failed: {exc}") from exc
-    save_token_file(token_file, record)
-    return record

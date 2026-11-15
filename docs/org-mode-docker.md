@@ -2,21 +2,21 @@
 
 This page runs PrivacyFence from the container image: on your own computer for yourself ([Run it on
 this computer](#run-it-on-this-computer)), or as an organization server with its reverse proxy
-([Quick start](#quick-start)). The server flow replaces
-[section 3](org-mode-setup-guide.md#3-service-account-and-install) (service account and install),
-[section 7](org-mode-setup-guide.md#7-reverse-proxy-and-tls) (reverse proxy and TLS) and
-[section 8](org-mode-setup-guide.md#8-hardened-systemd-unit) (systemd unit) of the
-[organization guide](org-mode-setup-guide.md), and the Upgrade and Backup parts of its
-[section 14](org-mode-setup-guide.md#14-operations). Sections
+([Quick start](#quick-start)). Sections
+[3](org-mode-setup-guide.md#3-service-account-and-install) (install) and
+[8](org-mode-setup-guide.md#8-hardened-systemd-unit) (container settings) of the
+[organization guide](org-mode-setup-guide.md) point here, and sections
 [4](org-mode-setup-guide.md#4-identity-provider),
 [5](org-mode-setup-guide.md#5-connector-apps),
+[6](org-mode-setup-guide.md#6-server-settings-and-your-own-apps) (the environment file is
+`privacyfence.env`),
 [9](org-mode-setup-guide.md#9-first-sign-in-and-validation),
 [10](org-mode-setup-guide.md#10-install-wide-and-per-user-policy),
 [11](org-mode-setup-guide.md#11-ai-systems),
 [12](org-mode-setup-guide.md#12-approvals-and-step-up),
-[13](org-mode-setup-guide.md#13-file-delivery) apply unchanged, and
-[section 6](org-mode-setup-guide.md#6-server-settings-and-your-own-apps) applies with the environment
-file being `privacyfence.env`.
+[13](org-mode-setup-guide.md#13-file-delivery),
+[14](org-mode-setup-guide.md#14-operations) and
+[15](org-mode-setup-guide.md#15-troubleshooting) apply to the container.
 
 ## The image
 
@@ -34,11 +34,28 @@ file being `privacyfence.env`.
 | Health check | Probes the daemon's well-known endpoint from inside the container, on `PRIVACYFENCE_PORT` (8765 by default) |
 | With no identity provider | Starts in single-user mode on localhost ([below](#run-it-on-this-computer)). It does not refuse to start. |
 
+## How the image is built
+
+`scripts/build_org_image.sh --platform linux/amd64|linux/arm64 --tag NAME:TAG` builds the image. It
+requires exactly one `dist/privacyfence-*.whl`, stages it with `deploy/docker/Dockerfile`, the
+entrypoint, the health check and `requirements/runtime.lock.txt` into `build/org-image/`, and runs
+`docker buildx build` on that directory. The image installs the hash-pinned lock, then the wheel
+with `--no-deps`.
+
+- `build.yml`'s `build-org-image` job builds and tests the image on a native runner per architecture
+  (`ubuntu-24.04`, `ubuntu-24.04-arm`) and saves it as the `org-image-<arch>` workflow artifact; it
+  never pushes. `publish-org-image.yml` pushes those tested bytes on a stable tag.
+  `tests.yml`'s `org-docker-image` is the per-PR amd64 leg.
+- The stop signal is `SIGINT`: the daemon installs no SIGTERM handler, so as PID 1 it would ignore the
+  default and `docker stop` would wait out its timeout.
+- The entrypoint refuses to start (exit 78) when no organization bundle is installed, rather than
+  starting on the container's unreachable loopback.
+- The base image is pinned by digest; Dependabot's `docker` entry bumps the digest within Python 3.12.
+
 ## Run it on this computer
 
 This is PrivacyFence for one person, in a container, with its own built-in sign-in for Google, Slack,
-Salesforce, Atlassian and Miro (organization mode and this image only; desktop mode, which is
-deprecated, has none). It is the same image and the same mode as a server, with no identity
+Salesforce, Atlassian and Miro (organization mode and this image only). It is the same image and the same mode as a server, with no identity
 provider: one administrator, served only at `http://localhost`.
 
 > **Anyone who can run `docker` on this computer controls the install.** They can read the setup
@@ -250,7 +267,7 @@ Google sign-in.
 - A public hostname with DNS pointing at the server (not proxied by Cloudflare), and TCP 443
   reachable; TCP 80 is recommended and UDP 443 optional ([Quick start](#quick-start), step 1). Caddy
   obtains the certificate itself.
-- Everything else in the guide's [Prerequisites](org-mode-setup-guide.md#2-prerequisites) except Python.
+- Everything else in the guide's [Prerequisites](org-mode-setup-guide.md#2-prerequisites).
 
 ## Files
 
@@ -505,10 +522,10 @@ docker compose pull
 docker compose up -d
 ```
 
-The advice in the guide's [Upgrade](org-mode-setup-guide.md#upgrade) applies: read the release's
-changelog entry first and back up first. Going back is safe only if the older version reads the data as
-the newer one left it ([Going back to 6.x](org-mode-setup-guide.md#going-back-to-6x)). Before moving
-to 8.x, check the Admin page says `Ready for PrivacyFence 8: yes.`
+Read the release's changelog entry first and back up first ([Backup and restore](#backup-and-restore)).
+Going back is safe only if the older version reads the data as the newer one left it
+([Going back to 6.x](org-mode-setup-guide.md#going-back-to-6x)). Then open the Admin page and check
+the version. Before moving to 8.x, check it says `Ready for PrivacyFence 8: yes.`
 ([Upgrading to 8.x](org-mode-setup-guide.md#upgrading-to-8x)). After an upgrade, each person sees a
 strip linking to What's new (`/whats-new`) the first time they open PrivacyFence, listing the
 changelog sections since the version they last used.
@@ -558,3 +575,8 @@ the daemon refuses to start:
 ```bash
 sudo install -d -o 10001 -g 10001 -m 700 /srv/privacyfence-org
 ```
+
+The daemon refuses to start in organization mode if the data directory, its `org/` directory or its
+`users/` tree grants any access to group or others, and it creates every directory there with mode
+`0700`. The data directory is `~/.privacyfence/` of the user it runs as; in the image that is
+`/var/lib/privacyfence-org/.privacyfence/`. The layout is in [Backup](org-mode-setup-guide.md#backup).

@@ -239,8 +239,6 @@ def _build_tool_step(step_id: str, raw: dict[str, Any], fail: Any) -> ToolStep:
     is_download = tool in DOWNLOAD_TOOLS
     is_upload = tool in UPLOAD_TOOLS
     if is_export or is_download:
-        if "destination_dir" in args:
-            raise fail(f"step {step_id}: do not give destination_dir, privacyfence-sync sets it")
         if save_result is not None:
             raise fail(f"step {step_id}: save_result is not allowed on {tool}")
     if is_export:

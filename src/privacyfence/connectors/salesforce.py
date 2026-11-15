@@ -298,8 +298,11 @@ _FIELDS_DESCRIPTION = (
     "YYYY-MM-DD and date-times as ISO 8601. Lookup fields take a record id."
 )
 
-_DESTINATION_DIR = (
-    "Folder on the user's computer to write the file to, absolute or starting with ~/."
+
+
+_DELIVERY_SENTENCE = (
+    "The file is delivered as a one-time download_url in the result (or inline when small): fetch "
+    "that address directly, no auth header needed."
 )
 
 
@@ -352,7 +355,6 @@ class SalesforceConnector(Connector):
     def __init__(self, client: SalesforceClient) -> None:
         self._sf = client
         self.my_email: str = ""
-        self.download_mode: str = "local"
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
 
@@ -365,7 +367,7 @@ class SalesforceConnector(Connector):
         return "salesforce"
 
     def tool_specs(self) -> list[ToolSpec]:
-        return export_files.visible_specs(self._all_tool_specs(), self.download_mode, self.download_config)
+        return export_files.visible_specs(self._all_tool_specs(), self.download_config)
 
     def _all_tool_specs(self) -> list[ToolSpec]:
         return [
@@ -438,15 +440,15 @@ class SalesforceConnector(Connector):
             ToolSpec(
                 name="salesforce_export_report",
                 description=(
-                    "Write every row of a Salesforce report to a CSV or JSON file on the user's "
-                    "computer, in one approval. Columns are the report's column API names. columns "
+                    "Export every row of a Salesforce report as a CSV or JSON file, in one "
+                    "approval. Columns are the report's column API names. columns "
                     "and filters narrow this export as on salesforce_run_report: for example "
                     '[{"column": "LAST_UPDATE", "operator": "greaterOrEqual", "value": '
                     '"2026-10-04"}] exports only rows changed since that date. A report of more '
                     "than 2,000 rows, or a grouped report, needs page_by; the export then reads it "
-                    "page by page internally. Returns {rows, columns, sha256, path, name, "
-                    "size_bytes, delivery}, never the rows; read the file at path. "
-                    + export_files.ORG_DELIVERY_SENTENCE + " Requires user approval."
+                    "page by page internally. Returns {rows, columns, sha256, name, "
+                    "size_bytes, delivery, download_url}, never the rows. "
+                    + _DELIVERY_SENTENCE + " Requires user approval."
                 ),
                 params=[
                     ToolParam("report_id", "str", description=_REPORT_ID_DESCRIPTION),
@@ -463,7 +465,6 @@ class SalesforceConnector(Connector):
                                           "as $1,200.00. both writes each column twice, raw value as "
                                           "the column name and the shown text as <column>.label, "
                                           "plus <column>.currency for money columns."),
-                    ToolParam("destination_dir", "str", description=_DESTINATION_DIR),
                     ToolParam("file_name", "str", required=False, default="",
                               description="File name ending in .csv or .json; the ending picks the "
                                           "format. Empty means <report_id>.csv."),
@@ -604,7 +605,7 @@ class SalesforceConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
-        export_files.refuse_if_exports_off(tool, self.download_mode, self.download_config)
+        export_files.refuse_if_exports_off(tool, self.download_config)
         if tool == "salesforce_list_reports":
             return await self._list_reports()
         if tool == "salesforce_get_record":
@@ -810,7 +811,7 @@ class SalesforceConnector(Connector):
         )
 
     async def _export_report(
-        self, report_id: str, destination_dir: str, columns: str = "", filters: str = "",
+        self, report_id: str, columns: str = "", filters: str = "",
         page_by: str = "", cell_format: str = "value", file_name: str = "",
     ) -> Any:
         filter_list = _parse_report_filters(filters)
@@ -818,10 +819,9 @@ class SalesforceConnector(Connector):
         page_by = page_by.strip()
         if cell_format not in ("value", "label", "both"):
             raise ValueError("cell_format must be value, label or both.")
-        destination_dir = export_files.check_destination(destination_dir)
         file_name, fmt = export_files.export_file_name(file_name, report_id)
         export_files.refuse_org_without_staging(
-            "salesforce_export_report", self.download_mode,
+            "salesforce_export_report",
             (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
             "salesforce_run_report",
         )
@@ -873,7 +873,7 @@ class SalesforceConnector(Connector):
         data = await asyncio.to_thread(export_files.render, names, rows, fmt, spreadsheet_safe=True)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
+        saved_to = export_files.ORG_SAVED_TO
         preview = {"Report": str(report_name), "Report ID": report_id}
         if column_list:
             preview["Columns"] = ", ".join(column_list)
@@ -906,19 +906,17 @@ class SalesforceConnector(Connector):
                 "Saved to": saved_to,
             },
             details_text=export_files.card_details(preview, n, names, saved_to, sha256),
-            delivery="staged_link" if self.download_mode == "org"
-            else "local_disk" if local_files.can_access_user_files(self.download_mode)
-            else "client_bridge",
+            delivery="staged_link",
             my_email=self.my_email,
             args={
                 "report_id": report_id, "columns": columns, "filters": filters,
                 "page_by": page_by, "cell_format": cell_format,
-                "destination_dir": destination_dir, "file_name": file_name, "sha256": sha256,
+                "file_name": file_name, "sha256": sha256,
             },
         )
         delivered = local_files.deliver_export(
-            destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
-            download_mode=self.download_mode, download_config=self.download_config,
+            file_name, data, export_files.MIME_TYPES[fmt],
+            download_config=self.download_config,
             download_base_url=self.download_base_url,
         )
         return export_files.export_summary(names, rows, sha256, delivered)

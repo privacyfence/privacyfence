@@ -24,10 +24,6 @@ Threading model:
   - Web thread:    uvicorn serving the embedded HTTP server (web/server.py)
     that hosts ``/mcp`` and the web approval/settings surfaces -- this is
     also the event loop every connector call now actually runs on.
-  - Update timer:  a background thread pulsing ``SettingsController.
-    on_update_check_timer()`` every few hours (see
-    UPDATE_CHECK_TIMER_INTERVAL_SECONDS below) -- the direct successor of
-    the old menu bar's own ``rumps.Timer``.
   - Cache warm:    short-lived background thread(s) started right after the
     web server's event loop is known, refreshing Slack/Telegram directory
     caches if they've gone stale -- see _warm_connector_caches(). Kept off
@@ -52,18 +48,18 @@ Configuration is split into two files (see paths.py):
     and docs/google-cloud-setup.md. It's plain data, not a credential, and is
     handed straight to CalendarConnector; the Calendar OAuth client itself
     never carries Workspace-admin directory scope. ``mode``/``server``/
-    ``idp`` switch this daemon into org mode — a real OAuth 2.1 authorization
-    server on ``/mcp`` instead of the local shared-secret token, human
-    identity resolved via the org's own OIDC IdP (see ADR 0011). Absent
-    (every install that hasn't opted in) means local mode. See org_mode.py and org_identity.py
-    for the schema, or build a bundle with ``scripts/build_org_bundle.py
-    --mode org ...``.
+    ``idp`` configure the organization server — a real OAuth 2.1 authorization
+    server on ``/mcp``, human identity resolved via the org's own OIDC IdP
+    (see ADR 0011); ``mode`` must be ``org`` (ADR 0301). See org_mode.py and
+    org_identity.py for the schema. A bundle left by an earlier version is read
+    here; a new server is configured with environment variables and the Admin page
+    (docs/org-mode-setup-guide.md).
   - ``config/settings.yaml``   — per-user settings: privacy policy,
     connectors{enabled}, auto_accept (the policy rules),
     pii_detection{enabled, detect_ip_addresses, detect_financial_figures,
     audit_match_details}, step_up{enabled, scope, rp_id, rp_name,
-    require_passkey} (local mode's own WebAuthn passkey enrollment config,
-    see step_up_config.py). No secrets live here. Lives under
+    require_passkey} (the WebAuthn passkey enrollment config, see
+    step_up_config.py). No secrets live here. Lives under
     ``paths.authority_dir()``, not the user-dir root
     directly -- see that function's own docstring.
 Per-user credentials (OAuth tokens, Telegram session) live under
@@ -82,12 +78,10 @@ import logging
 import os
 import sys
 import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlparse, urlsplit
+from typing import TYPE_CHECKING, Any
 
 import portalocker
 import yaml
@@ -95,8 +89,6 @@ import yaml
 from . import (
     __version__,
     admin_config,
-    agent_label,
-    agent_overrides,
     agent_runtimes,
     audit_forwarding,
     connector_configs,
@@ -108,9 +100,9 @@ from . import (
     oidc_provider,
     org_bundle_signing,
     org_mode,
+    paths,
     peek_provisioning,
     policy_upgrade,
-    privilege_separation,
     relay_client,
     runtime_credential_sweeper,
     scoped_tokens,
@@ -129,15 +121,12 @@ from .paths import (
     authority_dir,
     authority_root,
     data_dir,
-    handoff_dir,
     org_dir,
     safe_principal_id,
     user_dir,
 )
-from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, Principal, current_principal
-from .webauthn_stepup import StepUpRequirementChange, has_credentials as has_webauthn_credentials
-from .webauthn_stepup import observe_step_up_requirement, step_up_disabled_notice
+from .webauthn_stepup import StepUpRequirementChange
 from .app_credentials import telegram_app_credentials
 from .approval_ui import init_approval_ui
 from .audit_log import (
@@ -178,9 +167,8 @@ from .connectors.tasks import TasksConnector
 from .connectors.peek import PeekConnector
 from .connectors.telegram import TelegramConnector
 from .apps_script_client import AppsScriptClient, AppsScriptClientError
-from .atlassian_oauth import AtlassianOAuthError, assets_enabled, assets_workspace_override, scopes_for
+from .atlassian_oauth import AtlassianOAuthError, assets_enabled, assets_workspace_override
 from .atlassian_users import AtlassianUserDirectory, erase_overdue_caches
-from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .atlassian_oauth import load_token_file as load_atlassian_token
 from .calendar_client import CalendarClient, CalendarClientError
 from .assets_client import AssetsClient, AssetsClientError
@@ -190,30 +178,22 @@ from .contacts_client import ContactsClient, ContactsClientError
 from .drive_client import DriveClient, DriveClientError
 from .gmail_client import GmailClient, GmailClientError
 from .grist_auth import GristClientError
-from .grist_auth import authorize_interactive as grist_authorize_interactive
 from .grist_auth import bundle_settings as grist_bundle_settings
 from .grist_auth import load_token_file as load_grist_token
 from .grist_auth import resolve_credential as grist_resolve_credential
 from .grist_client import GristClient
 from .jira_client import JiraClient, JiraClientError
 from .miro_auth import MiroClientError, MiroTokenProvider
-from .miro_auth import authorize_interactive as miro_authorize_interactive
 from .miro_auth import bundle_settings as miro_bundle_settings
 from .miro_auth import load_token_file as load_miro_token
 from .miro_client import MiroClient
 from .salesforce_client import DEFAULT_REPORT_MAX_PAGES, SalesforceClient, SalesforceClientError
-from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .salesforce_client import load_token_file as load_salesforce_token
 from .slack_client import SlackClient, SlackClientError
 from .peek_client import PeekClient, PeekClientError, PeekProvisioningClient
 from .peek_client import bundle_base_url as peek_bundle_base_url
 from .peek_client import load_token_file as load_peek_token
-from .peek_client import normalize_base_url as peek_normalize_base_url
-from .peek_client import poll_device_login as peek_poll_device_login
 from .peek_client import resolve_server as peek_resolve_server
-from .peek_client import save_token_file as save_peek_token
-from .peek_client import start_device_login as peek_start_device_login
-from .slack_client import authorize_interactive as slack_authorize_interactive
 from .slack_client import load_token_file as load_slack_token
 from .tasks_client import TasksClient, TasksClientError
 from .telegram_client import TelegramClientError, TelegramPrivacyFenceClient
@@ -289,9 +269,8 @@ def _release_instance_lock() -> None:
 # ---------------------------------------------------------------------------- #
 # Shutdown wait: the main thread used to block inside an AppKit menu bar's
 # run loop until its "Quit PrivacyFence" ended it. That host is gone, so
-# run_app() below now blocks on this plain threading.Event instead -- request_shutdown() (called by SettingsController
-# .quit_app(), the direct successor of that same "Quit PrivacyFence" action)
-# sets it, same as SIGINT/Ctrl-C raising KeyboardInterrupt out of the wait.
+# run_app() below now blocks on this plain threading.Event instead -- request_shutdown()
+# (the "Quit PrivacyFence" action) sets it, same as SIGINT/Ctrl-C raising KeyboardInterrupt out of the wait.
 # ---------------------------------------------------------------------------- #
 
 _shutdown_event = threading.Event()
@@ -299,7 +278,7 @@ _shutdown_event = threading.Event()
 
 def request_shutdown() -> None:
     """Signal run_app()'s own wait loop to return. Called by
-    SettingsController.quit_app() -- see that method's own docstring."""
+    the "Quit PrivacyFence" action."""
     _shutdown_event.set()
 
 
@@ -310,28 +289,6 @@ def _wait_for_shutdown() -> None:
     thread (McpDispatcher.call() via /mcp, and every web/routes_*.py
     handler) -- this thread has nothing left to do but wait."""
     _shutdown_event.wait()
-
-
-# Periodic "is it time to check yet?" pulse for the update checker --
-# deliberately shorter than update_checker.CHECK_INTERVAL_SECONDS (24h).
-# SettingsController.on_update_check_timer() re-derives whether 24h have
-# actually passed from its own on-disk timestamp, so this is robust to
-# sleep/wake and doesn't need to match the real interval exactly.
-# _run_update_check_timer (started as its own daemon thread by
-# run_app(), below) is now what fires it.
-UPDATE_CHECK_TIMER_INTERVAL_SECONDS = 6 * 60 * 60
-
-
-def _run_update_check_timer(controller: Any) -> None:
-    """Fires ``controller.on_update_check_timer()`` once immediately, then
-    every UPDATE_CHECK_TIMER_INTERVAL_SECONDS until shutdown is requested --
-    reuses ``_shutdown_event`` as its own sleep/cancel mechanism so this
-    thread wakes and exits promptly rather than sleeping out its last
-    interval on the way down."""
-    while True:
-        controller.on_update_check_timer()
-        if _shutdown_event.wait(UPDATE_CHECK_TIMER_INTERVAL_SECONDS):
-            return
 
 
 PERSONAL_DATA_SWEEP_INTERVAL_SECONDS = 6 * 60 * 60
@@ -484,8 +441,8 @@ def _warn_if_legacy_bundle_changed() -> None:
 def load_org_config() -> dict[str, Any]:
     """Load the installed organization config bundle.
 
-    Three states, not two: absent entirely → {} (local mode, same
-    "missing config → connector skipped" philosophy used for every
+    Three states, not two: absent entirely → {} (no organization config yet,
+    the same "missing config → connector skipped" philosophy used for every
     connector below); a valid JSON object → parsed and returned as
     configured; present but broken (unreadable, malformed JSON, or a
     non-object top level) → raise ``org_mode.ConfigurationError`` and
@@ -494,12 +451,10 @@ def load_org_config() -> dict[str, Any]:
     Before this, "broken" collapsed into the same {} result as "absent" —
     so a corrupted or tampered org_config.json silently behaved exactly
     like no org config at all. For an org-mode install that's a silent
-    downgrade to no IdP-backed auth at all (org_mode.resolve_mode({})
-    resolves to "local"), triggerable by anything that can truncate or
+    downgrade to no IdP-backed auth at all (an empty bundle
+    reads as organization mode with no identity provider), triggerable by anything that can truncate or
     corrupt the file — not a state this daemon should ever paper over.
-    A desktop (local-mode) bundle is installed in PrivacyFence Settings under
-    Admin → Organization configuration → "Install configuration file…". An
-    organization server takes no new bundle (settings come from the
+    An organization server takes no new bundle (settings come from the
     environment, its own apps from signed connector configs).
 
     Bundle signing (ADR 0016): a well-formed-but-hostile *replacement* of
@@ -511,9 +466,7 @@ def load_org_config() -> dict[str, Any]:
     pinned signing key raises ConfigurationError the same as a malformed
     one, and ``mode: org`` additionally requires the bundle to actually
     be signed at all (see that module's own docstring for the trust-on-
-    first-use model). A local-mode install that has never adopted
-    signing is unaffected — this call is then a no-op past the "no
-    signing key pinned yet and no signature present" pass-through case.
+    first-use model). With no bundle file at all, this call is a no-op.
     """
     global _bundle_adopted_this_start
     # Runs several times per process, so only ever set it to True.
@@ -556,11 +509,13 @@ def load_org_config() -> dict[str, Any]:
             "pinned to %s -- every future bundle must verify against this key",
             org_bundle_signing.pinned_public_key_path(org_dir()),
         )
-    if org_mode.resolve_mode(data) == "org" and not trust.signed:
+    org_mode.validate_mode(data)
+    if not trust.signed:
         raise org_mode.ConfigurationError(
             f"Organization config at {path} has \"mode\": \"org\" but is not signed -- org mode "
-            "requires a signed bundle (build one with scripts/build_org_bundle.py --sign-key ...; "
-            "generate a signing key first with --generate-signing-key if you haven't yet)."
+            "requires a signed bundle (an org_bundle.json left by an earlier version, signed with the "
+            "organization's signing key). A new server needs no bundle: configure it with the environment "
+            "file and the Admin page, as docs/org-mode-setup-guide.md describes."
         )
     org_bundle_signing.record_accepted_serial(trust, org_dir())
     return data
@@ -578,7 +533,7 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
     pick its fail-safe default) -- deferred until after
     init_audit_logger() so there's an audit logger to record to, and still
     not called from inside load_org_config() itself, which is also called
-    from places that aren't "daemon startup" (e.g. settings_controller.py
+    from places that aren't "daemon startup" (e.g. a settings surface
     refreshing connector state) and shouldn't each add their own audit-log
     entry.
     """
@@ -633,7 +588,7 @@ def load_admin_config(bundle: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """
     try:
         admin, imported = admin_config.ensure(
-            bundle, mode=org_mode.resolve_mode(bundle), single_user=org_mode.is_single_user(bundle),
+            bundle, single_user=org_mode.is_single_user(bundle),
         )
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
@@ -682,34 +637,22 @@ def _stored_connector_configs(mode: str) -> dict[str, connector_configs.LoadedCo
 def effective_org_config(bundle: dict[str, Any], admin: dict[str, Any]) -> dict[str, Any]:
     """The one dict every org-config reader sees: bundle, admin config, connector configs and
     built-in apps composed."""
-    mode = org_mode.resolve_mode(bundle)
     return oauth_apps.effective_org_config(
-        bundle, admin, mode=mode, single_user=org_mode.is_single_user(bundle),
-        connectors=_stored_connector_configs(mode),
+        bundle, admin, single_user=org_mode.is_single_user(bundle),
+        connectors=_stored_connector_configs("org"),
     )
-
-
-def _local_effective_org_config() -> dict[str, Any]:
-    """The CLI sign-in commands run loopback flows, so they always use the local apps."""
-    bundle = load_org_config()
-    try:
-        admin = admin_config.config_for(bundle, mode="local", single_user=False)
-    except admin_config.AdminConfigError as exc:
-        raise org_mode.ConfigurationError(str(exc)) from exc
-    return oauth_apps.effective_org_config(bundle, admin, mode="local")
 
 
 def _release_org_config() -> dict[str, Any]:
     """The effective config of the server the release commands act on."""
     bundle = load_org_config()
-    mode = org_mode.resolve_mode(bundle)
     single_user = org_mode.is_single_user(bundle)
     try:
-        admin = admin_config.config_for(bundle, mode=mode, single_user=single_user)
+        admin = admin_config.config_for(bundle, single_user=single_user)
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
     return oauth_apps.effective_org_config(
-        bundle, admin, mode=mode, single_user=single_user, connectors=_stored_connector_configs(mode),
+        bundle, admin, single_user=single_user, connectors=_stored_connector_configs("org"),
     )
 
 
@@ -769,8 +712,8 @@ def _audit_step_up_requirement_change(change: StepUpRequirementChange) -> None:
     """
     decision = "step_up_requirement_enabled" if change.is_required else "step_up_requirement_disabled"
     summary = (
-        "local mode's step_up.require_passkey is now enforced" if change.is_required
-        else "local mode's step_up.require_passkey was turned off"
+        "step_up.require_passkey is now enforced" if change.is_required
+        else "step_up.require_passkey was turned off"
     )
     try:
         get_audit_logger().record(AuditEntry(
@@ -839,10 +782,10 @@ def check_storage_permissions(org_mode_active: bool) -> None:
     permissions were restored *after* the ``chmod`` that would have fixed
     them ran.
 
-    Local mode logs every finding at ``warning`` and keeps starting -- the
-    same "detectable, not necessarily preventable" posture the bundle
-    hash-logging above takes. Org mode -- centrally managed, and held to a
-    stricter standard -- fails closed: ``InsecurePermissionsError``
+    With ``org_mode_active`` false every finding is logged at ``warning`` and the
+    start goes on -- the same "detectable, not necessarily preventable"
+    posture the bundle hash-logging above takes. The organization server --
+    centrally managed, and held to a stricter standard -- fails closed: ``InsecurePermissionsError``
     propagates out of ``run_app()`` through the same top-level "print and
     refuse to start" path a broken org config's ``ConfigurationError``
     already uses (main()'s own ``except Exception``).
@@ -853,19 +796,7 @@ def check_storage_permissions(org_mode_active: bool) -> None:
     # docstring), so at daemon startup this list often names the same
     # directory twice; no need to warn about it twice too.
     dirs = list(dict.fromkeys([data_dir(), org_dir(), user_dir()]))
-    if privilege_separation.is_enabled():
-        # Privilege separation deliberately makes two of those directories looser
-        # than 0700 -- the system root is 0711 so the logged-in user can
-        # traverse to handoff_dir(), and handoff_dir() itself is 3770 so the
-        # companion and the daemon (two accounts now) can still hand each
-        # other a socket and a token. Auditing them against the flat 0700
-        # rule would report the design as a defect on every startup, and in
-        # org mode would refuse to start over it. privilege_separation's own
-        # audit_layout() checks the modes that layout actually calls for,
-        # plus the one that matters most: that authority/ is owned by the
-        # service account rather than still by the human.
-        dirs = [d for d in dirs if d not in (data_dir(), handoff_dir())]
-    problems = audit_directory_permissions(dirs) + privilege_separation.audit_layout()
+    problems = audit_directory_permissions(dirs)
     for problem in problems:
         logger.warning("Insecure storage permissions: %s", problem)
     if problems and org_mode_active:
@@ -908,16 +839,8 @@ def setup_logging(config: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------- #
-# Web approval UI + MCP-over-HTTP. config/settings.yaml's web.approval_ui
-# used to select native (AppKit) or web; the native implementation is gone
-# (ADR 0001), so the web approval UI is now unconditionally installed in
-# local mode -- there is nothing left to
-# select. web.mcp.enabled independently turns the /mcp endpoint on (a
-# transport change, separate from the approval surface), and
-# web.settings.enabled independently turns /settings on -- either can be
-# on or off without affecting the other two; all three share the one
-# embedded server/one port, the target architecture which local mode now
-# always starts.
+# Web server: the organization server's /mcp, approval and admin surfaces
+# share one embedded server and port. web.mcp.enabled turns /mcp on.
 # ---------------------------------------------------------------------------- #
 
 def _maybe_start_web_server(
@@ -925,76 +848,26 @@ def _maybe_start_web_server(
     connector_host: ConnectorHost,
     *,
     unattended_sessions_enabled: bool,
-    controller: Any = None,
     org_config: dict[str, Any] | None = None,
     config_path: str = "",
     bundle: dict[str, Any] | None = None,
     startup_admin: dict[str, Any] | None = None,
 ) -> Any:
-    """Returns the started WebServer -- always, in local mode, since the
-    web approval UI is the only one there is (see this section's own
-    comment above); org mode still returns None if ``mcp.enabled`` is off
-    (there is no approval surface to fall back to there either, but org mode has never had a way to reach one
-    without ``/mcp`` in the first place -- see ``_start_org_web_server``'s
-    own docstring). ``web.mcp.enabled``/``web.settings.enabled`` remain
-    independent rollback levers for those two surfaces specifically --
-    turning both off still leaves the server running for ``/approvals``
-    alone, since that has no off switch of its own: there is no other
-    approval surface to fall back to. With the old bridge gone, turning
-    ``mcp.enabled`` off also leaves this install with no way for Claude to
-    reach it at all -- ``web.mcp.enabled: true`` (settings.yaml.example's
-    default) is the only transport there is; the key
-    survives as a deliberate full-stop kill switch, not as a rollback to
-    some other still-working path. Imports the web/starlette/uvicorn/mcp
-    stack lazily so constructing it is deferred to the one place that
-    actually needs it, same posture as every other web/ import here.
+    """Returns the started organization WebServer, or None when ``web.mcp.enabled`` is off (there
+    is no other surface to fall back to: ``/mcp`` is the one transport, and the key survives as a
+    deliberate full-stop kill switch). Imports the web/starlette/uvicorn/mcp stack lazily so
+    constructing it is deferred to the one place that needs it.
 
-    ``connector_host`` is already built and holds the real connector set by
-    the time this is called (see run_app's ordering) -- the MCP dispatcher
-    polls ``connector_host.connectors`` live rather than taking its own
-    snapshot, so a connector rebuild pushed by SettingsController.
-    refresh_connectors (-> ConnectorHost.set_connectors) reaches the
-    ``/mcp`` endpoint too, with nothing here needing a second push. Note
-    that this connector set is the *local* principal's own; any other
-    principal dispatches against its own set from the ``ConnectorRegistry``
-    built below.
+    ``connector_host`` is already built and holds the real connector set by the time this is
+    called (see run_app's ordering).
 
-    ``controller``, when given, is the SettingsController instance
-    run_app() built for this daemon's whole lifetime -- passed through here
-    so the web settings page (when ``web.settings.enabled``) can drive it;
-    always the same instance regardless, so a rule changed via ``/settings``
-    and one changed via a gated call's own "Always allow" button stay in
-    sync with no separate plumbing.
-
-    ``org_config`` is where ``"mode"`` lives -- ``org`` switches
-    this into web/server.py's own org-mode wiring (a real OAuth 2.1
-    authorization server on ``/mcp``, no local-token approval/settings
-    surface at all -- see that module's own docstring for why). Defaults
-    to ``{}`` (local mode) when omitted, which no real caller does -- run_app() always passes the
+    ``org_config`` is where ``"mode"`` lives; ``org_mode.validate_mode`` refuses anything but ``org``.
+    Defaults to ``{}`` when omitted, which no real caller does -- run_app() always passes the
     result of ``load_org_config()``.
     """
     web_config = config.get("web", {}) or {}
     mcp_config = web_config.get("mcp", {}) or {}
-    settings_config = web_config.get("settings", {}) or {}
-    notifications_config = web_config.get("notifications", {}) or {}
     org_config = org_config or {}
-    mode = org_mode.resolve_mode(org_config)
-    if mode != "org":
-        if os.environ.get(oidc_provider.CLIENTS_ENV, "").strip():
-            raise org_mode.ConfigurationError(
-                "PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server."
-            )
-        if os.environ.get(upstream_mcp_config.ENV_VAR, "").strip():
-            raise org_mode.ConfigurationError(
-                f"{upstream_mcp_config.ENV_VAR} is set, but this is not an organization server."
-            )
-        if os.environ.get(upstream_mcp_config.ENV_VAR_INLINE, "").strip():
-            raise org_mode.ConfigurationError(
-                f"{upstream_mcp_config.ENV_VAR_INLINE} is set, but this is not an organization server."
-            )
-        ignored = sorted({*oauth_apps.set_auto_provision_variables(), *agent_runtimes.set_environment_variables()})
-        if ignored:
-            logger.warning("%s is ignored outside organization mode.", ", ".join(ignored))
     mcp_enabled = bool(mcp_config.get("enabled", False))
 
     # ADR 0007: settings.yaml's own file_bridge: section, read once here --
@@ -1010,218 +883,15 @@ def _maybe_start_web_server(
         ),
     )
 
-    if mode == "org":
-        if not mcp_enabled:
-            if os.environ.get(oidc_provider.CLIENTS_ENV, "").strip():
-                logger.warning("PRIVACYFENCE_OIDC_CLIENTS is ignored: the web server is off.")
-            return None
-        return _start_org_web_server(
-            web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
-            install_wide_config=config, install_wide_config_path=config_path,
-            bundle=bundle, startup_admin=startup_admin,
-        )
-
-    use_web_settings = bool(settings_config.get("enabled", False)) and controller is not None
-
-    from .approvals import PendingApprovalRegistry
-    from .gate import configure_popup_executor
-    from .web.mcp_dispatch import McpDispatcher
-    from .web.server import DEFAULT_PORT, WebServer
-    from .web_approval_ui import init_web_approval_ui
-
-    # web.approvals.* overrides the registry's defaults (hold 30s, pending
-    # TTL 15 min, ledger TTL 5 min). One registry
-    # backs both the web approval surface and privacyfence_await_approval
-    # (below), whether or not mcp_enabled is actually on -- constructing it
-    # unconditionally here costs nothing (it's just an empty dict-backed
-    # object until something registers into it) and means turning mcp.
-    # enabled on later, without restarting, would find it ready.
-    approvals_config = web_config.get("approvals", {}) or {}
-    registry = PendingApprovalRegistry(
-        hold_window=float(approvals_config.get("hold_window_seconds", 30.0)),
-        pending_ttl=float(approvals_config.get("pending_ttl_seconds", 15 * 60.0)),
-        ledger_ttl=float(approvals_config.get("ledger_ttl_seconds", 5 * 60.0)),
-        max_pending=int(approvals_config.get("max_pending", 50)),
-        # See approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL's own comment for
-        # why this exists alongside max_pending above.
-        max_pending_per_principal=int(approvals_config.get("max_pending_per_principal", 20)),
-        # See approvals.DEFAULT_ADAPTIVE_HOLD's own comment for what this
-        # collapses and why it's on by default.
-        adaptive_hold=bool(approvals_config.get("adaptive_hold", True)),
+    if not mcp_enabled:
+        if os.environ.get(oidc_provider.CLIENTS_ENV, "").strip():
+            logger.warning("PRIVACYFENCE_OIDC_CLIENTS is ignored: the web server is off.")
+        return None
+    return _start_org_web_server(
+        web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
+        install_wide_config=config, install_wide_config_path=config_path,
+        bundle=bundle, startup_admin=startup_admin,
     )
-    # See gate.py's own _popup_executor comment: it must never hold fewer
-    # workers than the registry can have approvals live, or a card past
-    # that count renders as "Preparing this request" forever.
-    configure_popup_executor(registry.max_pending)
-    web_ui = init_web_approval_ui(registry=registry)
-    init_approval_ui(web_ui)
-
-    mcp_dispatcher = None
-    if mcp_enabled:
-        from .connector_registry import ConnectorRegistry
-
-        # ADR 0008: local mode's own /mcp dispatch is now per-principal,
-        # exactly like org mode's (_start_org_web_server's own
-        # ConnectorRegistry below). Any principal other than the owner (an
-        # os-<uid>/os-<sid> OS user newly added to a separated install's
-        # service group) gets a freshly built, unconfigured connector set
-        # of their own -- "a new user starts with the packaged default
-        # policy and no connectors" -- built under their own principal_scope
-        # (ConnectorRegistry.get() enters it before calling this factory),
-        # so any credential a connector happens to persist lands under
-        # their own paths.user_dir(), never the owner's. This factory is
-        # never actually called for the owner (see _connectors() below).
-        def _connectors_for_new_principal(_principal: Principal) -> list:
-            new_connectors, _failures = build_connectors(config, org_config)
-            return new_connectors
-
-        connector_registry = ConnectorRegistry(factory=_connectors_for_new_principal)
-
-        def _connectors() -> dict[str, Any]:
-            # The owner (LOCAL_PRINCIPAL) dispatches against *this exact*
-            # connector_host, the one SettingsController also holds a
-            # reference to -- never through ConnectorRegistry's own cache,
-            # which would freeze a snapshot of connector_host.connectors at
-            # first build and never see a later connector_host.
-            # set_connectors() call (a toggle via /settings, an OAuth flow
-            # finishing). Bypassing the registry here is what keeps a rule
-            # changed via /settings and one changed via a gated call's own
-            # "Always allow" button in sync with no separate plumbing,
-            # exactly as before this ADR.
-            principal = current_principal()
-            if principal.id == LOCAL_PRINCIPAL_ID:
-                return connector_host.connectors
-            return connector_registry.get(principal).connectors
-
-        mcp_dispatcher = McpDispatcher(
-            _connectors, unattended_sessions_enabled=unattended_sessions_enabled,
-            registry=registry,
-            scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
-        )
-        if controller is not None:
-            # The direct successor of ipc_server.py's own constructor-time
-            # ``ipc_server.set_unattended_changed_listener(self._on_
-            # unattended_changed)`` wiring -- moved out here because, unlike
-            # the old always-on IPCServer, whether a dispatcher exists at
-            # all now depends on mcp_enabled, which SettingsController's own
-            # constructor has no visibility into.
-            controller.wire_unattended_listener(mcp_dispatcher)
-            # privacyfence_status's own per-connector view:
-            # SettingsController already tracks exactly the
-            # enabled/authenticated/blocked_by state that tool needs, so
-            # this dispatcher just asks for it rather
-            # than re-deriving it from the built connectors alone.
-            mcp_dispatcher.set_connectors_state_provider(controller.status_connectors)
-            # refresh_connectors() (toggle/authenticate/
-            # explicit refresh) fans a real tools/list_changed notification
-            # out to every open MCP session through this same dispatcher --
-            # see McpDispatcher.notify_tools_changed's own docstring for why
-            # this dispatcher, not the WebServer built below, is the right
-            # thing to wire (the ServerSession registry that notification
-            # actually reaches lives in web/routes_mcp.py's
-            # build_mcp_server, wired to this same dispatcher instance
-            # there).
-            controller.set_connectors_changed_listener(mcp_dispatcher.notify_tools_changed)
-
-    # config's own "step_up" section, not web_config's, since
-    # this is the human's privacy/security policy (settings.yaml), not a
-    # web server transport setting. Read once here, not inline in the
-    # WebServer(...) call below, so the require_passkey startup check right
-    # after server.start() reads the exact same config this daemon actually
-    # booted with.
-    #
-    # Wrapped in LiveStepUpConfig, not passed as a bare StepUpConfig,
-    # so SettingsController.enable_step_up (wired in just below) can flip
-    # require_passkey on for every consumer of this same object -- web/
-    # server.py's WebServer, and everything it mounts -- without a daemon
-    # restart. See step_up_config.py's own LiveStepUpConfig docstring.
-    local_step_up = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig.from_local_config(config))
-    if controller is not None:
-        controller.wire_step_up(local_step_up)
-    # SettingsController.enable_step_up (wired above) observes a
-    # require_passkey/step_up.enabled change made through the UI itself,
-    # right when it happens. This startup-time comparison against what the
-    # previous startup last saw covers every other case: an
-    # existing install's config already had it on at boot, or a human hand-
-    # edited the file between runs. webauthn_stepup.observe_step_up_
-    # requirement does the comparison and persists the new state; this
-    # daemon records the actual audit entry so that module stays free of
-    # any audit_log.py dependency.
-    step_up_change = observe_step_up_requirement(
-        LOCAL_PRINCIPAL, enabled=local_step_up.enabled, require_passkey=local_step_up.require_passkey,
-    )
-    if step_up_change is not None:
-        _audit_step_up_requirement_change(step_up_change)
-    server = WebServer(
-        web_ui,
-        port=int(web_config.get("port", DEFAULT_PORT)),
-        mcp_dispatcher=mcp_dispatcher,
-        controller=controller if use_web_settings else None,
-        allow_quit=bool(settings_config.get("allow_quit", True)),
-        notifications_enabled=bool(notifications_config.get("enabled", True)),
-        notifications_detail=str(notifications_config.get("detail", "minimal")),
-        # Mounts /security for local-mode passkey enrollment.
-        # LiveStepUpConfig mirrors every StepUpConfig attribute by delegation (step_up_config.py:432)
-        step_up=cast(step_up_config.StepUpConfig, local_step_up),
-        # ADR 0006 option D / ADR 0037: a relabel only, never an attested source.
-        agent_overrides=agent_overrides.from_config(config),
-        # The Admin API compares the admin config against this one to list what waits for a
-        # restart, and refreshes org_config -- the dict the connector factory above closes over.
-        startup_admin=startup_admin,
-        org_config=org_config,
-    )
-    server.start()
-    # The pending-result URL gate.py hands back to Claude is
-    # only meaningful once the server is actually listening -- set here,
-    # not at registry construction.
-    registry.set_base_url(server.base_url)
-    # Start, release nothing, and show a loud persistent banner -- rather
-    # than refusing to boot. Refusing to start here would remove the one path (/security)
-    # that fixes this misconfiguration, so this is a log line, not a raised
-    # ConfigurationError -- web_shell.wrap()'s own banner (StepUpConfig.
-    # local_enrollment_banner) is what actually makes this loud for a human
-    # who isn't reading the daemon's own log. See ADR 0069.
-    if local_step_up.local_enrollment_banner(has_credentials=has_webauthn_credentials(LOCAL_PRINCIPAL)) is not None:
-        logger.warning(
-            "step_up.require_passkey is set but no passkey is enrolled yet -- approving decisions and "
-            "sensitive settings changes will be refused until one is added on this install's "
-            "/security page (open PrivacyFence's companion app, or run "
-            "`privacyfence-app --print-sign-in-link`, and follow the Passkeys link)",
-        )
-    # The persistent half of the same banner posture -- a
-    # human reading only this log, not the web UI, should still see that
-    # the requirement was turned off, not just that it currently is off.
-    if step_up_disabled_notice(LOCAL_PRINCIPAL) is not None:
-        logger.warning(
-            "step_up.require_passkey was turned off after previously being required -- if this "
-            "wasn't done deliberately, treat this install as compromised (see "
-            "docs/security-and-compliance.md's Local-mode trust boundary section)",
-        )
-    # No sign-in link in these lines, and no discovery file carrying one:
-    # SecretRedactingFormatter scrubs bootstrap=<value> out of every line
-    # this process logs, and a file in the group-shared handoff directory
-    # would hand the session to anything running as this user. What a human
-    # does instead is open the companion app, which is also the only route to a session that may approve
-    # (web/session_auth.py's PROVENANCE_HUMAN), or run the break-glass
-    # command these lines name.
-    logger.info(
-        "Web approval UI active -- open approvals from PrivacyFence's companion app, or run "
-        "`privacyfence-app --print-sign-in-link` for a one-time link (%s/approvals)",
-        server.base_url,
-    )
-    if use_web_settings:
-        logger.info("Web settings active -- same two ways in (%s/settings)", server.base_url)
-    if server.mcp_url:
-        # ADR 0008: no single well-known file names the token any more --
-        # the .mcpb shim mints its own over the control channel (MINT MCP),
-        # and a direct client without a shim runs `--print-mcp-token`
-        # (which does the exact same mint, as itself).
-        logger.info(
-            "MCP-over-HTTP active -- %s (Authorization: Bearer <token from "
-            "`privacyfence-app --print-mcp-token`>)",
-            server.mcp_url,
-        )
-    return server
 
 
 def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1256,8 +926,8 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     - ``init_privacy_filter()`` -- without it, ``privacy_
       filter._REGISTRY`` (also a ``PrincipalRegistry``, see that module's
       docstring) kept its default empty-dict entry for every principal but
-      whichever one happened to be scoped when a local-mode ``run_app()``
-      called ``init_privacy_filter`` directly. ``category_policy()``'s own
+      whichever one happened to be scoped when ``run_app()`` called
+      ``init_privacy_filter`` directly. ``category_policy()``'s own
       "group absent from the registry" fallback is a hardcoded "allow" --
       the *opposite* of org mode's intended fail-closed ``block`` default
       (``privacy_filter.init_privacy_filter``'s own ``fail_safe_default``)
@@ -1472,8 +1142,8 @@ def _start_org_web_server(
         # once by run_app() and passed down consistently everywhere else in
         # this module, so this stays consistent with that. Per-principal
         # build failures aren't threaded anywhere yet -- org mode has no
-        # per-principal settings page for them to surface on (see
-        # SettingsController's own docstring) -- so they're discarded here;
+        # per-principal settings page for them to surface on --
+        # so they're discarded here;
         # a later phase that needs them for org mode plugs in at this seam.
         connectors, _failures = build_connectors(
             _load_principal_settings(install_wide_config=install_wide_config), org_config,
@@ -1516,10 +1186,9 @@ def _start_org_web_server(
     sessions = OrgSessionStore()
     mcp_dispatcher = McpDispatcher(
         lambda: connector_registry.get(current_principal()).connectors,
-        mode="org",
         unattended_sessions_enabled=unattended_sessions_enabled,
         registry=approval_registry,
-        scoped_token_policy=scoped_tokens.policy_from_org_config(org_config, org_mode=True),
+        scoped_token_policy=scoped_tokens.policy_from_org_config(org_config),
         agent_runtime=agent_runtime,
     )
 
@@ -1629,24 +1298,28 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 # Connector construction (graceful: missing org config or auth → connector skipped)
 # ---------------------------------------------------------------------------- #
 
+# The call to action every connector client's sign-in error ends with
+# ("Connect <Service> on the Connect page (/connect)"); see below.
+_CONNECT_PAGE_HINT = "on the Connect page (/connect)"
+
+
 def _classify_connector_failure(exc: BaseException) -> str:
     """Turns a per-connector build failure into one of the three states
     status surfaces need told apart -- "never set up", "auth expired/revoked",
-    or an actual runtime error -- so a later surface (SettingsController's
-    connector rows now, a status meta-tool later) can say which, instead of
-    every un-built connector looking identical.
+    or an actual runtime error -- so a later surface (the connector rows now, a
+    status meta-tool later) can say which, instead of every un-built connector looking identical.
 
     The first two categories are matched against text this codebase's own
     call sites author themselves -- never third-party text, so safe to
     pattern-match on:
 
     - a bare ``FileNotFoundError`` (the real Google OAuth client's own
-      behavior when a token file is absent) or "Use Authenticate…" (every
-      *ClientError's/*OAuthError's own "no token found"/"is not
-      authenticated" message below and in slack_client.py/
-      salesforce_client.py/atlassian_oauth.py's own ``load_token_file()``
-      helpers -- all phrased around the same "Use Authenticate… in
-      PrivacyFence Settings" call to action) means never authenticated.
+      behavior when a token file is absent) or "on the Connect page
+      (/connect)" (every *ClientError's/*OAuthError's own "no token
+      found"/"is not authenticated"/"sign-in expired" message below and in
+      the connector clients' own token loaders -- all phrased around the
+      same "Connect <Service> on the Connect page (/connect)" call to
+      action) means not authenticated.
     - "organization config not installed"/"app credentials not available"
       (this function's own raises just below, for a service with no org
       bundle section or, for Telegram, no baked-in app credentials) means
@@ -1657,7 +1330,7 @@ def _classify_connector_failure(exc: BaseException) -> str:
     third-party HTTP body) gets redacted before it can reach a
     client-facing surface."""
     msg = str(exc)
-    if isinstance(exc, FileNotFoundError) or "Use Authenticate…" in msg:
+    if isinstance(exc, FileNotFoundError) or _CONNECT_PAGE_HINT in msg:
         return "not_authenticated"
     if "organization config not installed" in msg or "app credentials not available" in msg:
         return "no_org_config"
@@ -1729,27 +1402,18 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
 
     google_client_config = _google_client_config(org_config)
 
-    # Computed once, not
-    # per connector -- Drive/Gmail/Confluence's own _download_file/
-    # _download_attachment methods branch on connector.download_mode, and
-    # (in org mode only) build a fully-qualified download_url from
-    # connector.download_base_url. Local mode's own connector.download_mode
-    # stays "local" and connector.download_config/download_base_url stay
-    # unset, exactly the original shape.
-    download_mode = org_mode.resolve_mode(org_config)
-    download_config = None
-    download_base_url = ""
-    if download_mode == "org":
-        download_config = org_mode.DownloadDeliveryConfig.from_org_config(org_config)
-        # ServerConfig.from_org_config already ran (and would have raised
-        # org_mode.ConfigurationError) before build_connectors was ever
-        # reached in a real org-mode boot -- see _start_org_web_server,
-        # which computes its own server_config first. Re-deriving it here
-        # keeps build_connectors self-contained (safe to call from a test
-        # or from ConnectorRegistry's own per-principal factory with no
-        # other org-mode wiring already in scope) at the cost of one cheap
-        # re-parse of the organization config's own "server" section.
-        download_base_url = org_mode.ServerConfig.from_org_config(org_config).issuer_url.rstrip("/")
+    # Computed once, not per connector: the download-delivery settings and the
+    # base URL every connector builds its one-time download_url from.
+    download_config = org_mode.DownloadDeliveryConfig.from_org_config(org_config)
+    # ServerConfig.from_org_config already ran (and would have raised
+    # org_mode.ConfigurationError) before build_connectors was ever
+    # reached in a real boot -- see _start_org_web_server, which computes
+    # its own server_config first. Re-deriving it here keeps build_connectors
+    # self-contained (safe to call from a test or from ConnectorRegistry's
+    # own per-principal factory with no other wiring already in scope) at the
+    # cost of one cheap re-parse of the organization config's own "server"
+    # section.
+    download_base_url = org_mode.ServerConfig.from_org_config(org_config).issuer_url.rstrip("/")
 
     # Gmail
     if enabled("gmail"):
@@ -1767,7 +1431,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             gmail_connector.append_signature = bool(
                 (config.get("gmail", {}) or {}).get("append_signature_to_drafts", False)
             )
-            gmail_connector.download_mode = download_mode
             gmail_connector.download_config = download_config
             gmail_connector.download_base_url = download_base_url
             connectors.append(gmail_connector)
@@ -1788,7 +1451,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Drive connector ready for %s", email)
             drive_connector = DriveConnector(drive_client)
             drive_connector.my_email = email
-            drive_connector.download_mode = download_mode
             drive_connector.download_config = download_config
             drive_connector.download_base_url = download_base_url
             connectors.append(drive_connector)
@@ -1909,7 +1571,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             salesforce_client.report_max_pages = _salesforce_report_max_pages(config)
             logger.info("Salesforce connector ready for %s", merged.get("instance_url"))
             salesforce_connector = SalesforceConnector(salesforce_client)
-            salesforce_connector.download_mode = download_mode
             salesforce_connector.download_config = download_config
             salesforce_connector.download_base_url = download_base_url
             connectors.append(salesforce_connector)
@@ -1940,7 +1601,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             if not atlassian_org.get("client_id"):
                 raise JiraClientError("Atlassian organization config not installed")
             if not atlassian_token:
-                raise JiraClientError("Jira is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+                raise JiraClientError("Jira is not authenticated. Connect Jira on the Connect page (/connect).")
             jira_client = JiraClient(
                 config=atlassian_config,
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
@@ -1953,7 +1614,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             jira_connector = JiraConnector(jira_client)
             jira_connector.my_email = atlassian_token.get("account_email", "")
             jira_connector.my_account_id = jira_client.account_id
-            jira_connector.download_mode = download_mode
             jira_connector.download_config = download_config
             jira_connector.download_base_url = download_base_url
             connectors.append(jira_connector)
@@ -1966,7 +1626,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             if not atlassian_org.get("client_id"):
                 raise ConfluenceClientError("Atlassian organization config not installed")
             if not atlassian_token:
-                raise ConfluenceClientError("Confluence is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+                raise ConfluenceClientError("Confluence is not authenticated. Connect Confluence on the Connect page (/connect).")
             confluence_client = ConfluenceClient(
                 config=atlassian_config,
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
@@ -1977,7 +1637,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             confluence_connector = ConfluenceConnector(confluence_client)
             confluence_connector.my_email = atlassian_token.get("account_email", "")
             confluence_connector.my_account_id = confluence_client.account_id
-            confluence_connector.download_mode = download_mode
             confluence_connector.download_config = download_config
             confluence_connector.download_base_url = download_base_url
             connectors.append(confluence_connector)
@@ -1992,7 +1651,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             if not atlassian_org.get("client_id"):
                 raise AssetsClientError("Atlassian organization config not installed")
             if not atlassian_token:
-                raise AssetsClientError("Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings.")
+                raise AssetsClientError("Jira Assets is not authenticated. Connect Jira Assets on the Connect page (/connect).")
             assets_client = AssetsClient(
                 config={**atlassian_config, **assets_workspace_override(config)},
                 token_file=_resolve_path(TOKEN_FILES["atlassian"]),
@@ -2001,7 +1660,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Jira Assets connector ready")
             assets_connector = AssetsConnector(assets_client)
             assets_connector.my_email = atlassian_token.get("account_email", "")
-            assets_connector.download_mode = download_mode
             assets_connector.download_config = download_config
             assets_connector.download_base_url = download_base_url
             connectors.append(assets_connector)
@@ -2025,7 +1683,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             session_file = _resolve_path(TOKEN_FILES["telegram"])
             if not os.path.exists(session_file) and not os.path.exists(session_file + ".session"):
                 raise TelegramClientError(
-                    "Telegram is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                    "Telegram is not authenticated. Connect Telegram on the Connect page (/connect)."
                 )
             tg_client = TelegramPrivacyFenceClient(
                 api_id=api_id,
@@ -2052,12 +1710,12 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not org_mode.connector_enabled_by_org(org_config, "peek"):
                 raise PeekClientError("Peek organization config not installed")
-            pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=download_mode == "org")
+            pinned = peek_bundle_base_url(org_config.get("peek") or {})
             record = load_peek_token(_resolve_path(TOKEN_FILES["peek"]))
             client = PeekClient(peek_resolve_server(pinned, record), record["token"])
             client.check_connection()
             logger.info("Peek connector ready for %s", client.host)
-            connectors.append(PeekConnector(client, download_mode=download_mode))
+            connectors.append(PeekConnector(client))
         except PeekClientError as exc:
             logger.warning("Peek connector disabled: %s", exc)
             failures["peek"] = _classify_connector_failure(exc)
@@ -2067,13 +1725,12 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         try:
             if not org_mode.connector_enabled_by_org(org_config, "grist"):
                 raise GristClientError("Grist organization config not installed")
-            grist_bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=download_mode == "org")
+            grist_bundle = grist_bundle_settings(org_config.get("grist") or {})
             token_path = _resolve_path(TOKEN_FILES["grist"])
             server_url, credential = grist_resolve_credential(grist_bundle, load_grist_token(token_path), token_path)
             grist_client = GristClient(server_url, credential)
             grist_client.check_connection()
             grist_connector = GristConnector(grist_client)
-            grist_connector.download_mode = download_mode
             grist_connector.download_config = download_config
             grist_connector.download_base_url = download_base_url
             connectors.append(grist_connector)
@@ -2099,8 +1756,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     if upstream_mcp_runtime.configured():
         connectors.extend(upstream_mcp_runtime.connectors_for_principal())
 
-    if org_mode.resolve_mode(org_config) == "org":
-        connectors.append(GroupMembershipConnector())
+    connectors.append(GroupMembershipConnector())
 
     return connectors, failures
 
@@ -2156,264 +1812,11 @@ def _log_cache_warm_failure(future: "concurrent.futures.Future[None]") -> None:
 
 
 # ---------------------------------------------------------------------------- #
-# OAuth / interactive-auth setup commands (headless/dev use — the primary UX
-# path is now "Authenticate…" in PrivacyFence Settings)
-# ---------------------------------------------------------------------------- #
-
-def run_gmail_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = GmailClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["gmail"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except GmailClientError as exc:
-        print(f"Gmail OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Gmail OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_drive_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = DriveClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["drive"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except DriveClientError as exc:
-        print(f"Drive OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Drive OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_contacts_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = ContactsClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["contacts"]))
-    try:
-        client.authorize_interactive()
-        result = client.check_connection()
-    except ContactsClientError as exc:
-        print(f"Contacts OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Contacts OAuth complete. Authorized as: {result}")
-    return 0
-
-
-def run_calendar_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = CalendarClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["calendar"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except CalendarClientError as exc:
-        print(f"Calendar OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Calendar OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_tasks_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = TasksClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["tasks"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except TasksClientError as exc:
-        print(f"Tasks OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Tasks OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_apps_script_oauth(org_config: dict[str, Any]) -> int:
-    client_config = _google_client_config(org_config)
-    client = AppsScriptClient(client_config=client_config, token_file=_resolve_path(TOKEN_FILES["apps_script"]))
-    try:
-        client.authorize_interactive()
-        email = client.check_connection()
-    except AppsScriptClientError as exc:
-        print(f"Apps Script OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Apps Script OAuth complete. Authorized as: {email}")
-    return 0
-
-
-def run_slack_oauth(org_config: dict[str, Any]) -> int:
-    slack_org = org_config.get("slack") or {}
-    if not slack_org.get("client_id") or not slack_org.get("client_secret"):
-        print("No Slack organization config installed.", file=sys.stderr)
-        return 1
-    try:
-        token = slack_authorize_interactive(
-            client_id=slack_org["client_id"],
-            client_secret=slack_org["client_secret"],
-            token_file=_resolve_path(TOKEN_FILES["slack"]),
-            user_scopes=slack_org.get("user_scopes"),
-        )
-    except SlackClientError as exc:
-        print(f"Slack OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Slack OAuth complete. Authorized for workspace: {token.get('team_name')}")
-    return 0
-
-
-def run_salesforce_oauth(org_config: dict[str, Any]) -> int:
-    sf_org = org_config.get("salesforce") or {}
-    if not sf_org.get("consumer_key") or not sf_org.get("consumer_secret"):
-        print("No Salesforce organization config installed.", file=sys.stderr)
-        return 1
-    try:
-        token = salesforce_authorize_interactive(
-            consumer_key=sf_org["consumer_key"],
-            consumer_secret=sf_org["consumer_secret"],
-            token_file=_resolve_path(TOKEN_FILES["salesforce"]),
-            login_url=sf_org.get("login_url", "https://login.salesforce.com"),
-        )
-    except SalesforceClientError as exc:
-        print(f"Salesforce OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Salesforce OAuth complete. Authorized for instance: {token.get('instance_url')}")
-    return 0
-
-
-def run_grist_oauth(org_config: dict[str, Any]) -> int:
-    try:
-        bundle = grist_bundle_settings(org_config.get("grist") or {}, org_mode=False)
-        if bundle.oauth is None:
-            print("No Grist OAuth app in the organization config.", file=sys.stderr)
-            return 1
-        record = grist_authorize_interactive(bundle.oauth, _resolve_path(TOKEN_FILES["grist"]))
-    except GristClientError as exc:
-        print(f"Grist OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    host = urlparse(str(record.get("server_url") or bundle.oauth.server_url)).netloc
-    print(f"Grist OAuth complete. Signed in to {host}.")
-    return 0
-
-
-def run_miro_oauth(org_config: dict[str, Any]) -> int:
-    try:
-        miro_config = miro_bundle_settings(org_config.get("miro") or {})
-        record = miro_authorize_interactive(miro_config, _resolve_path(TOKEN_FILES["miro"]))
-    except MiroClientError as exc:
-        print(f"Miro OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Miro OAuth complete. Signed in to the Miro team {record.get('team_id')}.")
-    return 0
-
-
-def _cli_pick_atlassian_resource(resources: list[dict[str, Any]]) -> dict[str, Any]:
-    """Terminal ``pick_resource`` for ``--atlassian-oauth``.
-
-    Every other caller of ``resolve_resource_and_save`` already has a
-    fallback for "can't/won't prompt": settings_controller.py's GUI picker
-    falls back to ``resources[0]`` when cancelled, and org mode's
-    routes_connect.py._first_resource always takes ``resources[0]`` outright
-    (there's no prompting surface in a server redirect flow). This CLI flow
-    is the one call site with neither -- without a ``pick_resource`` it hit
-    ``resolve_resource_and_save``'s hard failure whenever Atlassian's
-    accessible-resources response had more than one entry.
-
-    That happens even for a single-site account: mixing classic Jira scopes
-    with granular Confluence scopes (atlassian_oauth.py's DEFAULT_SCOPES) is
-    exactly the case atlassian_oauth.py's own scope comments describe as
-    "tracked separately" by Atlassian, and in practice that means the same
-    site URL comes back as more than one resource entry. Auto-pick among
-    same-URL duplicates the same way the other two callers effectively do;
-    only prompt on stdin when the URLs actually differ, i.e. a genuine
-    multi-site account.
-    """
-    urls = {r.get("url", "") for r in resources}
-    if len(urls) <= 1:
-        return resources[0]
-    print("Multiple Atlassian sites are accessible with this account:")
-    for i, resource in enumerate(resources):
-        print(f"  [{i}] {resource.get('url', '?')}")
-    while True:
-        choice = input(f"Choose a site [0-{len(resources) - 1}]: ").strip()
-        try:
-            idx = int(choice)
-        except ValueError:
-            idx = -1
-        if 0 <= idx < len(resources):
-            return resources[idx]
-        print("Invalid choice, try again.")
-
-
-def run_atlassian_oauth(org_config: dict[str, Any], config: dict[str, Any] | None = None) -> int:
-    atlassian_org = org_config.get("atlassian") or {}
-    if not atlassian_org.get("client_id") or not atlassian_org.get("client_secret"):
-        print("No Atlassian organization config installed.", file=sys.stderr)
-        return 1
-    try:
-        token = atlassian_authorize_interactive(
-            client_id=atlassian_org["client_id"],
-            client_secret=atlassian_org["client_secret"],
-            token_file=_resolve_path(TOKEN_FILES["atlassian"]),
-            scopes=scopes_for(assets=assets_enabled(config or {}, org_config)),
-            pick_resource=_cli_pick_atlassian_resource,
-        )
-    except AtlassianOAuthError as exc:
-        print(f"Atlassian OAuth setup failed: {exc}", file=sys.stderr)
-        return 1
-    print(f"Atlassian OAuth complete. Authorized for site: {token.get('site_url')}")
-    return 0
-
-
-def run_telegram_setup() -> int:
-    creds = telegram_app_credentials()
-    if not creds:
-        print(
-            "No Telegram app credentials in this build. For local dev, set "
-            "PRIVACYFENCE_TELEGRAM_API_ID and PRIVACYFENCE_TELEGRAM_API_HASH.",
-            file=sys.stderr,
-        )
-        return 1
-    api_id, api_hash = creds
-    session_file = _resolve_path(TOKEN_FILES["telegram"])
-    client = TelegramPrivacyFenceClient(api_id=api_id, api_hash=api_hash, session_file=session_file)
-    asyncio.run(client.authorize_interactive())
-    print(f"Telegram session saved to {session_file}")
-    return 0
-
-
-def run_peek_login(org_config: dict[str, Any]) -> int:
-    try:
-        pinned = peek_bundle_base_url(org_config.get("peek") or {}, org_mode=False)
-    except PeekClientError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    expired_message = "The Peek sign-in code expired. Run --peek-login again."
-    try:
-        base = pinned or peek_normalize_base_url(input("Peek server address: "))
-        login = peek_start_device_login(base)
-        print(f"Open {login.verification_url} and approve the code {login.user_code}.")
-        while True:
-            time.sleep(login.interval)
-            if time.time() > login.expires_at:
-                print(expired_message, file=sys.stderr)
-                return 1
-            poll = peek_poll_device_login(base, login.device_code)
-            if poll.status == "approved":
-                save_peek_token(_resolve_path(TOKEN_FILES["peek"]), base, poll.token)
-                print(f"Peek sign-in complete. Connected to {urlsplit(base).netloc}.")
-                return 0
-            if poll.status == "denied":
-                print("The Peek sign-in was denied.", file=sys.stderr)
-                return 1
-            if poll.status in ("expired", "consumed"):
-                print(expired_message, file=sys.stderr)
-                return 1
-    except PeekClientError as exc:
-        print(f"Peek sign-in failed: {exc}", file=sys.stderr)
-        return 1
-
-
-# ---------------------------------------------------------------------------- #
 # Main app
 # ---------------------------------------------------------------------------- #
 
 def run_app(config: dict[str, Any], config_path: str) -> int:
+    org_mode.validate_mode({})
     if not _acquire_instance_lock():
         # Finding one already running is an expected outcome, not a failure
         # -- a second start of the service, or a human who ran the CLI or
@@ -2453,37 +1856,27 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # ConfigurationError -- refuse to start rather than quietly advertise something other than
     # what the administrator configured.
     org_mode.reject_removed_tool_annotations(bundle)
-    if org_mode.resolve_mode(bundle) == "org":
-        prepare_connector_configs(bundle)
+    prepare_connector_configs(bundle)
     admin, admin_imported = load_admin_config(bundle)
     # Before the web server is built (it loads the scoped token store, whose tokens must already
     # hold their own rules) and for every person, signed in or not.
     data_format.migrate_everything(log=logger.warning)
-    # Same "org mode fails closed, local mode warns" posture as the
-    # rest of this function's fail-safe defaults now that mode is known.
-    check_storage_permissions(org_mode.resolve_mode(bundle) == "org")
-    init_privacy_filter(config, org_managed=org_mode.resolve_mode(bundle) == "org")
+    # The organization server fails closed on loose storage permissions.
+    check_storage_permissions(True)
+    init_privacy_filter(config, org_managed=True)
     # From here on every reader gets the effective config; the raw bundle stays for the
     # signature, the hash and the mode checks above.
     org_config = effective_org_config(bundle, admin)
     if org_mode.is_single_user(org_config):
         logger.warning("Single-user mode: one administrator, no identity provider, on this computer only.")
-    if org_mode.resolve_mode(bundle) == "local":
-        logger.warning(org_mode.LOCAL_MODE_DEPRECATION)
-    # ADR 0088: a local install shows every requester as "Undetected".
-    agent_label.set_local_mode(org_mode.resolve_mode(bundle) == "local")
     for warning in check_consistency_warnings():
         logger.warning(warning)
 
-    # Centralized audit forwarding is org-mode-only (see
-    # org_mode.AuditForwardingConfig's own docstring) -- a local-mode
-    # install's organization config could theoretically carry an
-    # "audit_forwarding" section, but there is no "centralize" to speak of
-    # for a single employee's own machine, so it's ignored outside org
-    # mode regardless of what the section says.
+    # Centralized audit forwarding (see org_mode.AuditForwardingConfig's own
+    # docstring).
     audit_forwarder = None
     audit_forwarding_config = org_mode.AuditForwardingConfig.from_org_config(org_config)
-    if audit_forwarding_config.enabled and org_mode.resolve_mode(org_config) == "org":
+    if audit_forwarding_config.enabled:
         try:
             sender = audit_forwarding.build_sender(audit_forwarding_config)
             audit_forwarder = audit_forwarding.AuditForwarder(sender)
@@ -2516,32 +1909,15 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     unattended_enabled = bool((org_config.get("unattended_sessions", {}) or {}).get("enabled", False))
     connector_host = ConnectorHost(connectors)
 
-    # Built once, here, and handed to *both* the web settings surface
-    # (_maybe_start_web_server, below). One
-    # SettingsController instance for this daemon's whole lifetime, rather
-    # than each surface building its own and drifting out of sync with the
-    # other's in-memory state (_busy_connectors, _telegram_auth, the
-    # update-check cache).
-    from .settings_controller import SettingsController
-
-    connector_names = [c.name for c in connectors]
-    settings_controller = SettingsController(
-        config_path=config_path, connectors=connector_names, connector_host=connector_host,
-        connector_objs=connectors, connector_failures=connector_failures,
-    )
-
     # Built after connector_host so the MCP dispatcher (if web.mcp.enabled)
     # can poll connector_host.connectors for the live connector set -- see
     # _maybe_start_web_server's own docstring.
     server = _maybe_start_web_server(
-        config, connector_host, unattended_sessions_enabled=unattended_enabled, controller=settings_controller,
+        config, connector_host, unattended_sessions_enabled=unattended_enabled,
         org_config=org_config, bundle=bundle, startup_admin=admin,
         # Resolved, not the raw --config argument -- org mode's
         # admin privacy page writes this file back, and it must land on the
-        # same path run_app() read `config` from. Local mode ignores it;
-        # its own settings.yaml writes go through SettingsController, which
-        # already holds the same resolved path (init_config_path, above).
-        config_path=_resolve_path(config_path),
+        # same path run_app() read `config` from.         config_path=_resolve_path(config_path),
     )
 
     # Every connector call now runs on the embedded web server's own ASGI
@@ -2551,8 +1927,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # _warm_connector_caches' own docstring) waits for that loop to be
     # captured instead. None when this daemon never starts the web server
     # at all -- that's only org mode with mcp.enabled off (see
-    # _maybe_start_web_server's own docstring); local mode always starts
-    # one now, so there's always a loop to wait for there.
+    # _maybe_start_web_server's own docstring).
     web_loop = server.wait_until_ready(timeout=5) if server is not None else None
     logger.info("Startup complete")
 
@@ -2561,10 +1936,6 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     elif server is not None:
         logger.warning("Web server event loop not ready in time; skipping background cache warm")
 
-    threading.Thread(
-        target=_run_update_check_timer, args=(settings_controller,),
-        name="update-check-timer", daemon=True,
-    ).start()
     threading.Thread(
         target=_run_personal_data_sweep, name="atlassian-personal-data-sweep", daemon=True,
     ).start()
@@ -2580,127 +1951,14 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
 
 # ---------------------------------------------------------------------------- #
-# --print-sign-in-link
-# ---------------------------------------------------------------------------- #
-
-def run_print_sign_in_link() -> int:
-    """The break-glass way in: a sign-in link printed in the human's own
-    terminal, never handed to the agent (ADR 0013: no MCP tool mints a
-    sign-in credential, since that would hand exactly this credential to the
-    party it governs).
-
-    The ordinary way into the web UI is the companion's own Open Approvals
-    item. This exists for when that is not reachable: an SSH session, a
-    desktop whose applications menu nobody has open, a tray icon that failed
-    to start. It asks the daemon for a link that can *approve*
-    (``MINT CONSOLE``), which the daemon grants only once the companion has
-    put its own dialog in front of whoever is at the login session -- the
-    command runs as the same OS user the agent does, so what makes the
-    resulting session attributable to a person is that a person clicked
-    Allow, not that the request arrived from a terminal.
-
-    If nothing confirms it, this still prints a link, and says what that link
-    is: an unattested session, which signs the reader in to *see* what is
-    pending but not to release it (web/session_auth.py's
-    ``PROVENANCE_UNATTESTED``). That beats printing nothing -- the reader may
-    well be locked out precisely because no companion is running, and
-    starting one is easier from inside the UI than from a refusal.
-
-    The URL goes to stdout alone, so ``privacyfence-app --print-sign-in-link``
-    can be piped into a browser command; everything else goes to stderr.
-    """
-    # Deferred, like every other web/ import in this module: this command is
-    # a one-shot client that never starts a server, and control_channel.py is
-    # the one web module with no rendering or ASGI weight behind it.
-    from .web import control_channel
-
-    base_url = control_channel.read_base_url()
-    if base_url is None:
-        print(
-            "PrivacyFence does not appear to be running in local mode -- there is no sign-in link "
-            "to mint. (Organization mode signs in through its own /login page instead.)",
-            file=sys.stderr,
-        )
-        return 1
-    try:
-        code = control_channel.mint_console_bootstrap_code()
-    except OSError as exc:
-        print(f"Could not reach PrivacyFence's control channel: {exc}", file=sys.stderr)
-        return 1
-    except control_channel.ControlChannelError as exc:
-        print(f"This link was not confirmed: {exc}", file=sys.stderr)
-        try:
-            code = control_channel.mint_bootstrap_code()
-        except (OSError, control_channel.ControlChannelError) as fallback_exc:
-            print(f"Could not mint a sign-in link at all: {fallback_exc}", file=sys.stderr)
-            return 1
-        print(
-            "Printing a view-only link instead: it will show you what is waiting, but approving "
-            "from it will be refused. Start PrivacyFence's companion app and run this again for "
-            "one that can approve.",
-            file=sys.stderr,
-        )
-    print(f"{base_url}/approvals?bootstrap={code}")
-    print(
-        "Open this on this machine within a few minutes -- it is consumed by the first visit, "
-        "successful or not. Settings is one click away in the page's own navigation.",
-        file=sys.stderr,
-    )
-    return 0
-
-
-# ---------------------------------------------------------------------------- #
-# --print-mcp-token
-# ---------------------------------------------------------------------------- #
-
-def run_print_mcp_token() -> int:
-    """ADR 0008's own break-glass-style path for ``/mcp``: a direct HTTP
-    MCP client with no ``.mcpb`` shim of its own (Claude Code, a hand-
-    rolled script) has nowhere to read a bearer token from any more on a
-    privilege-separated install, where each principal's token lives in its
-    own service-owned ``authority_dir()`` (``mcp_auth._mcp_token_path()``).
-    This runs the
-    identical ``MINT MCP`` mint the shim itself does
-    (``mcpb/shim/src/controlChannel.ts``), as this OS account, and prints
-    the result -- the same token this account gets back every time it asks,
-    for as long as it keeps running as itself.
-
-    The URL goes to stdout alone, like ``--print-sign-in-link``, so this
-    can be composed into a shell command (e.g. ``claude mcp add ... --header
-    "Authorization: Bearer $(privacyfence-app --print-mcp-token)"``);
-    everything else goes to stderr.
-    """
-    from .web import control_channel
-
-    base_url = control_channel.read_base_url()
-    if base_url is None:
-        print(
-            "PrivacyFence does not appear to be running in local mode -- there is no MCP token "
-            "to mint. (Organization mode uses its own OAuth 2.1 sign-in instead.)",
-            file=sys.stderr,
-        )
-        return 1
-    try:
-        token = control_channel.mint_mcp_token()
-    except OSError as exc:
-        print(f"Could not reach PrivacyFence's control channel: {exc}", file=sys.stderr)
-        return 1
-    except control_channel.ControlChannelError as exc:
-        print(f"Could not mint an MCP token: {exc}", file=sys.stderr)
-        return 1
-    print(token)
-    return 0
-
-
-# ---------------------------------------------------------------------------- #
 # --revoke-scoped-tokens
 # ---------------------------------------------------------------------------- #
 
 def run_revoke_scoped_tokens(principal_id: str) -> int:
     """The administrator's way to take back every scoped token one person
     holds (ADR 0165), for when their access is revoked for good. Runs as the
-    account that owns the data (``main`` dispatches it after the runtime
-    identity check) and writes the person's ``scoped_tokens.json`` directly;
+    account that owns the data (``main`` dispatches it before anything else
+    starts) and writes the person's ``scoped_tokens.json`` directly;
     a running daemon notices the change the next time a token is presented.
 
     ``principal_id`` must be ``local`` or name an existing ``users/<id>``
@@ -2739,12 +1997,12 @@ def _upstream_claim_keyset() -> Any:
 
 
 def run_rotate_upstream_claim_key() -> int:
-    """Add a new Ed25519 key to the upstream identity-claim key set (plan 3.4).
+    """Add a new Ed25519 key to the upstream identity-claim key set.
 
     The new key is published in the JWKS at once and starts signing five minutes
     later, so verifiers' cached key sets already hold it; the previous key stays
-    published for the overlap. Runs as the account that owns the data, after the
-    runtime identity check; a running server re-reads the file on its next call.
+    published for the overlap. Run it as the account that owns the data; a running
+    server re-reads the file on its next call.
     """
 
     try:
@@ -2864,11 +2122,8 @@ def run_print_env_from_bundle(secret_file: str | None) -> int:
 
 
 def _first_bundle_difference(bundle: dict[str, Any]) -> str | None:
-    """What the environment says differently from the legacy bundle for ``mode``, the server's
-    address and the identity provider's issuer and client id, or None when it says the same."""
-    mode = org_mode.resolve_mode({})
-    if mode != "org":
-        return f"{org_mode.MODE_ENV} is not \"org\", which org_bundle.json says."
+    """What the environment says differently from the legacy bundle for the server's address
+    and the identity provider's issuer and client id, or None when it says the same."""
     server = _bundle_section(bundle, "server")
     bundle_address = str(server.get("issuer_url") or "").strip()
     env_address = os.environ.get(org_mode.ISSUER_URL_ENV, "").strip()
@@ -2943,8 +2198,8 @@ def run_relay_dns_records() -> int:
 def run_peek_release(principal_id: str) -> int:
     """The administrator's way to take back the Peek token PrivacyFence minted
     for one person and stop renewing it, for when they have left. Runs as the
-    account that owns the data (``main`` dispatches it after the runtime
-    identity check) in its own process, so it neither reaches a running
+    account that owns the data (``main`` dispatches it before anything else
+    starts) in its own process, so it neither reaches a running
     daemon's connector registry nor needs one: a daemon keeps its cached
     connector, and so the revoked token, until it is evicted, and Peek
     refuses the token meanwhile. The Peek account stays. A person who
@@ -3066,46 +2321,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # is the human's privacy policy, not the agent's own operational data.
     default_config = str(authority_root(Path(PROJECT_ROOT)) / "config" / "settings.yaml")
     parser.add_argument("--config", default=default_config)
-    parser.add_argument("--gmail-oauth", action="store_true")
-    parser.add_argument("--drive-oauth", action="store_true")
-    parser.add_argument("--contacts-oauth", action="store_true")
-    parser.add_argument("--calendar-oauth", action="store_true")
-    parser.add_argument("--tasks-oauth", action="store_true")
-    parser.add_argument("--apps-script-oauth", action="store_true")
-    parser.add_argument("--slack-oauth", action="store_true")
-    parser.add_argument("--salesforce-oauth", action="store_true")
-    parser.add_argument("--atlassian-oauth", action="store_true")
-    parser.add_argument("--grist-oauth", action="store_true")
-    parser.add_argument("--miro-oauth", action="store_true")
-    parser.add_argument("--telegram-setup", action="store_true")
-    parser.add_argument(
-        "--peek-login", action="store_true",
-        help="Sign in to Peek with Peek's device sign-in and save the token.",
-    )
-    # The break-glass path from ADR 0013 -- see
-    # run_print_sign_in_link() for what it does and what it deliberately does
-    # not claim. Documented in --help rather than hidden: it is what the
-    # not-authorized page and the docs now point a locked-out human at, in
-    # place of asking their agent for a link.
-    parser.add_argument(
-        "--print-sign-in-link", action="store_true",
-        help=(
-            "Print a one-time sign-in link for PrivacyFence's own web UI and exit. Run this "
-            "yourself, in your own terminal -- PrivacyFence's companion app confirms it with you "
-            "before the link is allowed to approve anything."
-        ),
-    )
-    # ADR 0008: the CLI's own equivalent of the .mcpb shim's mintMcpToken()
-    # -- for a direct HTTP MCP client (Claude Code, another tool with no
-    # shim of its own) that needs the bearer token /mcp expects, without
-    # reading a shared file that (on a separated install) no longer exists.
-    parser.add_argument(
-        "--print-mcp-token", action="store_true",
-        help=(
-            "Print this OS account's own MCP bearer token (minting one on first use) and exit. "
-            "For a direct HTTP MCP client with no PrivacyFence extension of its own."
-        ),
-    )
     parser.add_argument(
         "--rotate-upstream-claim-key", action="store_true",
         help=(
@@ -3124,9 +2339,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--revoke-scoped-tokens", metavar="PRINCIPAL_ID", default=None,
         help=(
-            "Revoke every scoped token the account PRINCIPAL_ID holds ('local' in local mode, or the "
-            "principal id the audit log and the org Settings page show) and exit. Run it as the "
-            "account the daemon runs as."
+            "Revoke every scoped token the account PRINCIPAL_ID holds (the principal id the audit "
+            "log and the Settings page show) and exit. Run it as the account the daemon runs as."
         ),
     )
     parser.add_argument(
@@ -3173,22 +2387,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "provisioning key in the environment."
         ),
     )
-    # How the Windows Service Control Manager starts the
-    # daemon on a privilege-separated install -- see windows_service.py for
-    # why Windows needs an argv flag where macOS and Linux needed only a
-    # different service manager pointed at the same unchanged executable.
-    # Hidden from --help: nobody runs this by hand, and the one person who
-    # tries after reading it out of `sc qc` gets a message saying so
-    # (windows_service.run_service()).
-    parser.add_argument("--windows-service", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.idp_secret_file and not args.print_env_from_bundle:
         parser.error("--idp-secret-file goes with --print-env-from-bundle")
     return args
 
 
-# Why main() last returned 1, for a caller with no stderr to read it from: a Windows service has
-# none, so windows_service puts this in the Event Log entry for the failed start.
+# Why main() last returned 1, for a caller that cannot read stderr.
 _last_startup_error: str | None = None
 
 
@@ -3206,7 +2411,7 @@ def _refuse_to_start(message: str, *, logged: bool = False) -> int:
 
     ``logged`` once setup_logging() has run, to put it in the log file too -- the same pair the
     "Fatal error" path writes. Before that there is no log file to write to (settings.yaml names
-    it), which is why the recorded reason is what a Windows service reports instead.
+    it).
     """
     _note_startup_error(message)
     if logged:
@@ -3216,57 +2421,14 @@ def _refuse_to_start(message: str, *, logged: bool = False) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # A windowed Windows build started with no console has no std streams
-    # at all -- see std_streams.py. src/_daemon_entry.py already calls this
-    # before importing anything; repeating it here covers every other way
-    # main() is reached (the `privacyfence-app` console script, a dev run).
-    ensure_std_streams()
     args = parse_args(argv)
-
-    # Before anything else: this process is not the
-    # daemon, it is the shell the Service Control Manager expects to talk
-    # to. It hands itself to the SCM, which calls back into this same
-    # function with no arguments at all -- so every check below, the
-    # runtime-identity one included, runs exactly once, in the service's own
-    # run rather than in the dispatcher that precedes it.
-    if args.windows_service:
-        from . import windows_service
-
-        return windows_service.run_service()
-
-    # Before check_runtime_identity() below, deliberately: this invocation is
-    # the *human's*, run from their own shell as their own account, and on a
-    # separated install that check refuses exactly that account (it exists to
-    # stop the daemon starting as the wrong user). It is also a pure client
-    # of the control channel -- no config, no logging setup, nothing out of
-    # the authority directory it could not read anyway.
-    if args.print_sign_in_link:
-        return run_print_sign_in_link()
-    if args.print_mcp_token:
-        return run_print_mcp_token()
-
-    # Before load_config() below -- which is the first thing
-    # that would read settings.yaml out of the (now service-account-owned)
-    # authority directory, and whose own first-run behavior is to seed a
-    # fresh default from the packaged example when it can't. On a separated
-    # install started as the wrong account that would look like a silent
-    # policy reset rather than a failure, so this refuses to start instead.
-    # See privilege_separation.check_runtime_identity() for the full
-    # reasoning, including why this is the one place local mode fails closed.
-    try:
-        privilege_separation.check_runtime_identity()
-    except privilege_separation.PrivilegeSeparationError as exc:
-        return _refuse_to_start(f"Configuration error: {exc}")
 
     # Before anything reads or rewrites data: a newer release's data is not ours to touch.
     try:
-        data_format.check_not_newer(data_format.read_marker())
+        data_format.check_upgrade_source(paths.data_dir())
     except org_mode.ConfigurationError as exc:
         return _refuse_to_start(f"Configuration error: {exc}")
 
-    # After the identity check, unlike --print-mcp-token above: this one reads
-    # and writes the authority directory itself, so on a separated install it
-    # must run as the account that owns it.
     if args.revoke_scoped_tokens is not None:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
     if args.rotate_upstream_claim_key:
@@ -3284,15 +2446,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.grist_release is not None:
         return run_grist_release(args.grist_release)
 
-    oauth_flag = (
-        args.gmail_oauth or args.drive_oauth or args.contacts_oauth
-        or args.calendar_oauth or args.tasks_oauth or args.apps_script_oauth
-        or args.slack_oauth
-        or args.salesforce_oauth or args.atlassian_oauth or args.grist_oauth
-        or args.miro_oauth
-        or args.telegram_setup or args.peek_login
-    )
-
     try:
         config = load_config(args.config, principal=LOCAL_PRINCIPAL)
     except (FileNotFoundError, ValueError) as exc:
@@ -3301,66 +2454,6 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(config)
 
     try:
-        if oauth_flag:
-            org_config = _local_effective_org_config()
-            if args.gmail_oauth:
-                return run_gmail_oauth(org_config)
-            if args.drive_oauth:
-                return run_drive_oauth(org_config)
-            if args.contacts_oauth:
-                return run_contacts_oauth(org_config)
-            if args.calendar_oauth:
-                return run_calendar_oauth(org_config)
-            if args.tasks_oauth:
-                return run_tasks_oauth(org_config)
-            if args.apps_script_oauth:
-                return run_apps_script_oauth(org_config)
-            if args.slack_oauth:
-                return run_slack_oauth(org_config)
-            if args.salesforce_oauth:
-                return run_salesforce_oauth(org_config)
-            if args.atlassian_oauth:
-                return run_atlassian_oauth(org_config, config)
-            if args.grist_oauth:
-                return run_grist_oauth(org_config)
-            if args.miro_oauth:
-                return run_miro_oauth(org_config)
-            if args.telegram_setup:
-                return run_telegram_setup()
-            if args.peek_login:
-                return run_peek_login(org_config)
-        # ADR 0003 decision 6: only on the path that actually starts the
-        # persistent daemon, not any of the one-shot CLI invocations above --
-        # an admin password dialog popping up during `--gmail-oauth` would be
-        # a surprising thing for a scripted/headless call to trigger, and
-        # there is nothing to refuse yet on a one-shot command. A no-op
-        # everywhere but a packaged, unseparated install; see that function's
-        # own docstring for what it attempts and why it refuses to serve
-        # (raising PrivilegeSeparationError, caught below) if the attempt
-        # doesn't take. This is also what now calls maybe_auto_enable_macos()
-        # -- synchronously, so it can act on the outcome -- rather than
-        # main() calling that directly.
-        try:
-            privilege_separation.enforce_separation()
-        except privilege_separation.SeparationHandover as handover:
-            # Caught before the base class below, and exiting 0: the install
-            # is now separated and its service owns the daemon, so this
-            # process has nothing left to do and nothing went wrong. Exiting
-            # non-zero here would make Task Scheduler / launchd / systemd
-            # report a failed start for the one outcome decision 6 is
-            # actually trying to reach. See SeparationHandover.
-            logger.info("%s", handover)
-            print(str(handover))
-            return 0
-        except privilege_separation.PrivilegeSeparationError as exc:
-            return _refuse_to_start(f"Configuration error: {exc}", logged=True)
-        # ADR 0003 decision 7's startup-log half of the developer-path
-        # disclosure -- see privilege_separation.dev_unseparated_notice()'s
-        # own docstring; the /security page half is
-        # web/routes_security.py's local-mode call site.
-        dev_notice = privilege_separation.dev_unseparated_notice()
-        if dev_notice is not None:
-            logger.warning(dev_notice)
         return run_app(config, args.config)
     except Exception as exc:
         logger.error("Fatal error: %s", exc, exc_info=True)

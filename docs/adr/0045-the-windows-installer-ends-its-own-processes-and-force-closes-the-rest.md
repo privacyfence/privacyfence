@@ -5,6 +5,8 @@
 Accepted — 2026-09-24. Implemented in `installer/privacyfence.iss` (`CloseApplications=force`,
 and `PrepareToInstall`'s wait).
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 On an upgrade, Inno Setup has to overwrite files that PrivacyFence's own processes have open: the

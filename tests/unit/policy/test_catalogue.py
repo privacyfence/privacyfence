@@ -1,12 +1,10 @@
 """Tests for privacyfence.policy.catalogue.
 
 This module is the Auto-accept Settings page's own scope catalogue
-(``_policy_scope_catalogue``/``_POLICY_EXTRA_SCOPES``/``_rules_for_catalogue_entry``, all originally
-private to ``settings_controller.py``), promoted here so the bridge writer
+(``_policy_scope_catalogue``/``_POLICY_EXTRA_SCOPES``/``_rules_for_catalogue_entry``, shared by the
+Settings page), defined here so the bridge writer
 (``gate.propose_policy_change``) can share it instead of re-deriving it a second time -- see this
-module's own docstring. ``tests/unit/test_settings_controller.py``'s ``TestPolicyScopeCatalogue``/
-``TestAddPolicyRule`` already prove the re-exported names behave identically; these tests exercise
-the real definitions directly.
+module's own docstring. These tests exercise the definitions directly.
 """
 from __future__ import annotations
 

@@ -1,53 +1,13 @@
 """The web approval surface: WebApprovalUI (web_approval_ui.py) registers a
 pending card or confirmation, and these routes are what let a human actually
-see and decide it in a browser (ADR 0001). One module
-builds the route list for *both* local mode's single-secret session and org
-mode's principal-aware one, with an auth adapter per mode (ADR 0033).
-
-``create_app()`` is local mode's entry point (unchanged signature: wraps the
-route list in a ``Starlette`` app, folding in whatever ``extra_routes``/
-``lifespan`` web/server.py's ``build_app`` needs). ``build_routes()`` is org
-mode's (a plain ``list[Route]``, extended into ``_build_org_app``'s own
-larger app, mirroring web/routes_security.py's already-established two-
-callers-one-module shape). Both delegate to ``_build_route_list()``, which
-takes every place the two modes differ as a plain keyword argument -- same
-pattern web/routes_security.py's own ``build_routes()`` already uses for
-``resolve_principal``/``check_csrf``/``check_origin``/``unauthenticated_response``/
-``session_cookie_name``, reused here rather than invented fresh:
-
-- ``resolve_principal`` -- local: web/session_auth.py's own ``resolve_principal()``
-  (added alongside ``authenticated()`` for exactly this); org:
-  web/org_session.py's own ``authenticated()``, unchanged -- both already had
-  the identical ``Principal | None`` shape.
-- ``unauthenticated_page_response``/``unauthenticated_read_response`` --
-  local shows the same ``unauthorized_html`` recovery page either way; org
-  redirects a page view to ``/login?next=...`` but answers a JSON read with a
-  plain ``401`` -- see either mode's own adapter below for the exact shapes
-  this module used before the merge.
-- ``step_up_response`` -- the one piece web/approval_step_up.py
-  leaves mode-specific (its own module docstring): local's passkey-only
-  ``428``/``403``; org's, which can also carry an IdP-reauth link (closed by
-  ``step_up.require_passkey``). Kept as the two private factories
-  below (``_local_step_up_response``/``_org_step_up_response``) -- selected,
-  not merged, since the org one is a real behavioral difference (a fallback
-  local mode has nothing to fall back to), not incidental duplication; see
-  ADR 0066.
-- ``bridge_shim`` -- the org variant additionally handles a ``428``'s
-  ``idp_stepup_url`` (a button that POSTs to it) and a ``403``'s
-  ``enroll_url`` in the injected JS; kept as ``_bridge_shim``/``_org_bridge_shim`` for the same reason.
-- ``render_list_page`` -- local's carries the step-up enrollment banner and
-  the notifications-detail dial; org's carries the signed-in principal's
-  label and subscribes to ``/api/approvals/stream`` for live updates (org mode
-  mounts no ``/api/state/stream``).
-- ``unenrolled_batch_message`` -- what an approving batch that needs
-  step-up gets when nothing is enrolled and ``require_passkey`` is off:
-  local passes ``None`` (the batch applies, as a single decision would);
-  org passes a message and the batch is refused with a ``400``, since a
-  batch has no IdP link to fall back to (web/approval_step_up.py's
-  ``batch_step_up_response``, ADR 0065).
-- ``human_session_guard`` -- session provenance (web/session_auth.py's
-  ``PROVENANCE_HUMAN``), local-only: org mode has no session-provenance concept at all (its
-  equivalent is IdP re-auth), so its own adapter is a no-op.
+see and decide it in a browser (ADR 0001). ``build_routes()`` returns the
+organization ``/approvals`` route list (a plain ``list[Route]``, extended into
+``_build_org_app``'s larger app), built by ``_build_route_list()``, which takes
+every adapter as a plain keyword argument: ``resolve_principal``,
+``check_csrf``/``check_origin``, the unauthenticated responses,
+``step_up_response`` (``_org_step_up_response``: the passkey challenge plus an
+IdP-reauth link while ``step_up.require_passkey`` is off), ``bridge_shim``,
+``render_list_page`` and ``unenrolled_batch_message``.
 
 **Step-up** (ADR 0002 decision 6: a session alone must not be enough to
 release an approval) is otherwise identical between modes and
@@ -69,18 +29,11 @@ decides what auto-accepts from here on. Those register with
 ``approval_step_up.guard_decision`` takes the passkey half of that (gated on
 ``require_passkey`` rather than ``scope``, the same line
 web/routes_settings.py's own ``_needs_step_up`` draws); ``decide()`` below
-takes the human-session half for local mode, the same way it already does
-for an ordinary approving decision.
+applies the same guards as for an ordinary approving decision.
 
-**Org-only IdP step-up** (``_StepUpAuthAttemptStore``,
-``POST /api/approvals/{id}/stepup/idp``, ``GET /oauth/stepup/callback``) has
-no local-mode analogue at all -- local has no IdP to re-authenticate
-against -- so it stays a small separate module,
-web/routes_org_stepup.py, mounted only by ``_build_org_app`` alongside this
-module's own route list. ``require_human_session`` stays local-only and
-unchanged for the same kind of reason in reverse: org mode's equivalent of
-"was this session attributed to a person" is IdP re-auth, not a session
-provenance flag.
+**Org-only IdP step-up** (``POST /api/approvals/{id}/stepup/idp``,
+``GET /oauth/stepup/callback``) lives in web/routes_org_stepup.py, mounted by
+``_build_org_app`` alongside this module's own route list.
 
 approval_window_html.py's/dialog_window_html.py's documents post their
 decision through ``window.webkit.messageHandlers.pf.postMessage``; a small
@@ -102,13 +55,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
-from starlette.routing import BaseRoute, Route
+from starlette.routing import Route
 
 from .. import approval_list_html, approval_window_html, deny_feedback, web_shell, webauthn_stepup, whats_new
-from ..approvals import BATCH_RESULTS, CONFIRM_RESULTS
+from ..approvals import BATCH_RESULTS
 from ..deny_feedback import DenialFeedback
 from ..principal import Principal
 from ..step_up_config import StepUpConfig
@@ -118,14 +70,6 @@ from . import approval_step_up, org_session, step_up_decide
 from .csp import nonce_for as _csp_nonce_for
 from .csp import set_nonce as _set_csp_nonce
 from .routes_security import PF_WEBAUTHN_JS
-from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
-from .session_auth import LocalSessionStore
-from .session_auth import check_csrf as _csrf_matches
-from .session_auth import check_origin as _origin_ok
-from .session_auth import human_session_required_json as _human_session_required_json
-from .session_auth import is_human_session as _is_human_session
-from .session_auth import resolve_principal as _resolve_local_principal
-from .session_auth import unauthorized_html as _unauthorized_response
 
 # Only an *approving* decision needs step-up: denying leaks nothing, so
 # step-up is scoped to the two approving results only.
@@ -164,54 +108,23 @@ _ALREADY_DECIDED_MESSAGE = "Already decided elsewhere."
 _FAILED_MESSAGE = "Could not record this decision — please reload and try again."
 
 # StepUpResponseFactory: mints (or hard-refuses) the challenge for a single
-# decision that needs step-up -- local's passkey-only shape or org's
-# passkey-or-IdP one (module docstring). ``None`` means "nothing enrolled,
-# and no requirement to fall back to" -- local mode's own evadable
-# fall-through; org's own factory never returns it (module docstring).
+# decision that needs step-up: the passkey-or-IdP shape of
+# ``_org_step_up_response``. ``None`` would mean "nothing enrolled, and no
+# requirement to fall back to"; that factory never returns it.
 StepUpResponseFactory = Callable[..., "JSONResponse | None"]
-
-
-def _local_step_up_response(
-    principal: Principal, approval_id: str, *, result: str, choice: int | None,
-    step_up: StepUpConfig, challenges: StepUpChallengeStore,
-) -> JSONResponse | None:
-    """Local mode's step-up challenge factory. ``None``
-    when there is no enrolled passkey to challenge *and*
-    ``step_up.require_passkey`` is off, which the caller takes as "let the
-    decision through unguarded" -- evadable by simply never enrolling a
-    passkey, kept only for that configuration. With ``require_passkey`` on
-    and nothing enrolled, this hard-fails with a ``403`` instead -- the
-    write is never released. See ADR 0066."""
-    fingerprint = webauthn_stepup.decision_fingerprint(
-        approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
-    )
-    options_json = step_up_decide.begin_step_up(
-        principal, rp_id=step_up.rp_id, subject_key=approval_id, fingerprint=fingerprint, challenges=challenges,
-    )
-    if options_json is not None:
-        return JSONResponse(
-            {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
-        )
-    if step_up.require_passkey:
-        return JSONResponse(
-            {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
-        )
-    return None
 
 
 def _org_step_up_response(
     principal: Principal, approval_id: str, *, result: str, choice: int | None,
     step_up: StepUpConfig, challenges: StepUpChallengeStore,
 ) -> JSONResponse:
-    """Org mode's step-up challenge factory: same passkey ceremony as local
-    mode's, plus an IdP-reauth fallback link whenever
-    ``step_up.require_passkey`` is off -- so, unlike local mode, this never
-    lets a decision through unguarded; see
+    """Org mode's step-up challenge factory: the passkey ceremony, plus an
+    IdP-reauth fallback link whenever ``step_up.require_passkey`` is off --
+    so this never lets a decision through unguarded; see
     web/routes_org_stepup.py's own module docstring for the redirect this
     URL leads to. ``require_passkey`` closes that fallback instead:
     with nothing enrolled, this hard-refuses with a ``403`` naming
-    ``/security``, same as local mode's own ``require_passkey`` branch
-    (ADR 0066)."""
+    ``/security`` (ADR 0066)."""
     body: dict = {"error": "step_up_required"}
     fingerprint = webauthn_stepup.decision_fingerprint(
         approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
@@ -235,115 +148,11 @@ def _org_step_up_response(
     return JSONResponse(body, status_code=428)
 
 
-def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: str) -> str:
-    """Local mode's runtime shim, swapping approval_window_html.py's/
-    dialog_window_html.py's own ``window.webkit.messageHandlers.pf.
-    postMessage(payload)`` call for a ``fetch()`` POST here. ``csrf`` is
-    folded into every posted payload (double-submit: the same value also has
-    to match the session cookie server-side, see ``check_csrf``) rather than
-    trusted from the cookie alone. ``stepup_options_url`` is unused here --
-    local mode has no IdP alternative to link a client toward, see
-    ``_org_bridge_shim`` for the mode that does.
-
-    After a decision, back to the list: on a 2xx or a 409 (``already_decided`` -- a rule elsewhere resolved this
-    one first, a genuinely common case once rules-changed re-evaluation is
-    live, not an error), navigate straight back to ``/approvals`` via
-    ``location.replace`` (not a push -- the browser back button must not
-    walk into a card that no longer exists) with a toast message stashed in
-    ``sessionStorage`` for the list page to show once. Only a genuine
-    failure (network error, an unexpected status) leaves the card on screen
-    with an inline message -- there is nothing to navigate back to for
-    those. A deny whose payload carries a ``note`` or an ``intent`` (the
-    card's "Deny and send", ADR 0083) toasts ``_DENIED_WITH_NOTE_MESSAGE``
-    instead of ``_DENIED_MESSAGE``. Every key of the payload is forwarded
-    unchanged; the decide route validates them.
-
-    A ``428`` means step-up is outstanding: when the body
-    carries ``webauthn_options``, run the assertion ceremony
-    (``window.pfWebauthnGet``, defined by ``PF_WEBAUTHN_JS`` below) and
-    retry the same decide POST with a ``webauthn_assertion`` attached; a
-    ``428`` with no options (no passkey enrolled) or a failed ceremony both
-    fall through to the generic failure message, since local mode has no IdP
-    link to offer instead.
-
-    ``nonce``: this shim is a real ``<script>`` element injected
-    into an already-rendered card document (see ``_inject_shim`` below), so
-    it has to carry the same nonce that document's own ``<script>``/
-    ``<style>`` tags already do -- ``show_approval`` below recovers that
-    value via approval_window_html.extract_csp_nonce and passes it straight
-    through."""
-    del stepup_options_url  # reserved -- see docstring
-    return (
-        f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
-        + f'<script nonce="{nonce}">(function(){{'
-        "window.webkit = window.webkit || {};"
-        "window.webkit.messageHandlers = window.webkit.messageHandlers || {};"
-        "function pfDecide(body){"
-        f"return fetch({decide_url!r}, {{method:'POST', credentials:'same-origin',"
-        "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
-        "}"
-        "function pfIdpStepUp(url, payload){"
-        "return fetch(url, {method:'POST', credentials:'same-origin',"
-        "headers:{'Content-Type':'application/json'},"
-        "body: JSON.stringify({result: payload.result, choice: payload.choice == null ? null : payload.choice,"
-        f" csrf: {csrf!r}}})}}).then(function(r){{"
-        "if (!r.ok) { throw new Error('step-up refused'); }"
-        "return r.json();"
-        "}).then(function(data){"
-        "window.location.assign(data.redirect);"
-        f"}}).catch(function(){{ document.body.innerHTML = {_FAILED_MESSAGE!r}; }});"
-        "}"
-        "function pfIdpStepUpCard(url, payload){"
-        "document.body.innerHTML = 'This approval needs extra verification. "
-        "<button type=\"button\" id=\"pf-idp-stepup\">Verify by signing in again</button>';"
-        "document.getElementById('pf-idp-stepup').addEventListener('click', function(){"
-        "pfIdpStepUp(url, payload);"
-        "});"
-        "}"
-        "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
-        f"var body = Object.assign({{}}, payload, {{csrf: {csrf!r}}});"
-        "var isDeny = payload.result === 'deny' || payload.result === 'cancel';"
-        "var withNote = payload.result === 'deny' && !!(payload.note || payload.intent);"
-        "pfDecide(body).then(function(r){"
-        "  if (r.status === 428) {"
-        "    return r.json().then(function(data){"
-        "      if (data.webauthn_options && window.PublicKeyCredential) {"
-        "        return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function(assertion){"
-        "          var retryBody = Object.assign({}, body, {webauthn_assertion: assertion});"
-        "          return pfDecide(retryBody);"
-        "        }).catch(function(err){"
-        f"          document.body.innerHTML = {_FAILED_MESSAGE!r} + ' (' + err.message + ')';"
-        "          return null;"
-        "        });"
-        "      }"
-        f"      document.body.innerHTML = {_FAILED_MESSAGE!r};"
-        "      return null;"
-        "    });"
-        "  }"
-        "  return r;"
-        "}).then(function(r){"
-        "  if (r === null) { return; }"
-        "  var msg = null;"
-        f"  if (r.ok) {{ msg = withNote ? {_DENIED_WITH_NOTE_MESSAGE!r} : isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
-        f"  else if (r.status === 409) {{ msg = {_ALREADY_DECIDED_MESSAGE!r}; }}"
-        "  if (msg !== null) {"
-        "    try { sessionStorage.setItem('pf_toast', JSON.stringify({msg: msg})); } catch (e) {}"
-        "    window.location.replace('/approvals');"
-        "    return;"
-        "  }"
-        f"  document.body.innerHTML = {_FAILED_MESSAGE!r};"
-        "})"
-        f".catch(function(){{ document.body.innerHTML = {_FAILED_MESSAGE!r}; }});"
-        "}};"
-        "})();</script>"
-    )
-
-
-def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: str) -> str:
-    """Org mode's counterpart of ``_bridge_shim`` -- same
-    ``window.webkit.messageHandlers.pf.postMessage`` swap, plus the two
-    branches org mode's own ``_org_step_up_response``/``decide()`` responses
-    need that local mode's never send: a ``428``'s ``idp_stepup_url``
+def _org_decide_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: str) -> str:
+    """Org mode's runtime shim: the
+    ``window.webkit.messageHandlers.pf.postMessage`` swap for a ``fetch()``
+    POST, plus the two branches ``_org_step_up_response``/``decide()``
+    responses need: a ``428``'s ``idp_stepup_url``
     fallback button (it POSTs to that URL), and a ``403``'s ``enroll_url``
     (``step_up.require_passkey``). ``stepup_options_url`` is unused by the JS
     below directly (a ``428`` body already carries fresh options inline) but
@@ -352,7 +161,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
     endpoint to design -- today's flow never needs it because the first
     ``428`` already includes everything the client needs.
 
-    ``nonce``: same role as ``_bridge_shim``'s -- this is a real
+    ``nonce``: this is a real
     ``<script>`` element injected into an already-rendered card document, so
     it must carry that document's own nonce."""
     del stepup_options_url  # reserved -- see docstring
@@ -470,18 +279,16 @@ def _render_org_list_page(
     rows: list, *, csrf: str, nonce: str, principal: Principal, push_public_key: str = "",
     whats_new_version: str = "",
 ) -> str:
-    """Org mode's ``/approvals`` page, in the same shell local mode uses.
+    """Org mode's ``/approvals`` page.
 
     Live updates come from ``GET /api/approvals/stream`` (``stream_url``),
-    not the ``/api/state/stream`` local mode's shell connects to: org mode's
-    app mounts no state stream (there is no settings snapshot to push), but
-    this module's own approvals stream is mounted in both modes, is scoped
+    not a state stream (org mode mounts none: there is no settings snapshot to
+    push); this module's own approvals stream is scoped
     to the signed-in principal, and emits the same ``approvals`` event the
     shell script and ``window.__pfRenderApprovals`` already consume -- so a
     new approval, or one decided from another tab or device, shows up
     without a manual reload, and the live indicator reflects a real
-    connection. Tier-0/1 notifications stay off: they are local mode's
-    settings.yaml-configured feature, and org mode has no per-principal
+    connection. Tier-0/1 notifications stay off: org mode has no per-principal
     setting for them yet. Org mode's notifications are web push instead
     (ADR 0081): ``push_public_key`` is the server's VAPID public key when the
     org has push on, and the shell's permission pre-prompt then subscribes
@@ -528,7 +335,6 @@ def _build_route_list(
     render_list_page: Callable[..., str],
     per_item_message: str,
     unenrolled_batch_message: str | None,
-    human_session_guard: Callable[[Request, str], Response | None],
     stopping: threading.Event | None = None,
     whats_new_version_for: Callable[[Principal], str] = lambda principal: "",
 ) -> list[Route]:
@@ -539,8 +345,7 @@ def _build_route_list(
     web/routes_security.py's ``build_routes()`` already established;
     ``step_up_response``/``bridge_shim``/``render_list_page`` are the three
     places the shared web/approval_step_up.py leaves to the
-    caller, here selected (not merged) between ``_local_*``/``_org_*``
-    below.
+    caller, here supplied by ``build_routes``.
     """
     challenges = StepUpChallengeStore()
     origin = step_up_origin.rstrip("/")
@@ -725,22 +530,6 @@ def _build_route_list(
                 return JSONResponse({"status": "error", "error": str(exc)}, status_code=400)
 
         approval = registry.get(approval_id, principal_id=principal.id)
-        # A confirm dialog that is the whole gate on a config change rather
-        # than a second step inside a card -- see approvals.
-        # PendingApprovalRegistry.register_confirm's own ``sensitive``
-        # parameter, and module docstring.
-        sensitive_confirm = approval is not None and approval.sensitive and result == CONFIRM_RESULTS[0]
-
-        if result in _STEP_UP_RESULTS or sensitive_confirm:
-            # Ahead of the step-up ceremony below, not after it: there is no
-            # point walking somebody through a passkey prompt (or, in org
-            # mode, this is simply a no-op) for a decision this session
-            # could not have released whatever the answer was.
-            what = "create an auto-accept rule" if sensitive_confirm else "approve a decision"
-            guard_response = human_session_guard(request, what)
-            if guard_response is not None:
-                return guard_response
-
         stepup_response = approval_step_up.guard_decision(
             principal, step_up,
             approval=approval, approval_id=approval_id, result=result, choice=choice,
@@ -801,11 +590,6 @@ def _build_route_list(
         raw_batch_id = payload.get("batch_id")
         batch_id = raw_batch_id if isinstance(raw_batch_id, str) and raw_batch_id else uuid.uuid4().hex
 
-        if any(result in _BATCH_STEP_UP_RESULTS for _id, result in parsed):
-            guard_response = human_session_guard(request, "approve a decision")
-            if guard_response is not None:
-                return guard_response
-
         stepup_response, batch_id_verified = approval_step_up.guard_batch_decision(
             principal, step_up,
             parsed=parsed, registry=registry, batch_id=batch_id, batch_step_up_results=_BATCH_STEP_UP_RESULTS,
@@ -845,168 +629,6 @@ def _build_route_list(
     ]
 
 
-def _no_human_session_guard(request: Request, what: str) -> Response | None:
-    """Org mode's ``human_session_guard``: a no-op. Org mode has no
-    session-provenance concept -- its equivalent is IdP re-auth, which the
-    step-up factory above already offers on its own terms."""
-    del request, what
-    return None
-
-
-def create_app(
-    web_ui: WebApprovalUI,
-    *,
-    sessions: LocalSessionStore,
-    extra_routes: list[BaseRoute] | None = None,
-    lifespan=None,
-    notifications_enabled: bool = True,
-    notifications_detail: str = "minimal",
-    step_up: StepUpConfig | None = None,
-    step_up_origin: str = "",
-    any_connector_authenticated: Callable[[], bool] | None = None,
-    require_human_session: bool = False,
-    stopping: threading.Event | None = None,
-) -> Starlette:
-    """Build the Starlette app serving local mode's approval surface.
-    ``sessions`` (see session_auth.py's own module docstring) is the
-    local-mode session store -- this function takes it as a plain argument
-    rather than reading paths.py itself, so tests can construct an app
-    against an isolated WebApprovalUI/session-store pair with no filesystem
-    or global-singleton dependency. A request's own ``pf_session`` cookie
-    value doubles as the CSRF token baked into every rendered page below --
-    it is only ever set by web/server.py's ``_BootstrapMiddleware``, which is
-    what actually authenticates the one-time ``?bootstrap=`` exchange;
-    nothing in this module ever mints or sets that cookie itself.
-
-    ``extra_routes``/``lifespan`` are how server.py folds the ``/mcp``
-    endpoint into this same combined app rather than running a second ASGI
-    app/server on a second port -- one embedded HTTP server. Both default to
-    nothing so every existing caller (including this module's own tests) is
-    unaffected.
-
-    ``notifications_enabled``/``notifications_detail`` are settings.yaml.
-    example's ``web.notifications.enabled``/``detail`` -- see
-    web_shell.wrap's own docstring for what they turn off/dial.
-
-    ``step_up``/``step_up_origin`` gate an approving decision
-    on a fresh WebAuthn assertion -- see module docstring for what's
-    deliberately different from org mode's own factory (no IdP fallback,
-    still evadable by not enrolling). Both default to "off" so every
-    existing caller of this function is unaffected; web/server.py's
-    ``build_app`` is the one real (non-test) caller that passes them.
-
-    ``stopping``, when set, ends ``/api/approvals/stream`` on its next tick, so a server that is
-    shutting down is not held for its graceful-shutdown period.
-
-    ``require_human_session`` refuses an
-    approving decision -- the same two results ``_STEP_UP_RESULTS``/
-    ``_BATCH_STEP_UP_RESULTS`` step-up already scopes to, since denying
-    leaks nothing -- taken by a session web/session_auth.py cannot
-    attribute to a person. Independent of ``step_up`` and asked first: a
-    passkey answers "is this the enrolled human", provenance answers "did a
-    human ask for this session at all", and an install with no passkey
-    enrolled still wants the second question asked.
-
-    Default off, and web/server.py turns it on for exactly one kind of
-    install: a privilege-separated one -- see ADR 0003 and ADR 0062; an unseparated
-    build-from-source install has no companion to attribute a session to,
-    and an agent that can rewrite the credential store directly gains
-    nothing from the check anyway. Same line ``StepUpConfig.
-    from_local_config()`` already draws when it refuses ``require_passkey``
-    on such an install.
-
-    ``any_connector_authenticated`` picks the approvals page's empty state:
-    "Nothing is waiting" is right on a working install and misleading on one
-    where nothing is authenticated, since nothing is waiting because nothing
-    *can*. Called per request rather than resolved once, so authenticating a
-    connector takes effect on the next load rather than the next restart.
-    ``None`` (the default, and every caller that has no settings controller
-    to ask) keeps the steady-state copy -- never tell somebody who is
-    already set up that they aren't.
-    """
-
-    def _resolve_principal(request: Request) -> Principal | None:
-        return _resolve_local_principal(request, sessions)
-
-    def _human_session_guard(request: Request, what: str) -> Response | None:
-        if not require_human_session or _is_human_session(request, sessions):
-            return None
-        body, status = _human_session_required_json(what)
-        return JSONResponse(body, status_code=status)
-
-    def _banner_html(principal: Principal) -> str | None:
-        if step_up is None:
-            return None
-        # The persistent "requirement was turned off" notice stands
-        # alongside the "nothing enrolled yet" one -- see
-        # web/routes_settings.py's own _banner_html for the same pairing.
-        parts = [
-            step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(principal)),
-            webauthn_stepup.step_up_disabled_notice(principal),
-        ]
-        present = [p for p in parts if p]
-        return " ".join(present) if present else None
-
-    def _off_notice_html() -> str | None:
-        # Unlike _banner_html above (a live
-        # problem, re-derived every request), this is an invitation --
-        # step-up existing and being off is this install's ordinary
-        # default, not a defect -- so it's rendered as a dismissible notice
-        # instead of stacked into the non-dismissable banner.
-        return None if step_up is None else step_up.off_notice()
-
-    def _render_list_page(
-        rows: list, *, csrf: str, nonce: str, principal: Principal, whats_new_version: str = "",
-    ) -> str:
-        del whats_new_version  # org mode only
-        body = approval_list_html.build_list_html(
-            rows, csrf=csrf, nonce=nonce,
-            any_authed=any_connector_authenticated() if any_connector_authenticated else True,
-        )
-        # PF_WEBAUTHN_JS: the same
-        # ceremony helpers web/routes_settings.py's own settings page
-        # carries, needed here whenever Approve-selected's own 428 branch
-        # has to run one -- always injected regardless of whether step-up is
-        # actually enabled for this install.
-        body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
-        return web_shell.wrap(
-            body, title="PrivacyFence — Approvals", active="approvals", nonce=nonce,
-            notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
-            banner_html=_banner_html(principal),
-            dismissible_notice_html=_off_notice_html(), dismissible_notice_key="pf_step_up_off_dismissed",
-            deprecation_html=web_shell.local_mode_deprecation_html(),
-        )
-
-    def _unauthenticated_page(request: Request, next_path: str) -> Response:
-        del next_path  # local mode's recovery page names no destination to return to
-        return _unauthorized_response(request)
-
-    routes = _build_route_list(
-        web_ui,
-        resolve_principal=_resolve_principal,
-        check_csrf=_csrf_matches,
-        check_origin=_origin_ok,
-        session_cookie_name=_SESSION_COOKIE,
-        unauthenticated_page_response=_unauthenticated_page,
-        unauthenticated_read_response=_unauthorized_response,
-        step_up=step_up,
-        step_up_origin=step_up_origin,
-        step_up_response=_local_step_up_response,
-        bridge_shim=_bridge_shim,
-        render_list_page=_render_list_page,
-        per_item_message=(
-            "This install requires a separate passkey check per decision -- "
-            "decide these individually instead of as a batch."
-        ),
-        unenrolled_batch_message=None,
-        human_session_guard=_human_session_guard,
-        stopping=stopping,
-    )
-    all_routes: list[BaseRoute] = list(routes)
-    all_routes.extend(extra_routes or [])
-    return Starlette(routes=all_routes, lifespan=lifespan)
-
-
 def build_routes(
     *, web_ui: WebApprovalUI, sessions: org_session.OrgSessionStore, step_up: StepUpConfig, issuer_url: str,
     push_public_key: str = "", stopping: threading.Event | None = None,
@@ -1014,11 +636,7 @@ def build_routes(
     """Build org mode's own ``/approvals`` route list -- extended into
     ``_build_org_app``'s larger app the same way web/routes_security.py's
     own ``build_routes()`` already is. ``sessions`` is an
-    ``OrgSessionStore``, not the local-mode ``LocalSessionStore``
-    ``create_app`` above takes.
-
-    It shares ``create_app``'s route layer and differs only in its auth
-    adapter (ADR 0033). Every read and
+    ``OrgSessionStore`` (ADR 0033). Every read and
     write here is authorized against ``current_principal()`` (org_session's
     own ``authenticated()``), filtered through ``PendingApprovalRegistry``'s
     own principal dimension.
@@ -1026,8 +644,7 @@ def build_routes(
     The org-only IdP step-up routes (``/api/approvals/{id}/stepup/idp``,
     ``/oauth/stepup/callback``) are *not* included here -- see module
     docstring: they live in web/routes_org_stepup.py, mounted separately by
-    ``_build_org_app`` alongside this function's own return value, since
-    they have no local-mode analogue to share code with at all.
+    ``_build_org_app`` alongside this function's own return value, .
 
     ``push_public_key`` is the server's VAPID public key when the org has web
     push on (ADR 0081), else empty; see ``_render_org_list_page``.
@@ -1066,7 +683,7 @@ def build_routes(
         step_up=step_up,
         step_up_origin=issuer_url,
         step_up_response=_org_step_up_response,
-        bridge_shim=_org_bridge_shim,
+        bridge_shim=_org_decide_shim,
         render_list_page=_render_list_page,
         per_item_message=(
             "This organization requires a separate passkey check per decision -- "
@@ -1076,10 +693,9 @@ def build_routes(
             "Approving several requests at once needs a passkey. Set one up at /security, "
             "or approve each request from its card, where you can verify by signing in again."
         ),
-        human_session_guard=_no_human_session_guard,
         stopping=stopping,
         whats_new_version_for=whats_new.pending_version,
     )
 
 
-__all__ = ["create_app", "build_routes"]
+__all__ = ["build_routes"]

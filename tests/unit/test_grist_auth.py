@@ -30,7 +30,6 @@ from privacyfence.grist_auth import (
     discover,
     normalize_server_url,
 )
-from privacyfence.oauth_loopback import OAuthLoopbackError
 
 pytestmark = pytest.mark.unit
 
@@ -152,16 +151,13 @@ class TestNormalizeServerUrl:
 
 
 class TestBundleSettings:
-    def test_empty_section_in_local_mode(self):
-        assert bundle_settings({}, org_mode=False) == GristBundle("", None)
-
     def test_server_only(self):
-        assert bundle_settings({"server_url": "https://g.example.com/"}, org_mode=True) == GristBundle(
+        assert bundle_settings({"server_url": "https://g.example.com/"}) == GristBundle(
             "https://g.example.com", None,
         )
 
     def test_client_pair_defaults_server_and_auth_server(self):
-        bundle = bundle_settings({"client_id": "id", "client_secret": "sec"}, org_mode=False)
+        bundle = bundle_settings({"client_id": "id", "client_secret": "sec"})
         assert bundle.server_url == "https://docs.getgrist.com"
         assert bundle.oauth == GristOAuthConfig(
             "https://docs.getgrist.com", "id", "sec", "https://docs.getgrist.com",
@@ -169,7 +165,7 @@ class TestBundleSettings:
 
     def test_auth_server_url_defaults_to_the_server(self):
         bundle = bundle_settings(
-            {"server_url": "https://g.example.com", "client_id": "id", "client_secret": "sec"}, org_mode=True,
+            {"server_url": "https://g.example.com", "client_id": "id", "client_secret": "sec"},
         )
         assert bundle.oauth.auth_server_url == "https://g.example.com"
 
@@ -177,26 +173,26 @@ class TestBundleSettings:
         bundle = bundle_settings({
             "server_url": "https://g.example.com", "client_id": "id", "client_secret": "sec",
             "auth_server_url": "https://login.example.com/",
-        }, org_mode=False)
+        })
         assert bundle.oauth.auth_server_url == "https://login.example.com"
 
     @pytest.mark.parametrize("section", [{"client_id": "id"}, {"client_secret": "sec"}])
     def test_half_a_pair_is_incomplete(self, section):
         with pytest.raises(GristClientError) as err:
-            bundle_settings(section, org_mode=False)
+            bundle_settings(section)
         assert str(err.value) == "Grist organization config is incomplete: client_id and client_secret go together."
 
-    def test_org_mode_needs_a_server(self):
+    def test_it_needs_a_server(self):
         with pytest.raises(GristClientError) as err:
-            bundle_settings({}, org_mode=True)
+            bundle_settings({})
         assert str(err.value) == "Grist organization config not installed"
 
     def test_a_bad_url_raises_grist_client_error(self):
         with pytest.raises(GristClientError):
-            bundle_settings({"server_url": "http://g.example.com"}, org_mode=False)
+            bundle_settings({"server_url": "http://g.example.com"})
 
     def test_the_secret_is_not_in_the_repr(self):
-        bundle = bundle_settings({"client_id": "id", "client_secret": SECRET}, org_mode=False)
+        bundle = bundle_settings({"client_id": "id", "client_secret": SECRET})
         assert SECRET not in repr(bundle)
 
 
@@ -467,7 +463,7 @@ class TestRefresh:
         with pytest.raises(GristClientError) as err:
             self.refresh(net, answer)
         assert str(err.value) == (
-            "Your Grist sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign in again."
+            "Your Grist sign-in has expired or was revoked. Connect Grist on the Connect page (/connect) to sign in again."
         )
 
     def test_other_4xx_with_a_body(self, net):
@@ -586,9 +582,9 @@ class TestTokenFile:
         with pytest.raises(GristClientError, match="must start with https://"):
             grist_auth.load_token_file(str(path))
 
-    NOT_AUTH = "Grist is not authenticated. Use Authenticate… in PrivacyFence Settings."
+    NOT_AUTH = "Grist is not authenticated. Connect Grist on the Connect page (/connect)."
     UNREADABLE = (
-        "Grist's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect again."
+        "Grist's saved sign-in could not be read. Connect Grist on the Connect page (/connect) to connect again."
     )
 
     def test_missing_file(self, tmp_path):
@@ -635,7 +631,7 @@ class TestResolveCredential:
     PINNED_BUNDLE = GristBundle(SERVER, None)
     DIFFERENT = (
         "Grist was connected to a different server than your organization uses. "
-        "Use Authenticate… in PrivacyFence Settings to connect again."
+        "Connect Grist on the Connect page (/connect) to connect again."
     )
 
     def test_oauth_bundle_and_oauth_record(self):
@@ -647,7 +643,7 @@ class TestResolveCredential:
         with pytest.raises(GristClientError) as err:
             grist_auth.resolve_credential(self.OAUTH_BUNDLE, key_record(), "tok.json")
         assert str(err.value) == (
-            "Your organization connects to Grist with OAuth. Use Authenticate… in PrivacyFence Settings."
+            "Your organization connects to Grist with OAuth. Connect Grist on the Connect page (/connect)."
         )
         assert_no_secret(str(err.value))
 
@@ -659,7 +655,7 @@ class TestResolveCredential:
     def test_no_oauth_and_oauth_record(self):
         with pytest.raises(GristClientError) as err:
             grist_auth.resolve_credential(self.PLAIN_BUNDLE, oauth_record(), "t")
-        assert str(err.value) == "Grist is not authenticated. Use Authenticate… in PrivacyFence Settings."
+        assert str(err.value) == "Grist is not authenticated. Connect Grist on the Connect page (/connect)."
 
     def test_pinned_server_matching(self):
         server, _ = grist_auth.resolve_credential(self.PINNED_BUNDLE, key_record(), "t")
@@ -748,35 +744,3 @@ class TestGristTokenProvider:
         provider = GristTokenProvider(CONFIG, "t.json", oauth_record())
         assert_no_secret(repr(provider))
         assert_no_secret(repr(CONFIG))
-
-
-class TestAuthorizeInteractive:
-    def test_runs_the_browser_flow_and_saves(self, tmp_path, net, monkeypatch):
-        net.answers[f"{SERVER}/.well-known/oauth-authorization-server"] = FakeResponse(200, document())
-        net.answers[BASIC_ENDPOINTS.token_endpoint] = token_answer()
-        seen: dict[str, Any] = {}
-
-        def fake_run(build, exchange, **kwargs):
-            seen.update(kwargs)
-            seen["url"] = build("http://localhost:53685/callback", "st", "ch")
-            return exchange(CODE, "http://localhost:53685/callback", "verifier")
-
-        monkeypatch.setattr(grist_auth.oauth_loopback, "run_browser_oauth", fake_run)
-        path = str(tmp_path / "t.json")
-        record = grist_auth.authorize_interactive(CONFIG, path)
-        assert seen["port"] == 53685 and seen["path"] == "/callback" and seen["redirect_host"] == "localhost"
-        assert seen["url"].startswith(f"{SERVER}/oidc/auth?")
-        assert record["auth"] == "oauth" and record["server_url"] == SERVER
-        assert grist_auth.load_token_file(path) == record
-
-    def test_loopback_error(self, tmp_path, net, monkeypatch):
-        net.answers[f"{SERVER}/.well-known/oauth-authorization-server"] = FakeResponse(200, document())
-
-        def fake_run(build, exchange, **kwargs):
-            raise OAuthLoopbackError("timed out")
-
-        monkeypatch.setattr(grist_auth.oauth_loopback, "run_browser_oauth", fake_run)
-        with pytest.raises(GristClientError) as err:
-            grist_auth.authorize_interactive(CONFIG, str(tmp_path / "t.json"))
-        assert str(err.value) == "Grist sign-in failed: timed out"
-        assert not (tmp_path / "t.json").exists()

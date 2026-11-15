@@ -55,10 +55,10 @@ jobs:
             gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
           fi
 
-  # Every published DMG/installer/.deb is started and exercised, automatically, before it (or
-  # anything else from the same tag) actually ships -- see docs/releasing.md's "Packaged-artifact release
-  # gating" section. This job wires that guarantee into this workflow's own publish steps too: a
-  # failed packaged-artifact test on any platform blocks publication here as well.
+  # Everything build.yml tests (the organization image and its smoke test) must pass before anything
+  # from the same tag ships -- see docs/releasing.md's release gating section. This job wires that
+  # guarantee into this workflow's own publish steps too: a failed build.yml run blocks publication
+  # here as well.
   #
   # GitHub Actions has no native `needs:` across separate workflow files -- build.yml and this
   # workflow are two independent listeners on the same `push: tags: ['v*']` event, so there's no
@@ -87,8 +87,8 @@ jobs:
           set -euo pipefail
           workflow_id="build.yml"
           poll_interval_s=30
-          # build.yml's `build` job alone (DMG + notarization + packaged smoke test) has run well past ten
-          # minutes before; leave real headroom rather than risk a flaky timeout on release day.
+          # build.yml's organization image jobs (image build, image test and smoke test) can run for
+          # many minutes; leave real headroom rather than risk a flaky timeout on release day.
           max_wait_s=$((60 * 60))
           start=$(date +%s)
 

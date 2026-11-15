@@ -10,56 +10,17 @@ readme = "README.md"
 requires-python = ">=3.11.5"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Andras Takacs", email = "info@privacyfence.eu" }]
-keywords = [
-    "mcp",
-    "model-context-protocol",
-    "claude",
-    "ai-governance",
-    "privacy",
-    "pii",
-    "audit",
-    "gdpr",
-]
-# PyPI's browse/filter facets, and the sidebar metadata a `pip install privacyfence`
-# visitor sees first. `Programming Language :: Python :: 3.x` entries are the versions
-# CI actually tests (.github/workflows/tests.yml: 3.11 and 3.12 in the matrix, 3.13 in
-# the main `test` job), which is also what `requires-python` above claims -- keep the
-# three in sync when a version is added or dropped.
-#
-# Development Status stays at Beta rather than Production/Stable while the README's
-# "Status and scope" section still asks people to review the limitations and security
-# model before using PrivacyFence with production or regulated data.
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Environment :: Web Environment",
-    "Intended Audience :: End Users/Desktop",
-    "Intended Audience :: Information Technology",
-    "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: Apache Software License",
-    "Operating System :: MacOS :: MacOS X",
-    "Operating System :: Microsoft :: Windows",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Topic :: Communications :: Email",
-    "Topic :: Office/Business",
-    "Topic :: Security",
-    "Topic :: System :: Systems Administration :: Authentication/Directory",
-]
 dependencies = [
     "google-auth>=2.23.0",
     "google-auth-oauthlib>=1.1.0",
     "google-api-python-client>=2.100.0",
     "pyyaml>=6.0",
     # mcp's client transport needs it for upstream MCP servers (ADR 0285). Floor at 2.12: every
-    # httpx2 release below it has an advisory pip-audit reports against the lowest-direct
-    # resolution (dependency-audit.yml's floor-audit job).
+    # httpx2 release below it has an advisory pip-audit reports (the lowest-version audit that
+    # used to check this no longer exists).
     "httpx2>=2.12",
     # Floor at 50.0.0: 49.0.0 (the lowest version the other floors let a fresh resolve pick)
-    # carries PYSEC-2026-3552; dependency-audit.yml's floor-audit job checks the lowest-direct set.
+    # carries PYSEC-2026-3552 (the lowest-version audit that used to check this no longer exists).
     "cryptography>=50.0.0",
     "slack-sdk>=3.27.0",
     "telethon>=1.36.0",
@@ -74,7 +35,7 @@ dependencies = [
     "certifi>=2026.10.19",
     "openpyxl>=3.1",
     # Floor at 6.21.4: every pypdf release below it has at least one of the advisories pip-audit
-    # reports against the lowest-direct resolution (dependency-audit.yml's floor-audit job).
+    # reports (the lowest-version audit that used to check this no longer exists).
     "pypdf>=6.21.4",
     # pdf_render.py rasterises a PDF preview's first pages to PNG, so a review card can show the
     # document on a phone, where no browser renders an inline <embed> of a PDF (ADR 0080). An exact
@@ -163,36 +124,10 @@ dependencies = [
     # platform, so every install gets it rather than branching the
     # dependency list by sys_platform.
     "portalocker>=2.8",
-    # ADR 0002 decision 4: the companion app's tray/menu-bar icon on macOS/
-    # Windows -- a base dependency, not an optional extra, so a plain `pip install privacyfence`
-    # can run the companion entry point (companion.py) out of the box on the platforms it
-    # applies to. Platform-marked rather than unconditional: Linux has no tray at all (see
-    # companion.py's own module docstring -- it gets an XDG launcher instead) and would gain
-    # nothing from either package. Pillow backs the icon image pystray.Icon() requires; also
-    # declared (for an unrelated, build-time-only reason) in the dev extra below.
-    "pystray>=0.19; sys_platform == 'darwin' or sys_platform == 'win32'",
-    "Pillow>=10.0; sys_platform == 'darwin' or sys_platform == 'win32'",
 ]
-
-# The PyPI sidebar. Without these the project page carries no link back to anything --
-# no homepage, no source, no issue tracker -- and that page is all a visitor arriving
-# from `pip install privacyfence` gets to see.
-# Download points at the website's download page rather than GitHub Releases because
-# that is the canonical download surface and the one that counts the download KPI
-# (docs/downloads-and-release-kpi.md).
-[project.urls]
-Homepage = "https://privacyfence.eu"
-Download = "https://privacyfence.eu/download/"
-Documentation = "https://privacyfence.eu/docs/"
-Source = "https://github.com/privacyfence/privacyfence"
-Changelog = "https://privacyfence.eu/releases/"
-Issues = "https://github.com/privacyfence/privacyfence/issues"
-Security = "https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md"
 
 [project.scripts]
 privacyfence-app = "privacyfence.daemon_main:main"
-# The companion app (ADR 0002) -- see companion.py's own module docstring.
-privacyfence-companion = "privacyfence.companion:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -218,23 +153,7 @@ privacyfence = [
 # audit-surface cost (ADR 0001). The exact package set is preserved in
 # docs/adr/0001-remove-macos-native-extra.md for whoever picks native UI work back up.
 dev = [
-    "pyinstaller>=6.0",
-    # sdist/wheel build + local upload, for rehearsing a release by hand --
-    # see the "Publishing to PyPI" section of docs/releasing.md. CI
-    # (.github/workflows/publish-pypi.yml) installs `build` itself and
-    # never needs twine: it uploads via pypa/gh-action-pypi-publish's OIDC
-    # trusted-publishing flow, not a stored token, so nothing here signs
-    # in as CI.
     "build>=1.2",
-    "twine>=5.0",
-    # Build-time-only PNG -> multi-resolution .ico conversion for the
-    # Windows build: unlike
-    # macOS's sips/iconutil (used by build_dmg.sh), there's no Windows-
-    # native icon-conversion tool available cross-platform in CI, so
-    # scripts/build_installer.ps1 does it with Pillow instead. Not a
-    # runtime dependency -- mirrors how pyinstaller itself is dev-extra-
-    # only above.
-    "Pillow>=10.0",
 ]
 test = [
     "pytest>=8.0",
@@ -322,11 +241,6 @@ markers = [
     "browser: real Chromium via Playwright",
     "packaged: runs against a built installer/artifact",
     "live: touches a real third-party provider (self-hosted runner only)",
-    # OS-level path/process/locking/daemon-discovery behavior, homed under
-    # tests/platform/ rather than scattered across existing files.
-    # Deliberately a separate marker from `system`, which is the full
-    # daemon/MCP/approval/audit scenario -- a different concept.
-    "platform: OS-level path/process/locking/daemon behavior (tests/platform/)",
 ]
 
 [tool.coverage.run]

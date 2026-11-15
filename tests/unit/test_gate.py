@@ -288,7 +288,7 @@ class TestAutoAcceptPath:
 
 class TestPolicyV2StoreRules:
     """gate._evaluate_auto_accept reads the on-disk v2 auto_accept: section
-    (auto_accept.get_policy_v2_store_rules(), refreshed by settings_controller.add_policy_rule and
+    (auto_accept.get_policy_v2_store_rules(), refreshed by the Settings page's add-rule action and
     at daemon startup) unconditionally -- there is no v1 evaluator (ADR 0004), no policy.engine
     switch to gate this behind and no second evaluator to compare against (see auto_accept.py's
     own module docstring)."""
@@ -3099,15 +3099,25 @@ class TestApprovalBinding:
         client.get_document.return_value = SimpleNamespace(
             id=doc_id, name="Budget", workspace="Home", team="Acme",
         )
-        path = tmp_path / "people.csv"
-        path.write_bytes(b"Name\nAda\n")
-        dispatcher = McpDispatcher(lambda: {"grist": connector})
-        args = {"doc_id": doc_id, "table_id": "Contacts", "local_path": str(path), "reason": "r"}
+        from privacyfence import local_files
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upload_staging import get_upload_staging_store
 
-        first = await dispatcher.call("s1", "grist", "grist_import_csv", dict(args))
+        store = get_upload_staging_store()
+        token = store.create_slot(LOCAL_PRINCIPAL, "people.csv", max_bytes=1_000_000)
+        store.fill(token, LOCAL_PRINCIPAL.id, [b"Name\nAda\n"])
+        dispatcher = McpDispatcher(lambda: {"grist": connector})
+        args = {
+            "doc_id": doc_id, "table_id": "Contacts", "upload_id": local_files._encode_token(token),
+            "reason": "r",
+        }
+
+        with local_files.call_context():
+            first = await dispatcher.call("s1", "grist", "grist_import_csv", dict(args))
         assert first["status"] == "approval_pending"
         await self._accept(registry, first)
-        await dispatcher.call("s1", "grist", "grist_import_csv", dict(args))
+        with local_files.call_context():
+            await dispatcher.call("s1", "grist", "grist_import_csv", dict(args))
 
         client.add_records.assert_called_once()
         assert registry.list_pending() == []

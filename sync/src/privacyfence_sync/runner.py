@@ -158,19 +158,12 @@ async def _tool_step(
     result: Any
 
     if step.tool in EXPORT_TOOLS:
-        args["destination_dir"] = str(work_dir)
         result = await _call(client, step, step.tool, args, attended, out)
         await _receive_file(step, result, work_dir / str(step.args["file_name"]), client, work_dir)
         return
     if step.tool in DOWNLOAD_TOOLS:
-        holder = work_dir / f".download-{step.id}"
-        holder.mkdir(parents=True, exist_ok=True)
-        args["destination_dir"] = str(holder)
-        try:
-            result = await _call(client, step, step.tool, args, attended, out)
-            await _receive_file(step, result, work_dir / str(step.save_as), client, work_dir)
-        finally:
-            shutil.rmtree(holder, ignore_errors=True)
+        result = await _call(client, step, step.tool, args, attended, out)
+        await _receive_file(step, result, work_dir / str(step.save_as), client, work_dir)
         return
 
     if step.file is not None:

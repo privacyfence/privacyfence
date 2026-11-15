@@ -4,6 +4,8 @@
 
 Accepted — 2026-11-01. Implemented: `scripts/build_site.py` (header defaults), `website/install/`.
 
+Amended by [ADR 0305](0305-the-download-page-and-worker-are-retired.md), 2026-11-15.
+
 ## Context
 
 From 7.0 the way most people start is a Docker install, single-user for one person or an organization

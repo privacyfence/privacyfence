@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 540" width="1120" height="540" role="img" aria-labelledby="pf-arch-title pf-arch-desc" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
   <title id="pf-arch-title">How a request travels through PrivacyFence</title>
-  <desc id="pf-arch-desc">An AI client (Claude Desktop through the PrivacyFence extension, Claude Code over HTTP, or claude.ai through an organization deployment) sends each tool call over MCP to PrivacyFence. PrivacyFence applies policy, runs the local PII check, asks a person for approval where needed, and audits the decision. Only then does its connector call the service (Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram and more) with credentials that stay inside PrivacyFence.</desc>
+  <desc id="pf-arch-desc">An AI client (Claude Desktop or Claude Code over HTTP, or claude.ai through an organization deployment) sends each tool call over MCP to PrivacyFence. PrivacyFence applies policy, runs the local PII check, asks a person for approval where needed, and audits the decision. Only then does its connector call the service (Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram and more) with credentials that stay inside PrivacyFence.</desc>
   <!-- The source of the /how-it-works/ diagram and README.md's. Below 600 px the page shows
        architecture-narrow.svg, the same content top to bottom; change both together. -->
   <defs>
@@ -32,14 +32,11 @@
   <text x="30" y="456" font-size="12.5" fill="#60707d">or another MCP-compatible client</text>
 
   <!-- Transport -->
-  <rect x="262" y="80" width="190" height="64" rx="12" fill="#eef3f8" stroke="#dbe3e9" stroke-width="1.5" stroke-dasharray="6 4"/>
-  <text x="280" y="106" font-size="13.5" font-weight="700" fill="#14212b">Extension (.mcpb)</text>
-  <text x="280" y="126" font-size="12" fill="#43535f">stdio shim to /mcp, local files</text>
-  <line x1="220" y1="112" x2="258" y2="112" stroke="#43535f" stroke-width="1.6" marker-end="url(#arrow)"/>
-  <line x1="452" y1="112" x2="484" y2="160" stroke="#43535f" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="220" y1="112" x2="484" y2="160" stroke="#43535f" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="262" y="108" font-size="12" fill="#43535f">HTTP /mcp + passkey sign-in</text>
 
   <line x1="220" y1="252" x2="484" y2="252" stroke="#43535f" stroke-width="1.6" marker-end="url(#arrow)"/>
-  <text x="262" y="240" font-size="12" fill="#43535f">HTTP /mcp + local token</text>
+  <text x="262" y="240" font-size="12" fill="#43535f">HTTP /mcp + passkey sign-in</text>
 
   <line x1="220" y1="392" x2="484" y2="360" stroke="#43535f" stroke-width="1.6" marker-end="url(#arrow)"/>
   <text x="262" y="414" font-size="12" fill="#43535f">HTTPS /mcp + OAuth sign-in</text>

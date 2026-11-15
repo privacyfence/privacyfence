@@ -1,6 +1,6 @@
 """Tests for web/routes_whats_new.py and the "What's new" strip on org mode's pages (ADR 0238):
 the page and its seen endpoint (session, Origin and CSRF checks), what the page lists for a person
-who upgraded, and local mode, which mounts none of it.
+who upgraded, and the plain route set, which mounts none of it.
 
 whats_new.py's own parsing and per-person state is tests/unit/test_whats_new.py.
 """
@@ -15,12 +15,9 @@ from privacyfence import org_identity as oi
 from privacyfence import whats_new
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
-from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session, routes_whats_new
-from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.server import OrgAuth, build_app
-from privacyfence.web.state_stream import StateStream
 from privacyfence.web_approval_ui import WebApprovalUI
 
 pytestmark = pytest.mark.unit
@@ -251,13 +248,3 @@ def test_build_routes_refuses_an_unclassified_route(monkeypatch):
     with pytest.raises(RuntimeError, match="unclassified"):
         routes_whats_new.build_routes(sessions=org_session.OrgSessionStore())
 
-
-def test_local_mode_mounts_no_whats_new_route():
-    app = build_app(
-        WebApprovalUI(), mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="t",
-        step_up=StepUpConfig(rp_id="localhost"), step_up_issuer_url="http://localhost:8765",
-        state_stream=StateStream(settings_snapshot=lambda: {}, list_pending=lambda: []),
-    )
-    client = TestClient(app, base_url="http://localhost")
-    assert client.get("/whats-new").status_code == 404
-    assert client.post(routes_whats_new.SEEN_PATH, json={}).status_code == 404

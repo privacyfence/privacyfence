@@ -65,10 +65,9 @@ _REASON = ToolParam(
 
 
 class PeekConnector(Connector):
-    def __init__(self, client: PeekClient, download_mode: str = "local") -> None:
+    def __init__(self, client: PeekClient) -> None:
         # Only stores its arguments: the tool catalog builds ``cls(None)``.
         self._client = client
-        self.download_mode = download_mode
 
     @property
     def client(self) -> PeekClient:
@@ -140,7 +139,7 @@ class PeekConnector(Connector):
                 name="peek_upload_page",
                 description=(
                     "Publish an HTML page on Peek, or a new version of one of your pages, and "
-                    "get its share link. Give the page as html, local_path or upload_id. Give "
+                    "get its share link. Give the page as html or upload_id. Give "
                     "slug to replace what an existing page's link shows with this new version; "
                     "its visibility stays as it is. A new page is restricted unless you choose "
                     "otherwise: only you, Peek admins and the people granted access can open it. "
@@ -152,31 +151,23 @@ class PeekConnector(Connector):
                     ToolParam(
                         "html", "str", required=False, default="",
                         description=(
-                            "The page's full HTML source. Give exactly one of html, local_path "
-                            "and upload_id; empty otherwise."
-                        ),
-                    ),
-                    ToolParam(
-                        "local_path", "str", required=False, default="",
-                        description=(
-                            "Path of an HTML file on the user's computer, absolute or starting "
-                            "with ~/. Not available on an organization-managed install. Give "
-                            "exactly one of html, local_path and upload_id; empty otherwise."
+                            "The page's full HTML source. Give exactly one of html and "
+                            "upload_id; empty otherwise."
                         ),
                     ),
                     ToolParam(
                         "upload_id", "str", required=False, default="",
                         description=(
                             "Id returned by privacyfence_create_upload_slot after you PUT the "
-                            "file's bytes to its upload_url. Give exactly one of html, "
-                            "local_path and upload_id; empty otherwise."
+                            "file's bytes to its upload_url. Give exactly one of html and "
+                            "upload_id; empty otherwise."
                         ),
                     ),
                     ToolParam(
                         "name", "str", required=False, default="",
                         description=(
                             "File name Peek shows for the page and builds its link from, such "
-                            "as report.html. Empty uses the local file's name, or page.html."
+                            "as report.html. Empty means page.html."
                         ),
                     ),
                     ToolParam(
@@ -556,7 +547,6 @@ class PeekConnector(Connector):
     async def _upload_page(
         self,
         html: str = "",
-        local_path: str = "",
         upload_id: str = "",
         name: str = "",
         slug: str = "",
@@ -564,14 +554,9 @@ class PeekConnector(Connector):
         password: str = "",
     ) -> Any:
         _refuse_password(password)
-        sources = (bool(html.strip()), bool(local_path.strip()), bool(upload_id.strip()))
+        sources = (bool(html.strip()), bool(upload_id.strip()))
         if sum(sources) != 1:
-            raise ValueError("peek_upload_page: give exactly one of html, local_path and upload_id.")
-        if local_path.strip() and self.download_mode == "org":
-            raise ValueError(
-                "local_path is not available on an organization-managed install. "
-                "Pass html or upload_id instead."
-            )
+            raise ValueError("peek_upload_page: give exactly one of html and upload_id.")
         if slug:
             _check_slug(slug)
             if visibility:
@@ -587,15 +572,9 @@ class PeekConnector(Connector):
             if len(data) > UPLOAD_MAX_BYTES:
                 raise ValueError("peek_upload_page: the page is larger than 10 MB.")
         else:
-            source = (
-                local_path
-                if local_path.strip()
-                else f"{local_files.UPLOAD_REF_PREFIX}{upload_id.strip()}"
-            )
-            local_files.require_local_files(
-                [source], max_total_bytes=UPLOAD_MAX_BYTES, download_mode=self.download_mode,
-            )
-            data = local_files.read_local_file(source, download_mode=self.download_mode)
+            source = f"{local_files.UPLOAD_REF_PREFIX}{upload_id.strip()}"
+            local_files.require_local_files([source])
+            data = local_files.read_local_file(source)
             if len(data) > UPLOAD_MAX_BYTES:
                 raise ValueError("peek_upload_page: the page is larger than 10 MB.")
         if not data:
@@ -607,11 +586,7 @@ class PeekConnector(Connector):
                 "peek_upload_page: the page is not UTF-8 text. Peek publishes HTML pages only."
             ) from exc
 
-        name = (
-            os.path.basename(name.strip())
-            or (os.path.basename(local_path.strip()) if local_path.strip() else "")
-            or "page.html"
-        )
+        name = os.path.basename(name.strip()) or "page.html"
         if not 1 <= len(name) <= 200:
             raise ValueError("name must be 1 to 200 characters.")
         size = f"{len(data):,} bytes"

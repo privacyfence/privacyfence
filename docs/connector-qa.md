@@ -10,8 +10,7 @@ due is in [`release-testing.md`](release-testing.md).
 
 ## Credential boundary
 
-Live connector credentials — the per-account OAuth token files and the Telegram session, and the
-optional QA `org_bundle.json` — exist only as local files on a developer's own machine or on the
+Live connector credentials — the per-account OAuth token files and the Telegram session — exist only as local files on a developer's own machine or on the
 project-controlled self-hosted runner `runner.privacyfence.eu`, labelled `privacyfence-live`. They
 are never stored as GitHub Actions secrets and never reach a GitHub-hosted runner or a
 `pull_request`-triggered workflow. Both
@@ -47,12 +46,12 @@ Use dedicated accounts that share nothing with a personal or production identity
 
 The runner uses the built-in OAuth apps, so there is no QA app to register. Every account is connected
 on the QA organization server in a browser (see [The QA server](#the-qa-server)). An organization's
-own app can still be tested: build a QA bundle for it as the "For IT admins" section of
-[`google-cloud-setup.md`](google-cloud-setup.md), [`slack-setup.md`](slack-setup.md),
-[`atlassian-setup.md`](atlassian-setup.md) or [`salesforce-setup.md`](salesforce-setup.md) describes
-(`scripts/build_org_bundle.py --merge`), and place it on the runner as the optional
-`~/privacyfence/org/org_bundle.json` (see [Persistent QA state](#persistent-qa-state)). Keep it
-separate from any production bundle.
+own app can still be tested: sign a connector config for it with `scripts/sign_connector_config.py`
+as [`slack-setup.md`](slack-setup.md), [`atlassian-setup.md`](atlassian-setup.md),
+[`salesforce-setup.md`](salesforce-setup.md) or [`google-cloud-setup.md`](google-cloud-setup.md)
+describes, and upload it on the QA server's **Admin → Services** page
+([how connector configs are delivered](org-mode-setup-guide.md#signed-connector-configs)). Use a
+signing key of its own, separate from any production one.
 
 ## Seed data
 
@@ -423,11 +422,7 @@ browser on the QA server's `/connect` page, and `scripts/qa_runner_tokens.py` co
 [Connecting the QA accounts](#connecting-the-qa-accounts)). Reconnecting an account there is how a
 token is minted again.
 
-`scripts/qa_authenticate_connectors.py` and the per-connector `--<connector>-oauth` flags remain for
-local mode on a developer's own machine, where the recorder is run with the checkout's own
-`credentials/` folder. The runner does not use them, and they go away with local mode in 8.
-Telegram's local sign-in is `privacyfence-app --telegram-setup` (see
-[`telegram-setup.md`](telegram-setup.md)). The token files are named in `daemon_main.TOKEN_FILES`
+The token files are named in `daemon_main.TOKEN_FILES`
 (`token.json` for Gmail, `<connector>_token.json` for the others, `atlassian_token.json` shared by
 Jira and Confluence, `telegram.session`).
 
@@ -554,14 +549,12 @@ GitHub-hosted runner, not on this host.
 
 ### Organization mode and the `qa-live` principal
 
-The recorder runs in organization mode as the fixed principal `qa-live`, so it needs no change when
-local mode is removed, and it tests the apps most people use. `_qa_context()` enters that principal's
+The recorder runs in organization mode as the fixed principal `qa-live`, and it tests the apps most people use. `_qa_context()` enters that principal's
 scope once, before any connector is built, and every token path then resolves to
 `users/qa-live/credentials/` of the checkout, in the same file formats as before. `_qa_org_config()`
 builds the connector configuration the way an organization server does, offering every service:
 
-- the Google, Slack, Salesforce, Atlassian and Miro sections are the built-in apps, unless the
-  runner's optional bundle carries an organization's own app to test;
+- the Google, Slack, Salesforce, Atlassian and Miro sections are the built-in apps;
 - Peek's and Grist's addresses come from `PRIVACYFENCE_PEEK_BASE_URL`
   (`https://peek-qa.privacyfence.eu`) and `PRIVACYFENCE_GRIST_SERVER_URL`
   (`https://docs.getgrist.com`), set in both workflows.
@@ -573,8 +566,7 @@ Google sign-in client) in that step's environment and nowhere else. The last ste
 always runs, deletes `src/privacyfence/_builtin_apps.py`, because the runner is not ephemeral. Only
 the client ID and secret are used: refreshing a token needs no redirect.
 
-Local-mode loopback sign-in, and an organization's own app unless the optional bundle carries one,
-are no longer live-tested. Unit tests cover both.
+An organization's own app is not live-tested by the recorder. Unit tests cover it.
 
 ### Connecting the QA accounts
 
@@ -604,17 +596,14 @@ configuration the workflows copy into their fresh checkout at the start of every
 
 ```text
 ~/privacyfence/
-├── org/
-│   └── org_bundle.json       # optional: an organization's own app to test
 └── tests/
     └── fixtures/
         └── qa_environment.yaml
 ```
 
 `qa_environment.yaml` is required (see [Seed data](#seed-data)); the run fails with
-`##[error] … not found` without it. `org/org_bundle.json` is copied only when present. Neither is a
-secret in the sense of a token, but keep `~/privacyfence` owned by the runner user, and a bundle's
-client secrets with it. `~/privacyfence` is not a git clone and holds no code or venv. No step
+`##[error] … not found` without it. It is not a secret in the sense of a token, but keep
+`~/privacyfence` owned by the runner user. `~/privacyfence` is not a git clone and holds no code or venv. No step
 writes `users/` by hand.
 
 At the end of every run, whatever its outcome, `qa_runner_tokens.py push` writes the refreshed tokens

@@ -13,8 +13,8 @@ through literally the same code, not two implementations that happen to
 agree today.
 
 This module talks to the IdP with the same posture every other connector's
-OAuth flow in this codebase already has (``oauth_loopback.py``,
-``atlassian_oauth.py``, ...): synchronous ``requests`` calls, a handful of
+OAuth flow in this codebase already has (``atlassian_oauth.py``,
+``slack_client.py``, ...): synchronous ``requests`` calls, a handful of
 them, never on a hot path. Callers on the ASGI event loop (web/oauth_
 provider.py, web/routes_org_identity.py) run them via ``asyncio.to_thread``,
 the same pattern gate.py already uses for every blocking connector call
@@ -116,10 +116,9 @@ class IdpConfig:
     @staticmethod
     def from_org_config(org_config: dict[str, Any]) -> "IdpConfig | None":
         """``None`` when org_config carries no (or an incomplete) ``idp``
-        section -- the caller (daemon_main.py) treats that as "org mode
-        configured without an IdP", which is a startup error for org mode,
-        not silently falling back to local mode (mode is its own explicit
-        key -- see org_mode.py).
+        section -- the caller (daemon_main.py) treats that as single-user
+        mode (no identity provider, see org_mode.is_single_user), never as a
+        silent fallback to some other mode.
 
         This is the only place ``discover_idp``'s result feeds an
         ``IdpConfig`` that every subsequent OIDC call trusts, so
@@ -325,8 +324,8 @@ def verify_id_token(idp: IdpConfig, id_token: str, *, nonce: str) -> dict[str, A
 
 
 GOOGLE_ISSUER = org_mode.GOOGLE_ISSUER
-# Principal ids the data directory already uses for itself (local mode's ``local``, org
-# single-user mode's ``single-user``, and ``os-*`` for per-OS-user installs); an IdP ``sub`` that
+# Principal ids the data directory already uses for itself (the default ``local`` principal,
+# single-user mode's ``single-user``, and ``os-*`` left by 7.x installs); an IdP ``sub`` that
 # looks like one is hashed so a person can never land in someone else's directory.
 _RESERVED_SUBS = ("local", "single-user")
 _RESERVED_SUB_PREFIX = "os-"

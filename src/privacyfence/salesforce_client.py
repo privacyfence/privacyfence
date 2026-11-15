@@ -2,7 +2,7 @@
 
 Uses the `simple-salesforce` library if available; otherwise raises a clear
 error. Authentication is OAuth 2.0 (Web Server Flow with PKCE), driven from the
-PrivacyFence Settings via ``authorize_interactive`` below — no username/
+PrivacyFence Settings via ``build_authorize_url`` and ``exchange_code`` below — no username/
 password/security-token entry. The Connected App (consumer key/secret) is
 organization-level config installed via "Install configuration file…" on Admin → Organization configuration;
 the resulting access/refresh token is per-user, stored in a token file.
@@ -21,13 +21,10 @@ from urllib.parse import quote_plus, urlencode
 
 import requests
 
-from .oauth_loopback import OAuthLoopbackError, run_browser_oauth
 from .secure_files import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
-SALESFORCE_OAUTH_PORT = 53683
-SALESFORCE_REDIRECT_PATH = "/callback"
 DEFAULT_LOGIN_URL = "https://login.salesforce.com"
 DEFAULT_SCOPES = "api refresh_token"
 
@@ -582,10 +579,8 @@ def build_authorize_url(
     consumer_key: str, redirect_uri: str, state: str, code_challenge: str,
     login_url: str = DEFAULT_LOGIN_URL,
 ) -> str:
-    """Salesforce's OAuth 2.0 Web Server flow authorize URL -- separate
-    from ``authorize_interactive`` so ``web/routes_connect.py``'s
-    org-mode server-redirect flow can build the same URL without going
-    through ``oauth_loopback.run_browser_oauth``'s local listener."""
+    """Salesforce's OAuth 2.0 Web Server flow authorize URL, built for
+    ``web/routes_connect.py``'s server-redirect flow."""
     login_url = (login_url or DEFAULT_LOGIN_URL).rstrip("/")
     params = {
         "response_type": "code",
@@ -605,8 +600,7 @@ def exchange_code(
 ) -> dict[str, Any]:
     """Exchanges an authorization code for a Salesforce token and returns
     the normalized token record -- *not* yet saved to disk (see
-    ``save_token_file`` below). Shared by ``authorize_interactive``'s
-    local-mode loopback flow and org mode's server-redirect flow;
+    ``save_token_file`` below). Used by org mode's server-redirect flow;
     raises ``SalesforceClientError`` on any failure."""
     login_url = (login_url or DEFAULT_LOGIN_URL).rstrip("/")
     try:
@@ -644,43 +638,12 @@ def save_token_file(token_file: str, token_record: dict[str, Any]) -> None:
     _save_token_file(token_file, token_record)
 
 
-def authorize_interactive(
-    consumer_key: str,
-    consumer_secret: str,
-    token_file: str,
-    login_url: str = DEFAULT_LOGIN_URL,
-    port: int = SALESFORCE_OAUTH_PORT,
-) -> dict[str, Any]:
-    """Run Salesforce's OAuth 2.0 Web Server flow and persist the token.
-
-    ``consumer_key``/``consumer_secret``/``login_url`` come from the
-    organization config bundle (the Connected App IT registered). Returns the
-    saved token record; raises ``SalesforceClientError`` on failure.
-    """
-
-    def _build(redirect_uri: str, state: str, code_challenge: str) -> str:
-        return build_authorize_url(consumer_key, redirect_uri, state, code_challenge, login_url)
-
-    def _exchange(code: str, redirect_uri: str, code_verifier: str) -> dict[str, Any]:
-        return exchange_code(consumer_key, consumer_secret, code, redirect_uri, code_verifier, login_url)
-
-    try:
-        token_record = run_browser_oauth(
-            _build, _exchange, port=port, path=SALESFORCE_REDIRECT_PATH, redirect_host="localhost",
-        )
-    except OAuthLoopbackError as exc:
-        raise SalesforceClientError(f"Salesforce sign-in failed: {exc}") from exc
-
-    _save_token_file(token_file, token_record)
-    return token_record
-
-
 def load_token_file(token_file: str) -> dict[str, Any]:
     """Load a previously saved Salesforce token record, or raise SalesforceClientError."""
     if not os.path.exists(token_file):
         raise SalesforceClientError(
-            f"No Salesforce token found at '{token_file}'. Use Authenticate… in "
-            "PrivacyFence Settings to sign in."
+            f"No Salesforce token found at '{token_file}'. Connect Salesforce on the "
+            "Connect page (/connect) to sign in."
         )
     with open(token_file, encoding="utf-8") as fh:
         return json.load(fh)
@@ -744,8 +707,8 @@ class SalesforceClient:
         instance_url = self._config.get("instance_url", "")
         if not access_token or not instance_url:
             raise SalesforceClientError(
-                "Salesforce is not authenticated. Use Authenticate… in the "
-                "PrivacyFence Settings to sign in."
+                "Salesforce is not authenticated. Connect Salesforce on the "
+                "Connect page (/connect) to sign in."
             )
         instance = instance_url.replace("https://", "").replace("http://", "").rstrip("/")
         try:

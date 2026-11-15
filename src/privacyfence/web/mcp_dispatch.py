@@ -24,7 +24,6 @@ from ..auto_accept import (
     PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
 )
 from .. import agent_runtimes, audit_log, local_files, runtime_credentials, scoped_tokens
-from ..org_mode import LOCAL_MODE_DEPRECATION
 from ..connector import Connector
 from ..agent_identity import current_agent
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
@@ -38,7 +37,7 @@ from ..policy import propose as policy_propose
 from ..policy import scope_rows
 from ..policy import registry as policy_registry
 from ..policy.suggest import suggested_rules
-from ..principal import LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
+from ..principal import Principal, current_principal, principal_scope
 from ..scoped_token_proposals import REVIEW_PATH, get_registry, new_proposal, review_data
 from ..scoped_token_proposals import record as record_proposal
 from ..scoped_tokens import REVOKED_SCOPE, ScopedTokenPolicy, current_token_scope
@@ -59,7 +58,7 @@ _CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm", "is_one_to_on
 
 def _policy_rule_row(row) -> dict:
     """One ``privacyfence_list_policy`` rule row -- the same fields
-    ``settings_controller.SettingsController._auto_accept_state`` renders for the Auto-accept
+    ``settings_state``'s Auto-accept state builder renders for the Auto-accept
     Settings page, minus that method's own name-resolution machinery (a friendly display name
     for an opaque id like a Drive folder), which is a web-page-only affordance an MCP client has no
     use for: a model reading ``covered_tools``/``sentence`` already gets the width of the rule, and raw
@@ -110,7 +109,7 @@ class McpDispatcher:
 
     ``connectors_provider`` is called fresh on every dispatch rather than
     captured once, so a connector rebuild pushed live elsewhere (e.g.
-    ``SettingsController.refresh_connectors``, which calls
+    whatever calls
     ``ConnectorHost.set_connectors``) is picked up here too, with nothing
     else needing a second push -- see daemon_main.py's wiring.
     """
@@ -132,20 +131,12 @@ class McpDispatcher:
         self,
         connectors_provider: Callable[[], dict[str, Connector]],
         *,
-        mode: str = "local",
         unattended_sessions_enabled: bool = False,
         registry: PendingApprovalRegistry | None = None,
         scoped_token_policy: ScopedTokenPolicy | None = None,
         agent_runtime: agent_runtimes.N8nRuntimeConfig | None = None,
     ) -> None:
         self._connectors_provider = connectors_provider
-        # "local" or "org" -- privacyfence_status's own mode field, and what
-        # decides which next_step an un-onboarded install reports (open the
-        # companion, or ask an administrator -- org mode has no local sign-in
-        # path at all). daemon_main.py passes "org" from
-        # _start_org_web_server; every other call site (and every existing
-        # test) keeps the local-mode default.
-        self._mode = mode
         self._inflight: dict[str, tuple[Any, float]] = {}
         self._last_write_at: dict[tuple[str, str], float] = {}
         self._unattended_sessions_enabled = unattended_sessions_enabled
@@ -164,13 +155,11 @@ class McpDispatcher:
         # builds a bundle from. In memory only; end_session() drops it.
         self._session_calls: dict[tuple[str, Hashable], list[tuple[str, dict[str, Any], str]]] = {}
         # The deferred-approval registry privacyfence_await_approval polls
-        # -- None when nothing in this install can ever produce a
-        # pending approval (native-only local mode with /mcp still enabled),
-        # in which case every id this tool is asked about is simply
-        # "unknown".
+        # -- None in a test that never wires one, in which case every id
+        # this tool is asked about is simply "unknown".
         self._registry = registry
         # privacyfence_status's own per-connector view -- {name, enabled,
-        # authenticated, blocked_by} rows, reusing SettingsController's
+        # authenticated, blocked_by} rows, reusing the
         # already-tracked connector/config/failure state rather than this
         # dispatcher trying to derive enabled/blocked_by
         # itself from nothing but the built Connector objects it's handed.
@@ -201,10 +190,8 @@ class McpDispatcher:
         self._unattended_changed_listener = callback
 
     def set_connectors_state_provider(self, callback: Callable[[], list[dict[str, Any]]] | None) -> None:
-        """``callback`` is ``SettingsController.status_connectors`` in
-        production -- typed narrowly as a bare ``Callable`` here rather than
-        importing settings_controller.py just for the annotation, which would
-        be a circular import: that module reaches this one."""
+        """``callback`` returns the per-connector status rows -- typed
+        narrowly as a bare ``Callable`` here."""
         self._connectors_state_provider = callback
 
     def set_tools_changed_broadcaster(self, callback: Callable[[], None] | None) -> None:
@@ -217,7 +204,7 @@ class McpDispatcher:
         self._tools_changed_broadcaster = callback
 
     def notify_tools_changed(self) -> None:
-        """Called by ``SettingsController.refresh_connectors()`` (via
+        """Called whenever a connector rebuild lands (via
         ``set_connectors_changed_listener``, wired in daemon_main.py)
         whenever the live connector set actually changes -- fans a real
         ``tools/list_changed`` notification out to every open MCP session,
@@ -261,6 +248,7 @@ class McpDispatcher:
         connector = self.connectors.get(connector_name)
         if connector is None:
             raise ValueError(f"Unknown connector: {connector_name!r}")
+        args = self._declared_args_only(connector, tool, args)
 
         # principal_id folds into both the dedupe key and the
         # last-write timestamp below.
@@ -268,9 +256,8 @@ class McpDispatcher:
         # tool with the same arguments within _DEDUPE_TTL_SECONDS would
         # share one cache entry -- the second caller getting handed the
         # first caller's actual result, not a mere inefficiency but a
-        # cross-principal data leak. Harmless in local mode (there's only
-        # ever the one principal), but this dispatcher is shared process-
-        # wide, so it has to be correct once a second principal exists.
+        # cross-principal data leak: this dispatcher is shared process-wide
+        # by every principal.
         principal_id = current_principal().id
         # The scoped token's id, "" for an unscoped call: a scoped call must never be handed a
         # full-token call's result or pending approval without passing the gate itself, nor a
@@ -339,12 +326,10 @@ class McpDispatcher:
             raise
         fut.set_result(result)
         if local_files.call_produced_deliveries():
-            # A result that staged a file-bridge download carries a
-            # single-use download_staging token in its _meta -- reusing it
-            # from the dedupe cache would hand a second caller a token the
-            # first claim (or the shim writing the first response to disk)
-            # already consumed. See local_files.call_produced_deliveries's
-            # own docstring.
+            # A result that staged a one-time download link carries a single-use
+            # download_staging token -- reusing it from the dedupe cache would hand a
+            # second caller a link whose token the first claim already consumed. See
+            # local_files.call_produced_deliveries's own docstring.
             self._inflight.pop(key, None)
         if not self._is_read_only(connector, tool):
             self._last_write_at[(principal_id, connector_name)] = time.time()
@@ -375,6 +360,20 @@ class McpDispatcher:
             f"{principal_id}:{scope_id}:{session_key}:{agent_id}:{connector_name}:{tool}:"
             f"{json.dumps(args, sort_keys=True, default=str)}"
         )
+
+    @staticmethod
+    def _declared_args_only(connector: Connector, tool: str, args: dict) -> dict:
+        """Drops every argument the tool does not declare, so an agent holding a cached schema that
+        still sends a parameter a later release removed is ignored instead of raising ``TypeError``
+        in the connector. A tool with a verbatim ``input_schema`` (an upstream MCP tool) or no spec
+        at all is left alone: its own schema, not a ``ToolParam`` list, says what it takes."""
+        for spec in connector.tool_specs():
+            if spec.name == tool:
+                if spec.input_schema is not None:
+                    return args
+                declared = {p.name for p in spec.params} | _CONNECTOR_COMPUTED_ARGS
+                return {k: v for k, v in args.items() if k in declared}
+        return args
 
     @staticmethod
     def _is_read_only(connector: Connector, tool: str) -> bool:
@@ -457,8 +456,8 @@ class McpDispatcher:
 
     def list_policy(self, claude_reason: str = "") -> dict:
         """privacyfence_list_policy's handler: the on-disk
-        ``auto_accept:`` scope rows, sentence-rendered the same way ``settings_controller.
-        SettingsController._auto_accept_state`` renders it for the Auto-accept Settings page, plus
+        ``auto_accept:`` scope rows, sentence-rendered the same way ``settings_state``'s Auto-accept
+        state builder renders it for the Auto-accept Settings page, plus
         the scope catalogue ``privacyfence_propose_policy_change``'s ``group``/``verbs`` validate
         against -- so a model can discover a real rule id and a real (group, verbs) pair before
         proposing anything, the same "list before you propose" contract ``propose_policy_change``
@@ -529,21 +528,13 @@ class McpDispatcher:
 
     def runtime_delivery_enabled(self) -> bool:
         """Whether a token proposal may ask for delivery into n8n, and the status tool is offered."""
-        return (
-            self._mode == "org"
-            and self.scoped_token_proposals_enabled()
-            and agent_runtimes.delivery_available(self._agent_runtime)
-        )
+        return self.scoped_token_proposals_enabled() and agent_runtimes.delivery_available(self._agent_runtime)
 
     async def propose_scoped_token(self, session_key: Hashable, params: dict, base_url: str) -> dict:
         """privacyfence_propose_scoped_token's handler (ADR 0251): validates, registers a
         proposal for a person to review in Settings and returns its link. Never mints a token."""
         if current_token_scope() is not None:
             raise GateDeniedError("Request denied: a scoped token cannot propose tokens.")
-        if self._mode == "local" and current_principal().id != LOCAL_PRINCIPAL.id:
-            raise ValueError(
-                "Token proposals are reviewed by this computer's owner; this account has no Scoped tokens page."
-            )
         policy = self._scoped_token_policy
         if policy is None or not self.scoped_token_proposals_enabled():
             raise ValueError(scoped_tokens.PROPOSALS_DISABLED_MESSAGE)
@@ -558,7 +549,7 @@ class McpDispatcher:
         credential_type = agent_runtimes.DEFAULT_CREDENTIAL_TYPE
         if "deliver_to" in params:
             runtime_config = self._agent_runtime
-            if self._mode == "local" or runtime_config is None or not agent_runtimes.delivery_available(runtime_config):
+            if runtime_config is None or not agent_runtimes.delivery_available(runtime_config):
                 raise ValueError(agent_runtimes.DELIVERY_UNAVAILABLE)
             delivery = agent_runtimes.parse_deliver_to(params["deliver_to"])
             mcp_url = agent_runtimes.mcp_url_for(runtime_config, base_url)
@@ -703,8 +694,8 @@ class McpDispatcher:
         connectors = self._status_connector_rows()
         setup_complete = any(c["authenticated"] for c in connectors)
         result: dict[str, Any] = {
-            "mode": self._mode, "setup_complete": setup_complete, "connectors": connectors,
-            "deprecation": LOCAL_MODE_DEPRECATION if self._mode == "local" else None,
+            # Always "org" (ADR 0301): kept on the wire for clients that read it.
+            "mode": "org", "setup_complete": setup_complete, "connectors": connectors,
         }
 
         # ADR 0285: only when the operator configured upstream MCP servers.
@@ -723,34 +714,13 @@ class McpDispatcher:
             self._audit_status_check("status_checked", claude_reason)
             return result
 
-        if self._mode != "local":
-            result["next_step"] = "contact_your_administrator"
-            result["sign_in_url"] = None
-            result["message"] = (
-                "PrivacyFence is running in organization mode, but no connector is authenticated "
-                "for this account yet. There is no local sign-in link here -- organization mode "
-                "signs in through its own identity provider, so ask the human to check with their "
-                "administrator about getting connectors authorized for their account."
-            )
-            self._audit_status_check("status_checked", claude_reason)
-            return result
-
-        # Points at the companion rather than at anything reachable over
-        # /mcp: no MCP tool mints a sign-in credential (ADR 0013,
-        # docs/adr/0013-no-mcp-tool-mints-a-sign-in-credential.md), so what
-        # is left for an un-onboarded install is the one affordance that
-        # does not route through this process at all.
-        result["next_step"] = "open_privacyfence_companion"
+        result["next_step"] = "contact_your_administrator"
         result["sign_in_url"] = None
         result["message"] = (
-            "PrivacyFence is running, but nothing is authenticated yet -- an empty or partial "
-            "tool list means \"not set up\", not \"nothing to do here\". Ask the human to open "
-            "PrivacyFence's companion app -- the menu-bar icon on macOS, the tray icon on "
-            "Windows, the PrivacyFence entry in the applications menu on Linux -- and choose "
-            "Open Settings, then authenticate at least one connector (Gmail, Slack, etc.). "
-            "There is no link for you to hand them: a sign-in link is exactly the credential "
-            "that governs this process, so PrivacyFence never issues one to it. "
-            "PrivacyFence-governed tools stay unavailable until they finish."
+            "PrivacyFence is running in organization mode, but no connector is authenticated "
+            "for this account yet. There is no local sign-in link here -- organization mode "
+            "signs in through its own identity provider, so ask the human to check with their "
+            "administrator about getting connectors authorized for their account."
         )
         self._audit_status_check("status_checked", claude_reason)
         return result
@@ -763,7 +733,7 @@ class McpDispatcher:
         # provider): the best available answer is "every connector this
         # dispatcher can actually see is authenticated, nothing is known
         # about any other", since only built Connector objects are visible
-        # at all without SettingsController's own config/failure state.
+        # at all without the config/failure state.
         return [
             {"name": name, "enabled": True, "authenticated": True, "blocked_by": None}
             for name in sorted(self.connectors)

@@ -37,9 +37,9 @@ logger = logging.getLogger(__name__)
 ASSETS_REQUIRED_SCOPE = "read:cmdb-object:jira"
 NEEDS_ASSETS_PERMISSION = (
     "Jira Assets needs an extra Atlassian permission. "
-    "Use Authenticate… on Jira Assets in PrivacyFence Settings."
+    "Connect Jira Assets on the Connect page (/connect)."
 )
-NOT_AUTHENTICATED = "Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings."
+NOT_AUTHENTICATED = "Jira Assets is not authenticated. Connect Jira Assets on the Connect page (/connect)."
 NEEDS_WORKSPACE_ID = (
     "Jira Assets could not look up this site's Assets workspace id. Set it under Admin → "
     "Features → Jira Assets, or as connectors.assets.workspace_id in PrivacyFence settings; see "

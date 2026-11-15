@@ -27,7 +27,7 @@
     <section class="page-intro shell">
       <p class="kicker">AI agent · claude.ai</p>
       <h1>claude.ai, with every gated call waiting for you.</h1>
-      <p class="lede">claude.ai reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with <strong>organization mode only</strong>: PrivacyFence run by your organization, reachable over public HTTPS. On your own computer, use <a href="/ai-agents/claude-desktop/">Claude Desktop</a>, <a href="/ai-agents/claude-code/">Claude Code</a> or <a href="/ai-agents/chatgpt/">ChatGPT desktop</a> instead.</p>
+      <p class="lede">claude.ai reaches your services only through PrivacyFence, which reviews reads before release and holds changes for your approval. It works with <strong>organization mode only</strong>: PrivacyFence run by your organization, reachable over public HTTPS. On your own computer, use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> or <a href="/ai-agents/claude-code/">Claude Code</a> with the Docker image instead.</p>
     </section>
 
     <section class="page-section shell" aria-labelledby="connects-heading">
@@ -55,7 +55,7 @@
       <div class="card-grid grid-auto">
         <article class="card stack">
           <h3>On your own computer</h3>
-          <p>Not available: claude.ai cannot reach a PrivacyFence on your own computer. Use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> on macOS or Windows, <a href="/ai-agents/claude-code/">Claude Code</a> on macOS, Windows or Linux, or <a href="/ai-agents/chatgpt/">ChatGPT desktop</a> on macOS.</p>
+          <p>Not available: claude.ai cannot reach a PrivacyFence on your own computer. Use <a href="/ai-agents/claude-desktop/">Claude Desktop</a> or <a href="/ai-agents/claude-code/">Claude Code</a> with the Docker image on your computer.</p>
         </article>
         <article class="card stack">
           <h3>Organization mode</h3>
@@ -92,7 +92,7 @@
         <h2 id="files-heading">Files travel through one-time links.</h2>
       </div>
       <div class="page-copy stack">
-        <p>A local path means nothing to the server, and claude.ai does not run PrivacyFence's Claude Desktop extension. To upload, claude.ai asks PrivacyFence for a single-use upload address and sends the file there. A download of up to about 75 KB comes back in the tool result; a larger one becomes a short-lived, one-time link. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
+        <p>A local path means nothing to the server. To upload, claude.ai asks PrivacyFence for a single-use upload address and sends the file there. A download of up to about 75 KB comes back in the tool result; a larger one becomes a short-lived, one-time link. <a href="/docs/how-it-works/#files">Files</a> has the sizes and lifetimes.</p>
         <p>claude.ai opens a link and sends an upload from its own sandbox, which reaches only the domains on <strong>Settings → Capabilities → Domain allowlist</strong>. Put the deployment's host there, or the approval goes through and claude.ai then cannot reach the file.</p>
         <p>To read a document, no download is needed: PrivacyFence returns a PDF, Word, PowerPoint or Excel file from Drive as text.</p>
       </div>

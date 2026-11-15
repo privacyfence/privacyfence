@@ -26,7 +26,6 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from .google_http import authorized_http
-from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -307,22 +306,6 @@ class CalendarClient:
     # Authentication
     # ------------------------------------------------------------------ #
 
-    def authorize_interactive(self) -> None:
-        """Run the interactive OAuth flow and persist the token.
-
-        ``client_config`` comes from the organization config bundle (installed
-        via PrivacyFence Settings), not a file on disk.
-        """
-        if not self._client_config:
-            raise CalendarClientError(
-                "No Google organization config installed. Install the configuration file on "
-                "Admin → Organization configuration in PrivacyFence Settings first."
-            )
-        logger.info("Starting Calendar interactive OAuth flow")
-        creds = authorize_local(self._client_config, SCOPES)
-        self._save_token(creds)
-        logger.info("Calendar OAuth token saved to '%s'", self._token_file)
-
     def _load_credentials(self) -> Credentials:
         # Guards concurrent refresh/save of the shared token file when
         # multiple threads hit an expired token at the same time.
@@ -330,7 +313,7 @@ class CalendarClient:
             if not os.path.exists(self._token_file):
                 raise CalendarClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Authenticate Google Calendar from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
+                    "Connect Google Calendar on the Connect page (/connect) to authorize."
                 )
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
             if creds.valid:
@@ -342,13 +325,13 @@ class CalendarClient:
                 except Exception as exc:
                     raise CalendarClientError(
                         f"Failed to refresh Calendar OAuth token: {exc}. "
-                        "Reconnect Google Calendar from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                        "Connect Google Calendar on the Connect page (/connect) to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
             raise CalendarClientError(
                 "Cached Calendar OAuth token is invalid and cannot be refreshed. "
-                "Reconnect Google Calendar from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                "Connect Google Calendar on the Connect page (/connect) to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:

@@ -31,23 +31,16 @@ the sign-in. Saving asks for a passkey and takes effect at once.
 Do not mark the built-in PrivacyFence app as trusted or pre-approved: that trust would extend to
 every PrivacyFence server and to anyone using the public app. To trust an app, register your own.
 
-Desktop installs have no built-in app (desktop mode is deprecated; see
-[moving to organization mode](moving-to-organization-mode.md)): they use the bundle described
-below.
-
 ## Your own app
 
-Register your own app when you want Salesforce to treat PrivacyFence as your organization's app. On
-an organization server the app is a signed connector config uploaded on **Admin → Services**; on a
-desktop install it is a `salesforce` section in the bundle.
+Register your own app when you want Salesforce to treat PrivacyFence as your organization's app. The app is a signed connector config uploaded on **Admin → Services**.
 
 ## What you need
 
 - A Salesforce administrator who can create an **External Client App**.
 - Your org's login URL: `https://login.salesforce.com` (production), `https://test.salesforce.com`
   (sandbox), or your **My Domain** URL (see [Values](#values)).
-- Python 3 to run `scripts/sign_connector_config.py` (organization server) or
-  `scripts/build_org_bundle.py` (desktop install), or a browser for the offline signing page.
+- Python 3 to run `scripts/sign_connector_config.py`, or a browser for the offline signing page.
 
 ## Register the app
 
@@ -81,12 +74,10 @@ permission sets whose users may use it.
 
 | Item | Value |
 |---|---|
-| Local redirect (desktop installs) | `http://localhost:53683/callback` — exactly this. Salesforce accepts `http://` only when the host is literally `localhost`, which is why this redirect uses `localhost` rather than `127.0.0.1`. |
-| Org redirect (organization server) | `https://<server>/oauth/callback/salesforce`, with `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`) |
+| Redirect | `https://<server>/oauth/callback/salesforce`, with `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`) |
 | OAuth scopes | **Manage user data via APIs (`api`)** and **Perform requests at any time (`refresh_token`, `offline_access`)**. PrivacyFence requests `api refresh_token`. |
 | Login URL | `https://login.salesforce.com` (default), `https://test.salesforce.com` for a sandbox, or your My Domain URL, e.g. `https://acme.my.salesforce.com` or, for a sandbox, `https://acme--uat.sandbox.my.salesforce.com` |
-| Connector config (organization server) | `sign_connector_config.py sign --provider salesforce --client-id <Consumer Key> --client-secret-file <file holding the Consumer Secret>`, with `--login-url <URL>` if your org needs one |
-| Bundle flags (desktop install) | `--salesforce-consumer-key <Consumer Key>` and `--salesforce-consumer-secret <Consumer Secret>` (both required together); `--salesforce-login-url <URL>` (default `https://login.salesforce.com`) |
+| Connector config | `sign_connector_config.py sign --provider salesforce --client-id <Consumer Key> --client-secret-file <file holding the Consumer Secret>`, with `--login-url <URL>` if your org needs one |
 
 **Use your My Domain URL** when your org turns on **Prevent login from https://login.salesforce.com**
 (or the test.salesforce.com equivalent) in its My Domain settings, or when users sign in through
@@ -111,28 +102,9 @@ config's own login URL wins over the **Login URL** field. **Remove our own app**
 built-in app and, like uploading, makes everyone who connected Salesforce sign in again. The signing
 tools and the serial rule are described in [org-mode-setup-guide.md](org-mode-setup-guide.md).
 
-### Desktop install: the bundle
-
-`scripts/build_org_bundle.py` is in the PrivacyFence source repository and is attached to every
-stable GitHub Release. It needs only Python 3; no PrivacyFence install is required.
-
-```bash
-python3 scripts/build_org_bundle.py \
-  --salesforce-consumer-key 3MVG9... \
-  --salesforce-consumer-secret abcdef0123456789 \
-  --salesforce-login-url https://acme.my.salesforce.com \
-  -o org_bundle.json --merge
-```
-
-`--merge` adds Salesforce to an existing bundle; drop it if this is the first service in the
-bundle. A bundle holds one login URL, so users of a sandbox and of production need separate
-bundles. Install the bundle on **Admin → Organization configuration**
-([connecting-a-service.md](connecting-a-service.md)).
-
 ## Users connect
 
-Users click **Authenticate…** next to Salesforce (desktop install, after the bundle is installed) or **Connect**
-(organization server), sign in on Salesforce's page and click **Allow**. The shared flow is
+Users click **Connect** next to Salesforce, sign in on Salesforce's page and click **Allow**. The shared flow is
 described in [connecting-a-service.md](connecting-a-service.md).
 
 After that, PrivacyFence refreshes the access token by itself: when Salesforce reports an expired
@@ -188,19 +160,14 @@ See [ADR 0155](adr/0155-exports-write-a-file-and-return-only-counts-and-a-hash.m
 ## Troubleshooting
 
 **`redirect_uri_mismatch`** — the Callback URL on the app must include
-`http://localhost:53683/callback` for desktop installs, and
-`https://<server>/oauth/callback/salesforce` on its own line for an organization server.
-
-**Salesforce will not save an `http://` Callback URL** — only `http://localhost:…` is accepted
-without HTTPS. Enter `http://localhost:53683/callback` exactly; `127.0.0.1` is rejected.
+`https://<server>/oauth/callback/salesforce` on its own line.
 
 **`invalid_client_id` or `invalid client credentials`** — check that the consumer key and secret in
-the connector config or bundle match the app. A brand-new app can also return this for its first few minutes.
+the connector config match the app. A brand-new app can also return this for its first few minutes.
 
 **The login page says you cannot log in here, or points you to your My Domain** — the org blocks
 login from `login.salesforce.com`. Set the **Login URL** on **Admin → Services** to your My Domain
-URL (or, with your own app, sign the connector config with `--login-url`, or rebuild the desktop
-bundle with `--salesforce-login-url`).
+URL (or, with your own app, sign the connector config with `--login-url`).
 
 **Sandbox users cannot sign in** — the login URL is the production one. Use
 `https://test.salesforce.com` or the sandbox's My Domain URL.

@@ -39,7 +39,7 @@ from privacyfence.web import mcp_tools
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
 
-from ...helpers import assert_tool_definitions_complete
+from ...helpers import assert_tool_definitions_complete, token_verifier
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
@@ -77,7 +77,7 @@ def _walk(node: Any, path: str = "$"):
 
 @contextlib.asynccontextmanager
 async def _connected_session(dispatcher: McpDispatcher):
-    app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+    app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
     async with mcp_lifespan(session_manager):
         async with httpx2.AsyncClient(
             transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -90,7 +90,7 @@ async def _connected_session(dispatcher: McpDispatcher):
 
 
 async def test_the_live_tool_list_is_exactly_the_set_checked_here():
-    async with _connected_session(McpDispatcher(lambda: CONNECTORS, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False))) as session:
+    async with _connected_session(McpDispatcher(lambda: CONNECTORS, scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True))) as session:
         listed = await session.list_tools()
     assert sorted(tool.name for tool in listed.tools) == sorted(
         name for name in ADVERTISED if name != mcp_tools.RUNTIME_CREDENTIAL_STATUS_TOOL.name
@@ -105,7 +105,7 @@ async def test_the_status_tool_is_listed_where_delivery_is_on(monkeypatch):
 
     monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
     dispatcher = McpDispatcher(
-        lambda: CONNECTORS, mode="org", scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
+        lambda: CONNECTORS, scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
         agent_runtime=agent_runtimes.N8nRuntimeConfig(True, "https://n8n.example.com", "", ""),
     )
     async with _connected_session(dispatcher) as session:

@@ -1,7 +1,7 @@
 """README.md's links to privacyfence.eu point at pages the site actually builds.
 
-README.md is also the PyPI long description, so it links its documentation on privacyfence.eu
-rather than in the repository. Nothing fetches those URLs here (no network in this tier), so this
+README.md is also rendered away from the repository (registry listings), so it links its
+documentation on privacyfence.eu rather than in the repository. Nothing fetches those URLs here (no network in this tier), so this
 checks them against what scripts/build_site.py publishes instead: a `/docs/<name>/` link names a
 doc in the published half of docs/README.md, and its `#anchor` is one of that doc's headings; any
 other path is a hand-written page in the build manifest. tests/unit/test_docs_links.py covers the

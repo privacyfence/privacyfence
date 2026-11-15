@@ -160,7 +160,7 @@ class TestRequestErrors:
             client.get_document("doc1")
         assert str(exc.value) == (
             "Grist refused the sign-in (HTTP 401). The API key or sign-in may be wrong, expired or "
-            "revoked. Use Authenticate… in PrivacyFence Settings to connect again."
+            "revoked. Connect Grist on the Connect page (/connect) to connect again."
         )
         assert len(net.calls) == 2
         assert cred.forced == 1

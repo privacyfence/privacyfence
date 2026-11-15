@@ -6,6 +6,8 @@ Accepted — 2026-09-29. Implemented: `.github/workflows/publish-mcp-registry.ym
 `mcpb/server.json.tmpl`, `scripts/mcp_registry_server_json.py`, and the `.mcpb` upload in
 `.github/workflows/build.yml`.
 
+**Superseded by [ADR 0308](0308-the-mcp-registry-listing-of-the-extension-is-no-longer-published.md), 2026-11-15.**
+
 ## Context
 
 The official MCP registry (`registry.modelcontextprotocol.io`) is where MCP directories and

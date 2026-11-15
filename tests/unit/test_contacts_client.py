@@ -2,10 +2,9 @@
 normalization (_parse_person), the search_contacts API-then-client-filter
 fallback, and update_contact's partial-field update building.
 
-Also covers the OAuth2 token lifecycle (authorize_interactive /
-_load_credentials / _save_token), mocking at the google-auth library
-boundary (Credentials.from_authorized_user_file /
-google_oauth.authorize_local) rather than at _load_credentials
+Also covers the OAuth2 token lifecycle (_load_credentials / _save_token), mocking at the google-auth library
+boundary
+(Credentials.from_authorized_user_file) rather than at _load_credentials
 itself -- see test_tasks_client.py's module docstring for why.
 """
 from __future__ import annotations
@@ -21,7 +20,6 @@ import sys
 import pytest
 
 from privacyfence.contacts_client import (
-    SCOPES,
     Contact,
     ContactEmail,
     ContactPhone,
@@ -47,31 +45,6 @@ def http_error(status: int = 404, body: bytes = b'{"error": "nope"}') -> HttpErr
     resp.status = status
     resp.reason = "error"
     return HttpError(resp, body)
-
-
-# ---------------------------------------------------------------------------- #
-# authorize_interactive
-# ---------------------------------------------------------------------------- #
-
-class TestAuthorizeInteractive:
-    def test_missing_client_config_raises(self, tmp_path):
-        client = ContactsClient(client_config={}, token_file=str(tmp_path / "token.json"))
-        with pytest.raises(ContactsClientError, match="No Google organization config installed"):
-            client.authorize_interactive()
-
-    def test_runs_local_authorization_and_persists_returned_credentials(self, tmp_path, monkeypatch):
-        token_file = tmp_path / "nested" / "token.json"
-        client = ContactsClient(client_config={"installed": {"client_id": "cid"}}, token_file=str(token_file))
-
-        fake_creds = MagicMock()
-        fake_creds.to_json.return_value = '{"token": "abc"}'
-        mock_authorize_local = MagicMock(return_value=fake_creds)
-        monkeypatch.setattr("privacyfence.contacts_client.authorize_local", mock_authorize_local)
-
-        client.authorize_interactive()
-
-        mock_authorize_local.assert_called_once_with({"installed": {"client_id": "cid"}}, SCOPES)
-        assert token_file.read_text(encoding="utf-8") == '{"token": "abc"}'
 
 
 # ---------------------------------------------------------------------------- #

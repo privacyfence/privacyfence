@@ -1,26 +1,21 @@
-"""One step-up orchestration for both approval modes (ADR 0033): web/
-routes_approvals.py's local-mode and org-mode
-routes each grew their own copy of the sequence around an approval decision --
-"does a sensitive confirm or an ordinary approving decision need a fresh
-WebAuthn assertion, and if so, challenge or verify one" -- built on top of the
+"""The step-up orchestration around an approval decision (ADR 0033): "does a
+sensitive confirm or an ordinary approving decision need a fresh WebAuthn
+assertion, and if so, challenge or verify one" -- built on top of the
 ceremony primitives step_up_decide.py already shares (see that module's own
-docstring for why it exists). This module is that sequence, factored out
-once, with no route move and no file deletion: both callers still resolve
-their own ``Principal`` (ambient in local mode, from
-``org_session.authenticated()`` in org mode -- ADR 0008) and still build
-their own "step-up required" response (local: passkey-only ``428``/``403``;
-org: a ``428`` that can also carry an IdP-reauth link, closed by
-``require_passkey``, ADR 0066) -- both passed in rather than duplicated here.
+docstring for why it exists). The caller, web/routes_approvals.py, resolves
+its own ``Principal`` (from ``org_session.authenticated()``) and builds its
+own "step-up required" response (a ``428`` that can also carry an IdP-reauth
+link, closed by ``require_passkey``, ADR 0066) -- both passed in rather than
+duplicated here.
 
-``batch_step_up_response`` needs no callback: a batch is passkey-only in
-both modes (no IdP-reauth link), so the one per-mode difference left is a
-plain string, ``unenrolled_batch_message`` -- what happens to an approving
-batch that needs step-up when nothing is enrolled and ``require_passkey`` is
-off. Local mode passes ``None`` and keeps its single-decision rule (the batch
-applies without step-up, the same evadable fall-through a single decision
-has there). Org mode passes a message and the batch is refused with a
-``400`` and nothing applied, since org mode's single decisions always have
-the IdP link to fall back to and a batch has none (ADR 0065, ADR 0066).
+``batch_step_up_response`` needs no callback: a batch is passkey-only (no
+IdP-reauth link), so what is left to pass is a plain string,
+``unenrolled_batch_message`` -- what happens to an approving batch that
+needs step-up when nothing is enrolled and ``require_passkey`` is off. With
+a message the batch is refused with a ``400`` and nothing applied, since a
+single decision always has the IdP link to fall back to and a batch has none
+(ADR 0065, ADR 0066). ``None`` lets the batch apply without step-up, the
+evadable fall-through.
 """
 from __future__ import annotations
 
@@ -38,8 +33,7 @@ from . import step_up_decide
 
 # Called with no arguments to mint a fresh challenge (or a hard "nothing
 # enrolled" refusal) for the decision/batch the caller already closed this
-# over -- local mode's own passkey-only shape, or org mode's passkey-or-IdP
-# one. ``None`` means "nothing enrolled, and no requirement to fall back
+# over -- passkey-only, or passkey-or-IdP. ``None`` means "nothing enrolled, and no requirement to fall back
 # to" -- the caller's evadable fall-through, see module docstring.
 StepUpResponder = Callable[[], "JSONResponse | None"]
 
@@ -185,15 +179,14 @@ def batch_step_up_response(
     """The batch counterpart of a mode's own single-decision step-up
     response: a ``428`` challenge when a passkey is enrolled, and the same
     ``403`` naming ``/security`` when nothing is and ``require_passkey`` is
-    on. Deliberately no IdP-reauth fallback in either mode: a batch decision
+    on. Deliberately no IdP-reauth fallback: a batch decision
     is a page-level ceremony (like web/routes_settings.py's own sensitive
     actions), not a per-card one, and a page-level step-up never offered an
     IdP link either.
 
     With nothing enrolled and ``require_passkey`` off, the answer is the
-    caller's ``unenrolled_batch_message``: ``None`` (local mode) returns
-    ``None``, the evadable fall-through local mode's single decisions share;
-    a message (org mode) returns a ``400 batch_step_up_unavailable`` carrying
+    caller's ``unenrolled_batch_message``: ``None`` returns ``None``, the
+    evadable fall-through; a message returns a ``400 batch_step_up_unavailable`` carrying
     it, so the batch is refused with nothing applied and the approver
     decides each item on its card, where the IdP link is offered. See
     ADR 0065 and ADR 0066."""
@@ -268,7 +261,7 @@ def guard_batch_decision(
     )
     if response is not None:
         return response, False
-    # A ``None`` response means either a verified assertion or local mode's
+    # A ``None`` response means either a verified assertion or the
     # evadable fall-through (no assertion supplied at all, since
     # ``step_up_response`` above only ever returns ``None`` for that case,
     # and only with no ``unenrolled_batch_message``) -- only the former

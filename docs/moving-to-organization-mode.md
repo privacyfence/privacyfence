@@ -1,31 +1,49 @@
 # Moving to organization mode
 
-PrivacyFence's desktop (local) mode is deprecated in PrivacyFence 7 and will be removed in
-PrivacyFence 8. Desktop mode is the install you get from the macOS, Windows or Linux installer: it
-runs as a service on your own computer, with the companion app. Desktop installs keep working as
-they do today for as long as you stay on 7.x. This page is for people who want to move before then,
-and for anyone who has just seen the deprecation notice.
+PrivacyFence 8 runs only in organization mode: as an organization server, or as the Docker image
+on one computer (single-user mode). The desktop (local) mode, the install you get from the macOS,
+Windows or Linux installer, is part of PrivacyFence 7 only. Desktop installs
+keep working as they do today for as long as you stay on 7.x. This page is for people who want to
+move to organization mode, and for anyone whose PrivacyFence 8 refused to start on a desktop data
+directory.
 
-## What you see
+## What a desktop install is
 
-Every desktop start logs a warning, `privacyfence_status` carries a `deprecation` notice that your AI
-client is asked to pass on to you once, every desktop page shows a strip with the same text, and the
-companion shows a one-time desktop notification. The text is:
+A desktop install runs as a service on your own computer and keeps its data in the PrivacyFence data
+directory of that computer. It signs in to your services through a loopback address and connects to
+your AI client with a local token. PrivacyFence 8 does not read that data.
 
-> Desktop mode is deprecated and will be removed in PrivacyFence 8. PrivacyFence's built-in sign-in
-> for Google, Slack, Salesforce, Atlassian and Miro works only in organization mode and the Docker
-> image. Move to an organization server, or try the Docker image on this computer.
+## What happens when 8 starts on a desktop install
 
-Nothing in your install changes: your connections, rules, passkeys and audit log are untouched.
+PrivacyFence 8 checks the data directory before it does anything else. On a desktop data directory it
+stops and prints:
 
-## Why desktop mode goes away
+> This data directory ({root}) belongs to a PrivacyFence desktop install. PrivacyFence 8 runs only as
+> an organization server or the Docker image and does not read desktop data. Keep using PrivacyFence 7
+> on this computer, or move to organization mode:
+> https://privacyfence.eu/docs/moving-to-organization-mode/
+
+On a data directory that holds an organization server's data but was never prepared for 8, it stops
+and prints:
+
+> This data directory ({root}) has not been prepared for PrivacyFence 8. Install the latest
+> PrivacyFence 7, start it once, check that the Admin page says "Ready for PrivacyFence 8: yes", then
+> start this release again: https://privacyfence.eu/docs/moving-to-organization-mode/
+
+Nothing in the data directory is changed in either case. Starting 7.x on it again works.
+
+PrivacyFence 8 also refuses `PRIVACYFENCE_MODE=local`, and a bundle that says `"mode": "local"`.
+Organization mode is the only mode: leave the setting out, or set it to `org`.
+
+## Why desktop mode is not part of 8
 
 PrivacyFence's built-in apps, the relay that lets them work on any server, the Admin page and
 single-user mode all serve organization mode. Desktop mode cannot use the built-in apps: it signs in
 through a loopback address on your computer, which an app shared by many organizations cannot use
-with Slack, Miro or Atlassian. Keeping two products costs more with every feature, so organization mode is the one
-that stays. The decision is recorded in [ADR 0261](adr/0261-local-mode-is-deprecated-in-7-and-removed-in-8.md);
-the built-in apps are [ADR 0255](adr/0255-built-in-oauth-apps-ship-in-every-distribution.md).
+with Slack, Miro or Atlassian. Keeping two products costs more with every feature, so organization
+mode is the one that stays. The decision is recorded in
+[ADR 0261](adr/0261-local-mode-is-deprecated-in-7-and-removed-in-8.md); the built-in apps are
+[ADR 0255](adr/0255-built-in-oauth-apps-ship-in-every-distribution.md).
 
 ## Two ways forward
 
@@ -46,14 +64,14 @@ register their organization's own.
 ## Bringing your rules along
 
 Your always-allow rules and step-up level move to the new install as a file: export them on the
-desktop's **Settings → Auto-accept** page and import them on the new one. Connections, passkeys and
-scoped tokens do not move; connect your accounts again and enroll a passkey. The steps and the full
-list of what does and does not move are in
+desktop's **Settings → Auto-accept** page (in PrivacyFence 7) and import them on the new one.
+Connections, passkeys and scoped tokens do not move; connect your accounts again and enroll a
+passkey. The steps and the full list of what does and does not move are in
 [Moving a person from a desktop install](org-mode-setup-guide.md#moving-a-person-from-a-desktop-install).
 
-## Before any later upgrade to 8.x
+## Before upgrading to 8.x
 
-PrivacyFence 8 will not convert data written by releases before 7. So upgrade to 8.x only from 7.x,
+PrivacyFence 8 does not convert data written by releases before 7. So upgrade to 8.x only from 7.x,
 and first:
 
 1. Install the latest 7.x and start it once. Every start brings everyone's stored data up to date and

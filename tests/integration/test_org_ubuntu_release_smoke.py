@@ -15,10 +15,10 @@ through: ``daemon_main.main()`` end to end -- CLI parsing, config
 bootstrap, ``load_org_config()``'s fail-closed signature/mode checks,
 ``build_connectors()``, the instance lock, the *real* uvicorn thread bound
 to a *real* socket in a *separate OS process* -- started, stopped, and
-restarted the way systemd (docs/org-mode-setup-guide.md's "Hardened systemd
-unit", ``privacyfence-org.service``) actually would, with a reverse proxy's
-Host/X-Forwarded-* handling (the guide's "Caddy" config under "Reverse proxy
-and TLS") simulated at the HTTP layer rather than assumed.
+restarted the way the container runtime (docs/org-mode-docker.md) actually
+would, with a reverse proxy's Host/X-Forwarded-* handling (the guide's
+"Caddy" config under "Reverse proxy and TLS") simulated at the HTTP layer
+rather than assumed.
 
 Covers, against one synthetic, Ed25519-signed ``org_config.json`` and a
 real (loopback) mocked IdP (tests/integration/mock_idp.py) -- never a real
@@ -95,10 +95,10 @@ external IdP, real TLS certificate, or real reverse proxy binary:
     audits again.
 
 Deliberately NOT covered here: a real
-systemd unit, a real Caddy process, a real external IdP, or the packaged
-``.deb``
-specifically -- see "Why a --target install, not the .deb" below for why the
-last of those isn't needed for what this test actually checks.
+container runtime, a real Caddy process, a real external IdP, or the
+organization image itself (tests/integration/test_org_docker_image.py runs
+that) -- see "Why a --target install" below for why the image isn't needed
+for what this test actually checks.
 
 Also deliberately NOT covered here, and worth being explicit about after
 two org-mode defects (found on the first real install, fixed in 8322c111
@@ -142,8 +142,8 @@ rules are correct -- see ``docs/testing-policy.md`` for that boundary
 stated as policy rather than left for a reader to infer from a green
 checkmark.
 
-Why a --target install, not the .deb
--------------------------------------
+Why a --target install
+-------------------------
 ``paths.data_dir()`` resolves to the repo root itself for an editable dev
 checkout (see that module's own docstring) -- running ``daemon_main.main()``
 that way would read/write this actual repository's own ``config/``/``org/``
@@ -152,29 +152,23 @@ with any other daemon already running against this same checkout. A real
 (non-editable) install is what flips ``paths._is_installed_package()`` to
 True, which is what makes ``data_dir()`` resolve under ``$HOME/
 .privacyfence`` instead -- and *that* is genuinely what
-docs/org-mode-setup-guide.md's "Service account and install" documents for
-a real Ubuntu server (``pip install privacyfence`` into a venv), not the
-desktop-oriented ``.deb`` (autostart entry, app icons) scripts/
-build_deb.sh produces. Building it fresh here (module-scoped, once per test
+the organization image installs: the built wheel, with its dependencies
+already in place (deploy/docker/Dockerfile). Building it fresh here (module-scoped, once per test
 session) with ``pip install --no-deps --target <dir>`` (see the
 ``installed_privacyfence`` fixture's own comment for why a plain venv isn't
 used instead) reuses every dependency already importable in the process
 running this test and costs only the one small ``privacyfence`` package
-build -- seconds, not the minutes a full PyInstaller bundle
-(scripts/build_deb.sh's own job) would add.
+build -- seconds, not the minutes an image build would add.
 
 Gating
 ------
 Opt-in via ``PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1`` -- unset (the
 default) skips this whole module instantly, so a contributor's ordinary
 ``pytest`` run never pays this module's setup cost, and neither does the
-`test`/`platform-windows`/`platform-macos` full-suite jobs in tests.yml,
-which never set it. Two CI jobs do: ``.github/workflows/build.yml``'s
-``build-deb`` job at release-tag time, and
-``.github/workflows/tests.yml``'s own ``org-mode-smoke`` job on every PR --
-promoted the same way ``test-windows`` -> ``platform-windows`` was, once
-this module was itself proven green rather than left release-tag-gated
-indefinitely.
+`test` full-suite job in tests.yml, which never sets it. Two CI jobs do:
+``.github/workflows/build.yml``'s ``build-org-image`` job at release-tag
+time, and ``.github/workflows/tests.yml``'s own ``org-mode-smoke`` job on
+every PR.
 """
 from __future__ import annotations
 
@@ -199,7 +193,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if not os.environ.get("PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS"):
     pytest.skip(
         "release-workflow smoke test -- set PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1 to run "
-        "(see this module's own docstring; .github/workflows/build.yml's build-deb job does this)",
+        "(see this module's own docstring; .github/workflows/build.yml's build-org-image job does this)",
         allow_module_level=True,
     )
 
@@ -218,10 +212,10 @@ from tests.packaged_policy_probe import (  # noqa: E402
 
 # `system`, not `packaged`: this module drives the installable `privacyfence`
 # package directly, via a `--target` install (see this module's own "Why a
-# --target install, not the .deb" docstring section), not a built artifact --
+# --target install" docstring section), not a built artifact --
 # same taxonomy tier as tests/system/test_local_mode_system.py's own daemon/
 # MCP/approval/audit scenario, just against a real Ubuntu org-mode service
-# instead of local mode. Also what tests/diagnostics.py's own CI-diagnostics
+# rather than an in-process app. Also what tests/diagnostics.py's own CI-diagnostics
 # capture keys off of.
 pytestmark = [pytest.mark.system, pytest.mark.packaged, pytest.mark.timeout(300)]
 
@@ -232,7 +226,7 @@ CLAUDE_REDIRECT_URI = "https://claude.example/oauth/callback"
 
 # ---------------------------------------------------------------------------- #
 # A real, non-editable `privacyfence` install (see module docstring's "Why a
-# --target install, not the .deb" section) -- built once and reused by every
+# --target install" section) -- built once and reused by every
 # test below.
 #
 # `pip install --target <dir>` rather than a fresh venv: a nested venv's own
@@ -249,7 +243,7 @@ CLAUDE_REDIRECT_URI = "https://claude.example/oauth/callback"
 # own already-working environment (however it was set up), while `import
 # privacyfence` resolves to the freshly built, non-editable copy instead of
 # this checkout's editable `src/` tree -- which is the one thing that
-# actually matters here (see "Why a --target install, not the .deb" above:
+# actually matters here (see "Why a --target install" above:
 # paths._is_installed_package() has to see a real install path).
 # ---------------------------------------------------------------------------- #
 
@@ -275,8 +269,8 @@ def installed_privacyfence(tmp_path_factory: pytest.TempPathFactory) -> str:
     )
     assert install.returncode == 0, (
         f"pip install of {REPO_ROOT} into an isolated site-packages failed "
-        f"(this is what a real `pip install privacyfence` on a fresh Ubuntu server does -- see "
-        f"docs/org-mode-setup-guide.md's \"Service account and install\"):\n{install.stdout}\n{install.stderr}"
+        f"(the daemon is installed from the built wheel exactly as the organization image installs it -- see "
+        f"deploy/docker/Dockerfile):\n{install.stdout}\n{install.stderr}"
     )
     entry = site_dir / "privacyfence" / "daemon_main.py"
     assert entry.exists(), f"privacyfence package was not installed at {entry}"
@@ -322,6 +316,11 @@ def _signed_org_config(
 def _write_org_config(home: Path, config: dict | bytes) -> None:
     org_dir = home / ".privacyfence" / "org"
     org_dir.mkdir(parents=True, exist_ok=True)
+    # A data directory that already holds org data must carry the data-format marker, or startup
+    # refuses it (``data_format.check_upgrade_source``); this is what a prepared install has.
+    (home / ".privacyfence" / "data_format.json").write_text(
+        json.dumps({"format": 7, "written_by": "smoke-test"}), encoding="utf-8"
+    )
     path = org_dir / "org_config.json"
     if isinstance(config, bytes):
         path.write_bytes(config)
@@ -343,8 +342,8 @@ def _free_port() -> int:
 def _daemon(installed_privacyfence: str, *, home: Path, extra_env: dict[str, str] | None = None):
     """Starts the real ``privacyfence.daemon_main:main`` entry point --
     ``python -m privacyfence.daemon_main`` is exactly what the
-    ``privacyfence-app`` console script itself does, and what systemd would
-    exec -- as its own OS process, ``$HOME`` pointed at an isolated sandbox,
+    ``privacyfence-app`` console script itself does, and what the container
+    runtime would exec -- as its own OS process, ``$HOME`` pointed at an isolated sandbox,
     and always terminates it on the way out: SIGTERM first (see
     TestCleanShutdownAndRestart's own docstring for why that signal
     specifically), SIGKILL if it hasn't exited a few seconds later (a hung/
@@ -552,8 +551,7 @@ def _find_pending_approval_id(list_page_html: str) -> str | None:
 class TestStrictStartup:
     def test_refuses_to_start_on_an_unsigned_org_mode_bundle(self, installed_privacyfence, tmp_path):
         # "mode": "org" with no signature at all -- load_org_config()'s own
-        # documented refusal (org_bundle_signing.py's TOFU model is opt-in
-        # for local mode, mandatory for org mode).
+        # documented refusal (org_bundle_signing.py's TOFU model is mandatory).
         home = tmp_path / "home"
         home.mkdir()
         _write_org_config(home, {
@@ -652,13 +650,13 @@ class TestRunningOrgModeService:
         # /settings itself is a real, read-only route in org mode now
         # -- see test_org_mode_routes_are_mounted below -- and org mode
         # mounts its own POST /api/settings/{action} too (the same
-        # path local mode's ~30-action dispatcher answers, restricted to
+        # path the full settings dispatcher answers, restricted to
         # routes_settings._ORG_ALLOWED_ACTIONS) -- so a GET here now 405s
         # (a real route, wrong method) rather than 404ing outright.
         # quit_app is one of the ~24 local-only actions org mode's own
         # allowlist never includes -- POSTing it still 404s, which is what
-        # actually proves local mode's unrestricted dispatcher surface
-        # isn't reachable. The local-mode-only state stream still 404s
+        # actually proves the unrestricted dispatcher surface
+        # isn't reachable. The state stream still 404s
         # outright, unchanged.
         assert self.client.get("/api/settings/quit_app").status_code == 405
         cookie = _complete_browser_login(self.client, self.idp, sub="dave")
@@ -943,9 +941,8 @@ class TestCleanShutdownAndRestart:
 
         with _daemon(installed_privacyfence, home=home) as (proc, log_path):
             _wait_until_ready(proc, "127.0.0.1", port, log_path)
-            # SIGTERM, not SIGINT: this is what `systemctl stop`/`docker
-            # stop` actually send (the systemd unit's default
-            # KillSignal) -- Ctrl-C's SIGINT already has its own dedicated
+            # SIGTERM, not SIGINT: this is what `docker stop`
+            # actually sends -- Ctrl-C's SIGINT already has its own dedicated
             # handling in daemon_main.py (_wait_for_shutdown's docstring);
             # what an Ubuntu service deployment needs proven is this one.
             proc.terminate()
@@ -969,8 +966,8 @@ class TestCleanShutdownAndRestart:
         """Starting cleanly again (the test above) isn't the same claim as
         *this* principal's own on-disk state -- an auto-accept rule they
         confirmed, and the audit trail that decision wrote -- still being
-        there afterwards, the way ``systemctl restart privacyfence-org`` needs
-        (docs/org-mode-setup-guide.md's "Hardened systemd unit"): a clean stop/start
+        there afterwards, the way ``docker compose restart privacyfence`` needs
+        (docs/org-mode-docker.md): a clean stop/start
         must never look, from the outside, like each principal's storage
         reset to empty.
         """

@@ -79,10 +79,9 @@ which is deny-only without an unattended session.
 
 ## The approvals list
 
-**Approvals** (`/approvals`) is the page you get when you open PrivacyFence (it opens through the
-companion app on every platform). It lists every request waiting for you and updates live while
-it's open. In an organization deployment each person sees only their own requests, and the
-list is current as of when the page loaded (it does not update live).
+**Approvals** (`/approvals`) is the page you get when you open PrivacyFence. It lists every request waiting for you. Each
+person sees only their own requests, and the list is current as of when the page loaded (it does
+not update live).
 
 The heading counts what is waiting, for example "4 approvals pending · 3 reads · 1 write". Each row
 shows:
@@ -197,28 +196,25 @@ depends on where it came from:
 
 | Shown as | Meaning |
 |---|---|
-| The AI system's name and logo, with a **Verified** badge | Organization deployments only: the OAuth client this request was made with registered only with that AI system's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise), with no administrator step. See [AI systems](org-mode-setup-guide.md#11-ai-systems) |
+| The AI system's name and logo, with a **Verified** badge | The OAuth client this request was made with registered only with that AI system's own redirect URI (claude.ai, ChatGPT, Gemini Enterprise), with no administrator step. See [AI systems](org-mode-setup-guide.md#11-ai-systems) |
 | "Says it is …" with a **Not verified** badge | The name the AI system reported about itself, or a relabel set in `agent_overrides:`. PrivacyFence cannot confirm it |
 | "Unrecognised AI system", with the claimed name in quotes if one was sent | The name matches no known AI system, or none was sent |
 
-On a local install every request shows **Undetected**, with no name and no badge. Every AI system
-on the computer shares one credential, so PrivacyFence has no way to tell them apart. The three rows
-above apply to organization deployments only. When the name is not verified, the card's wording
-says "the AI system" rather than borrowing the claimed name.
+When the name is not verified, the card's wording says "the AI system" rather than borrowing the
+claimed name.
 
 The name is for your information only. It never changes what is allowed: the same request gets the
 same rule match and the same decision whoever claims to be asking. The audit log records the same
 identity and where it came from (`agent_source`). See
 [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md),
 [ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md),
-[ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md) and
-[ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md).
+and [ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md).
 
 ### Gmail signature on drafts
 
 The Gmail draft tools can append your Gmail signature — the one Gmail stores for the sending
 address. Turn it on for every draft with **Privacy Filter → Gmail → Append Gmail
-signature to drafts** (**Settings** on a desktop install, **Admin** on an organization server; `gmail.append_signature_to_drafts`, off by default); each call can override
+signature to drafts** (on **Admin**; `gmail.append_signature_to_drafts`, off by default); each call can override
 it with `include_signature`.
 
 The signature is fetched before the card is shown, so the card's preview shows the draft exactly as
@@ -265,12 +261,10 @@ the text, but it never asks for a second confirmation. The one exception is `dri
 an uploaded file can be something the AI system never read, so it gets the same scan and second
 confirmation as a read.
 
-Turn the check off, or turn off just IP addresses or currency amounts, on a desktop install in
-**Settings → General → PII Detection Gate** (`pii_detection.enabled`,
-`pii_detection.detect_ip_addresses`, `pii_detection.detect_financial_figures`; all on by default).
-In an organization deployment these settings are install-wide and edited by an administrator on
-**Admin → Privacy Filter** (the PII Detection Gate is there too), not on Settings; saving asks for a
-passkey. Settings is personal.
+Turn the check off, or turn off just IP addresses or currency amounts, on **Admin → Privacy Filter**
+(the PII Detection Gate; `pii_detection.enabled`, `pii_detection.detect_ip_addresses`,
+`pii_detection.detect_financial_figures`; all on by default). These settings are install-wide and
+edited by an administrator, not on Settings; saving asks for a passkey. Settings is personal.
 
 ---
 
@@ -528,8 +522,7 @@ Each category is set to one of:
 | `redact` | `[REDACTED BY PRIVACY FILTER — N characters withheld]` (only the length is revealed) | empty |
 | `block` | `[BLOCKED BY PRIVACY FILTER]` | empty |
 
-On a desktop install, set them in **Settings → Privacy Filter**, which has one page per group, or in
-`settings.yaml`. On an organization server an administrator sets them on **Admin → Privacy Filter**.
+An administrator sets them on **Admin → Privacy Filter**.
 Changes apply immediately. Each group also has a `default_policy` for any category not listed.
 
 | Group (`settings.yaml` key) | Settings page | Categories — value in a fresh `settings.yaml` |
@@ -542,22 +535,19 @@ Changes apply immediately. Each group also has a `default_policy` for any catego
 | `confluence_privacy` | Confluence | `search_excerpt` block · `attachments` block |
 
 In a fresh `settings.yaml` every group's `default_policy` is `block`. If a group is missing from
-`settings.yaml` altogether, its default is `allow` on a local install and `block` in an
-organization deployment. A group that is present but malformed — an unknown policy value, a
+`settings.yaml` altogether, its default is `block`. A group that is present but malformed — an unknown policy value, a
 non-mapping `categories` — stops PrivacyFence from starting rather than falling back to `allow`.
 
 The filter applies only to tools that return content from the service; writes are not filtered.
-Other connectors have no categories. **Privacy Filter → Calendar** (on **Settings** for a desktop install, on **Admin** for an
-organization server) has one switch instead: whether `calendar_get_free_busy` may show event titles and status
+Other connectors have no categories. **Privacy Filter → Calendar** (on **Admin**) has one switch instead: whether `calendar_get_free_busy` may show event titles and status
 (`calendar.free_busy_full_event_details`, on by default) or only busy/free blocks.
 
 If `file_metadata` and `file_list` are set differently, PrivacyFence logs a warning at startup:
 a file's name and owners reach the AI system through whichever of the two tools is still allowed.
 
-In an organization deployment the privacy filter and the PII check are install-wide: an
+The privacy filter and the PII check are install-wide: an
 administrator edits the install-wide privacy policy on the **Admin → Privacy Filter** page, and
-**Settings** does not show it. Settings is personal. A desktop install keeps its own Privacy Filter on
-Settings. See [Organization deployment](org-mode-setup-guide.md).
+**Settings** does not show it. Settings is personal. See [Organization deployment](org-mode-setup-guide.md).
 
 ---
 
@@ -585,9 +575,9 @@ Limits:
 | Extracted text shown and scanned | first 20,000 characters |
 | Gmail and Confluence attachments fetched for a preview | up to 5 MB; larger ones show metadata only and are not scanned |
 | Drive files fetched in full for a preview | up to 5 MB; larger ones are not scanned |
-| Local file read for an upload preview | up to 5 MB |
+| Uploaded file read for an upload preview | up to 5 MB |
 | A single part inside a DOCX or PPTX | 10 MiB decompressed; a larger part is skipped |
-| `drive_upload_file` from a local path | 50 MB |
+| `drive_upload_file` upload | 50 MB |
 | Attachments on one Gmail draft | 18 MB in total |
 
 Reading a document with `drive_get_file_content` is different: it fetches at most the first
@@ -603,39 +593,15 @@ preview.
 
 ## Notifications
 
-While the Approvals page is open in a browser tab:
-
-- the tab title shows the number waiting, for example "(3)", and screen readers announce changes —
-  no permission needed;
-- if you allow notifications, a desktop notification appears when a new request arrives and the tab
-  is not focused (at most one every 5 seconds; several at once become one "N approvals pending"
-  notification). They come from your browser; nothing leaves your machine.
-
-PrivacyFence offers to turn notifications on right after you decide a request, never on page load.
-You can also turn them on in **Settings → General → Approval Notifications**, which is also where
-you set how much a notification says:
-
-| Level | A notification for one new request shows |
-|---|---|
-| `minimal` | "1 approval pending" and nothing else |
-| `standard` | adds the connector and whether it is a read or a write |
-| `detailed` | also adds the request's title, for example "Send email to alice@example.com" — which can put private content on your lock screen |
-
-`web.notifications.detail` is `standard` in a fresh `settings.yaml`; if the key is missing, the
-level is `minimal`. `web.notifications.enabled: false` turns off the title count, the announcements
-and the notifications together.
-
-### Organization deployments: push notifications
-
-An organization deployment has no title count or tab notifications. It has **web push** instead,
-which reaches a phone or a browser whose PrivacyFence tab is closed:
+PrivacyFence sends **web push** notifications, which reach a phone or a browser whose PrivacyFence
+tab is closed:
 
 - right after you decide a request, the Approvals page offers to turn notifications on; on an
   iPhone or iPad, add PrivacyFence to your Home Screen first (the page says so);
 - a notification arrives when a new request is waiting for you, at most one every 5 seconds, and
   tapping it opens the Approvals page;
-- it always says only "1 approval pending" (or "N approvals pending"), the `minimal` level above,
-  whatever else you could see on the page;
+- it always says only "1 approval pending" (or "N approvals pending"), whatever else you could
+  see on the page;
 - it travels through your browser's push service (Apple's, Google's, Mozilla's or Microsoft's),
   encrypted so that service cannot read it. Your organization can turn push off for everyone.
 
@@ -649,12 +615,12 @@ in [ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md).
 
 When step-up is on, approving asks for your passkey (Touch ID, Face ID, Windows Hello, a security
 key, or your phone) — proof that a person, not a program on your computer, made the decision. It is
-on by default on installs from the macOS, Windows and Linux installers, with the scope
+on by default in single-user mode, and an administrator turns it on for a server, with the scope
 `writes_and_pii_reads`: every approved write, and every read the PII check flagged. Denying never
 needs a passkey. A batch approved with **Approve selected** needs one prompt for the whole set.
 
-Add a passkey at **Security** (`/security`); on a packaged install the companion app walks you
-through adding the first one. Any authenticator that checks your PIN, fingerprint or face works:
+Add a passkey at **Security** (`/security`); on a single-user install the setup code leads you
+there. Any authenticator that checks your PIN, fingerprint or face works:
 one built into the device, a USB or NFC security key, or your phone over the browser's QR-code flow
 (see [ADR 0055](adr/0055-step-up-passkey-enrollment-accepts-any-authenticator.md)). To use the one
 built into Windows, set up Windows Hello first (**Settings → Accounts → Sign-in options**, add a

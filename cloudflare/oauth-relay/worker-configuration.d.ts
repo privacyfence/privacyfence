@@ -1,5 +1,5 @@
 // Ambient binding types for this Worker, matching wrangler.toml exactly. Committed by hand: the
-// bindings are fixed and documented in docs/downloads-and-release-kpi.md's "Cloudflare resources"
+// bindings are fixed and documented in docs/release-archive.md's "Cloudflare resources"
 // table; regenerate with `npx wrangler types` instead if a binding is ever added or renamed.
 
 interface Env {

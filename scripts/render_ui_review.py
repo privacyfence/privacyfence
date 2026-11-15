@@ -14,10 +14,9 @@ Writes PNGs into DIR, plus an ``index.html`` that lays them out side by side:
 - ``<page>-<width>-<theme>.png`` for /approvals (and again with two rows selected and "Deny
   selected with a note…" open, ``approvals-note``), one approval card of each kind (and the write
   and read cards again with the deny note panel open, ``card-<kind>-note``), the PII
-  confirmation and the choice dialog, every /settings section (an org admin's six, and local
-  mode's Connectors), /connect (and its Telegram sign-in at each step), /security, and the
-  fallback pages with no shell (no longer pending, preparing, not authorized, local mode's
-  /security), from
+  confirmation dialog, every /settings section (an org admin's five), /connect (and its Telegram
+  sign-in at each step), /security, and the fallback pages with no shell (no longer pending,
+  preparing, not authorized, /security), from
   tests/integration/ui_review_capture.py, which this script runs with pytest so the pages come
   from the same in-process servers the browser tests use.
 

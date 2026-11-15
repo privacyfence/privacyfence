@@ -526,42 +526,34 @@ class TestUpstreamDomains:
 
 
 class TestPolicy:
-    def test_policy_local_is_always_enabled_365(self):
-        policy = scoped_tokens.policy_from_org_config({"scoped_tokens": {"enabled": False, "max_days": 5}}, org_mode=False)
-        assert policy == ScopedTokenPolicy(True, 365, True)
-
     def test_policy_org_defaults_off_90_and_clamps_bad_max_days(self, caplog):
         from_cfg = scoped_tokens.policy_from_org_config
-        assert from_cfg({}, org_mode=True) == ScopedTokenPolicy(False, 90)
-        assert from_cfg({"scoped_tokens": "yes"}, org_mode=True) == ScopedTokenPolicy(False, 90)
-        assert from_cfg({"scoped_tokens": {"enabled": True}}, org_mode=True) == ScopedTokenPolicy(True, 90)
-        assert from_cfg({"scoped_tokens": {"enabled": "true"}}, org_mode=True).enabled is False
-        assert from_cfg({"scoped_tokens": {"enabled": True, "max_days": 30}}, org_mode=True) == ScopedTokenPolicy(True, 30)
+        assert from_cfg({}) == ScopedTokenPolicy(False, 90)
+        assert from_cfg({"scoped_tokens": "yes"}) == ScopedTokenPolicy(False, 90)
+        assert from_cfg({"scoped_tokens": {"enabled": True}}) == ScopedTokenPolicy(True, 90)
+        assert from_cfg({"scoped_tokens": {"enabled": "true"}}).enabled is False
+        assert from_cfg({"scoped_tokens": {"enabled": True, "max_days": 30}}) == ScopedTokenPolicy(True, 30)
         for bad in (0, 366, "30", 1.5, True, None):
-            assert from_cfg({"scoped_tokens": {"enabled": True, "max_days": bad}}, org_mode=True).max_days == 90
+            assert from_cfg({"scoped_tokens": {"enabled": True, "max_days": bad}}).max_days == 90
         assert "scoped_tokens.max_days" in caplog.text
-
-    def test_local_policy_allows_ai_proposals(self):
-        policy = scoped_tokens.policy_from_org_config({}, org_mode=False)
-        assert policy.allow_ai_proposals is True
 
     def test_org_policy_needs_allow_ai_proposals_true(self):
         from_cfg = scoped_tokens.policy_from_org_config
-        assert from_cfg({"scoped_tokens": {"enabled": True}}, org_mode=True).allow_ai_proposals is False
-        on = from_cfg({"scoped_tokens": {"enabled": True, "allow_ai_proposals": True}}, org_mode=True)
+        assert from_cfg({"scoped_tokens": {"enabled": True}}).allow_ai_proposals is False
+        on = from_cfg({"scoped_tokens": {"enabled": True, "allow_ai_proposals": True}})
         assert on.allow_ai_proposals is True
-        off = from_cfg({"scoped_tokens": {"enabled": True, "allow_ai_proposals": False}}, org_mode=True)
+        off = from_cfg({"scoped_tokens": {"enabled": True, "allow_ai_proposals": False}})
         assert off.allow_ai_proposals is False
 
     def test_org_policy_ignores_allow_ai_proposals_without_enabled(self):
         for section in ({"allow_ai_proposals": True}, {"enabled": False, "allow_ai_proposals": True}):
-            policy = scoped_tokens.policy_from_org_config({"scoped_tokens": section}, org_mode=True)
+            policy = scoped_tokens.policy_from_org_config({"scoped_tokens": section})
             assert policy.allow_ai_proposals is False
 
     def test_org_policy_warns_on_non_bool_allow_ai_proposals(self, caplog):
         for bad in ("true", 1, None):
             policy = scoped_tokens.policy_from_org_config(
-                {"scoped_tokens": {"enabled": True, "allow_ai_proposals": bad}}, org_mode=True,
+                {"scoped_tokens": {"enabled": True, "allow_ai_proposals": bad}},
             )
             assert policy.allow_ai_proposals is False
         assert "scoped_tokens.allow_ai_proposals must be true or false; using false" in caplog.text

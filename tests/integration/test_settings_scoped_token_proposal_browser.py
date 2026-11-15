@@ -21,7 +21,7 @@ pytestmark = pytest.mark.browser
 
 HOSTILE = "<img src=x onerror=\"window.__pwned = true\">"
 DATA = {
-    "delivery": "companion", "max_days": 365, "default_days": 90, "warn_days": 14,
+    "delivery": "once", "max_days": 365, "default_days": 90, "warn_days": 14,
     "tokens": [], "rules": [], "tools": [{"connector": "gmail", "tools": ["gmail_get_message"]}],
     "auto_tools": [], "scope_groups": [],
     "proposals": [{"id": "p1", "label": "Nightly digest", "agent_label": "Claude", "expires_at": 4_000_000_000}],

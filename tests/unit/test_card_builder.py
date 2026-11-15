@@ -10,9 +10,8 @@ import base64
 import html
 import re
 
-import pytest
 
-from privacyfence import agent_label, approval_icons, card_builder
+from privacyfence import approval_icons, card_builder
 from privacyfence.agent_identity import (
     REGISTRY,
     UNKNOWN_AGENT,
@@ -23,12 +22,6 @@ from privacyfence.agent_identity import (
 )
 from privacyfence.approval_window_html import NARROW, WIDE
 from tests.unit.test_pdf_render import encrypted_pdf, text_pdf
-
-
-@pytest.fixture(autouse=True)
-def _org_mode_labels(monkeypatch):
-    """The tiered labels here are org mode's; local mode's "Undetected" is ADR 0088."""
-    monkeypatch.setattr(agent_label, "_local_mode", False)
 
 
 class TestReadingTimeLabel:
@@ -391,18 +384,6 @@ class TestAgentTierOnCard:
         assert "pf-agent-claim" not in row
         assert "Not verified" in row
         assert "Claude" not in TestAgentDisplayName._without_stylesheet(doc)
-
-    def test_local_mode_renders_undetected_with_no_claim_or_badge(self, monkeypatch):
-        # ADR 0088: every local-mode request is "Undetected", whatever it claims.
-        monkeypatch.setattr(agent_label, "_local_mode", True)
-        for agent in (CLAIMED_CHATGPT, UNKNOWN_AGENT, identify("claude-exfil", "", AgentSource.CLIENT_INFO)):
-            row = _agent_row(self._card(agent))
-            assert 'data-agent-tier="undetected"' in row
-            assert '<span class="pf-agent-name">Undetected</span>' in row
-            assert "Not verified" not in row
-            assert "pf-agent-glyph" not in row
-            assert "pf-agent-claim" not in row
-            assert "ChatGPT" not in row and "claude-exfil" not in row
 
     def test_unmatched_name_renders_unknown_with_the_raw_claim(self):
         agent = identify("claude-exfil", "", AgentSource.CLIENT_INFO)

@@ -5,7 +5,7 @@ OAuth app (client id/secret) is organization-level config; the resulting
 access token + cloud id are per-user, shared with the Confluence client.
 
 Required config keys:
-  access_token – OAuth bearer token from atlassian_oauth.authorize_interactive
+  access_token – OAuth bearer token from the Atlassian OAuth sign-in (atlassian_oauth)
   cloud_id     – the Atlassian site's cloud id, used to build the
                  api.atlassian.com/ex/jira/{cloud_id} proxy URL
   site_url     – the human-facing site URL (for issue links), optional
@@ -236,7 +236,7 @@ class JiraClient:
 
         if not access_token or not cloud_id:
             raise JiraClientError(
-                "Jira is not authenticated. Use Authenticate… in PrivacyFence Settings."
+                "Jira is not authenticated. Connect Jira on the Connect page (/connect)."
             )
 
         self._users = user_directory or AtlassianUserDirectory(cloud_id=cloud_id)

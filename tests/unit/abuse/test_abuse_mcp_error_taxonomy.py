@@ -32,6 +32,8 @@ from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
 
+from ...helpers import token_verifier
+
 TOKEN = "mcp-error-taxonomy-test-token"
 
 
@@ -72,7 +74,7 @@ class BoomConnector(Connector):
 @contextlib.asynccontextmanager
 async def _session_calling(exc_factory):
     dispatcher = McpDispatcher(lambda: {"boom": BoomConnector(exc_factory)})
-    app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+    app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
     transport = httpx2.ASGITransport(app=app)
 
     async with mcp_lifespan(session_manager):

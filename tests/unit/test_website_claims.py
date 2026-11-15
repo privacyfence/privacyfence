@@ -42,7 +42,7 @@ def test_security_has_the_limitations_section():
     section = re.search(rf'<section [^>]*id="{LIMITATIONS_ID}".*?</section>', page, flags=re.DOTALL)
     assert section, "/security/ has no limitations section"
     text = section.group(0)
-    for needle in ("certification", "SLA", "root", "compliant", "local mode"):
+    for needle in ("certification", "SLA", "root", "compliant"):
         assert needle in text, f"the limitations section no longer mentions {needle!r}"
 
 

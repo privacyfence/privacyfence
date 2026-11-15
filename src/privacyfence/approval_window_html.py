@@ -69,7 +69,7 @@ from collections.abc import Callable, Sequence
 from html import escape as _html_escape
 from pathlib import Path
 
-from .agent_label import NEUTRAL_SUBJECT, NOT_VERIFIED, TIER_ATTESTED, TIER_UNDETECTED, AgentLabel, unknown_agent_label
+from .agent_label import NEUTRAL_SUBJECT, NOT_VERIFIED, TIER_ATTESTED, AgentLabel, unknown_agent_label
 from .deny_note_html import PANEL_JS as _DENY_NOTE_JS
 from .deny_note_html import panel_html as _deny_note_panel_html
 from .design_css import DOCUMENT_CSS
@@ -741,10 +741,6 @@ def _button_row_html(accept_all_labels: list[str]) -> str:
 # "everything that was ever going to render has rendered" the way there
 # would be for a document with real external resources.
 #
-# window.__pfEnableButtons exposes the same function to a host that needs to
-# force the buttons on; nothing in the web UI calls it. Safe to call more
-# than once (removeAttribute/setAttribute are idempotent).
-#
 # The deny note panel (deny_note_html.py, whose PANEL_JS runs first in the
 # same <script>): "Deny with a note…" ([data-pf-note-open]) opens and closes
 # it, and its "Deny and send" posts a deny with the panel's {note, intent}
@@ -789,7 +785,6 @@ _JS = """
       buttons[i].setAttribute('tabindex', '0');
     }
   }
-  window.__pfEnableButtons = enableButtons;
 
   // A capped value (.pf-clamp, see _kv_rows_html) that really is cut off at
   // the width it rendered at becomes a button that opens it in place; one
@@ -1114,16 +1109,8 @@ def _agent_html(label: AgentLabel, icon_data_uri: str) -> str:
     any mark, the claim worded as a claim, and a "Not verified" badge. The
     mark is dropped here for anything not attested even if a caller passed
     one -- the rule lives where the markup is written, not only upstream.
-    Undetected (every local-mode request, ADR 0088): the word "Undetected"
-    alone -- no glyph, no claim, no badge."""
+    """
     tier = label.tier
-    if tier == TIER_UNDETECTED:
-        return (
-            f'<div class="pf-agent pf-agent-{tier}" data-agent-tier="{tier}">'
-            '<span class="pf-agent-by">Requested by</span>'
-            f'<span class="pf-agent-name">{_html_escape(label.headline)}</span>'
-            '</div>'
-        )
     attested = tier == TIER_ATTESTED
     if attested and icon_data_uri:
         mark = f'<img class="pf-agent-icon" src="{_html_escape(icon_data_uri, quote=True)}" alt="">'

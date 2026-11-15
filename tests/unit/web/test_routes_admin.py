@@ -18,7 +18,6 @@ from starlette.testclient import TestClient
 from privacyfence import (
     admin_config,
     connector_configs,
-    daemon_main,
     data_format,
     group_membership,
     oauth_apps,
@@ -94,12 +93,12 @@ class World:
     def __init__(self, *, step_up=None, registry=None, settings=None, settings_path=""):
         self.settings = settings if settings is not None else {}
         self.bundle = json.loads(json.dumps(BUNDLE))
-        self.admin = admin_config.ensure(self.bundle, mode="org", single_user=False)[0]
+        self.admin = admin_config.ensure(self.bundle, single_user=False)[0]
         # An organization server's own app is a stored connector config, not a bundle section.
         stored = connector_configs.legacy_path(connector_configs.default_org_dir(), "slack")
         stored.parent.mkdir(parents=True, exist_ok=True)
         stored.write_text(json.dumps({"source": "legacy-bundle", "fields": BUNDLE["slack"]}), encoding="utf-8")
-        self.org_config = oauth_apps.effective_org_config(self.bundle, self.admin, mode="org")
+        self.org_config = oauth_apps.effective_org_config(self.bundle, self.admin)
         self.sessions = org_session.OrgSessionStore()
         self.registry = registry if registry is not None else Registry()
         self.routes = routes_admin.build_org_routes(
@@ -346,25 +345,6 @@ class TestAudit:
         assert world.post("withdraw_service", {"service": "slack"}, csrf).status_code == 200
         assert audit == [] and world.registry.evicted == evicted
 
-    def test_local_mode_audits_as_the_local_principal(self, audit):
-        world = World()
-        r = routes_admin._dispatch(
-            ADMIN, "withdraw_service", {"service": "slack"}, mode="local", bundle=world.bundle,
-            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
-            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
-        )
-        assert r.status_code == 200
-        assert audit == [("carol", "Stopped offering Slack (principal=local)")]
-
-    def test_an_org_only_action_is_unknown_in_local_mode(self):
-        world = World()
-        r = routes_admin._dispatch(
-            ADMIN, "set_web_push", {"enabled": False}, mode="local", bundle=world.bundle,
-            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
-            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
-        )
-        assert r.status_code == 404
-
 
 class TestAgentRuntimes:
     BODY = {"enabled": True, "project_id": "proj1", "mcp_url": "", "credential_type": "httpBearerAuth"}
@@ -412,15 +392,6 @@ class TestAgentRuntimes:
         spec = routes_admin.ADMIN_ACTIONS["set_agent_runtimes"]
         assert (spec.modes, spec.sensitive, spec.applies) == (frozenset({"org"}), True, "restart")
         assert routes_admin.RESTART_LABELS["agent_runtimes"] == "Agent runtimes"
-
-    def test_it_is_unknown_in_local_mode(self):
-        world = World()
-        r = routes_admin._dispatch(
-            ADMIN, "set_agent_runtimes", self.BODY, mode="local", bundle=world.bundle,
-            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
-            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
-        )
-        assert r.status_code == 404
 
     def test_it_needs_a_passkey_then_saves_and_flags_a_restart(self):
         world = World()
@@ -666,15 +637,6 @@ class TestPrivacyActions:
         _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "block"}, csrf)
         assert world.registry.evicted == 0 and relay_checks == []
 
-    def test_a_privacy_action_is_unknown_in_local_mode(self):
-        world = World()
-        r = routes_admin._dispatch(
-            ADMIN, "set_default_policy", {"group": "privacy", "policy": "allow"}, mode="local", bundle=world.bundle,
-            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
-            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
-        )
-        assert r.status_code == 404
-
 
 class TestPrivacyAndStatsState:
     def test_privacy_rows_read_the_install_wide_settings(self, tmp_path):
@@ -687,7 +649,7 @@ class TestPrivacyAndStatsState:
         assert (privacy["pii_enabled"], privacy["pii_ip"], privacy["pii_financial"]) == (True, True, True)
 
     def test_calendar_and_the_gmail_signature_are_left_out(self):
-        # toggle_calendar_free_busy and toggle_gmail_signature are local-mode settings.
+        # toggle_calendar_free_busy and toggle_gmail_signature are per-install settings.
         world = World()
         world.sign_in(ADMIN)
         privacy = world.client.get("/api/admin/state").json()["privacy"]
@@ -854,12 +816,6 @@ class TestGroupMembership:
         body = {"group": "other@acme.com", "audience": "mgmt"}
         r = _passkey_post(world, "approve_group_membership", body, csrf)
         assert (r.status_code, r.json()) == (409, {"error": "Nothing is waiting for that approval."})
-
-    def test_local_mode_does_not_have_the_actions(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        for action in ("approve_group_membership", "decline_group_membership"):
-            assert world.post(action, {"group": "g@x.com", "audience": "mgmt"}, csrf).status_code == 404
 
 
 class TestRouteClassification:
@@ -1435,287 +1391,6 @@ class TestConnectorConfigPageShim:
         assert out["clicked"] is True
 
 
-# --------------------------------------------------------------------------- #
-# Local mode
-# --------------------------------------------------------------------------- #
-
-LOCAL_BUNDLE = {"slack": {"client_id": "slack-id", "client_secret": SECRET}}
-LOCAL_ORIGIN = "http://localhost"
-
-
-class LocalWorld:
-    def __init__(self, controller, monkeypatch, *, step_up=None, require_human_session=False):
-        from privacyfence.web.session_auth import LocalSessionStore
-
-        self.bundle = json.loads(json.dumps(LOCAL_BUNDLE))
-        monkeypatch.setattr(daemon_main, "load_org_config", lambda: self.bundle)
-        self.admin = admin_config.ensure(self.bundle, mode="local", single_user=False)[0]
-        self.org_config = oauth_apps.effective_org_config(self.bundle, self.admin, mode="local")
-        self.controller = controller
-        self.refreshed = 0
-
-        def refreshed():
-            self.refreshed += 1
-            return {}
-
-        monkeypatch.setattr(controller, "refresh_connectors", refreshed)
-        self.sessions = LocalSessionStore()
-        self.routes = routes_admin.build_routes(
-            controller=controller, sessions=self.sessions,
-            step_up=step_up or StepUpConfig(rp_id="localhost"), step_up_origin=LOCAL_ORIGIN,
-            require_human_session=require_human_session, startup_admin=self.admin, org_config=self.org_config,
-        )
-        self.client = TestClient(Starlette(routes=self.routes), base_url=LOCAL_ORIGIN)
-
-    def sign_in(self, provenance=None):
-        from privacyfence.web.session_auth import PROVENANCE_HUMAN, SESSION_COOKIE
-
-        session_id = self.sessions.create(provenance=provenance or PROVENANCE_HUMAN)
-        self.client.cookies.set(SESSION_COOKIE, session_id)
-        return session_id
-
-    def post(self, action, body, csrf, **kwargs):
-        return self.client.post(f"/api/admin/{action}", json={**body, "csrf": csrf}, **kwargs)
-
-
-@pytest.fixture
-def local_controller(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
-    from privacyfence import resource_names, update_checker
-    from privacyfence import settings_controller as sc
-
-    monkeypatch.setattr(resource_names, "_cache_file", lambda: tmp_path / "resource_name_cache.json")
-    monkeypatch.setattr(update_checker, "_cache_file", lambda: tmp_path / "update_check_cache.json")
-    monkeypatch.setattr(sc, "check_for_update", lambda **kw: None)
-    org_dir = tmp_path / "org"
-    org_dir.mkdir()
-    monkeypatch.setattr(sc, "org_dir", lambda: org_dir)
-    config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept: {}\nconnectors: {}\n", encoding="utf-8")
-    return sc.SettingsController(
-        str(config_path), connectors=[], connector_host=SimpleNamespace(set_connectors=lambda conns: None),
-    )
-
-
-def _enrol_local():
-    from privacyfence.principal import LOCAL_PRINCIPAL
-
-    _enrol(LOCAL_PRINCIPAL)
-
-
-class TestLocalAccess:
-    def test_no_session_is_refused(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        assert world.client.get("/api/admin/state").status_code == 401
-        assert world.client.post("/api/admin/withdraw_service", json={"service": "slack"}).status_code == 401
-
-    def test_org_only_and_unknown_actions_are_404(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        for action in ("set_web_push", "set_authz", "set_auto_provisioning", "not_an_action", "set_default_policy"):
-            assert world.post(action, {}, csrf).status_code == 404, action
-
-    def test_csrf_and_origin_are_checked(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        assert world.post("clear_rooms", {}, "wrong").status_code == 401
-        assert world.post("clear_rooms", {}, csrf, headers={"Origin": "https://evil.example"}).status_code == 403
-        assert world.client.post("/api/admin/clear_rooms", content=b"{").status_code == 400
-
-    def test_unknown_body_keys_are_refused(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        assert world.post("withdraw_service", {"service": "slack", "bundle": {}}, csrf).status_code == 400
-
-    def test_the_state_carries_the_controller_error_and_no_secret(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        world.sign_in()
-        local_controller.error = "something to read"
-        r = world.client.get("/api/admin/state")
-        assert r.json()["error"] == "something to read"
-        assert SECRET not in r.text
-        assert "download_delivery" not in r.json() and "relay_status" not in r.json()
-        assert r.json()["upgrade_ready"] == data_format.status()
-
-
-class TestLocalHumanSession:
-    def test_an_unattested_session_cannot_make_a_sensitive_change(self, local_controller, monkeypatch):
-        from privacyfence.web.session_auth import PROVENANCE_UNATTESTED
-
-        world = LocalWorld(local_controller, monkeypatch, require_human_session=True)
-        csrf = world.sign_in(PROVENANCE_UNATTESTED)
-        r = world.post("set_unattended_sessions", {"enabled": True}, csrf)
-        assert (r.status_code, r.json()["error"]) == (403, "human_session_required")
-
-    def test_a_non_sensitive_change_needs_no_human_session(self, local_controller, monkeypatch):
-        from privacyfence.web.session_auth import PROVENANCE_UNATTESTED
-
-        world = LocalWorld(local_controller, monkeypatch, require_human_session=True)
-        csrf = world.sign_in(PROVENANCE_UNATTESTED)
-        assert world.post("withdraw_service", {"service": "slack"}, csrf).status_code == 200
-
-    def test_an_attested_session_reaches_the_passkey_step(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch, require_human_session=True)
-        _enrol_local()
-        csrf = world.sign_in()
-        assert world.post("set_unattended_sessions", {"enabled": True}, csrf).status_code == 428
-
-
-class TestLocalApplying:
-    def test_offer_service_saves_refreshes_the_startup_dict_and_the_connectors(
-        self, local_controller, monkeypatch, audit, relay_checks
-    ):
-        world = LocalWorld(local_controller, monkeypatch)
-        _enrol_local()
-        csrf = world.sign_in()
-        shared = world.org_config
-        assert world.post("withdraw_service", {"service": "slack"}, csrf).status_code == 200
-        assert "slack" not in shared and world.refreshed == 1
-        r = _local_passkey_post(world, "offer_service", {"service": "slack"}, csrf)
-        assert r.status_code == 200
-        assert world.org_config is shared and shared["slack"]["client_id"] == "slack-id"
-        assert world.refreshed == 2
-        assert admin_config.load()["services"]["slack"]["offered"] is True
-        assert audit[-1] == ("local", "Offered Slack (principal=local)")
-        assert relay_checks == []
-
-    def test_a_sensitive_change_needs_a_passkey_whatever_step_up_says(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        r = world.post("set_unattended_sessions", {"enabled": True}, csrf)
-        assert (r.status_code, r.json()) == (
-            403, {"error": "Add a passkey on /security first.", "enroll_url": "/security"},
-        )
-
-    def test_a_restart_action_is_listed_until_the_restart(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        _enrol_local()
-        csrf = world.sign_in()
-        r = _local_passkey_post(world, "set_unattended_sessions", {"enabled": True}, csrf)
-        assert r.status_code == 200
-        assert r.json()["restart_needed"] == ["Unattended sessions"]
-        assert world.refreshed == 0
-
-    def test_a_bundle_that_fails_to_load_reads_as_empty(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        world.sign_in()
-
-        def broken():
-            raise daemon_main.org_mode.ConfigurationError("broken")
-
-        monkeypatch.setattr(daemon_main, "load_org_config", broken)
-        assert world.client.get("/api/admin/state").status_code == 200
-
-
-def _local_passkey_post(world, action, body, csrf):
-    first = world.post(action, body, csrf)
-    assert first.status_code == 428, first.text
-    with patch.object(wa.webauthn, "verify_authentication_response", return_value=VERIFIED):
-        return world.post(action, {**body, "webauthn_assertion": {"id": "Y3JlZC0x"}}, csrf)
-
-
-class TestLocalRoomsUpload:
-    URL = "/api/admin/rooms/upload"
-
-    def test_it_replaces_the_rooms_with_step_up(self, local_controller, monkeypatch, audit):
-        world = LocalWorld(local_controller, monkeypatch)
-        _enrol_local()
-        csrf = world.sign_in()
-        r = _passkey_upload(world.client, self.URL, csrf, ROOMS_BYTES)
-        assert r.status_code == 200
-        assert r.json()["rooms"]["count"] == 1 and r.json()["error"] == ""
-        assert audit[-1] == ("local", "Replaced the room directory (1 rooms) (principal=local)")
-        assert world.refreshed == 1
-
-    def test_a_passkey_is_always_needed(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        r = _upload(world.client, self.URL, csrf, ROOMS_BYTES)
-        assert (r.status_code, r.json()["error"]) == (403, "Add a passkey on /security first.")
-
-    def test_it_refuses_without_a_human_session(self, local_controller, monkeypatch):
-        from privacyfence.web.session_auth import PROVENANCE_UNATTESTED
-
-        world = LocalWorld(local_controller, monkeypatch, require_human_session=True)
-        csrf = world.sign_in(PROVENANCE_UNATTESTED)
-        r = _upload(world.client, self.URL, csrf, ROOMS_BYTES)
-        assert (r.status_code, r.json()["error"]) == (403, "human_session_required")
-        assert admin_config.load()["rooms"] == []
-
-    def test_no_session_and_bad_csrf(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        assert _upload(world.client, self.URL, "x", ROOMS_BYTES).status_code == 401
-        world.sign_in()
-        assert _upload(world.client, self.URL, "wrong", ROOMS_BYTES).status_code == 401
-
-    def test_a_non_room_file_and_a_large_file_are_refused(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        _enrol_local()
-        csrf = world.sign_in()
-        refused = _upload(world.client, self.URL, csrf, b"[1, 2]")  # no passkey asked for first
-        assert (refused.status_code, refused.json()["error"]) == (
-            400, "The file is not a room directory written by sync_room_directory.py.",
-        )
-        assert _upload(world.client, self.URL, csrf, b"not json").status_code == 400
-        big = b'{"rooms": [], "pad": "' + b"x" * routes_admin.MAX_ROOMS_UPLOAD_BYTES + b'"}'
-        assert _upload(world.client, self.URL, csrf, big).json() == {"error": "The file is larger than 2 MB."}
-
-
-class TestLocalBundleUpload:
-    URL = "/api/admin/org_config/upload"
-
-    def _signed(self):
-        from privacyfence import org_bundle_signing
-
-        private_key, _ = org_bundle_signing.generate_keypair()
-        return json.dumps(org_bundle_signing.sign_bundle({"version": 1, "org_name": "Acme"}, private_key)).encode()
-
-    def test_a_first_signed_bundle_needs_confirmation_before_step_up(self, local_controller, monkeypatch):
-        from privacyfence import settings_controller as sc
-
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        r = _upload(world.client, self.URL, csrf, self._signed())
-        assert (r.status_code, r.json()["error"]) == (409, "pin_confirmation_required")
-        assert not (sc.org_dir() / "org_bundle.json").exists()
-
-    def test_a_passkey_is_always_needed(self, local_controller, monkeypatch):
-        from privacyfence import settings_controller as sc
-
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        r = _upload(world.client, self.URL, csrf, b'{"version": 1}')
-        assert (r.status_code, r.json()["error"]) == (403, "Add a passkey on /security first.")
-        assert not (sc.org_dir() / "org_bundle.json").exists()
-
-    def test_it_installs_with_step_up_and_answers_with_the_admin_state(self, local_controller, monkeypatch):
-        from privacyfence import settings_controller as sc
-
-        world = LocalWorld(local_controller, monkeypatch)
-        _enrol_local()
-        csrf = world.sign_in()
-        # A bundle that still carries settings the admin config owns: the state says they are ignored.
-        raw = json.dumps({"version": 1, "web_push": {"enabled": False}}).encode()
-        r = _passkey_upload(world.client, self.URL, csrf, raw)
-        assert r.status_code == 200
-        state = r.json()
-        assert "services" in state and "restart_needed" in state
-        assert "are ignored" in state["error"]
-        assert (sc.org_dir() / "org_bundle.json").exists()
-
-    def test_it_refuses_without_a_human_session(self, local_controller, monkeypatch):
-        from privacyfence.web.session_auth import PROVENANCE_UNATTESTED
-
-        world = LocalWorld(local_controller, monkeypatch, require_human_session=True)
-        csrf = world.sign_in(PROVENANCE_UNATTESTED)
-        r = _upload(world.client, self.URL, csrf, b'{"version": 1}')
-        assert (r.status_code, r.json()["error"]) == (403, "human_session_required")
-
-    def test_it_is_classified_as_bespoke_sensitive(self):
-        assert routes_admin.ROUTE_CLASSIFICATION[self.URL] == "bespoke-sensitive"
-
-
 def _active_nav(page: str) -> list[str]:
     return sorted(set(re.findall(r'<a class="pf-shell-nav-item active" href="([^"]+)" aria-current="page">', page)))
 
@@ -1756,22 +1431,6 @@ class TestAdminPage:
         assert '"restart_needed"' in r.text and '"relay_status"' in r.text
         initial = r.text.split("window.__pfInitialState = ")[1].split(";</script>")[0]
         assert not {"connectors", "telegram_auth", "peek_auth"} & set(json.loads(initial))
-
-    def test_a_local_visitor_with_no_session_is_refused(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        assert world.client.get("/admin").status_code == 401
-
-    def test_the_local_owner_gets_the_page_with_the_admin_nav_item_active(self, local_controller, monkeypatch):
-        world = LocalWorld(local_controller, monkeypatch)
-        csrf = world.sign_in()
-        r = world.client.get("/admin")
-        assert r.status_code == 200
-        assert _active_nav(r.text) == ["/admin"]
-        assert "var ENDPOINT = '/api/admin';" in r.text
-        assert f"var CSRF = '{csrf}';" in r.text
-        assert '"org_config": true' in r.text
-        assert '"relay_status"' not in r.text
-        assert SECRET not in r.text
 
 
 class TestRecordGroupMembershipAudit:

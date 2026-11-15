@@ -7,8 +7,8 @@ public, so they are never committed: CI supplies them as the TELEGRAM_API_ID/TEL
 secrets, and every build that ships Telegram support writes them into the git-ignored
 ``src/privacyfence/_telegram_credentials.py`` right before packaging. This script is that one
 generator -- scripts/build_dmg.sh, scripts/build_deb.sh, scripts/build_installer.ps1 and
-.github/workflows/publish-pypi.yml all call it rather than each carrying their own heredoc. Every
-distribution, PyPI included, ships the credentials: ADR 0040.
+.github/workflows/build.yml's `build-org-image` all call it rather than each carrying their own
+heredoc. Every distribution ships the credentials: ADR 0040.
 
 Subcommands:
 
@@ -26,7 +26,7 @@ Subcommands:
     this is what proves that still works. Missing with ``--require`` (a stable tag) exits 1;
     missing without it prints a GitHub Actions ``::warning::`` and exits 0.
 
-Stdlib only, like scripts/r2_release.py: the publish-pypi build job calls it before installing
+Stdlib only, like scripts/r2_release.py: build.yml's `build-org-image` job calls it before installing
 PrivacyFence.
 """
 from __future__ import annotations

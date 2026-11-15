@@ -7,6 +7,8 @@ pre-release access question, and give Phase 7 a real gate", merged in
 [#363](https://github.com/privacyfence/privacyfence/pull/363)). Implemented; the decision
 ratified behavior that was already live.
 
+**Superseded by [ADR 0305](0305-the-download-page-and-worker-are-retired.md), 2026-11-15.**
+
 ## Context
 
 Every tag uploads its artifacts to the Cloudflare R2 bucket `privacyfence-releases`, left at R2's

@@ -26,7 +26,7 @@ TOOLS = {
     "tasks": ["tasks_list_tasks"],
 }
 DATA = {
-    "delivery": "companion", "max_days": 365, "default_days": 90, "warn_days": 14,
+    "delivery": "once", "max_days": 365, "default_days": 90, "warn_days": 14,
     "tokens": [
         {"id": "st-1", "label": "Daily sync", "created_at": 0, "expires_at": 30 * DAY, "days_left": 20,
          "expiring_soon": False, "expired": False,
@@ -360,7 +360,7 @@ UPSTREAM_DATA = {
 def upstream_page(browser):
     pg = browser.new_page()
     pg.set_content(build_html(
-        _make_state(), mode="org", initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(UPSTREAM_DATA),
+        _make_state(), initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(UPSTREAM_DATA),
     ))
     yield pg
     pg.close()
@@ -466,7 +466,7 @@ def test_a_page_without_gated_tools_shows_no_fieldset(browser):
     data["upstreams"][0]["gated_tools"] = []
     pg = browser.new_page()
     try:
-        pg.set_content(build_html(_make_state(), mode="org", initial_section="scoped_tokens", scoped_tokens=data))
+        pg.set_content(build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=data))
         assert pg.query_selector("[data-st-gated-for]") is None
     finally:
         pg.close()
@@ -479,7 +479,7 @@ def test_duplicate_leaves_gated_tools_unticked(browser):
         {"name": "kh_propose_change", "gate": "popup", "effect": "Proposes a change."}]
     pg = browser.new_page()
     try:
-        pg.set_content(build_html(_make_state(), mode="org", initial_section="scoped_tokens", scoped_tokens=data))
+        pg.set_content(build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=data))
         assert "kh_propose_change (writes data)" in pg.inner_text('[data-st-approved]')
         pg.click('[data-st-duplicate="st-1"]')
         assert pg.eval_on_selector_all(

@@ -1,8 +1,7 @@
 """Tests for scripts/changelog_section.py, and for the real CHANGELOG.md it reads.
 
 Imported by file path (importlib) rather than as a package, since scripts/ isn't part of the
-installed ``privacyfence`` distribution -- same pattern as tests/unit/test_r2_release.py and
-tests/unit/test_build_org_bundle.py.
+installed ``privacyfence`` distribution -- same pattern as tests/unit/test_r2_release.py.
 
 Half of this file tests the parser against synthetic changelogs; the other half asserts things
 about the repo's own CHANGELOG.md that would otherwise only be discovered on tag day, when the

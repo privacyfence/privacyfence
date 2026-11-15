@@ -1,7 +1,7 @@
 # Releasing
 
-How a PrivacyFence release is versioned, cut, built, gated and published. For how each artifact is
-built and signed, see [`packaging.md`](packaging.md); for the release gates and the manual checks
+How a PrivacyFence release is versioned, cut, built, gated and published. For the
+organization image, see [`org-mode-docker.md`](org-mode-docker.md#how-the-image-is-built); for the release gates and the manual checks
 every release still needs, see [`release-testing.md`](release-testing.md).
 
 ## Versioning
@@ -39,8 +39,8 @@ cloud container (such as Claude Code on the web) can push branches but not `refs
 
 It needs one secret, `RELEASE_TAG_TOKEN`, and **that secret may not be the `GITHUB_TOKEN`**:
 GitHub does not start a workflow run for an event raised by the `GITHUB_TOKEN`, so a tag pushed
-with it creates the tag, starts neither `build.yml` nor `publish-pypi.yml`, and reports success.
-No artifacts, no R2 upload, no GitHub Release, no error. Use a fine-grained PAT with **Contents:
+with it creates the tag, starts neither `build.yml` nor the publish workflows, and reports success.
+No image, no R2 upload, no GitHub Release, no error. Use a fine-grained PAT with **Contents:
 write** on this repo. A GitHub App installation token minted per run would be the account-owned
 alternative — the same reasoning the R2 credentials get below, a user token stops working when
 that user's access changes — but `release.yml` reads only `secrets.RELEASE_TAG_TOKEN` and has no
@@ -53,18 +53,18 @@ successful release. See [ADR 0021](adr/0021-release-tag-push-never-uses-github-t
 `release.yml` never installs the package or resolves a version through `setuptools_scm`, so its
 `dry_run` only proves the tag/changelog bookkeeping (`r2_release.py channel`,
 `changelog_section.py`, `tag_release.py`'s sequencing guards) — it touches no packaged artifact.
-Every `pytest.mark.packaged` test (the macOS DMG/`.pkg`, Windows installer, and `.deb` lifecycle
-smoke tests — see [`testing-policy.md`'s layer 6](testing-policy.md#layer-6-packaged-artifact)) runs only inside `build.yml`'s
-`build`/`build-windows`/`build-deb` jobs, which otherwise only trigger on an actual tag push, so a
+Every `pytest.mark.packaged` test (the Docker image test and the Ubuntu release smoke test — see
+[`testing-policy.md`'s layer 6](testing-policy.md#layer-6-packaged-artifact)) runs inside `build.yml`'s
+`build-org-image` job, which otherwise only triggers on an actual tag push, so a
 regression only a packaged test catches would otherwise first surface on a real tag — see
 [ADR 0030](adr/0030-preflight-dispatches-build-yml-before-tagging.md).
 
 Before dispatching `release.yml` — dry run or real — dispatch `build.yml` itself
 (`workflow_dispatch`, no inputs) against the exact commit you intend to tag, and confirm `build`,
-`build-windows`, `build-deb`, `build-org-image` (both architectures), and `sbom` all succeed. This is safe to run against an untagged
+`build-org-image` (both architectures) and `sbom` all succeed. This is safe to run against an untagged
 commit: every upload/publish/release step in `build.yml` is gated
 `if: startsWith(github.ref, 'refs/tags/')`, so the run builds and tests every artifact but uploads
-nothing to R2, GitHub Releases, or PyPI — see that job's "Determine version and release channel"
+nothing to R2 or GitHub Releases — see that job's "Determine version and release channel"
 step, which resolves `channel="n/a (not a tag push)"` off a tag. A failure here is fixed on `main`
 like any other CI failure, then the pre-flight is re-run, before `release.yml` is dispatched at all.
 
@@ -79,39 +79,20 @@ which reports *a* tag on the commit being built rather than specifically the one
 the run — so a commit carrying two release tags builds as whichever one `describe` prefers (the
 alphabetically earlier, for two lightweight tags of the same age), not as the tag just pushed. Every job that resolves a version runs
 `scripts/r2_release.py check-tag` before publishing anything — as the first step in each of
-`build.yml`'s jobs, so this fails in the first few seconds instead of after a full artifact set has
-been built; `publish-pypi.yml`'s `build` job runs it after building the sdist/wheel. The fix is
+`build.yml`'s jobs, so this fails in the first few seconds instead of after the image has
+been built; `publish-pypi.yml`'s `build` job runs it after building `privacyfence-sync`. The fix is
 to move the release forward onto a new commit, or to delete the unwanted tag before
 retagging. A version that has already published artifacts stays published; cut the next one. See
 [ADR 0022](adr/0022-one-release-tag-per-commit.md).
-
-**macOS ships one file.** The DMG carries the `.pkg` and the one Claude Desktop extension,
-`PrivacyFence.mcpb` ([ADR 0089](adr/0089-tool-annotations-are-always-truthful.md) removed the
-second one ADR 0087 added), and nothing else; the `.pkg` is never uploaded or attached on its
-own, so releasing the DMG releases all three. The one exception is the MCP registry below: a
-stable GitHub Release also carries that same `PrivacyFence.mcpb` on its own. How each artifact
-is built and signed is [`packaging.md`](packaging.md).
 
 A stable GitHub Release also attaches `privacyfence-sync-plugin.zip`, the recipe-writing skill as a Claude
 plugin: `finalize-release` runs `scripts/build_sync_plugin.py --version <version>`, which stamps the release
 version into the plugin's `plugin.json` and refuses a stale copy of `sync/README.md`
 (ADR 0163).
 
-**The official MCP registry lists every stable release.** `.github/workflows/publish-mcp-registry.yml`
-triggers on the same tag push, waits for `build.yml` to succeed on that commit (the same
-`wait_for_build` gate as PyPI), downloads `PrivacyFence.mcpb` back from the GitHub Release, renders
-`mcpb/server.json.tmpl` with `scripts/mcp_registry_server_json.py` (version, release-asset URL,
-SHA-256) and runs `mcp-publisher publish` as `io.github.privacyfence/privacyfence`. It
-authenticates with GitHub OIDC, so there is no secret to set up and no maintainer's organization
-membership involved; pre-release tags are skipped, and a version already listed is left alone, so
-a re-run (`workflow_dispatch` from the tag) is safe. It is a workflow of its own so a registry
-outage can never hold back `build.yml` or PyPI. A release whose GitHub Release has no `.mcpb`
-(everything before this landed) cannot be listed: GitHub Releases here are immutable. See
-[ADR 0112](adr/0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md).
-
 **The organization Docker image is published for every release, pre-releases included.**
 `.github/workflows/publish-org-image.yml` triggers on the same tag push, waits for `build.yml` to
-succeed on that commit (the same `wait_for_build` gate as PyPI), downloads the two images
+succeed on that commit (the same `wait_for_build` gate as `publish-pypi.yml`), downloads the two images
 `build.yml`'s `build-org-image` jobs built and tested (`org-image-amd64`, `org-image-arm64`),
 pushes them to `ghcr.io/privacyfence/privacyfence-org`, combines them into one multi-architecture
 manifest, applies the tags `scripts/org_image_tags.py` chooses and attaches a GitHub
@@ -122,8 +103,8 @@ pre-release, and its run summary says no floating tag moved. It authenticates wi
 own `GITHUB_TOKEN`, so there is no secret to set up. It rebuilds nothing, so what ships is what the
 image test ran against. A failed publish is rerun with `workflow_dispatch` from the tag, within 30
 days (how long the tested images are kept as workflow artifacts). It is a workflow of its own so a
-GHCR outage can never hold back PyPI, whereas `build-org-image` inside `build.yml` does gate PyPI,
-the MCP registry and the GitHub Release on every tag (see "Packaged-artifact release gating"
+GHCR outage can never hold back the `privacyfence-sync` publish, whereas `build-org-image` inside `build.yml` does gate
+the `privacyfence-sync` publish and the GitHub Release on every tag (see "Packaged-artifact release gating"
 below). See ADRs 0209, 0210, 0215 and 0268 (which amends 0208's stable-only rule).
 
 If the repository restricts allowed Actions, `publish-org-image.yml` needs both
@@ -137,20 +118,18 @@ public packages allowed), then pull it signed out and run
 `gh attestation verify oci://ghcr.io/privacyfence/privacyfence-org:X.Y.Z --owner privacyfence`.
 
 That tag push is what `.github/workflows/build.yml`, `.github/workflows/publish-pypi.yml` **and**
-`.github/workflows/publish-n8n-node.yml` all trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG (which carries the
-macOS `.pkg` installer and the `.mcpb`; `scripts/build_dmg.sh` builds all three), the Windows
-installer and the `.deb` (running each one's own packaged-artifact smoke test, see "Packaged-artifact
-release gating" below) and generates the SBOMs, the second builds the sdist/wheel from the same tag, and the third publishes the n8n node to npm
+`.github/workflows/publish-n8n-node.yml` all trigger on (`on: push: tags: ['v*']`) — the first builds
+and tests the organization image and generates the SBOM (see "Packaged-artifact release gating" below),
+the second builds `privacyfence-sync` from the same tag, and the third publishes the n8n node to npm
 (stable tags only, see "Publishing the n8n node to npm"). The
 workflows trigger independently but no longer publish independently: `publish-pypi.yml`'s and `publish-n8n-node.yml`'s
 `wait_for_build` jobs block every one of their own publish steps on `build.yml`'s run for that same
-commit actually succeeding — see "Packaged-artifact release gating" below. Every one of those
-artifacts always uploads to the private Cloudflare R2 release archive (see "Cloudflare R2 release
-archive" below);
-whether it *also* reaches a public GitHub Release / PyPI/TestPyPI depends on the tag's channel
-(`a`/`b`/`rc` suffix, or none for stable — same PEP 440 short-form scheme `update_checker.py`'s
-beta channel already ranks by): only a stable tag's DMG/`.mcpb`/SBOMs get attached to a public GitHub
-Release and only a stable tag's sdist/wheel reach PyPI/TestPyPI; a pre-release tag still gets a
+commit actually succeeding — see "Packaged-artifact release gating" below. Every artifact `build.yml`
+produces uploads to the private Cloudflare R2 release archive (see "Cloudflare R2 release
+archive" below); whether it *also* reaches a public GitHub Release / PyPI/TestPyPI depends on the tag's
+channel (`a`/`b`/`rc` suffix, or none for stable — same PEP 440 short-form scheme `update_checker.py`'s
+beta channel already ranks by): only a stable tag's SBOMs and sync plugin get attached to a public GitHub
+Release and only a stable tag's `privacyfence-sync` reaches PyPI/TestPyPI; a pre-release tag still gets a
 GitHub Release entry (marked prerelease, so `update_checker.py`'s beta channel — which reads
 exactly that flag — keeps working), just with no files attached to it. The one thing that does need to be
 committed first is the release notes — see "Release notes come from CHANGELOG.md" below. Nothing
@@ -163,25 +142,17 @@ A checkout needs its full tag history for this to resolve correctly — a shallo
 with no `.git/` at all) falls back to `[tool.setuptools_scm]`'s `fallback_version`, a placeholder
 that's never a real shipped version. `.github/workflows/tests.yml` and `build.yml` both pass
 `fetch-depth: 0` to `actions/checkout` for exactly this reason; do the same in any new workflow that
-installs this package. `scripts/build_dmg.sh` and `scripts/build_mcpb.sh` both read the resolved
-version back via `importlib.metadata.version("privacyfence")`, so they require the package to
-already be `pip install -e .`d (both scripts' own prerequisites say so) — same as
-`PrivacyFenceApp.spec`'s `VERSION` and `src/privacyfence/__init__.py`'s `__version__` itself.
-
-`mcpb/shim/package.json`'s `version` field is **not** tied to any of this — leave it as
-`0.0.0-dev`. The shim carries no protocol version of its own to keep in sync with the daemon's (it
-has no tool-schema knowledge at all — see `mcpb/shim/src/index.ts`'s module docstring), so unlike
-the original bridge it replaced, there's nothing here for the real version to be injected into at build time. `scripts/
-build_mcpb.sh` reads the real version only to stamp the `.mcpb` manifest itself
-(`mcpb/manifest.json.tmpl`'s `__VERSION__`), not anything inside the bundled `shim.js`.
+installs this package. The wheel that goes into the image is built inside `build-org-image` and is never published, attached to a
+release or uploaded to R2: the image is the only distribution of the `privacyfence` package
+([ADR 0309](adr/0309-the-organization-image-is-the-only-distribution.md)).
 
 ## Release notes come from CHANGELOG.md
 
 A stable tag's GitHub Release body is `CHANGELOG.md`'s section for that version, not GitHub's
 "generate release notes" button. `build.yml`'s `finalize-release` job — the same job that attaches
 every build's artifacts to the release, see "Packaged-artifact release gating" below — runs
-`scripts/changelog_section.py <version>` once, after `needs:` has already proven `build`,
-`build-windows`, `build-deb`, `build-org-image`, and `sbom` all succeeded, and hands the result to
+`scripts/changelog_section.py <version>` once, after `needs:` has already proven `build-org-image`
+and `sbom` succeeded, and hands the result to
 `softprops/action-gh-release` as `body_path:` in that same single call that attaches the files.
 
 That makes the notes a pull-request deliverable rather than a tag-day one, and it puts one
@@ -226,35 +197,73 @@ section a release PR writes is what organization users read on the What's new pa
 ([ADR 0238](adr/0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md)).
 A pre-release shows its `[Unreleased]` entries there.
 
+## What CI builds
+
+`build.yml` runs on a `v*` tag push and on `workflow_dispatch` (every upload, publish and release
+step is gated on a tag ref, so a dispatch against an untagged commit is the pre-flight described
+above). A release builds three things: the organization image, the SBOM, and, from
+`publish-pypi.yml`, `privacyfence-sync` ([ADR 0306](adr/0306-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md)). Each job first runs
+`scripts/r2_release.py check-tag` ([ADR 0022](adr/0022-one-release-tag-per-commit.md)).
+
+| Job | Runner | Builds | Tests |
+|---|---|---|---|
+| `build-org-image` | `ubuntu-24.04`, `ubuntu-24.04-arm` | the organization image per architecture, saved as a workflow artifact | the image's own smoke tests, before anything is uploaded |
+| `sbom` | `ubuntu-latest` | CycloneDX SBOM for the Python lock file | — |
+| `finalize-release` | `ubuntu-latest` | needs both; attaches files, renders `CHANGELOG.md` notes, uploads the org admin tools to R2 | — |
+
+`publish-org-image.yml` pushes the tested image bytes on a stable tag, and `publish-pypi.yml`
+publishes `privacyfence-sync`. All tests live in `tests/integration/`. Layer definitions are in
+[`testing-policy.md`](testing-policy.md#the-seven-layers).
+
+## The Glama listing
+
+Glama starts `python -m privacyfence.catalog_server` to read PrivacyFence's tool list. That module
+is a catalog, not a way to run PrivacyFence: it lists every tool from the same definitions the
+daemon's `/mcp` endpoint serves, holds no credentials, does no I/O beyond stdio, and answers every
+tool call with an error that says to install PrivacyFence
+([ADR 0114](adr/0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md)). No
+console script is installed for it.
+
+The listing's build spec is set in the listing's own settings on Glama, not in this repository. It
+installs the catalog server from this repository's tag, not from PyPI, so a change to the catalog
+reaches Glama only when the listing is rebuilt from a new tag. The command arguments are
+`["mcp-proxy", "--", "/opt/privacyfence/bin/python", "-m", "privacyfence.catalog_server"]`, with no
+environment variables. `uv` and `mcp-proxy` come from Glama's build image, not from this repository.
+
 ## Packaged-artifact release gating
 
-Every published DMG/installer/`.deb` is started and exercised, automatically, before it (or
-anything else from the same tag) ships. Which test covers which artifact is
+The organization image is started and exercised, automatically, before it (or
+anything else from the same tag) ships. Which test covers it is
 [`testing-policy.md`'s layer 6](testing-policy.md#layer-6-packaged-artifact); the
 process guarantees are:
 
-- **Within a build job:** each of `build`, `build-windows` and `build-deb` runs its own
-  `pytest.mark.packaged` test as an ordinary step, right after building its artifact and before its
+- **Within a build job:** `build-org-image` runs its `pytest.mark.packaged` tests (the image test and
+  the Ubuntu release smoke test) as ordinary steps, right after building the image and before its
   own R2 and workflow-artifact uploads. A failed step stops the job there; no `needs:` involved.
-- **The GitHub Release is all-or-nothing:** the build jobs and `sbom` only upload workflow
-  artifacts. `finalize-release` (`needs: [build, build-windows, build-deb, sbom, build-org-image]`, the same job that
-  promotes R2's `latest.json`) downloads them all and makes the one `softprops/action-gh-release`
-  call, so a release gets the complete file set or is not touched at all.
+- **The GitHub Release is all-or-nothing:** `build-org-image` and `sbom` only upload workflow
+  artifacts. `finalize-release` (`needs: [sbom, build-org-image]`) downloads them and makes the one
+  `softprops/action-gh-release` call, so a release gets the complete file set or is not touched at all.
 - **One run per tag push:** GitHub occasionally starts a workflow twice for one push, and two
   `build.yml` runs for one tag cannot both succeed. Each workflow's first job, `dedupe`, cancels
   the newer of two runs for the same push (`scripts/release_run_guard.py`, see
   [ADR 0111](adr/0111-a-duplicate-release-run-cancels-itself.md)).
-- **PyPI waits for `build.yml`:** GitHub Actions has no `needs:` across workflow files, so
+- **The sync publish waits for `build.yml`:** GitHub Actions has no `needs:` across workflow files, so
   `publish-pypi.yml`'s `wait_for_build` job polls for `build.yml`'s run on the same commit
   and fails, publishing nothing, unless it succeeded. It is keyed on commit SHA, not run recency,
   so a `workflow_dispatch` rerun after a fixed `build.yml` finds the new result immediately (see
   that job's own comment).
 
-## Publishing to PyPI
+## Publishing privacyfence-sync to PyPI
 
-`publish-pypi.yml` builds the sdist/wheel and publishes to **TestPyPI first, then PyPI**, gated in
-that order (`publish-pypi` job's `needs: publish-testpypi`) — a broken publish never reaches the
-real index. It authenticates with neither project via a stored API token: both use PyPI's OIDC
+`publish-pypi.yml` builds `privacyfence-sync` (`python -m build --sdist --wheel sync`, with the
+same version as the root tag) and publishes it to **TestPyPI first, then PyPI**, gated in that order
+(`publish-pypi-sync`'s `needs: publish-testpypi-sync`) — a broken publish never reaches the real
+index. The `privacyfence` package itself is not published: its wheel is built only inside the image
+build and never leaves it ([ADR 0309](adr/0309-the-organization-image-is-the-only-distribution.md)).
+The workflow keeps its name because the Trusted Publisher entries below are bound to the workflow
+file name.
+
+It authenticates with neither index via a stored API token: both use PyPI's OIDC
 **Trusted Publisher** mechanism (`pypa/gh-action-pypi-publish`, `permissions: id-token: write`),
 so GitHub mints a short-lived token for the job and PyPI/TestPyPI trade it for a one-shot upload
 credential themselves. There is no long-lived secret in this repo for either index.
@@ -267,7 +276,7 @@ that isn't claimed yet, and claim it on the first successful publish. Do this on
    `pypi.org/manage/account/publishing/` — the two are unrelated accounts/registrations even if you
    use the same login for both).
 2. Add a pending publisher with:
-   - **PyPI Project Name**: `privacyfence`
+   - **PyPI Project Name**: `privacyfence-sync`
    - **Owner**: `privacyfence`
    - **Repository name**: `privacyfence`
    - **Workflow name**: `publish-pypi.yml`
@@ -282,23 +291,13 @@ TestPyPI publish succeeding and the real PyPI publish running — the "test firs
 already enforces via job ordering, made into an explicit approval gate rather than just a rerun-only
 safety net.
 
-**`privacyfence-sync` is published by the same release.** The `build` job also builds the client in
-`sync/` (`python -m build --sdist --wheel sync`), with the same version as the root tag, and uploads it
-as the `pypi-dist-sync` artifact. Two further jobs publish it after the main uploads:
-`publish-testpypi-sync` (after `publish-testpypi`) and `publish-pypi-sync` (after `publish-pypi` and
-`publish-testpypi-sync`), with the same stable-channel gate. Register its trusted publisher the same
-way as above, on both services, with **PyPI Project Name** `privacyfence-sync` and the same
-workflow (`publish-pypi.yml`) and environments (`testpypi` / `pypi`). Until that is registered only
-the two `-sync` jobs fail; the `privacyfence` upload is unaffected.
-
 `workflow_dispatch` exists for rerunning by hand (e.g. after a transient failure) — point it at a
 tagged commit. Run from an untagged commit and `setuptools_scm` produces a dev version with a local
 segment (`+g<sha>`), which both indexes reject as an upload.
 
-**Only a stable tag reaches PyPI/TestPyPI.** `publish-testpypi` (and, transitively, `publish-pypi`,
-which depends on it) is gated on `needs.build.outputs.channel == 'stable'` — a pre-release tag
-(`a`/`b`/`rc` suffix) still builds the sdist/wheel, but the `build` job's `publish-r2` sibling is
-the only place it's published; see below.
+**Only a stable tag reaches PyPI/TestPyPI.** `publish-testpypi-sync` (and, transitively,
+`publish-pypi-sync`, which depends on it) is gated on the stable channel — a pre-release tag
+(`a`/`b`/`rc` suffix) builds `privacyfence-sync` but publishes it nowhere.
 
 ## Publishing the n8n node to npm
 
@@ -331,29 +330,21 @@ repository `privacyfence`, workflow `publish-n8n-node.yml`, environment `npm`), 
 ## Cloudflare R2 release archive
 
 Every tag push — stable and pre-release alike — also uploads that release's artifacts to the
-private Cloudflare R2 bucket `privacyfence-releases`, under `releases/<channel>/<version>/`. R2 is
-the one archive that has *everything*; PyPI and the GitHub Release carry only a stable tag's files.
-The facts live in [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md):
+private Cloudflare R2 bucket `privacyfence-releases`, under `releases/<channel>/<version>/`. R2 keeps
+the uploads and no manifest or `latest` pointer; it is the one archive that has *everything*, and the
+GitHub Release carries a stable tag's files only.
+The facts live in [`release-archive.md`](release-archive.md):
 
-- layout, channels, which job uploads what, which channel reaches which public index, and what the
-  private bucket does and does not buy — [Release archive (R2)](downloads-and-release-kpi.md#release-archive-r2);
-- `scripts/r2_release.py`'s subcommands (`channel`, `check-tag`, `upload`, `finalize`, `verify`,
-  `promote`), which every upload step calls — same section;
+- layout, channels, which job uploads what, and what the private bucket does and does not buy —
+  [Release archive (R2)](release-archive.md#release-archive-r2);
+- `scripts/r2_release.py`'s subcommands (`channel`, `check-tag`, `upload`), which every upload step
+  calls — same section;
 - the secrets and variables (`CF_RELEASES_R2_ACCESS_KEY_ID`, `CF_RELEASES_R2_SECRET_ACCESS_KEY`,
   and the `CF_RELEASES_R2_ENDPOINT` variable) and the rule that every Cloudflare token is
   **account-owned**, never minted from a personal profile —
-  [Credentials](downloads-and-release-kpi.md#credentials).
+  [Credentials](release-archive.md#credentials).
 
-The process rule that belongs here: a pre-release tag never reaches PyPI/TestPyPI and its GitHub
-Release entry (still created, marked prerelease, because `update_checker.py`'s beta channel reads
-exactly that flag) carries no files — its artifacts are reachable only through the download
-Worker.
-
-## Who can download a pre-release
-
-Anyone, through the Worker — decided 2026-09-13, and deliberately kept. A tester needs no
-credential, just the link or the "Want to test the next version?" section on
-`privacyfence.eu/download/`. Every pre-release download still goes through the Worker, so it is
-counted, and R2 stays unreachable except through it. The reasoning, and the exact steps to reverse
-it (Worker routes and website together, never one without the other), are in
-[ADR 0024](adr/0024-pre-releases-are-publicly-downloadable.md).
+The process rule that belongs here: a pre-release tag's GitHub Release entry (still created, marked
+prerelease, because `update_checker.py`'s beta channel reads exactly that flag) carries no files;
+its artifacts are only in the archive, which is private
+([ADR 0305](adr/0305-the-download-page-and-worker-are-retired.md)).
