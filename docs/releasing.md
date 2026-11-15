@@ -17,41 +17,48 @@ after another release already took that number (see `d929510`, "Revert version b
 together with other pending CRs", from back when that was still how it worked).
 
 ## Cutting a release
-
 **Cutting a release is a tag, not a commit.** Once `main` is at the commit you want to release,
-dispatch `release.yml` (below). Versions are PEP 440 short form: `v4.0.0` stable, `v4.0.0a13`
-pre-release (a=alpha, b=beta, rc=release-candidate).
+dispatch `tld-release.yml` on `main` (below) with `version` and `dry_run`. Versions are PEP 440 short
+form: `v4.0.0` stable, `v4.0.0a13` pre-release (a=alpha, b=beta, rc=release-candidate). Always pass
+`version` explicitly, and never pass `skip_checks`. `prerelease` has no effect here: the workflow
+creates no GitHub Release (`create_release` is false), and `build.yml` decides the channel from the tag.
 
-`release.yml` is the only way to cut a release. A `v*` tag ruleset on the repository refuses a tag
-pushed by an account without the repository admin role, and the account whose fine-grained token is
-`RELEASE_TAG_TOKEN` must hold that role. A person with that role could still push a tag by hand;
-that is not the procedure, because it skips every check below. `scripts/tag_release.py <version>`
-is the script the workflow runs for them (clean tree, at `origin/main`'s tip, no second tag on the
-commit, PEP 440 short form, sequential with no gaps) — see its own docstring.
+`tld-release.yml` is the only way to cut a release (ADR 0310). It runs in the `tld-release`
+environment, which admits only `main`, and the owner approves every run. It creates an annotated tag
+through the REST API with `TLD_RELEASE_TOKEN`, an owner token stored as that environment's secret.
+The `tld-tags` ruleset (`rulesets.tags` in `.tld/admin-policy.yaml`) lets no workflow token create a
+tag. A person with the admin role could still push a tag by hand; that is not the procedure, because
+it skips every check below. `scripts/tag_release.py <version>` holds the tag checks the workflow runs
+(clean tree, at `origin/main`'s tip, no second tag on the commit, PEP 440 short form, sequential with
+no gaps) — see its own docstring.
 
-**Cut it from the Actions tab.** `.github/workflows/release.yml` (`workflow_dispatch`, inputs
-`version` and `dry_run`) runs `r2_release.py channel`, then `changelog_section.py` on the stable
-channel, then `tag_release.py`, against `main`'s tip on a runner. `dry_run` **defaults to true**:
-the default dispatch runs every check and creates the tag on the runner without pushing it, which
-is also the only way to read the release notes that would ship without shipping them. It exists
-because a release should not depend on which machine you are sitting at — in particular, a sandboxed
-cloud container (such as Claude Code on the web) can push branches but not `refs/tags/*`.
+**Cut it from the Actions tab.** `.github/workflows/tld-release.yml` (`workflow_dispatch`, inputs
+`version` and `dry_run`) takes these steps against `main`'s tip, in order: decide the tag; check that
+the commit is green (every check run on `main`'s tip must be finished and green, so a red, queued or
+still-running run blocks — including a `build.yml` pre-flight that is still running, a scheduled run,
+and the self-hosted `deploy-qa-server` job when that runner is offline); run
+`scripts/release_check.py`, which runs `r2_release.py channel`, `changelog_section.py` (stable
+channel only, with the body that will ship written to the run summary) and
+`tag_release.py --no-fetch --check-only`; show GitHub's generated notes, which do not ship; and, on a
+real run, create the tag. `dry_run` **defaults to true**: the default dispatch runs every check and
+creates nothing, which is also the only way to read the release notes that would ship without
+shipping them. It exists because a release should not depend on which machine you are sitting at — in
+particular, a sandboxed cloud container (such as Claude Code on the web) can push branches but not
+`refs/tags/*`. If `main` moves while the run waits for approval, `tag_release.py` refuses (local
+`main` is not `origin/main`); dispatch again.
 
-It needs one secret, `RELEASE_TAG_TOKEN`, and **that secret may not be the `GITHUB_TOKEN`**:
-GitHub does not start a workflow run for an event raised by the `GITHUB_TOKEN`, so a tag pushed
-with it creates the tag, starts neither `build.yml` nor the publish workflows, and reports success.
-No image, no R2 upload, no GitHub Release, no error. Use a fine-grained PAT with **Contents:
-write** on this repo. A GitHub App installation token minted per run would be the account-owned
-alternative — the same reasoning the R2 credentials get below, a user token stops working when
-that user's access changes — but `release.yml` reads only `secrets.RELEASE_TAG_TOKEN` and has no
-step that mints one, so switching to an App is a workflow change, not a secret swap. The workflow
-refuses to start without the secret, and after pushing a tag it polls for the `build.yml` run on
-that commit and fails loudly if none appears, so the silent-failure mode above cannot pass for a
-successful release. See [ADR 0021](adr/0021-release-tag-push-never-uses-github-token.md).
+`TLD_RELEASE_TOKEN` **may not be the `GITHUB_TOKEN`**: GitHub does not start a workflow run for an
+event raised by the `GITHUB_TOKEN`, so a tag created with it exists, starts neither `build.yml` nor
+the publish workflows, and reports success. No image, no R2 upload, no GitHub Release, no error. It
+is an owner token, so the tag starts both workflows. The workflow does not check afterwards that
+`build.yml` started, so whoever cuts confirms a `push` run of `build.yml` and of `publish-pypi.yml`
+for the tagged commit within a few minutes. If neither appears, the tag exists and nothing started:
+the owner deletes the tag and cuts again. See
+[ADR 0021](adr/0021-release-tag-push-never-uses-github-token.md).
 
-**Pre-flight `build.yml` itself before tagging — `release.yml`'s dry run does not cover this.**
-`release.yml` never installs the package or resolves a version through `setuptools_scm`, so its
-`dry_run` only proves the tag/changelog bookkeeping (`r2_release.py channel`,
+**Pre-flight `build.yml` itself before tagging — the `tld-release.yml` dry run does not cover this.**
+`tld-release.yml` never installs the package or resolves a version through `setuptools_scm`, so its
+dry run only proves the tag/changelog bookkeeping (`r2_release.py channel`,
 `changelog_section.py`, `tag_release.py`'s sequencing guards) — it touches no packaged artifact.
 Every `pytest.mark.packaged` test (the Docker image test and the Ubuntu release smoke test — see
 [`testing-policy.md`'s layer 6](testing-policy.md#layer-6-packaged-artifact)) runs inside `build.yml`'s
@@ -59,19 +66,21 @@ Every `pytest.mark.packaged` test (the Docker image test and the Ubuntu release 
 regression only a packaged test catches would otherwise first surface on a real tag — see
 [ADR 0030](adr/0030-preflight-dispatches-build-yml-before-tagging.md).
 
-Before dispatching `release.yml` — dry run or real — dispatch `build.yml` itself
-(`workflow_dispatch`, no inputs) against the exact commit you intend to tag, and confirm `build`,
+Before dispatching `tld-release.yml` — dry run or real — dispatch `build.yml` itself
+(`workflow_dispatch`, no inputs) against the exact commit you intend to tag, and confirm
 `build-org-image` (both architectures) and `sbom` all succeed. This is safe to run against an untagged
 commit: every upload/publish/release step in `build.yml` is gated
 `if: startsWith(github.ref, 'refs/tags/')`, so the run builds and tests every artifact but uploads
 nothing to R2 or GitHub Releases — see that job's "Determine version and release channel"
 step, which resolves `channel="n/a (not a tag push)"` off a tag. A failure here is fixed on `main`
-like any other CI failure, then the pre-flight is re-run, before `release.yml` is dispatched at all.
+like any other CI failure, then the pre-flight is re-run, before `tld-release.yml` is dispatched at all.
+The green check refuses while the pre-flight is running or red, but cannot notice a pre-flight that
+was never dispatched.
 
 **Check the OAuth relay before tagging.** Organization servers that use the built-in OAuth apps
 sign in through the relay at `oauth.privacyfence.eu`, which ships on its own track and not with
 a release tag ([`oauth-relay.md`](oauth-relay.md)). Run `curl -fsSI https://oauth.privacyfence.eu/health`
-before dispatching `release.yml`; it must return 200. A relay that is down does not block a
+before dispatching `tld-release.yml`; it must return 200. A relay that is down does not block a
 release, but a release published while it is down cannot be tested end to end.
 
 **One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
