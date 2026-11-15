@@ -20,7 +20,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-release-docs
 
-- pending
+- review: Docs match section 3.5. The blank line after the Cutting a release heading in docs/releasing.md was dropped; cosmetic, left as is.
 
 ## p5-rulesets-in-policy
 
