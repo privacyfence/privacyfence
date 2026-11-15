@@ -15,7 +15,18 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from privacyfence import admin_config, connector_configs, daemon_main, data_format, oauth_apps, paths, privacy_filter, relay_client
+from privacyfence import (
+    admin_config,
+    connector_configs,
+    daemon_main,
+    data_format,
+    group_membership,
+    oauth_apps,
+    paths,
+    privacy_filter,
+    relay_client,
+    upstream_mcp_runtime,
+)
 from privacyfence import webauthn_stepup as wa
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal, principal_scope
@@ -61,6 +72,8 @@ ACTION_BODIES = {
     "toggle_pii_category": {"category_key": "detect_ip_addresses"},
     "set_default_policy": {"group": "privacy", "policy": "redact"},
     "set_category_policy": {"group": "privacy", "category": "body", "policy": "block"},
+    "approve_group_membership": {"group": "mgmt@acme.com", "audience": "mgmt"},
+    "decline_group_membership": {"group": "mgmt@acme.com", "audience": "mgmt", "email": "a@acme.com"},
 }
 
 
@@ -125,6 +138,15 @@ def _passkey_post(world, action, body, csrf):
 def audit(monkeypatch):
     recorded = []
     monkeypatch.setattr(routes_admin, "_record_settings_audit", lambda p, s: recorded.append((p.id, s)))
+    return recorded
+
+
+@pytest.fixture
+def membership_audit(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(
+        routes_admin, "_record_group_membership_audit", lambda p, d, s: recorded.append((p.id, d, s)),
+    )
     return recorded
 
 
@@ -704,6 +726,140 @@ class TestPrivacyAndStatsState:
         csrf = world.sign_in(ADMIN)
         r = _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "redact"}, csrf)
         assert "stats" in r.json() and r.json()["privacy"]["default_policy"]["privacy"] == "redact"
+
+
+class TestGroupMembership:
+    GROUP = "mgmt@acme.com"
+    MAP = {GROUP: frozenset({"mgmt", "all"})}
+
+    @pytest.fixture
+    def store(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(upstream_mcp_runtime, "all_group_audiences", lambda: dict(self.MAP))
+        monkeypatch.setattr(upstream_mcp_runtime, "membership_source", lambda: "snapshot")
+        store = group_membership.MembershipStore(tmp_path / "group_membership.json")
+        group_membership.set_store(store)
+        store.apply_snapshot({}, group_audiences=self.MAP, now=1.0, max_additions=20)  # bootstrap
+        store.apply_snapshot(
+            {self.GROUP: ["a@acme.com", "b@acme.com"]}, group_audiences=self.MAP, now=2.0, max_additions=20,
+        )
+        return store
+
+    def _signed_in(self):
+        world = World()
+        _enrol(ADMIN)
+        return world, world.sign_in(ADMIN)
+
+    def test_the_state_lists_the_pending_rows(self, store):
+        world, _ = self._signed_in()
+        gm = world.client.get("/api/admin/state").json()["group_membership"]
+        assert gm["source"] == "snapshot" and gm["last_rejected"] is None
+        assert gm["pending"] == [
+            {"group": self.GROUP, "audience": "mgmt", "count": 2, "emails": ["a@acme.com", "b@acme.com"]},
+        ]
+        assert gm["updated_at"] == 2.0
+
+    def test_the_state_lists_at_most_fifty_addresses_and_the_full_count(self, store):
+        store.apply_snapshot(
+            {self.GROUP: [f"p{i}@acme.com" for i in range(60)]}, group_audiences=self.MAP, now=3.0, max_additions=100,
+        )
+        world, _ = self._signed_in()
+        row = world.client.get("/api/admin/state").json()["group_membership"]["pending"][0]
+        assert row["count"] == 60 and len(row["emails"]) == 50
+
+    def test_a_static_source_is_read_only_with_nothing_pending(self, store, monkeypatch):
+        monkeypatch.setattr(upstream_mcp_runtime, "membership_source", lambda: "static")
+        world, _ = self._signed_in()
+        gm = world.client.get("/api/admin/state").json()["group_membership"]
+        assert gm == {"source": "static", "updated_at": None, "pending": [], "last_rejected": None}
+
+    def test_a_rejected_snapshot_is_reported(self, store):
+        store.apply_snapshot(
+            {self.GROUP: [f"q{i}@acme.com" for i in range(30)]}, group_audiences=self.MAP, now=3.0, max_additions=5,
+        )
+        world, _ = self._signed_in()
+        rejected = world.client.get("/api/admin/state").json()["group_membership"]["last_rejected"]
+        assert rejected == {"reason": "too_many_additions", "at": 3.0}
+
+    def test_both_actions_are_org_only_sensitive_and_declared(self):
+        for action in ("approve_group_membership", "decline_group_membership"):
+            spec = routes_admin.ADMIN_ACTIONS[action]
+            assert (spec.modes, spec.sensitive, spec.applies) == (frozenset({"org"}), True, "self")
+            assert routes_admin.ADMIN_PARAMS[action] == (
+                ("group", str, True), ("audience", str, True), ("email", str, False),
+            )
+
+    def test_first_call_needs_a_passkey_step_up(self, store):
+        world, csrf = self._signed_in()
+        r = world.post("approve_group_membership", {"group": self.GROUP, "audience": "mgmt"}, csrf)
+        assert r.status_code == 428
+        assert store.pending(self.MAP)[0].emails == ("a@acme.com", "b@acme.com")
+
+    def test_access_csrf_and_origin_are_checked(self, store):
+        body = {"group": self.GROUP, "audience": "mgmt"}
+        world = World()
+        assert world.client.post("/api/admin/approve_group_membership", json=body).status_code == 401
+        csrf = world.sign_in(ALICE)
+        assert world.post("approve_group_membership", body, csrf).status_code == 403
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        assert world.post("approve_group_membership", body, "wrong").status_code == 401
+        r = world.post("decline_group_membership", body, csrf, headers={"Origin": "https://evil.example"})
+        assert r.status_code == 403
+
+    def test_approving_makes_the_resolver_grant_the_audience(self, store, audit, membership_audit):
+        resolver = group_membership.SnapshotResolver(store)
+        assert "mgmt" not in resolver.audiences_for("a@acme.com", self.MAP)
+        world, csrf = self._signed_in()
+        r = _passkey_post(world, "approve_group_membership", {"group": self.GROUP, "audience": "mgmt"}, csrf)
+        assert r.status_code == 200, r.text
+        assert "mgmt" in resolver.audiences_for("a@acme.com", self.MAP)
+        assert "mgmt" in resolver.audiences_for("b@acme.com", self.MAP)
+        assert r.json()["group_membership"]["pending"] == []
+        assert membership_audit == [(
+            "carol", "group_membership_approved",
+            f"Approved membership for 2 person(s) in {self.GROUP} for audience mgmt (admin=carol)",
+        )]
+        assert "@acme.com" not in membership_audit[-1][2].replace(self.GROUP, "")
+        assert not any("Approved membership" in summary for _, summary in audit)
+
+    def test_a_failed_membership_write_is_500(self, store, monkeypatch, audit, membership_audit):
+        def boom(*args, **kwargs):
+            raise OSError("read-only")
+
+        monkeypatch.setattr(routes_admin, "_decide_group_membership", boom)
+        world, csrf = self._signed_in()
+        r = _passkey_post(world, "approve_group_membership", {"group": self.GROUP, "audience": "mgmt"}, csrf)
+        assert (r.status_code, r.json()) == (500, {"error": "Could not save the group membership."})
+        assert membership_audit == []
+
+    def test_approving_one_email_leaves_the_other_pending(self, store):
+        world, csrf = self._signed_in()
+        body = {"group": self.GROUP, "audience": "mgmt", "email": "a@acme.com"}
+        r = _passkey_post(world, "approve_group_membership", body, csrf)
+        assert r.status_code == 200
+        assert [p["emails"] for p in r.json()["group_membership"]["pending"]] == [["b@acme.com"]]
+
+    def test_declining_removes_the_pending_row_and_grants_nothing(self, store, audit, membership_audit):
+        world, csrf = self._signed_in()
+        r = _passkey_post(world, "decline_group_membership", {"group": self.GROUP, "audience": "mgmt", "email": ""}, csrf)
+        assert r.status_code == 200, r.text
+        assert r.json()["group_membership"]["pending"] == []
+        assert "mgmt" not in group_membership.SnapshotResolver(store).audiences_for("a@acme.com", self.MAP)
+        assert membership_audit[-1][1] == "group_membership_declined"
+        assert membership_audit[-1][2].startswith(f"Declined membership for 2 person(s) in {self.GROUP} for audience mgmt")
+        assert "@acme.com" not in membership_audit[-1][2].replace(self.GROUP, "")
+
+    def test_nothing_waiting_is_a_409(self, store):
+        world, csrf = self._signed_in()
+        body = {"group": "other@acme.com", "audience": "mgmt"}
+        r = _passkey_post(world, "approve_group_membership", body, csrf)
+        assert (r.status_code, r.json()) == (409, {"error": "Nothing is waiting for that approval."})
+
+    def test_local_mode_does_not_have_the_actions(self, local_controller, monkeypatch):
+        world = LocalWorld(local_controller, monkeypatch)
+        csrf = world.sign_in()
+        for action in ("approve_group_membership", "decline_group_membership"):
+            assert world.post(action, {"group": "g@x.com", "audience": "mgmt"}, csrf).status_code == 404
 
 
 class TestRouteClassification:
@@ -1616,3 +1772,40 @@ class TestAdminPage:
         assert '"org_config": true' in r.text
         assert '"relay_status"' not in r.text
         assert SECRET not in r.text
+
+
+class TestRecordGroupMembershipAudit:
+    """The real ``_record_group_membership_audit`` (the route tests replace it with a stand-in)."""
+
+    SUMMARY = "Approved membership for 2 person(s) in staff for audience https://x.example (admin=alice)"
+
+    def test_records_the_decision_as_its_own_audit_entry(self, monkeypatch):
+        entries = []
+
+        class FakeLogger:
+            def record(self, entry):
+                entries.append(entry)
+
+        monkeypatch.setattr(routes_admin, "get_audit_logger", lambda: FakeLogger())
+        principal = Principal(id="alice")
+        for decision in ("group_membership_approved", "group_membership_declined"):
+            routes_admin._record_group_membership_audit(principal, decision, self.SUMMARY)
+
+        assert [e.decision for e in entries] == ["group_membership_approved", "group_membership_declined"]
+        for entry in entries:
+            assert entry.sender == principal.id
+            assert entry.connector == "privacyfence"
+            assert entry.summary == self.SUMMARY
+            assert "@" not in entry.summary
+
+    def test_an_audit_failure_is_logged_not_raised(self, monkeypatch, caplog):
+        class BrokenLogger:
+            def record(self, entry):
+                raise OSError("disk full")
+
+        monkeypatch.setattr(routes_admin, "get_audit_logger", lambda: BrokenLogger())
+        with caplog.at_level(logging.WARNING):
+            routes_admin._record_group_membership_audit(
+                Principal(id="alice"), "group_membership_approved", self.SUMMARY,
+            )
+        assert "Audit log write failed for a group membership decision" in caplog.text

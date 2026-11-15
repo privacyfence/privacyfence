@@ -44,7 +44,7 @@ CONNECTORS: dict[str, tuple[str, str, str]] = {
 }
 # Operator-declared, no external provider: no product page, setup guide or README row
 # (docs/upstream-mcp.md is its documentation).
-NO_PAGE_MODULES = {"upstream_mcp"}
+NO_PAGE_MODULES = {"upstream_mcp", "group_membership"}
 PAGE_GUIDES = {page: guide for page, guide, _ in CONNECTORS.values()}
 CONNECTOR_PAGE = re.compile(r"^/connectors/[a-z0-9-]+/$")
 

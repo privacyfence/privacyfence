@@ -88,4 +88,5 @@ HIDDEN_IMPORTS = [
     "privacyfence.connectors.peek",
     "privacyfence.connectors.miro",
     "privacyfence.connectors.upstream_mcp",
+    "privacyfence.connectors.group_membership",
 ]

@@ -102,6 +102,8 @@ from . import (
     connector_configs,
     data_format,
     grist_provisioning,
+    group_membership,
+    identity_claim,
     oauth_apps,
     oidc_provider,
     org_bundle_signing,
@@ -113,7 +115,6 @@ from . import (
     runtime_credential_sweeper,
     scoped_tokens,
     step_up_config,
-    upstream_claims,
     upstream_mcp_config,
     upstream_mcp_registry,
     upstream_mcp_runtime,
@@ -168,6 +169,7 @@ from .connectors.contacts import ContactsConnector
 from .connectors.drive import DriveConnector
 from .connectors.gmail import GmailConnector
 from .connectors.grist import GristConnector
+from .connectors.group_membership import GroupMembershipConnector
 from .connectors.jira import JiraConnector
 from .connectors.miro import MiroConnector
 from .connectors.salesforce import SalesforceConnector
@@ -1678,26 +1680,27 @@ def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
 
 def _configure_upstream_mcp(issuer_url: str) -> None:
     """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` or ``PRIVACYFENCE_UPSTREAM_MCP`` set
-    (ADR 0285, 0288): load the declaration, seed its grants, register the declared tools into the policy tables, and configure the runtime. Raises
+    (ADR 0285, 0298): load the declaration, register the declared tools into the policy tables, build the group maps
+    and the membership resolver, and configure the runtime. Raises
     ``org_mode.ConfigurationError`` (the start is refused) on any problem."""
     upstreams = upstream_mcp_config.load_declared()
     if upstreams is None:
         return
+    claim_settings, membership = upstream_mcp_config.load_settings()
     upstream_mcp_registry.register(upstreams)
-    try:
-        seeded = admin_config.seed_upstream_grants(upstream_mcp_config.seed_payload(upstreams))
-    except admin_config.AdminConfigError as error:
-        raise org_mode.ConfigurationError(str(error)) from None
-    if seeded:
-        logger.info(
-            "Seeded the domain grants of upstream(s) %s from the declaration; edit them in admin_config.json from now on.",
-            ", ".join(seeded),
-        )
-    grants = upstream_mcp_config.GrantStore(
+    groups = upstream_mcp_config.GroupMapStore(
         admin_config.admin_config_path(), frozenset(upstream.id for upstream in upstreams),
     )
+    resolver: group_membership.MembershipResolver
+    if membership.source == "static":
+        resolver = group_membership.StaticFileResolver(Path(membership.file or ""))
+    else:
+        resolver = group_membership.SnapshotResolver(group_membership.get_store())
     upstream_mcp_runtime.configure(
-        upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url), grants=grants,
+        upstreams=upstreams, signer=identity_claim.load_signer(
+            issuer_url, overlap_seconds=claim_settings.key_overlap_hours * 3600,
+        ),
+        groups=groups, resolver=resolver, membership_max_additions=membership.max_additions,
     )
     logger.info("Upstream MCP server(s): %s", ", ".join(upstream.id for upstream in upstreams))
 
@@ -2095,6 +2098,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
 
     if upstream_mcp_runtime.configured():
         connectors.extend(upstream_mcp_runtime.connectors_for_principal())
+
+    if org_mode.resolve_mode(org_config) == "org":
+        connectors.append(GroupMembershipConnector())
 
     return connectors, failures
 
@@ -2719,6 +2725,64 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --rotate-upstream-claim-key / --revoke-upstream-claim-key
+# ---------------------------------------------------------------------------- #
+
+def _upstream_claim_keyset() -> Any:
+    """The claim key set with the operator file's overlap, so the command's prune keeps what the server publishes."""
+    from . import upstream_claim_keys, upstream_mcp_config
+
+    claim_settings, _ = upstream_mcp_config.load_settings()
+    return upstream_claim_keys.KeySet(
+        org_dir() / upstream_claim_keys.FILENAME, overlap_seconds=claim_settings.key_overlap_hours * 3600,
+    )
+
+
+def run_rotate_upstream_claim_key() -> int:
+    """Add a new Ed25519 key to the upstream identity-claim key set (plan 3.4).
+
+    The new key is published in the JWKS at once and starts signing five minutes
+    later, so verifiers' cached key sets already hold it; the previous key stays
+    published for the overlap. Runs as the account that owns the data, after the
+    runtime identity check; a running server re-reads the file on its next call.
+    """
+
+    try:
+        keys = _upstream_claim_keyset()
+    except org_mode.ConfigurationError as exc:
+        return _refuse_to_start(f"Configuration error: {exc}")
+    keys.ensure()
+    new = keys.rotate()
+    starts = datetime.fromtimestamp(new.signs_from, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(
+        f"Rotated: new key {new.kid} starts signing at {starts}; "
+        "the previous key stays published for the configured overlap."
+    )
+    return 0
+
+
+def run_revoke_upstream_claim_key(kid: str) -> int:
+    """Remove one key from the upstream identity-claim key set and its JWKS at once."""
+    from . import upstream_claim_keys
+
+    try:
+        keys = _upstream_claim_keyset()
+    except org_mode.ConfigurationError as exc:
+        return _refuse_to_start(f"Configuration error: {exc}")
+    keys.ensure()
+    try:
+        removed = keys.revoke(kid)
+    except upstream_claim_keys.KeySetError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if not removed:
+        print("No such key.", file=sys.stderr)
+        return 1
+    print(f"Revoked key {kid}.")
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # --relay-dns-records
 # ---------------------------------------------------------------------------- #
 
@@ -3042,6 +3106,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "For a direct HTTP MCP client with no PrivacyFence extension of its own."
         ),
     )
+    parser.add_argument(
+        "--rotate-upstream-claim-key", action="store_true",
+        help=(
+            "Add a new key to the upstream identity-claim key set and exit. It is published at once and "
+            "starts signing five minutes later. Run it as the account the daemon runs as."
+        ),
+    )
+    parser.add_argument(
+        "--revoke-upstream-claim-key", metavar="KID", default=None,
+        help=(
+            "Remove the key KID from the upstream identity-claim key set and its JWKS at once, and exit. "
+            "Refused for the only key that can sign. Run it as the account the daemon runs as."
+        ),
+    )
     # ADR 0165: an administrator takes back all of one person's scoped tokens.
     parser.add_argument(
         "--revoke-scoped-tokens", metavar="PRINCIPAL_ID", default=None,
@@ -3191,6 +3269,10 @@ def main(argv: list[str] | None = None) -> int:
     # must run as the account that owns it.
     if args.revoke_scoped_tokens is not None:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
+    if args.rotate_upstream_claim_key:
+        return run_rotate_upstream_claim_key()
+    if args.revoke_upstream_claim_key is not None:
+        return run_revoke_upstream_claim_key(args.revoke_upstream_claim_key)
     if args.relay_dns_records:
         return run_relay_dns_records()
     if args.print_env_from_bundle:

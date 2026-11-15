@@ -1,0 +1,12 @@
+{
+  "upstream_mcp": {
+    "knowledgehub": {
+      "groups": {
+        "everyone@company": ["all"],
+        "mgmt@company": ["mgmt"],
+        "hr@company": ["hr"],
+        "contracts@company": ["contracts"]
+      }
+    }
+  }
+}

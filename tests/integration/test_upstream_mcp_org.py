@@ -3,7 +3,7 @@
 The server is a real ``WebServer`` in organization mode; the upstream is the p6 reference server on
 another port, verifying PrivacyFence's claims against the server's own ``/upstream-mcp/jwks``. The
 AI client is the official ``mcp`` client with a real access token for a verified person whose
-admin-config grants give them the ``general`` domain only.
+group maps give them the ``general`` audience only.
 """
 from __future__ import annotations
 
@@ -23,11 +23,12 @@ from mcp.client.streamable_http import streamable_http_client
 
 from privacyfence import gate as gate_module
 from privacyfence import org_identity as oi
-from privacyfence import upstream_claims, upstream_mcp_registry, upstream_mcp_runtime
+from privacyfence import identity_claim, upstream_mcp_registry, upstream_mcp_runtime
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.connectors import upstream_mcp as connector_module
 from privacyfence.principal import Principal, current_principal
-from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+from privacyfence.group_membership import StaticFileResolver
+from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.org_session import OrgSessionStore
@@ -97,7 +98,10 @@ def stack(tmp_path, monkeypatch):
     issuer_url = f"http://localhost:{org_port}"
 
     (tmp_path / "admin_config.json").write_text(json.dumps({
-        "upstream_mcp": {"ref": {"grants": [{"match": "*", "domains": ["general"]}]}},
+        "upstream_mcp": {"ref": {"groups": {"everyone@example.com": ["general"]}}},
+    }), encoding="utf-8")
+    (tmp_path / "members.json").write_text(json.dumps({
+        "version": 1, "groups": {"everyone@example.com": ["ann@example.com"]},
     }), encoding="utf-8")
     upstreams = parse_upstreams({
         "version": 1,
@@ -115,13 +119,14 @@ def stack(tmp_path, monkeypatch):
     }, source="test")
     upstream_mcp_registry.register(upstreams)
     upstream_mcp_runtime.configure(
-        upstreams=upstreams, signer=upstream_claims.load_signer(issuer_url),
-        grants=GrantStore(tmp_path / "admin_config.json", frozenset({"ref"})),
+        upstreams=upstreams, signer=identity_claim.load_signer(issuer_url, overlap_seconds=86400),
+        groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"ref"})),
+        resolver=StaticFileResolver(tmp_path / "members.json"),
     )
 
     # The upstream verifies against the organization server's own key set.
     counting = _CountingApp(reference.build_app(
-        audience=_AUDIENCE, issuer=f"{issuer_url}/upstream-mcp", jwks_url=f"{issuer_url}/upstream-mcp/jwks",
+        audience=_AUDIENCE, issuer=issuer_url, jwks_url=f"{issuer_url}/upstream-mcp/jwks",
     ))
     upstream_server = uvicorn.Server(uvicorn.Config(counting, host="127.0.0.1", port=ref_port, log_level="warning"))
     upstream_thread = threading.Thread(target=upstream_server.run, daemon=True)
@@ -172,7 +177,7 @@ async def test_a_person_with_the_general_grant_reads_only_general_documents(stac
         assert titles == {"Policy overview", "Office policy"}
 
         hidden = await session.call_tool("ref_get_doc", {"id": "3", "reason": "integration test"})
-        assert hidden.is_error is True  # the HR document is not in the person's domains
+        assert hidden.is_error is True  # the HR document is not in the person's audiences
 
         status = await session.call_tool("privacyfence_status", {})
         upstreams = status.structured_content["upstreams"]

@@ -1,16 +1,18 @@
 """A reference upstream MCP server for PrivacyFence (ADR 0286).
 
 This is a reference for upstream implementers and for tests, not a production server. It shows what
-an upstream has to do with the signed caller claim PrivacyFence sends on every HTTP request:
-verify it (RS256 only, ``typ`` ``pf-upstream-claim+jwt``, ``aud``, ``iss``, ``exp``/``nbf`` with no
-leeway, a ``jti`` never seen before) and filter what it returns by the claim's ``domains``. Only
-``sub``, ``domains`` and ``act.type`` may change what a query returns; a service claim (the startup
-``tools/list``) lists the tools and gets no documents.
+an upstream has to do with the signed identity claim PrivacyFence sends on every HTTP request, in the
+``X-PrivacyFence-Claim`` header (``docs/identity-claim.md`` is the contract): verify it (EdDSA only,
+``typ`` ``pf-identity-claim+jwt``, ``aud``, ``iss``, ``exp``, a ``jti`` never seen before, and for a
+tool call the ``req`` hash of the exact call) and filter what it returns by the claim's ``audiences``.
+Only ``sub``, ``audiences`` and ``principal_type`` may change what a query returns; a service claim
+(the startup ``tools/list``) lists the tools and gets no documents. The verifier is the vendorable
+``contrib/verifier/pf_claim_verify.py``.
 
 Run it::
 
     python3 scripts/upstream_mcp_reference_server.py --audience https://kh.example/mcp \\
-        --issuer https://pf.example/upstream-mcp --jwks-url https://pf.example/upstream-mcp/jwks
+        --issuer https://pf.example --jwks-url https://pf.example/upstream-mcp/jwks
 """
 
 from __future__ import annotations
@@ -18,79 +20,49 @@ from __future__ import annotations
 import argparse
 import contextlib
 import contextvars
+import importlib.util
 import json
-import threading
-import time
-from collections.abc import AsyncIterator
+import sys
+from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Any
 
-import jwt
-from jwt.algorithms import RSAAlgorithm
 from mcp import types
 from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel.server import Server as MCPServer
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
-CLAIM_TYPE = "pf-upstream-claim+jwt"
+CLAIM_HEADER = "x-privacyfence-claim"
+MAX_BODY_BYTES = 1024 * 1024
+
+
+def _load_pf_claim_verify() -> Any:
+    """Load the vendorable verifier by path, as an upstream that vendors the file would."""
+    path = Path(__file__).resolve().parents[1] / "contrib" / "verifier" / "pf_claim_verify.py"
+    spec = importlib.util.spec_from_file_location("pf_claim_verify", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+pf_claim_verify = _load_pf_claim_verify()
 
 DEFAULT_DOCUMENTS: list[dict[str, str]] = [
-    {"id": "1", "domain": "general", "title": "Policy overview", "body": "The company policy in brief."},
-    {"id": "2", "domain": "general", "title": "Office policy", "body": "Office hours policy."},
-    {"id": "3", "domain": "hr", "title": "HR policy", "body": "Leave and conduct policy."},
-    {"id": "4", "domain": "finance", "title": "Finance policy", "body": "Expense policy."},
+    {"id": "1", "audience": "general", "title": "Policy overview", "body": "The company policy in brief."},
+    {"id": "2", "audience": "general", "title": "Office policy", "body": "Office hours policy."},
+    {"id": "3", "audience": "hr", "title": "HR policy", "body": "Leave and conduct policy."},
+    {"id": "4", "audience": "finance", "title": "Finance policy", "body": "Expense policy."},
 ]
 
 # The verified claim of the request being handled.
-_claims: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("upstream_claims")
-
-
-class _Verifier:
-    def __init__(
-        self, *, audience: str, issuer: str | None, jwks: dict | None, jwks_url: str | None,
-        public_key_pem: bytes | None,
-    ) -> None:
-        if sum(x is not None for x in (jwks, jwks_url, public_key_pem)) != 1:
-            raise ValueError("give exactly one of jwks, jwks_url, public_key_pem")
-        self._audience = audience
-        self._issuer = issuer
-        self._jwks = jwks
-        self._public_key_pem = public_key_pem
-        self._jwk_client = jwt.PyJWKClient(jwks_url) if jwks_url else None
-        self._seen: dict[str, float] = {}
-        self._lock = threading.Lock()
-
-    def _key(self, token: str) -> Any:
-        if self._public_key_pem is not None:
-            return self._public_key_pem
-        if self._jwk_client is not None:
-            return self._jwk_client.get_signing_key_from_jwt(token).key
-        assert self._jwks is not None
-        kid = jwt.get_unverified_header(token).get("kid")
-        for jwk in self._jwks["keys"]:
-            if jwk.get("kid") == kid:
-                return RSAAlgorithm.from_jwk(json.dumps(jwk))
-        raise jwt.InvalidTokenError("unknown kid")
-
-    def verify(self, token: str) -> dict[str, Any]:
-        if jwt.get_unverified_header(token).get("typ") != CLAIM_TYPE:
-            raise jwt.InvalidTokenError("wrong typ")
-        options: dict[str, Any] = {"require": ["exp", "nbf", "aud", "sub", "jti"]}
-        claims = jwt.decode(
-            token, self._key(token), algorithms=["RS256"], audience=self._audience,
-            issuer=self._issuer, leeway=0, options=options,
-        )
-        now = time.time()
-        with self._lock:
-            self._seen = {j: exp for j, exp in self._seen.items() if exp > now}
-            if claims["jti"] in self._seen:
-                raise jwt.InvalidTokenError("replayed jti")
-            self._seen[claims["jti"]] = float(claims["exp"])
-        return claims
+_claims: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("reference_claims")
 
 
 def _text(payload: object, *, error: bool = False) -> types.CallToolResult:
@@ -100,10 +72,10 @@ def _text(payload: object, *, error: bool = False) -> types.CallToolResult:
 def _build_server(documents: list[dict]) -> MCPServer:
     def allowed() -> list[dict]:
         claims = _claims.get()
-        domains = set(claims.get("domains") or [])
-        if (claims.get("act") or {}).get("type") == "service":
+        audiences = set(claims.get("audiences") or [])
+        if claims.get("principal_type") == "service":
             return []
-        return [d for d in documents if d["domain"] in domains]
+        return [d for d in documents if d["audience"] in audiences]
 
     async def list_tools(ctx: ServerRequestContext, _params: Any) -> types.ListToolsResult:
         def tool(name: str, description: str, props: list[str]) -> types.Tool:
@@ -142,11 +114,12 @@ def _build_server(documents: list[dict]) -> MCPServer:
 
 
 def build_app(
-    *, audience: str, issuer: str | None, jwks: dict | None = None, jwks_url: str | None = None,
-    public_key_pem: bytes | None = None, documents: list[dict] | None = None,
+    *, audience: str, issuer: str, jwks: dict | None = None, jwks_url: str | None = None,
+    documents: list[dict] | None = None, clock: Callable[[], float] | None = None,
 ) -> Starlette:
-    verifier = _Verifier(
-        audience=audience, issuer=issuer, jwks=jwks, jwks_url=jwks_url, public_key_pem=public_key_pem,
+    # The issuer is PrivacyFence's issuer URL, with no suffix.
+    verifier = pf_claim_verify.ClaimVerifier(
+        issuer=issuer, audience=audience, jwks=jwks, jwks_url=jwks_url, **({"clock": clock} if clock else {}),
     )
     server = _build_server(list(DEFAULT_DOCUMENTS if documents is None else documents))
     # Stateless: every request is verified and handled on its own, so its claim is the one in force.
@@ -155,18 +128,46 @@ def build_app(
     class _Endpoint:
         async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
             request = Request(scope, receive)
-            header = request.headers.get("authorization", "")
+            token = request.headers.get(CLAIM_HEADER)
+            if token is None:
+                await JSONResponse({"error": "invalid_claim"}, status_code=401)(scope, receive, send)
+                return
+            await self._handle(scope, receive, send, token)
+
+        async def _handle(self, scope: Scope, receive: Receive, send: Send, token: str) -> None:
+            body = b""
+            more = True
+            while more:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    break
+                body += message.get("body", b"")
+                if len(body) > MAX_BODY_BYTES:
+                    await PlainTextResponse("request too large", status_code=413)(scope, receive, send)
+                    return
+                more = message.get("more_body", False)
             try:
-                scheme, _, token = header.partition(" ")
-                if scheme.lower() != "bearer" or not token:
-                    raise jwt.InvalidTokenError("no bearer token")
-                claims = verifier.verify(token.strip())
+                principal = verifier.verify(token.strip(), body=body)
             except Exception:  # noqa: BLE001 -- every failure is the same 401, with no detail
                 await JSONResponse({"error": "invalid_claim"}, status_code=401)(scope, receive, send)
                 return
+            claims = {
+                "sub": principal.sub,
+                "audiences": list(principal.audiences),
+                "principal_type": principal.principal_type,
+            }
+            sent = False
+
+            async def replay() -> Any:
+                nonlocal sent
+                if not sent:
+                    sent = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+                return await receive()
+
             reset = _claims.set(claims)
             try:
-                await manager.handle_request(scope, receive, send)
+                await manager.handle_request(scope, replay, send)
             finally:
                 _claims.reset(reset)
 
@@ -183,24 +184,17 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8099)
     parser.add_argument("--audience", required=True)
-    parser.add_argument("--issuer")
+    parser.add_argument("--issuer", required=True, help="The PrivacyFence issuer URL, with no suffix.")
     key = parser.add_mutually_exclusive_group(required=True)
-    key.add_argument("--jwks-url")
-    key.add_argument("--jwks-file")
-    key.add_argument("--public-key-file")
+    key.add_argument("--jwks-url", help="The JWKS URL (Ed25519 keys), <issuer>/upstream-mcp/jwks.")
+    key.add_argument("--jwks-file", help="A JWKS file (Ed25519 keys).")
     args = parser.parse_args()
 
-    jwks = public_key_pem = None
+    jwks = None
     if args.jwks_file:
         with open(args.jwks_file, encoding="utf-8") as handle:
             jwks = json.load(handle)
-    if args.public_key_file:
-        with open(args.public_key_file, "rb") as handle:
-            public_key_pem = handle.read()
-    app = build_app(
-        audience=args.audience, issuer=args.issuer, jwks=jwks, jwks_url=args.jwks_url,
-        public_key_pem=public_key_pem,
-    )
+    app = build_app(audience=args.audience, issuer=args.issuer, jwks=jwks, jwks_url=args.jwks_url)
     import uvicorn
 
     print(f"listening on {args.host}:{args.port}", flush=True)

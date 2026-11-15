@@ -29,7 +29,14 @@ CARD = re.compile(
     r"(?P<body>.*?)</article>",
     re.S,
 )
-REFERENCE = {m["anchor"]: m.groupdict() for m in SUMMARY_ROW.finditer((REPO / "docs" / "tools-reference.md").read_text(encoding="utf-8"))}
+# The organization-only group membership sync tool is administration, not a connector a person connects to,
+# so the website does not list it.
+NOT_ON_THE_WEBSITE = {"privacyfence-administration"}
+REFERENCE = {
+    m["anchor"]: m.groupdict()
+    for m in SUMMARY_ROW.finditer((REPO / "docs" / "tools-reference.md").read_text(encoding="utf-8"))
+    if m["anchor"] not in NOT_ON_THE_WEBSITE
+}
 CARDS = {m["anchor"]: m.groupdict() for m in CARD.finditer(PAGE)}
 
 

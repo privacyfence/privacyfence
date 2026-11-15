@@ -2457,7 +2457,8 @@ class TestMaybeStartWebServerOrgMode:
             )
         assert upstream_mcp_runtime.configured()
         assert upstream_mcp_runtime.upstream_ids() == {"kh"}
-        assert (tmp_path / "upstream_claim_signing_key.pem").exists()
+        assert (tmp_path / "upstream_claim_keys.json").exists()
+        assert not (tmp_path / "upstream_claim_signing_key.pem").exists()
         assert "Upstream MCP server(s): kh" in caplog.text
 
     def test_no_upstream_file_leaves_the_runtime_unconfigured(self, monkeypatch, tmp_path):
@@ -2539,51 +2540,52 @@ class TestMaybeStartWebServerOrgMode:
         ):
             daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
 
-    def test_upstream_mcp_grants_seed_once_and_the_first_ones_stay(self, monkeypatch, tmp_path, caplog):
-        from privacyfence import admin_config, upstream_mcp_registry, upstream_mcp_runtime
-
-        first = [{"match": "*", "domains": ["general"]}]
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(first))
-        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
-            self._start_org(monkeypatch, tmp_path)
-        assert "Seeded the domain grants of upstream(s) kh" in caplog.text
-        assert admin_config.load()["upstream_mcp"] == {"kh": {"grants": first}}
-
-        upstream_mcp_registry.unregister_all()
-        upstream_mcp_runtime.reset()
-        monkeypatch.setenv(
-            "PRIVACYFENCE_UPSTREAM_MCP", self._inline([{"match": "@x.com", "domains": ["hr"]}]),
-        )
-        self._start_org(monkeypatch, tmp_path)
-        assert admin_config.load()["upstream_mcp"] == {"kh": {"grants": first}}
-
-    def test_upstream_mcp_collision_leaves_admin_config_unseeded(self, monkeypatch, tmp_path):
-        from privacyfence import admin_config
-
+    def test_upstream_mcp_operator_grants_refuse_the_start(self, monkeypatch, tmp_path):
         grants = [{"match": "*", "domains": ["general"]}]
         monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline(grants))
-        monkeypatch.setattr(
-            daemon_main.upstream_mcp_registry, "register",
-            lambda upstreams: (_ for _ in ()).throw(org_mode.ConfigurationError("collides")),
-        )
-        with pytest.raises(org_mode.ConfigurationError, match="collides"):
+        with pytest.raises(org_mode.ConfigurationError, match="grants were replaced by groups"):
             self._start_org(monkeypatch, tmp_path)
-        assert admin_config.load() is None or admin_config.load()["upstream_mcp"] == {}
+
+    def test_upstream_mcp_static_membership_file_builds_a_static_resolver(self, monkeypatch, tmp_path):
+        from privacyfence import group_membership, upstream_mcp_runtime
+
+        members = tmp_path / "members.json"
+        members.write_text('{"version": 1, "groups": {"a@co.example": ["x@co.example"]}}', encoding="utf-8")
+        data = json.loads(self._inline())
+        data["membership"] = {"source": "static", "file": str(members)}
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", json.dumps(data))
+        self._start_org(monkeypatch, tmp_path)
+        assert isinstance(upstream_mcp_runtime._runtime.resolver, group_membership.StaticFileResolver)
+
+    def test_upstream_mcp_default_membership_is_the_snapshot_resolver(self, monkeypatch, tmp_path):
+        from privacyfence import group_membership, upstream_mcp_runtime
+
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        self._start_org(monkeypatch, tmp_path)
+        assert isinstance(upstream_mcp_runtime._runtime.resolver, group_membership.SnapshotResolver)
+
+    def test_upstream_mcp_grants_in_admin_config_refuse_the_start(self, monkeypatch, tmp_path):
+        (tmp_path / "admin_config.json").write_text(
+            json.dumps({"version": 1, "upstream_mcp": {"kh": {"grants": []}}}), encoding="utf-8",
+        )
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", self._inline())
+        with pytest.raises(org_mode.ConfigurationError, match="grants were replaced by groups"):
+            self._start_org(monkeypatch, tmp_path)
 
     def test_build_connectors_appends_the_upstream_connectors_when_configured(self, tmp_path):
-        from privacyfence import oidc_provider, upstream_mcp_runtime
-        from privacyfence.upstream_claims import ClaimSigner
-        from privacyfence.upstream_mcp_config import GrantStore, parse_upstreams
+        from privacyfence import upstream_mcp_runtime
+        from privacyfence.identity_claim import ClaimSigner
+        from privacyfence.upstream_claim_keys import KeySet
+        from privacyfence.group_membership import StaticFileResolver
+        from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 
         upstreams = parse_upstreams(json.loads(self._upstream_file(tmp_path).read_text()), source="test")
         assert daemon_main.build_connectors({}, {})[0] == []
         upstream_mcp_runtime.configure(
             upstreams=upstreams,
-            signer=ClaimSigner(
-                issuer="https://pf.example/upstream-mcp",
-                key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"),
-            ),
-            grants=GrantStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            signer=ClaimSigner(issuer="https://pf.example", keys=KeySet(tmp_path / "keys.json")),
+            groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            resolver=StaticFileResolver(tmp_path / "members.json"),
         )
         connectors, failures = daemon_main.build_connectors({}, {})
         assert [c.name for c in connectors] == ["kh"]
@@ -5628,6 +5630,139 @@ class TestRevokeScopedTokens:
         assert capsys.readouterr().out.startswith("Revoked 0 scoped token(s) for local.\n")
 
 
+class TestRotateUpstreamClaimKey:
+    """``privacyfence-app --rotate-upstream-claim-key`` / ``--revoke-upstream-claim-key`` (plan 3.4)."""
+
+    @pytest.fixture
+    def org(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_claim_keys
+
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        return upstream_claim_keys.KeySet(tmp_path / upstream_claim_keys.FILENAME)
+
+    def test_rotate_creates_the_first_key_adds_a_second_and_reports_it(self, org, capsys):
+        assert daemon_main.run_rotate_upstream_claim_key() == 0
+
+        out = capsys.readouterr().out
+        kids = [k["kid"] for k in org.jwks()["keys"]]
+        assert len(kids) == 2
+        newest = kids[-1]
+        assert out.startswith(f"Rotated: new key {newest} starts signing at 20")
+        assert out.endswith("Z; the previous key stays published for the configured overlap.\n")
+
+    @pytest.mark.parametrize("command", ["rotate", "revoke"])
+    def test_the_commands_use_the_operator_files_overlap(self, org, monkeypatch, tmp_path, command):
+        from privacyfence import upstream_claim_keys, upstream_mcp_config
+
+        operator = tmp_path / "operator.yaml"
+        operator.write_text("version: 1\nupstreams: []\nclaim:\n  key_overlap_hours: 72\n")
+        monkeypatch.setenv(upstream_mcp_config.ENV_VAR, str(operator))
+        seen: list[int] = []
+        real = upstream_claim_keys.KeySet.__init__
+
+        def spy(self, path, *, overlap_seconds=86400, **kw):
+            seen.append(overlap_seconds)
+            real(self, path, overlap_seconds=overlap_seconds, **kw)
+
+        monkeypatch.setattr(upstream_claim_keys.KeySet, "__init__", spy)
+        if command == "rotate":
+            daemon_main.run_rotate_upstream_claim_key()
+        else:
+            daemon_main.run_revoke_upstream_claim_key("nope")
+        assert seen == [72 * 3600]
+
+    def test_the_commands_default_to_24_hours_without_an_operator_file(self, org, monkeypatch):
+        from privacyfence import upstream_claim_keys, upstream_mcp_config
+
+        monkeypatch.delenv(upstream_mcp_config.ENV_VAR, raising=False)
+        monkeypatch.delenv(upstream_mcp_config.ENV_VAR_INLINE, raising=False)
+        seen: list[int] = []
+        real = upstream_claim_keys.KeySet.__init__
+
+        def spy(self, path, *, overlap_seconds=86400, **kw):
+            seen.append(overlap_seconds)
+            real(self, path, overlap_seconds=overlap_seconds, **kw)
+
+        monkeypatch.setattr(upstream_claim_keys.KeySet, "__init__", spy)
+        daemon_main.run_rotate_upstream_claim_key()
+        assert seen == [86400]
+
+    @pytest.mark.parametrize("command", ["rotate", "revoke"])
+    def test_an_invalid_operator_file_is_refused_without_a_traceback(
+        self, org, monkeypatch, tmp_path, capsys, command,
+    ):
+        from privacyfence import upstream_mcp_config
+
+        operator = tmp_path / "operator.yaml"
+        operator.write_text("version: 1\nupstreams: []\nclaim: [not, an, object]\n")
+        monkeypatch.setenv(upstream_mcp_config.ENV_VAR, str(operator))
+        monkeypatch.delenv(upstream_mcp_config.ENV_VAR_INLINE, raising=False)
+        if command == "rotate":
+            code = daemon_main.run_rotate_upstream_claim_key()
+        else:
+            code = daemon_main.run_revoke_upstream_claim_key("nope")
+        captured = capsys.readouterr()
+        assert code == 1
+        assert captured.err.startswith("Configuration error: ")
+        assert "Traceback" not in captured.err
+        assert not (tmp_path / "upstream_claim_keys.json").exists()
+
+    def test_revoke_removes_a_key_and_reports_it(self, org, capsys):
+        daemon_main.run_rotate_upstream_claim_key()
+        capsys.readouterr()
+        old, new = [k["kid"] for k in org.jwks()["keys"]]
+
+        assert daemon_main.run_revoke_upstream_claim_key(new) == 0
+
+        assert capsys.readouterr().out == f"Revoked key {new}.\n"
+        assert [k["kid"] for k in org.jwks()["keys"]] == [old]
+
+    def test_revoke_an_unknown_key_exits_1(self, org, capsys):
+        assert daemon_main.run_revoke_upstream_claim_key("nope") == 1
+
+        captured = capsys.readouterr()
+        assert captured.err == "No such key.\n"
+        assert captured.out == ""
+
+    def test_revoke_the_only_signing_key_exits_1(self, org, capsys):
+        daemon_main.run_rotate_upstream_claim_key()
+        capsys.readouterr()
+        old = org.jwks()["keys"][0]["kid"]  # the new key has not started signing yet
+
+        assert daemon_main.run_revoke_upstream_claim_key(old) == 1
+
+        captured = capsys.readouterr()
+        assert "only key that can sign" in captured.err
+        assert captured.out == ""
+        assert old in {k["kid"] for k in org.jwks()["keys"]}
+
+    @pytest.mark.parametrize(
+        "argv, runner, expected",
+        [
+            (["--rotate-upstream-claim-key"], "run_rotate_upstream_claim_key", []),
+            (["--revoke-upstream-claim-key", "abc"], "run_revoke_upstream_claim_key", ["abc"]),
+        ],
+    )
+    def test_the_flags_run_after_the_runtime_identity_check(self, monkeypatch, argv, runner, expected):
+        from privacyfence import privilege_separation
+
+        calls: list[str] = []
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", lambda: calls.append("identity"))
+        monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, runner, lambda *args: calls.extend(args) or 0)
+
+        assert daemon_main.main(argv) == 0
+        assert calls == ["identity", *expected]
+
+        def _refuse():
+            raise privilege_separation.PrivilegeSeparationError("wrong account")
+
+        calls.clear()
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
+        assert daemon_main.main(argv) != 0
+        assert calls == []
+
+
 class TestGristRelease:
     """``privacyfence-app --grist-release PRINCIPAL_ID``."""
 
@@ -6153,7 +6288,8 @@ class TestEffectiveOrgConfigWiring:
 
         connectors, _failures = daemon_main.build_connectors({}, org_config)
 
-        assert [c.name for c in connectors] == ["slack"]
+        # Organization mode also offers the group membership sync tool.
+        assert [c.name for c in connectors] == ["slack", "privacyfence"]
 
     def test_local_mode_does_not_use_a_builtin_app(self, monkeypatch):
         self._builtin_slack(monkeypatch)

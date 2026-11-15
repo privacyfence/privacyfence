@@ -409,7 +409,7 @@ def scoped_token_page_data(
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
             "allow_personal_data_reads": token.allow_personal_data_reads,
-            "upstream_domains": {uid: sorted(doms) for uid, doms in sorted(token.upstream_domains.items())},
+            "upstream_audiences": {uid: sorted(doms) for uid, doms in sorted(token.upstream_audiences.items())},
             "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
             "last_denied_tool": seen.last_denied_tool,
             "runtime_credential": (
@@ -442,12 +442,12 @@ def scoped_token_page_data(
     from .. import upstream_mcp_runtime  # function-local, as in _build_org_app
 
     if upstream_mcp_runtime.configured():
-        # The data domains a token may narrow are the ones the person holds themselves.
-        held = upstream_mcp_runtime.held_domains(principal, principal.email_verified)
+        # The audiences a token may narrow are the ones the person holds themselves.
+        held = upstream_mcp_runtime.held_audiences(principal, principal.email_verified)
         page["upstreams"] = [
             {
                 "id": row["id"], "label": row["label"], "tools": by_connector.get(str(row["id"]), []),
-                "domains": sorted(held.get(str(row["id"]), frozenset())),
+                "audiences": sorted(held.get(str(row["id"]), frozenset())),
             }
             for row in upstream_mcp_runtime.status()
         ]

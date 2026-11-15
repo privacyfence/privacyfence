@@ -3,15 +3,17 @@
 An organization server can put another MCP server (an "upstream", for example a knowledge hub) behind
 PrivacyFence. The operator declares which of its tools exist and how each is gated; PrivacyFence
 enforces that tool policy with cards, scoped tokens and the audit log, like a built-in connector.
-Every request to the upstream carries a 60-second signed claim naming the person, the data domains they
-may see and what is calling, and the upstream filters its own queries by it.
+Every call PrivacyFence forwards carries a short signed claim, bound to that one call, that names the
+person, the audiences they hold and what is calling; the upstream filters its own queries by it.
 
 Why it is built this way: [ADR 0285](adr/0285-upstream-mcp-servers-are-declared-connectors.md),
-[ADR 0286](adr/0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) and
-[ADR 0287](adr/0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md).
+[ADR 0297](adr/0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md),
+[ADR 0298](adr/0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) and
+[ADR 0299](adr/0299-group-membership-is-updated-through-a-scoped-token-tool.md).
 
-- **Operators:** [write the file](#the-operator-file), [grant domains](#domain-grants), restart.
-- **Upstream implementers:** [verify the claim and filter by `domains`](#for-upstream-implementers).
+- **Operators:** [write the file](#the-operator-file), [map groups to audiences](#groups-and-audiences),
+  [keep membership current](#group-membership), restart.
+- **Upstream implementers:** [verify the claim and filter by `audiences`](#for-upstream-implementers).
 - **Try it:** [the reference upstream](#reference-upstream).
 
 ## For operators
@@ -60,9 +62,6 @@ upstreams:
     tools:
       search: {gate: auto, verb: search}
       propose_change: {gate: popup, verb: add, effect: Adds a change proposal to the knowledge hub.}
-    grants:
-      - match: "*"
-        domains: [general]
 ```
 
 The AI client sees each declared tool as `<id>_<tool>`, here `kh_search` and `kh_propose_change`. Any
@@ -71,14 +70,17 @@ mistake in the declaration refuses the start; the message names the path of the 
 
 | Rule | Detail |
 |---|---|
-| Keys | `version` must be `1`. Only `version` and `upstreams` at the top; only `id`, `label`, `url`, `audience`, `tools`, `grants` in an upstream; only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
-| Size | At most 8 upstreams, 50 tools and 200 grants per upstream; the file or inline text is at most 256 KiB. |
+| Keys | `version` must be `1`. Only `version`, `upstreams`, `claim` and `membership` at the top; only `id`, `label`, `url`, `audience`, `tools`, `identity_claim`, `claim_lifetime_seconds` and `allowed_principal_types` in an upstream (an old `grants` key is refused with `grants were replaced by groups`); only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
+| Size | At most 8 upstreams and 50 tools per upstream; the file or inline text is at most 256 KiB. |
 | Repeated key | A key that appears twice in one mapping or object is refused (`the file repeats a key.` or `the text repeats a key.`), so a repeated tool name cannot silently keep the last gate. |
 | Format | A YAML file is checked by the same rules as JSON; a wrong top level still reads `must be a JSON object`. |
 | `id` | 2-16 characters, lowercase letters and digits, starting with a letter; unique. It may not collide with a built-in connector name (such as `gmail`, `drive`, `privacyfence`): `upstream id "<id>" collides with the built-in connector "<name>"`. |
 | `label` | 1-60 characters, no control characters. It names the server on cards and in the tool descriptions. |
 | `url` | `https://` with any host, or `http://` only for `localhost`, a loopback address or a single-word host name (a container on the same Docker network, such as `http://knowledge-hub:8080/mcp`). No user name, no fragment. |
-| `audience` | Required, 1-200 characters, no whitespace. It becomes the `aud` of every claim; the upstream accepts only claims with its own audience. |
+| `audience` | Required, 1-200 characters, no whitespace. It becomes the `aud` of every claim; the upstream accepts only claims with its own audience. Not to be confused with the *audiences* a person holds. |
+| `identity_claim` | `required` (the default) signs every call; `off` sends no claim and resolves no caller. |
+| `claim_lifetime_seconds` | 5-60, default 60: how long a claim is valid. |
+| `allowed_principal_types` | A non-empty list from `claude_client` (a person's AI client) and `n8n_workflow` (any scoped token); default both. A caller of another type is refused before anything is sent. |
 | tool name | 1-48 letters, digits, underscores or hyphens; `<id>_<tool>` is at most 64 characters and must not collide with an existing tool. |
 | `gate` | `auto` (runs at once), `review` (runs, then the person sees the result before it is returned) or `popup` (the person approves before the call is sent). |
 | `verb` | One of the policy verbs. A **read verb** (`read`, `download`, `search`) takes `auto` or `review` and no `effect`. **Every other verb** takes `popup` and must carry an `effect`: 1-200 characters, ending in a full stop, shown on the card. |
@@ -101,59 +103,114 @@ Approval cards show the server, the tool and the argument names, never the argum
 tool's card also offers the arguments' text for review. Upstream tools have no "Always allow" button and no
 auto-accept rules yet.
 
-### Domain grants
+### Groups and audiences
 
-A *domain* is the upstream's own label for a slice of its data (`general`, `hr`, `finance`). Which people
-hold which domains is set in `admin_config.json` under `upstream_mcp` (on an organization server,
-`org/admin_config.json`; see the [configuration reference](configuration-reference.md#admin-config-orgadmin_configjson)):
+An *audience* is the upstream's own label for a slice of its data (`all`, `mgmt`, `finance`). A person holds
+the audiences of the Workspace groups they belong to. The map from groups to audiences is set in
+`admin_config.json` under `upstream_mcp` (on an organization server, `org/admin_config.json`; see the
+[configuration reference](configuration-reference.md#admin-config-orgadmin_configjson)):
 
 ```json
 "upstream_mcp": {
-  "kh": {"grants": [
-    {"match": "*",               "domains": ["general"]},
-    {"match": "@hr.example.com", "domains": ["hr"]},
-    {"match": "ceo@example.com", "domains": ["hr", "finance"]}
-  ]}
+  "kh": {"groups": {
+    "everyone@company.example": ["all"],
+    "mgmt@company.example":     ["mgmt"],
+    "ceo-staff@company.example": ["mgmt", "finance"]
+  }}
 }
 ```
 
-- `match` is `*` (any verified person), `@<domain>` (an email domain, case-insensitive) or one email
-  address (case-insensitive). A person's domains are the union of every grant that matches them.
-- A domain name is 1-63 characters: lowercase letters, digits, underscores and hyphens, starting with a
-  letter or digit. At most 200 grants per upstream.
-- A grant for an id the declaration does not declare is logged once and ignored. An invalid section is
-  reported as `admin_config.json: upstream_mcp.<id>.grants[<n>]: <problem>`; at startup it refuses the
-  start, and in a running server the last good grants stay in force and the error is logged.
-- **"Verified" matters.** Grants match only an email address PrivacyFence treats as verified: the
+- A group name is lower case and email-shaped; an audience is 1-63 characters (`a-z`, `0-9`, `_`, `-`,
+  starting with a letter or digit). At most 200 groups per upstream. A person's audiences are the union over
+  every group they belong to.
+- `all` is the one unrestricted audience: an addition to it applies at once. Every other audience is
+  restricted and needs an administrator's approval for each person ([below](#group-membership)).
+- **Grants were replaced by groups.** A `grants` key in the declaration is refused at
+  start with this message; nothing is seeded from the declaration any more, and `admin_config.json` holds `groups`.
+- A group map for an id the declaration does not declare is logged once and ignored. An invalid section is
+  reported as `admin_config.json: upstream_mcp.<id>.groups: <problem>`; at startup it refuses the start, and
+  in a running server the last good map stays in force and the error is logged.
+- **"Verified" matters.** Audiences come only from an email address PrivacyFence treats as verified: the
   identity provider said the address is verified, or the identity provider's `trust_unverified_email` is on
   and the address is in an allowed domain (see [Who may sign in](org-mode-setup-guide.md#who-may-sign-in)).
-  The single-user person is verified. An unverified or empty address gets no domains, so the upstream returns no data for
-  that person. Sessions that began before this feature carry no verification bit and give no domains until
-  the person signs in again.
-- **Seeding grants.** An upstream may carry `grants` in the declaration itself (a list of `match` and
-  `domains`, as above). On start they are copied into `admin_config.json` once per upstream id. An id that
-  is already there is never touched, even when its grants are empty, and nothing is removed: taking an
-  upstream out of the declaration removes nothing. After the first start `admin_config.json` owns the
-  grants ([ADR 0288](adr/0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md)).
-- **Grant edits apply without a restart:** PrivacyFence re-reads the file when its modification time
-  changes, and the next call uses the new grants. There is no Admin page control for grants; it is a file
-  edit. Because every claim lives 60 seconds, a revoked grant stops working within a minute.
+  The single-user person is verified. An unverified or empty address gets no audiences, so the upstream
+  returns no data for that person.
+- **Edits apply without a restart:** PrivacyFence re-reads the file when its modification time changes. There
+  is no Admin page control for the map; it is a file edit. Do it while no one is saving on the Admin page.
+
+### Operator keys
+
+Besides the per-upstream keys in the table above, the operator file has two top-level objects:
+
+| Key | Meaning |
+|---|---|
+| `claim.key_overlap_hours` | 1-720, default 24: how long a rotated key stays in the key set after it stops signing. |
+| `membership.source` | `snapshot` (the default: membership comes from the [sync tool](#group-membership)) or `static`. |
+| `membership.file` | With `static` only: the path of a JSON file `{"version": 1, "groups": {"mgmt@company.example": ["a@company.example"]}}`, re-read when it changes. No approvals; for a first try and for tests. |
+| `membership.max_additions` | 1-1000, default 20: how many additions one snapshot and the last 24 hours together may hold before the snapshot is rejected. |
+
+`identity_claim`, `claim_lifetime_seconds` and `allowed_principal_types` are described in the table of rules
+above. A change to any of these needs a restart.
+
+### Group membership
+
+PrivacyFence does not read your directory. A job of yours (an n8n workflow that lists the Workspace groups)
+tells it who is in each group by calling the tool **`privacyfence_update_group_membership`** with
+`{"groups": {"mgmt@company.example": ["a@company.example", "b@company.example"]}}`. Each call is a snapshot of
+the groups it names. The tool answers `{"status": "applied" | "rejected", "added", "removed", "parked",
+"ignored_groups", "reason"}`.
+
+- **Only a scoped token can call it, and only an administrator can create that token.** In Settings → Scoped
+  tokens → New token an administrator ticks `privacyfence_update_group_membership` under "Tools that need no
+  rule". An AI client cannot call the tool or propose a token for it. Keep the secret in the job's credential
+  store, never in a chat.
+- **Removals apply at once.** A person who is absent from a group in the snapshot loses that group's audiences
+  at the next call.
+- **Additions to `all` apply at once; additions to any other audience wait.** The person is *parked* until an
+  administrator opens **Admin → Group membership** and approves or declines them for that group and audience
+  (one person, or everyone pending for that group and audience). An approval is only for that group and
+  audience, and is forgotten when the person leaves the group.
+- **Groups no upstream's map names are ignored** and never stored; mapping a group later makes it appear in
+  the next snapshot.
+- **Limits.** At most 500 groups and 20000 member entries per snapshot. A snapshot is rejected, and nothing
+  is applied, when its additions together with those of the last 24 hours exceed `membership.max_additions`
+  (the very first snapshot is exempt), or when more than 500 approvals would be pending. A rejection is an
+  audit entry, a log line and a row on the Admin page.
+- Every call, approval and decline is in the audit log with counts and group names, never addresses.
+
+The tool is also listed in the [tools reference](tools-reference.md).
 
 ### What a person and a scoped token see
 
-- **A person** (through an AI client) gets the domains their grants give them.
-- **A scoped token** gets only the domains its creator ticked, and never more than the creator holds.
-  In Settings → Scoped tokens → New token, tick an upstream tool and a fieldset `Data domains for <label>`
-  appears with one box per domain you hold, none ticked. A token made without ticking any sees no
-  domain. A token only narrows: it cannot add a domain the person lacks, and if the person later loses a
-  grant the token loses it too.
-- A scoped token's calls carry `act.type` `workflow`; a person's carry `ai_client`.
+- **A person** (through an AI client) gets the audiences their groups give them, with `principal_type`
+  `claude_client`.
+- **A scoped token** gets only the audiences its creator ticked, and never more than the creator holds. In
+  Settings → Scoped tokens → New token, tick an upstream tool and a fieldset `Audiences for <label>` appears
+  with one box per audience you hold, none ticked. A token made without ticking any sees no audience. A token
+  only narrows: if the person later loses an audience, the token loses it too. Its claim has `principal_type`
+  `n8n_workflow` and no email.
 - An AI client cannot propose a scoped token that includes an upstream tool: the proposal is refused with
   `Upstream tools cannot be proposed; create the token in Settings.`
 
 **Known limitation.** An upstream tool declared `review` or `popup` has no scope-catalogue entry yet, so the
 New token form lists only the `auto` upstream tools. Scoped-token rules for upstream tools are a later
 change.
+
+### Rotating the claim key
+
+Claims are signed with an Ed25519 key kept in `upstream_claim_keys.json` in the org directory and published at
+`<PrivacyFence address>/upstream-mcp/jwks`. To rotate it, run `privacyfence-app --rotate-upstream-claim-key` as
+the account the daemon runs as. The new key is published at once and starts signing five minutes later, so an
+upstream that caches the key set for five minutes has it first; the old key stays published for
+`claim.key_overlap_hours`. `--revoke-upstream-claim-key KID` removes a key from the key set at once (for a
+leaked key) and refuses the only signing key. See the
+[configuration reference](configuration-reference.md#command-line-options).
+
+### Audit
+
+Every call PrivacyFence forwards to an upstream writes one `upstream_forwarded` audit entry with the claim's
+`jti`, `sub`, principal type, audiences and `req` and how the call ended (including a refusal or a signing
+failure), so your upstream's log can be matched to PrivacyFence's. The claim and the arguments are never logged.
 
 ### `privacyfence_status`
 
@@ -176,92 +233,51 @@ secrets in an upstream's error messages. Each call opens one short MCP session t
 
 ## For upstream implementers
 
-PrivacyFence sends `Authorization: Bearer <jwt>` on **every HTTP request** to your MCP endpoint, a new
-token each time. Treat it as the only proof of who is asking; PrivacyFence holds the approvals and the
-audit trail, you hold the data.
+PrivacyFence sends the header `X-PrivacyFence-Claim: <jwt>` on **every HTTP request** to your MCP endpoint, a
+new claim each time. It never sets `Authorization`; that stays free for your own use. Treat the claim as the
+only proof of who is asking; PrivacyFence holds the approvals and the audit trail, you hold the data.
 
-**Verify it** (the [reference server](#reference-upstream) does all of this):
+The full contract, with the claim fields, the `req` binding of a claim to one tool call, the verification
+checklist and the versioning, is [identity-claim.md](identity-claim.md). The short form:
 
-- Fetch the keys from `<PrivacyFence address>/upstream-mcp/jwks` (public, no sign-in; cache it, honor the
-  `kid`, refetch on an unknown `kid`). Accept **RS256 only**.
-- Require the header `typ` `pf-upstream-claim+jwt`. It keeps a claim apart from the OpenID Connect ID tokens
-  PrivacyFence also signs, with a different key.
-- Require `aud` equal to the `audience` the operator declared for you, `iss` equal to
-  `<PrivacyFence address>/upstream-mcp`, and `exp` (60 seconds after `iat`); check `nbf` too. Use no clock
-  leeway beyond a second or two.
-- Keep a `jti` cache for the token's lifetime and refuse a `jti` you have seen.
+- Verify with `contrib/verifier/pf_claim_verify.py`, one file you can vendor (Python, with `PyJWT` and
+  `cryptography`). Give it your `audience`, PrivacyFence's issuer address and the JWKS address
+  `<PrivacyFence address>/upstream-mcp/jwks` (Ed25519 keys, cache five minutes, honor the `kid`). Pass it the
+  raw request body so it can check `req`.
+- **Only `sub`, `audiences` and `principal_type` may change what a query returns.** Everything else is for
+  your own audit.
+- A request that is not a tool call carries no audiences. A service claim (PrivacyFence's startup tool list)
+  has none either: return the tool list for it and no data.
+- Filter by `audiences` inside the query, not afterwards, so ranking and pagination stay correct and a guessed
+  document id is still refused. PrivacyFence never filters your results. A row-level security sketch is in
+  [identity-claim.md](identity-claim.md#row-level-security-sketch-postgresql).
 - Answer `401` for any failure, with no detail.
-
-**The claim**
-
-| Claim | Meaning |
-|---|---|
-| `sub` | The person's id; `privacyfence` for a service claim. |
-| `email`, `email_verified` | The person's address when verified, otherwise `""` and `false`. |
-| `domains` | Sorted list of the data domains the caller may see. Filter inside your own queries by it. |
-| `act` | What is calling: `{"type": "ai_client", "attested": bool, "name": "...", "claimed_name": "..."}`, `{"type": "workflow", "token_id": "...", "label": "..."}` (a scoped token), or `{"type": "service"}`. |
-| `pf_upstream`, `pf_tool` | The upstream id, and the upstream tool name for a `tools/call` (`null` otherwise). |
-| `iat`, `nbf`, `exp`, `jti` | Timing and the replay id. |
-
-**Only `sub`, `domains` and `act.type` may change what a query returns.** Everything else (`email`,
-`act.name`, `act.claimed_name`, `act.label`, `pf_tool`) is for your own audit: a client name is only claimed
-unless `attested` is true, and a label is whatever the token's creator typed.
-
-**The service actor.** PrivacyFence's startup `tools/list` is signed with `act.type` `service`, `sub`
-`privacyfence`, `domains: []`. Return the tool list for it and no data: an upstream that follows the
-contract returns nothing for a caller with no domains.
-
-**Check ids where the data lives.** Filter by `domains` inside the query, not afterwards, so ranking and
-pagination stay correct and a guessed document id is still refused. PrivacyFence never filters your results.
-
-### Row-level security sketch (PostgreSQL)
-
-Set the caller's domains once per transaction and let the database enforce them:
-
-```sql
-ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
-ALTER TABLE documents FORCE ROW LEVEL SECURITY;
-
-CREATE POLICY documents_by_domain ON documents
-  USING (domain = ANY (string_to_array(current_setting('app.domains'), ',')));
-```
-
-```sql
-BEGIN;
-SET LOCAL app.domains = 'general,hr';   -- the claim's domains, comma-joined, after verification
-SELECT id, title FROM documents WHERE body ILIKE '%policy%';
-COMMIT;
-```
-
-Bind the list as a parameter (`SELECT set_config('app.domains', $1, true)`), never by string
-concatenation. An empty list must give an empty `app.domains`, which matches no row. Connect as a role that is
-not the table owner and has no `BYPASSRLS`.
 
 ## Reference upstream
 
 `scripts/upstream_mcp_reference_server.py` is a small upstream for trying all of this and for tests. It is
-not for production. It verifies claims as above and serves `search`, `get_doc` and `propose_change` over four
-in-memory documents in the `general` (two), `hr` and `finance` domains, returning only the caller's
-domains; the service claim gets the tool list and no documents.
+not for production. It verifies claims with `pf_claim_verify.py` and serves `search`, `get_doc` and
+`propose_change` over four in-memory documents in the `general` (two), `hr` and `finance` audiences, returning
+only the caller's audiences; a service claim gets the tool list and no documents.
 
-Run it against a PrivacyFence server (the signing keys come from its JWKS address):
+Run it against a PrivacyFence server (the Ed25519 keys come from its JWKS address):
 
 ```
 python3 scripts/upstream_mcp_reference_server.py --host 127.0.0.1 --port 8099 \
-    --audience ref-upstream --issuer https://privacyfence.example.org/upstream-mcp \
+    --audience ref-upstream --issuer https://privacyfence.example.org \
     --jwks-url https://privacyfence.example.org/upstream-mcp/jwks
 ```
 
-Use `--jwks-file <file>` (a saved copy of the JWKS) or `--public-key-file <pem>` instead of `--jwks-url`
-when the upstream cannot reach PrivacyFence. The `--issuer` is your PrivacyFence address followed by
-`/upstream-mcp`.
+Use `--jwks-file <file>` (a saved copy of the JWKS) instead of `--jwks-url` when the upstream cannot reach
+PrivacyFence. The `--issuer` is your PrivacyFence address with no suffix.
 
 The operator file the manual check uses (`ref`, tools exposed as `ref_search`, `ref_get_doc`,
-`ref_propose_change`):
+`ref_propose_change`), with a static membership file so no sync job is needed:
 
 ```json
 {
   "version": 1,
+  "membership": {"source": "static", "file": "/etc/privacyfence/membership.json"},
   "upstreams": [
     {
       "id": "ref",
@@ -278,48 +294,18 @@ The operator file the manual check uses (`ref`, tools exposed as `ref_search`, `
 }
 ```
 
-With PrivacyFence running in the Docker container `privacyfence` (organization image, data in
-`/var/lib/privacyfence-org/.privacyfence`), set grants by editing `admin_config.json` in the container.
-Grant every domain to the single-user person and `general` to everyone else:
+The static membership file says who is in which group:
 
-```
-docker exec -i privacyfence python3 - <<'PY'
-import json, os
-path = "/var/lib/privacyfence-org/.privacyfence/org/admin_config.json"
-config = json.load(open(path))
-config.setdefault("upstream_mcp", {})["ref"] = {"grants": [
-    {"match": "*", "domains": ["general"]},
-    {"match": "admin@privacyfence.localhost", "domains": ["general", "hr", "finance"]},
-]}
-tmp = path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(config, f, indent=2)
-st = os.stat(path)
-os.chmod(tmp, st.st_mode & 0o7777)
-os.chown(tmp, st.st_uid, st.st_gid)
-os.replace(tmp, path)
-PY
+```json
+{"version": 1, "groups": {"everyone@example.org": ["admin@privacyfence.localhost"],
+                          "finance@example.org":  ["admin@privacyfence.localhost"]}}
 ```
 
-Then keep only the `*` grant; the next `ref_search` returns `general` documents only, with no restart:
-
-```
-docker exec -i privacyfence python3 - <<'PY'
-import json, os
-path = "/var/lib/privacyfence-org/.privacyfence/org/admin_config.json"
-config = json.load(open(path))
-config.setdefault("upstream_mcp", {})["ref"] = {"grants": [{"match": "*", "domains": ["general"]}]}
-tmp = path + ".tmp"
-with open(tmp, "w") as f:
-    json.dump(config, f, indent=2)
-st = os.stat(path)
-os.chmod(tmp, st.st_mode & 0o7777)
-os.chown(tmp, st.st_uid, st.st_gid)
-os.replace(tmp, path)
-PY
-```
-
-Do this only while no one is editing the Admin page: the server also writes this file.
+Map the groups to audiences in `admin_config.json` under `upstream_mcp.ref.groups`
+(`"everyone@example.org": ["general"]`, `"finance@example.org": ["finance"]`); the file is re-read when it
+changes, so the next `ref_search` returns the `general` and `finance` documents with no restart. Remove the
+person from the `finance` group in the membership file and the next call returns `general` only. Do this only
+while no one is editing the Admin page: the server also writes `admin_config.json`.
 
 ## Testing
 

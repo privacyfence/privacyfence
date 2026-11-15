@@ -14,8 +14,8 @@ import httpx2
 import pytest
 from mcp import ClientSession, types
 
-from privacyfence import oidc_provider
-from privacyfence.upstream_claims import CallerClaim, ClaimSigner
+from privacyfence.identity_claim import CLAIM_HEADER, ClaimSigner, IdentityCaller
+from privacyfence.upstream_claim_keys import KeySet
 from privacyfence.upstream_mcp_client import (
     CallResult,
     UpstreamMcpClient,
@@ -34,7 +34,7 @@ sys.modules[_SPEC.name] = ref
 _SPEC.loader.exec_module(ref)
 
 AUD = "https://kh.example/mcp"
-ISSUER = "https://pf.example/upstream-mcp"
+ISSUER = "https://pf.example"
 URL = "http://testserver/mcp"
 
 
@@ -51,13 +51,15 @@ def _upstream(*tools: DeclaredTool, url: str = URL) -> UpstreamServer:
 
 @pytest.fixture
 def signer(tmp_path):
-    return ClaimSigner(issuer=ISSUER, key=oidc_provider.load_or_create_signing_key(tmp_path / "k.pem"))
+    keys = KeySet(tmp_path / "keys.json")
+    keys.ensure()
+    return ClaimSigner(issuer=ISSUER, keys=keys)
 
 
-def _caller(*domains: str) -> CallerClaim:
-    return CallerClaim(
-        sub="u1", email="a@b.example", email_verified=True, domains=tuple(domains),
-        act={"type": "ai_client", "attested": False, "name": "", "claimed_name": ""},
+def _caller(*audiences: str) -> IdentityCaller:
+    return IdentityCaller(
+        sub="u1", principal_type="claude_client", email="a@b.example", audiences=tuple(audiences),
+        tools=("search",), act={"sub": "client-1"},
     )
 
 
@@ -97,11 +99,102 @@ async def test_call_tool_returns_structured_content_and_counts_other_blocks(sign
     monkeypatch.setattr(ClientSession, "call_tool", fake)
     async with _client(signer) as client:
         result = await client.call_tool("search", {}, _caller())
-    assert result == CallResult(text="one\ntwo", structured={"a": 1}, dropped_blocks=1)
+    assert (result.text, result.structured, result.dropped_blocks) == ("one\ntwo", {"a": 1}, 1)
+
+
+class _Spy(httpx2.AsyncBaseTransport):
+    """Passes every request to the reference app and keeps the headers of each."""
+
+    def __init__(self, app):
+        self._inner = httpx2.ASGITransport(app=app)
+        self.requests: list[httpx2.Request] = []
+
+    async def handle_async_request(self, request):
+        self.requests.append(request)
+        return await self._inner.handle_async_request(request)
+
+
+@contextlib.asynccontextmanager
+async def _spied(signer, upstream=None):
+    app = ref.build_app(audience=AUD, issuer=ISSUER, jwks=signer.jwks())
+    async with app.router.lifespan_context(app):
+        spy = _Spy(app)
+        yield UpstreamMcpClient(upstream or _upstream(), signer, transport=spy), spy
+
+
+def _claim_of(request: httpx2.Request) -> dict:
+    import jwt
+
+    return jwt.decode(request.headers[CLAIM_HEADER], options={"verify_signature": False})
+
+
+async def test_a_call_sends_the_claim_header_and_never_authorization(signer):
+    async with _spied(signer) as (client, spy):
+        result = await client.call_tool("search", {"query": "policy"}, _caller("general"))
+    assert spy.requests
+    assert all(CLAIM_HEADER in r.headers and "authorization" not in r.headers for r in spy.requests)
+    call = [r for r in spy.requests if json.loads(r.content or b"{}").get("method") == "tools/call"]
+    assert len(call) == 1
+    claim = _claim_of(call[0])
+    assert claim["audiences"] == ["general"] and claim["tools"] == ["search"] and claim["req"]
+    assert claim["jti"] == result.jti and claim["req"] == result.req
+
+
+async def test_requests_that_are_not_the_call_carry_no_audiences(signer):
+    async with _spied(signer) as (client, spy):
+        await client.call_tool("search", {"query": "policy"}, _caller("general"))
+    others = [r for r in spy.requests if json.loads(r.content or b"{}").get("method") != "tools/call" and r.content]
+    assert others
+    for request in others:
+        claim = _claim_of(request)
+        assert claim["audiences"] == [] and claim["tools"] == [] and "req" not in claim
+
+
+async def test_identity_claim_off_sends_no_header(signer):
+    upstream = UpstreamServer(
+        id="kh", label="KH", url=URL, audience=AUD, tools=(_declared("search"),), identity_claim="off",
+    )
+    async with _spied(signer, upstream) as (client, spy):
+        # The reference server refuses unsigned calls, so only the transport is observed.
+        with pytest.raises(UpstreamMcpClientError):
+            await client.call_tool("search", {"query": "policy"}, None)
+    assert spy.requests
+    assert all(CLAIM_HEADER not in r.headers and "authorization" not in r.headers for r in spy.requests)
+
+
+async def test_a_signing_failure_sends_nothing_and_is_claim_failed(signer, monkeypatch):
+    def broken(*args, **kwargs):
+        from privacyfence.upstream_claim_keys import KeySetError
+
+        raise KeySetError("No upstream claim signing key is usable.")
+
+    monkeypatch.setattr(KeySet, "sign", broken)
+    async with _spied(signer) as (client, spy):
+        with pytest.raises(UpstreamMcpClientError) as caught:
+            await client.call_tool("search", {"query": "policy"}, _caller("general"))
+    assert caught.value.kind == "claim_failed"
+    assert spy.requests == []
+
+
+def test_arguments_that_cannot_be_canonicalised_mark_the_claim_as_failed(signer):
+    # The SDK itself serialises NaN as null, so the end-to-end path cannot carry it; the auth is the guard.
+    import httpx2
+
+    from privacyfence.identity_claim import ClaimSigningError, IdentityClaimAuth
+    from privacyfence.upstream_mcp_client import _FailureRecorder
+
+    recorder = _FailureRecorder(signer)
+    auth = IdentityClaimAuth(recorder, "general", _caller("general"), 30)  # type: ignore[arg-type]
+    body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"q":NaN}}}'
+    request = httpx2.Request("POST", "http://upstream.test/mcp", content=body.encode())
+    assert json.loads(body)["params"]["arguments"]["q"] != json.loads(body)["params"]["arguments"]["q"]
+    with pytest.raises(ClaimSigningError):
+        next(auth.auth_flow(request))
+    assert auth.request_unhashable is True  # the client reports claim_failed from this flag
 
 
 async def test_a_result_over_the_cap_is_too_large(signer):
-    big = [{"id": "9", "domain": "general", "title": "Big", "body": "x" * 1_000_001}]
+    big = [{"id": "9", "audience": "general", "title": "Big", "body": "x" * 1_000_001}]
     async with _client(signer, documents=big) as client:
         with pytest.raises(UpstreamMcpClientError) as caught:
             await client.call_tool("search", {"query": "big"}, _caller("general"))

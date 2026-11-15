@@ -447,6 +447,23 @@ class TestCallConnectorTool:
         assert result.structured_content == {"echoed": {"message": "hi"}}
         assert connector.calls == [("echo_say", {"message": "hi"})]
 
+    async def test_the_connector_sees_the_oauth_client_id_only_during_the_call(self):
+        from privacyfence.agent_identity import current_client_id
+
+        seen: list[str] = []
+
+        class _Spy(EchoConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                seen.append(current_client_id())
+                return await super().call(tool, args)
+
+        dispatcher = _dispatcher({"echo": _Spy()})
+        async with _connected_session(dispatcher, verifier=_OrgVerifier("alice@example.org")) as session:
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.is_error is False
+        assert seen == ["claude-desktop"]
+        assert current_client_id() == ""
+
     async def test_reason_is_popped_before_reaching_the_connector(self):
         connector = EchoConnector()
         dispatcher = _dispatcher({"echo": connector})

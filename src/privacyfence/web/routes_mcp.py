@@ -50,7 +50,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .. import __version__ as PRIVACYFENCE_VERSION
 from .. import local_files, scoped_tokens
-from ..agent_identity import UNKNOWN_AGENT, UNKNOWN_ID_PREFIX, AgentIdentity, AgentSource, agent_scope, identify, identify_registry_id
+from ..agent_identity import UNKNOWN_AGENT, UNKNOWN_ID_PREFIX, AgentIdentity, AgentSource, agent_scope, client_id_scope, identify, identify_registry_id
 from ..agent_overrides import AgentOverrides
 from ..connector import Connector
 from ..gate import audit_scoped_refusal, reason_scope
@@ -511,7 +511,9 @@ def build_mcp_server(
         uploads = _file_bridge_uploads(params)
         base_url = str(ctx.request.base_url) if ctx.request is not None else ""
         with (
-            principal_scope(principal), agent_scope(agent), scoped_tokens.token_scope(scope),
+            principal_scope(principal), agent_scope(agent),
+            client_id_scope(access_token.client_id if access_token else ""),
+            scoped_tokens.token_scope(scope),
             local_files.call_context(
                 bridge_available=bridge_available, uploads=uploads, base_url=base_url,
             ) as call_state,
