@@ -384,18 +384,3 @@ class TestCachedRuleValue:
         assert ss.cached_rule_value(rule, get_resolver()) == "a.com, b.com"
 
 
-class TestPickResourceIndex:
-    def test_no_registry_means_no_choice(self, monkeypatch):
-        from types import SimpleNamespace
-
-        monkeypatch.setattr(ss, "get_approval_ui", lambda: SimpleNamespace(deferred_registry=None))
-        assert ss._pick_resource_index(title="t", prompt="p", options=["a"]) is None
-
-    def test_choice_goes_through_the_web_prompt_registry(self, monkeypatch):
-        from types import SimpleNamespace
-
-        registry = object()
-        monkeypatch.setattr(ss, "get_approval_ui", lambda: SimpleNamespace(deferred_registry=registry))
-        monkeypatch.setattr(ss.dialog_window_html, "build_choice_html", lambda **kw: "<html>")
-        monkeypatch.setattr(ss.web_prompt, "block_on_choice", lambda reg, html: 1 if reg is registry else None)
-        assert ss._pick_resource_index(title="t", prompt="p", options=["a", "b"]) == 1

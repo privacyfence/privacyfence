@@ -45,7 +45,7 @@ from typing import Any, Literal
 
 from .design_css import DOCUMENT_CSS
 from .html_embed import json_for_script
-from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
+from .web.org_settings_scope import NOT_APPLICABLE_ACTIONS, ORG_MODE
 
 # The settings page is built from the shared design system (resources/design/, ADR 0078/0079),
 # which DOCUMENT_CSS inlines ahead of this module's own rules: the tokens (dark mode included --
@@ -100,12 +100,9 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-hint { font-size: var(--step-small); color: var(--muted); line-height: 1.5; }
 .pf-aa-pair-hint { margin: var(--space-s) 0; }
 .pf-aa-pair-invalid { color: var(--warning); }
-/* The Connect an AI client page's command sample (ADR 0104): scrolls inside itself, never the page. */
-.pf-ai-command { margin: var(--space-s) 0; padding: var(--space-s); border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface-soft); overflow-x: auto; font-size: var(--step-small); }
-.pf-ai-url { user-select: all; }
 .pf-empty { font-size: var(--step-small); color: var(--muted); }
 
-/* ---- Banners (error, update, welcome): status cards ---- */
+/* ---- Banners (error, update): status cards ---- */
 .pf-banner { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-xs); font-size: var(--step-small); line-height: 1.5; }
 .pf-banner-dismiss {
   flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: var(--tap); min-height: var(--tap);
@@ -202,17 +199,6 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
   padding: var(--space-2xs) var(--space-xs); font-size: var(--step-small);
 }
 
-/* ---- Connectors (local mode) ---- */
-.pf-connector-list { display: flex; flex-direction: column; gap: var(--space-xs); }
-.pf-connector-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-s); }
-.pf-connector-name { display: flex; align-items: center; gap: var(--space-xs); flex: 1 1 200px; min-width: 0; font-weight: 650; }
-.pf-connector-icon {
-  width: 36px; height: 36px; border-radius: var(--radius-s); background: var(--mark-tile); border: 1px solid var(--line);
-  display: flex; align-items: center; justify-content: center; flex: none; overflow: hidden;
-}
-.pf-connector-icon img { width: 22px; height: 22px; object-fit: contain; }
-.pf-connector-actions { display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap; }
-
 /* ---- Auto-accept (policy v2) ---- */
 .pf-aa-search { flex: 1 1 100%; }
 .pf-aa-row-main { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-xs); }
@@ -297,7 +283,7 @@ code { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere;
 .pf-about-license { font-size: 13px; color: var(--muted); }
 .pf-about-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-xs); margin-top: var(--space-m); }
 
-/* ---- Telegram sign-in modal ---- */
+/* ---- Modal dialogs ---- */
 .pf-modal-overlay {
   position: fixed; inset: 0; background: var(--scrim); display: flex;
   align-items: center; justify-content: center; z-index: 100; padding: var(--gutter);
@@ -322,16 +308,14 @@ _JS = r"""
 (function () {
   // window.__pfCapabilities is Python's own settings_window_html.
   // build_html()/_capabilities_for() -- which inner-nav sections this
-  // (mode, is_admin) combination gets, and which individual actions never
+  // is_admin value gets, and which individual actions never
   // have a real route to post to at all (org_settings_scope.
-  // NOT_APPLICABLE_ACTIONS, plus the handful of local-only bespoke actions
+  // NOT_APPLICABLE_ACTIONS, plus the handful of bespoke actions
   // that table doesn't cover -- see that function's own docstring). Every
-  // call site that sets no capabilities renders under the fallback below, which hides
-  // nothing -- local mode's own rendering is unaffected by any of this
-  // (ADR 0032).
+  // call site that sets no capabilities renders under the fallback below.
   var CAPS = window.__pfCapabilities || {
-    mode: 'local', is_admin: false,
-    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, stats: false, about: true },
+    mode: 'org', is_admin: false,
+    sections: { general: true, auto_accept: true, audit: true, about: true },
     not_applicable_actions: [],
     personalTransfer: false,
   };
@@ -347,7 +331,7 @@ _JS = r"""
     // for what's otherwise purely client-side UI state (see this module's
     // own docstring on `ui`). Every other route omits the script that sets
     // it, so this falls back to 'general' exactly as before -- except in a
-    // mode where General itself is hidden (a non-admin org
+    // case where General itself is hidden (a non-admin
     // principal), where landing on a nav item that isn't drawn at all would
     // leave the page with no visible selection; Auto-accept is the one
     // section every org principal, admin or not, always gets.
@@ -360,29 +344,6 @@ _JS = r"""
     stNewGroup: null, stNewValue: '', stNewVerbs: {}, stNewRules: [], stDupRules: {},
     // Review panel for an AI-proposed token (window.__pfScopedProposal); spLabel === null until first drawn.
     spLabel: null, spDays: null, spRules: {}, spVerbs: {}, spTools: {}, spPersonalData: false, spPersonalDataReads: false, spTyped: '',
-    // Dismissible client-side only (never sent to Python, same reasoning
-    // as every other `ui.*` field) -- see renderWelcomeBanner below.
-    welcomeBannerDismissed: false,
-    telegramModalOpen: false,
-    // Tracks whether we've actually observed a non-null telegram_auth.step
-    // from Python yet -- a fresh, never-submitted modal also has step ===
-    // null, and without this the auto-close-on-success check in render()
-    // couldn't tell "flow just succeeded" apart from "flow never started".
-    telegramAuthWasActive: false,
-    // The Peek sign-in modal, with the same was-active bookkeeping.
-    peekModalOpen: false,
-    peekAuthWasActive: false,
-    // Grist API-key form: gristSubmitted is set when Connect is posted and
-    // cleared once the result (success or error) has been seen in a snapshot.
-    gristModalOpen: false,
-    gristSubmitted: false,
-    // True once the submitted form's row has been seen busy: a snapshot pushed
-    // before the worker marks it busy must not close the modal.
-    gristSawBusy: false,
-    gristServerUrl: '',
-    // What is being typed, kept across re-renders; the key is only ever page
-    // state, cleared on submit and never posted anywhere but grist_connect.
-    gristApiKey: '',
   };
   var pyState = null;
 
@@ -483,7 +444,7 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   var NAV_ITEMS = [
-    ['general', 'General'], ['connectors', 'Connectors'], ['ai_client', 'AI clients'], ['scoped_tokens', 'Scoped tokens'], ['auto_accept', 'Auto-accept'],
+    ['general', 'General'], ['scoped_tokens', 'Scoped tokens'], ['auto_accept', 'Auto-accept'],
     ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['stats', 'Stats'], ['about', 'About'],
   ];
 
@@ -584,8 +545,7 @@ _JS = r"""
   }
 
   // Which approvals ask for a passkey (ADR 0091). The configured
-  // step_up.scope -- the org's bundle, or config/settings.yaml in local
-  // mode -- is the minimum: a rung narrower than it is drawn locked, with
+  // step_up.scope -- the organization's configuration -- is the minimum: a rung narrower than it is drawn locked, with
   // no data-action, so this control can only ever ask for more.
   var CREDENTIAL_TYPE_OPTIONS = [
     ['httpBearerAuth', 'MCP Client node (n8n\u2019s built-in bearer credential)'],
@@ -613,15 +573,14 @@ _JS = r"""
     seg += '</div>';
     var minimumLabel = '';
     STEP_UP_SCOPE_LABELS.forEach(function (it) { if (it[0] === g.step_up_scope_floor) { minimumLabel = it[1]; } });
-    var source = CAPS.mode === 'org' ? 'Your organization requires' : '<code>config/settings.yaml</code> requires';
     return rowHtml(groupLabel,
-      'Which approvals ask for your passkey. ' + source + ' at least <strong>' + esc(minimumLabel) +
+      'Which approvals ask for your passkey. Your organization requires at least <strong>' + esc(minimumLabel) +
       '</strong>; you can require it for more of your own approvals, never less.',
       seg, 'pf-row-sub');
   }
 
-  // The PII Detection Gate's switches: the owner's own on General in local mode, the install-wide
-  // policy on the Admin page's Privacy Filter in org mode. `g` carries pii_enabled/pii_ip/pii_financial.
+  // The PII Detection Gate's switches: the install-wide policy on the Admin page's Privacy Filter.
+  // `g` carries pii_enabled/pii_ip/pii_financial.
   function piiGateCardHtml(g) {
     var html = '<div class="card pf-card pf-pii-gate">';
     html += rowHtml('PII Detection Gate',
@@ -659,10 +618,8 @@ _JS = r"""
       html += '</div>';
     }
 
-    // The PII gate is the owner's own setting in local mode. On an organization
-    // server it is install-wide and an administrator changes it on the Admin page,
-    // so General there is only each person's own notification and passkey settings.
-    if (CAPS.mode !== 'org') { html += piiGateCardHtml(g); }
+    // The PII gate is install-wide and an administrator changes it on the Admin page,
+    // so General is only each person's own notification and passkey settings.
 
     // A plain same-origin <a>, not a data-action AJAX call --
     // /security is its own standalone page (web/routes_security.py), not
@@ -716,111 +673,6 @@ _JS = r"""
     }
 
     html += '</div>';
-    return html;
-  }
-
-  // -------------------------------------------------------------------- //
-  // Connectors
-  // -------------------------------------------------------------------- //
-
-  function connectorStatus(c) {
-    // app.css badges: the text always names the state, the colour repeats it.
-    if (c.busy) return { text: 'Connecting…', cls: 'badge-warning' };
-    if (c.authed) return { text: 'Connected', cls: 'badge-success' };
-    if (!c.enabled) return { text: 'Disabled', cls: 'badge-dashed' };
-    if (!c.has_org) {
-      return { text: c.key === 'telegram' ? 'App credentials missing' : 'Organization config missing', cls: 'badge-danger' };
-    }
-    return { text: 'Not connected', cls: '' };
-  }
-
-  // Shown on first run (nothing authenticated yet) so
-  // landing here from the companion's Open Settings item isn't a blank
-  // connector list with no explanation of what any of it means or what
-  // order to do things in. Dismissible, client-side only -- see ui.
-  // welcomeBannerDismissed's own comment above; a page reload brings it
-  // back until a connector is actually authenticated, at which point
-  // `anyAuthed` below stops it from rendering at all.
-  function renderWelcomeBanner(state) {
-    if (ui.welcomeBannerDismissed) return '';
-    var anyAuthed = state.connectors.some(function (c) { return c.authed; });
-    if (anyAuthed) return '';
-    var html = '<div class="card card-info pf-welcome-banner"><div class="pf-banner">';
-    html += '<div><div class="pf-row-title">Welcome to PrivacyFence</div>';
-    html += '<div class="pf-row-desc">PrivacyFence is a privacy and approval gateway between Claude and your ' +
-      'real accounts (Gmail, Drive, Slack, and similar) -- it governs access to them, it does not provide them ' +
-      'itself. Nothing is governed until at least one connector below is authenticated. ' +
-      'The Admin page decides which services are offered. Authenticate one below, then go back to Claude.</div></div>';
-    html += '<div class="pf-banner-dismiss" role="button" tabindex="0" aria-label="Dismiss welcome message" ' +
-      'data-dismiss-welcome="1">✕</div>';
-    html += '</div></div>';
-    return html;
-  }
-
-  function renderConnectors(state) {
-    var html = '<div class="pf-page">';
-    html += '<h1 class="pf-page-title">Connectors</h1>';
-    html += '<div class="pf-page-subtitle">Authenticate a connector to let Claude access it, subject to approval and policy. ' +
-      'Signing in opens a browser window on the machine running PrivacyFence -- not necessarily this device.</div>';
-    html += renderWelcomeBanner(state);
-    if (!state.connectors.length) {
-      html += '<div class="card"><div class="pf-row-title">No connectors are enabled</div>' +
-        '<div class="pf-row-desc">Connectors appear here once your organization config enables them. ' +
-        'Install it from the General page.</div></div>';
-    }
-    html += '<div class="pf-connector-list">';
-    var gristSignin = state.grist_signin || 'unavailable';
-    var gristAuth = state.grist_auth || { error: '' };
-    state.connectors.forEach(function (c) {
-      var status = connectorStatus(c);
-      html += '<div class="card pf-connector-row">';
-      html += '<div class="pf-connector-name"><div class="pf-connector-icon">' +
-        (c.icon_data_uri ? '<img src="' + esc(c.icon_data_uri) + '" alt="" width="22" height="22"/>' : '') + '</div>';
-      html += '<span>' + esc(c.label) + '</span><span class="badge ' + status.cls + '">' + esc(status.text) + '</span></div>';
-      html += '<div class="pf-connector-actions">';
-      var authDisabled = c.busy;
-      if (c.key === 'grist' && gristSignin === 'unavailable') {
-        // A malformed organization section: the error shows under the row.
-        html += '<div class="pf-link pf-auth-link" role="button" aria-label="' + esc(c.auth_label) + ' Grist" aria-disabled="true">' +
-          esc(c.auth_label) + '</div>';
-      } else if (c.key === 'grist' && gristSignin === 'api_key') {
-        // An API key, not OAuth: its own small modal (renderGristModal),
-        // opened client-side like Telegram's (data-grist-auth).
-        html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' Grist"' +
-          (authDisabled ? ' aria-disabled="true"' : ' data-grist-auth="1"') + '>' + esc(c.auth_label) + '</div>';
-      } else if (c.key === 'peek') {
-        // Peek's device sign-in has its own two-step modal (renderPeekModal),
-        // opened client-side like Telegram's.
-        html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' Peek"' +
-          (authDisabled ? ' aria-disabled="true"' : ' data-peek-auth="1"') + '>' + esc(c.auth_label) + '</div>';
-      } else if (c.key === 'telegram') {
-        // Telegram's phone/code/2FA flow needs its own multi-step modal
-        // (see renderTelegramModal below) instead of the generic single-
-        // click OAuth flow every other connector uses -- intercepted here
-        // client-side (data-telegram-auth, not data-action) so opening the
-        // modal at the phone-entry step needs no round trip to Python;
-        // the first real bridge call is telegram_start_auth() once a
-        // phone number is actually submitted.
-        html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' Telegram"' +
-          (authDisabled ? ' aria-disabled="true"' : ' data-telegram-auth="1"') + '>' + esc(c.auth_label) + '</div>';
-      } else {
-        html += '<div class="pf-link pf-auth-link" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' ' + esc(c.label) + '" ' +
-          (authDisabled ? 'aria-disabled="true"' : dataAttr('authenticate_connector', { connector: c.key })) + '>' + esc(c.auth_label) + '</div>';
-      }
-      // Directional, not a single
-      // toggle_connector -- re-enabling a connector is gated
-      // (_SENSITIVE_ACTIONS) differently from disabling one (see
-      // web/routes_settings.py's own classification comment), so the
-      // action this click sends has to match which direction the very
-      // next click will actually take (ADR 0070).
-      html += toggleHtml(c.enabled, c.enabled ? 'disable_connector' : 'enable_connector', { connector: c.key }, false, c.label + ' enabled');
-      html += '</div>';
-      if (c.key === 'grist' && gristSignin === 'unavailable' && gristAuth.error) {
-        html += '<div class="pf-modal-error" style="flex-basis:100%">' + esc(gristAuth.error) + '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div></div>';
     return html;
   }
 
@@ -1210,11 +1062,6 @@ _JS = r"""
 
   function auditAgentHtml(agent) {
     agent = agent || {};
-    // Every local-mode row (ADR 0088): "Undetected" alone, no tier badge.
-    if (agent.tier === 'undetected') {
-      return '<div class="pf-audit-agent pf-audit-agent-undetected" data-agent-tier="undetected">' +
-        '<span class="pf-audit-agent-name">' + esc(agent.headline || 'Undetected') + '</span></div>';
-    }
     var tier = TIER_MARKERS.hasOwnProperty(agent.tier) ? agent.tier : 'unknown';
     var headline = agent.headline || 'Unrecognised AI system';
     var text = agent.claim ? headline + ' \u201c' + agent.claim + '\u201d' : headline;
@@ -1282,61 +1129,11 @@ _JS = r"""
   // Connect an AI client (ADR 0104)
   // -------------------------------------------------------------------- //
 
-  // Static for the life of the page (the MCP URL only changes with a
-  // restart), so it is its own global rather than part of `state`. The
-  // token is never on this page: Copy token asks the companion to put it on
-  // the clipboard (web/routes_settings.py's /api/settings/mcp_token/copy).
-  var AI_CLIENT = window.__pfAiClient || { mcp_url: '' };
-  var DOCS_URL = 'https://privacyfence.eu/docs/';
-
-  function docLink(path, label) {
-    return '<a class="pf-link" href="' + esc(DOCS_URL + path) + '" target="_blank" rel="noopener">' + esc(label) + ' ↗</a>';
-  }
-
-  function renderAiClient() {
-    var url = AI_CLIENT.mcp_url;
-    var html = '<div class="pf-page">';
-    html += '<h1 class="pf-page-title">Connect an AI client</h1>';
-    html += '<div class="pf-page-subtitle">An AI client on this computer connects to PrivacyFence with two things: the MCP URL, and your token in an <code>Authorization</code> header.</div>';
-
-    html += '<div class="card pf-card">';
-    html += rowHtml('MCP URL', 'Streamable HTTP. It changes only if <code>web.port</code> does.', '<code class="pf-ai-url">' + esc(url) + '</code>');
-    html += rowHtml('Header', 'Sent with every request.', '<code>Authorization: Bearer &lt;token&gt;</code>', 'pf-row-sub');
-    html += rowHtml('Token',
-      'PrivacyFence\'s companion puts your token on the clipboard and says so on your desktop. The token never passes through this page. Treat it like a password.',
-      '<div class="button primary" role="button" tabindex="0" aria-label="Copy token" ' + dataAttr('copy_mcp_token', {}) + '>Copy token</div>',
-      'pf-row-sub');
-    html += '</div>';
-
-    html += '<h2 class="pf-group-title">Claude Code</h2>';
-    html += '<div class="card pf-card"><div class="pf-hint">Copy the token, then run this in a terminal, pasting the token in place of <code>&lt;token&gt;</code>:</div>';
-    html += '<pre class="pf-ai-command"><code>claude mcp add --transport http --scope user privacyfence ' + esc(url) +
-      ' \\\n  --header "Authorization: Bearer &lt;token&gt;"</code></pre>';
-    html += '<div>' + docLink('connect-claude-code/', 'Claude Code setup') + '</div></div>';
-
-    html += '<h2 class="pf-group-title">ChatGPT desktop</h2>';
-    html += '<div class="card pf-card"><div class="pf-hint">In ChatGPT desktop, open <strong>Settings → MCP servers → Add server</strong>. Choose <strong>Streamable HTTP</strong>, enter the MCP URL above, and add the header <code>Authorization</code> with the value <code>Bearer &lt;token&gt;</code>, pasting the token you copied.</div>';
-    html += '<div>' + docLink('connect-chatgpt/#chatgpt-desktop', 'ChatGPT setup') + '</div></div>';
-
-    html += '<h2 class="pf-group-title">Other MCP clients</h2>';
-    html += '<div class="card pf-card"><div class="pf-hint">Any client that speaks MCP over Streamable HTTP and can send a custom header: add a server with the MCP URL above and the <code>Authorization</code> header, with the token you copied. Clients PrivacyFence has not been tested with may still work, but are not supported.</div>';
-    html += '<div>' + docLink('how-it-works/#how-an-ai-system-connects', 'How an AI system connects') + '</div></div>';
-
-    html += '<h2 class="pf-group-title">Rotate the token</h2>';
-    html += '<div class="card pf-card">' + rowHtml('Rotate token',
-      'Replaces your token with a new one, which the companion copies to the clipboard. Every AI client using the old token stops working until you give it the new one.',
-      '<div class="button danger" role="button" tabindex="0" aria-label="Rotate token" ' + dataAttr('rotate_mcp_token', {}) + '>Rotate token…</div>') + '</div>';
-
-    html += '<div class="pf-hint">No terminal? The companion\'s menu has <strong>Copy AI Client Token</strong> too.</div>';
-    html += '</div>';
-    return html;
-  }
-
   // -------------------------------------------------------------------- //
   // Scoped tokens
   // -------------------------------------------------------------------- //
 
-  // Like AI_CLIENT, static for the life of the page: a create or revoke
+  // Static for the life of the page: a create or revoke
   // reloads it, so the list is always rebuilt from the server.
   var SCOPED = window.__pfScopedTokens || { delivery: 'companion', max_days: 365, default_days: 90, warn_days: 14, tokens: [], rules: [], tools: [], scope_groups: [] };
 
@@ -2200,7 +1997,7 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   var ADMIN_NAV_ITEMS = [
-    ['services', 'Services'], ['features', 'Features'], ['org_config', 'Organization configuration'],
+    ['services', 'Services'], ['features', 'Features'],
     ['delivery', 'File delivery'], ['access', 'Sign-in'], ['step_up', 'Step-up'],
     ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
   ];
@@ -2255,7 +2052,7 @@ _JS = r"""
       lines.push(row.relay ? 'Uses the built-in PrivacyFence app through oauth.privacyfence.eu.'
         : 'Uses the built-in PrivacyFence app.');
     } else if (row.app_source === 'none') {
-      lines.push(CAPS.mode === 'org' && CONNECTOR_PROVIDERS.indexOf(row.key) !== -1
+      lines.push(CONNECTOR_PROVIDERS.indexOf(row.key) !== -1
         ? "No app is available for this service. Upload a connector config for your organization's own app."
         : "No app is available for this service. Add your organization's own app to the configuration file.");
     }
@@ -2274,7 +2071,7 @@ _JS = r"""
       var address = opts.server_url || opts.base_url || '';
       var variable = SERVER_ADDRESS_VARIABLES[row.key];
       if (!address) {
-        if (CAPS.mode === 'org') { lines.push('Set the server address below.'); }
+        lines.push('Set the server address below.');
       } else if (opts.address_source === 'environment') {
         lines.push('Server: ' + esc(address) + ' (set by ' + variable + ' on the server).');
       } else if (opts.address_source === 'imported') {
@@ -2424,10 +2221,10 @@ _JS = r"""
         ? '<span class="pf-row-desc">' + esc('Offered: set by ' + row.offered_locked_by + ' on the server.') + '</span>'
         : toggleHtml(row.offered, action, { service: row.key }, false, 'Offer ' + row.label);
       html += rowHtml(row.label, lines.join(''), offerControl);
-      if (CAPS.mode === 'org' && row.key === 'slack') {
+      if (row.key === 'slack') {
         html += slackOwnAppRowHtml(row);
       }
-      if (CAPS.mode === 'org' && CONNECTOR_PROVIDERS.indexOf(row.key) !== -1) {
+      if (CONNECTOR_PROVIDERS.indexOf(row.key) !== -1) {
         html += connectorConfigRowHtml(row);
       }
       if (row.offered && row.key === 'salesforce') {
@@ -2440,16 +2237,6 @@ _JS = r"""
       html += '</div>';
     });
     return html + '</div>';
-  }
-
-  // Local mode's bundle upload. The shim posts the chosen file to the admin endpoint.
-  function renderOrgConfig(state) {
-    var html = '<div class="pf-page"><h1 class="pf-page-title">Organization configuration</h1><div class="card pf-card">';
-    html += rowHtml('Organization Configuration',
-      'Your own app credentials, and the server and identity-provider settings, from your IT administrator.',
-      '<div class="button primary" role="button" tabindex="0" aria-label="Install configuration file" ' +
-      dataAttr('install_org_config', {}) + '>Install configuration file…</div>');
-    return html + '</div></div>';
   }
 
   function serviceRow(state, key) {
@@ -2759,7 +2546,6 @@ _JS = r"""
     switch (key) {
       case 'services': return renderServices(state);
       case 'features': return renderFeatures(state);
-      case 'org_config': return renderOrgConfig(state);
       case 'delivery': return renderDelivery(state);
       case 'access': return renderAccess(state);
       case 'step_up': return renderStepUp(state);
@@ -2825,8 +2611,6 @@ _JS = r"""
       section = CAPS.sections.general ? 'general' : 'auto_accept';
     }
     switch (section) {
-      case 'connectors': return renderConnectors(state);
-      case 'ai_client': return renderAiClient();
       case 'scoped_tokens': return renderScopedTokens();
       case 'auto_accept': return renderAutoAccept(state);
       case 'privacy': return renderPrivacy(state);
@@ -2835,142 +2619,6 @@ _JS = r"""
       case 'about': return renderAbout(state);
       default: return renderGeneral(state);
     }
-  }
-
-  // -------------------------------------------------------------------- //
-  // Telegram sign-in modal (see settings_controller.py's telegram_start_
-  // auth/telegram_submit_code/telegram_submit_2fa/telegram_cancel_auth)
-  // -------------------------------------------------------------------- //
-
-  var TELEGRAM_STEP_COPY = {
-    phone: {
-      title: 'Sign in to Telegram', desc: 'Phone number, with country code (e.g. +1234567890):',
-      placeholder: '+1234567890', type: 'text', submitLabel: 'Send Code', submitAction: 'telegram_start_auth', field: 'phone',
-    },
-    code: {
-      title: 'Enter verification code', desc: 'Telegram sent a code to the number above.',
-      placeholder: 'Code', type: 'text', submitLabel: 'Authorize', submitAction: 'telegram_submit_code', field: 'code',
-    },
-    password: {
-      title: 'Two-step verification', desc: 'Enter your Telegram two-step verification password.',
-      placeholder: 'Password', type: 'password', submitLabel: 'Submit', submitAction: 'telegram_submit_2fa', field: 'password',
-    },
-  };
-
-  function renderTelegramModal(state) {
-    if (!ui.telegramModalOpen) return '';
-    var auth = state.telegram_auth || { step: null, error: '' };
-    var step = auth.step || 'phone';
-    var copy = TELEGRAM_STEP_COPY[step];
-    var busy = (state.connectors.find(function (c) { return c.key === 'telegram'; }) || {}).busy;
-
-    var html = '<div class="pf-modal-overlay" role="presentation">';
-    html += '<div class="pf-modal" role="dialog" aria-modal="true" aria-label="' + esc(copy.title) + '">';
-    html += '<div class="pf-modal-title">' + esc(copy.title) + '</div>';
-    html += '<div class="pf-modal-desc">' + esc(copy.desc) + '</div>';
-    if (auth.error) html += '<div class="pf-modal-error">' + esc(auth.error) + '</div>';
-    html += '<input type="' + copy.type + '" class="field pf-modal-input" placeholder="' + esc(copy.placeholder) +
-      '" data-telegram-field="' + copy.field + '" aria-label="' + esc(copy.placeholder) + '"' + (busy ? ' disabled' : '') + '/>';
-    html += '<div class="pf-modal-buttons">';
-    html += '<div class="button secondary" role="button" tabindex="0" aria-label="Cancel Telegram sign-in" data-telegram-cancel="1">Cancel</div>';
-    html += '<div class="button primary" role="button" tabindex="0" aria-label="' + esc(copy.submitLabel) +
-      '" data-telegram-submit="' + copy.submitAction + '"' + (busy ? ' aria-disabled="true"' : '') + '>' +
-      (busy ? 'Working…' : esc(copy.submitLabel)) + '</div>';
-    html += '</div></div></div>';
-    return html;
-  }
-
-  // Peek sign-in modal (see settings_controller.py's peek_start_login/
-  // peek_finish_login/peek_cancel_login).
-  function renderPeekModal(state) {
-    if (!ui.peekModalOpen) return '';
-    var auth = state.peek_auth || { step: null, error: '' };
-    var busy = (state.connectors.find(function (c) { return c.key === 'peek'; }) || {}).busy;
-    var approve = auth.step === 'approve';
-    var title = approve ? 'Approve in Peek' : 'Connect Peek';
-
-    var html = '<div class="pf-modal-overlay" role="presentation">';
-    html += '<div class="pf-modal" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">';
-    html += '<div class="pf-modal-title">' + esc(title) + '</div>';
-    if (approve) {
-      html += '<div class="pf-modal-desc">A browser window opened on the machine running PrivacyFence. ' +
-        'Sign in to Peek there and approve this code:</div>';
-      html += '<div class="pf-modal-code">' + esc(auth.user_code || '') + '</div>';
-      html += '<div class="pf-modal-desc">' + esc('Or open ' + (auth.verification_url || '')) + '</div>';
-    } else if (auth.pinned_base_url) {
-      html += '<div class="pf-modal-desc">' + esc('Your organization uses ' + auth.pinned_base_url + '.') + '</div>';
-    } else {
-      html += '<div class="pf-modal-desc">The address of your Peek server.</div>';
-    }
-    if (auth.error) html += '<div class="pf-modal-error">' + esc(auth.error) + '</div>';
-    if (!approve && !auth.pinned_base_url) {
-      html += '<input type="url" class="field pf-modal-input" data-peek-field="base_url" ' +
-        'placeholder="https://peek.example.com" aria-label="Peek server address"' + (busy ? ' disabled' : '') + '/>';
-    }
-    var submitLabel = approve ? 'Done' : 'Continue';
-    html += '<div class="pf-modal-buttons">';
-    html += '<div class="button secondary" role="button" tabindex="0" aria-label="Cancel Peek sign-in" data-peek-cancel="1">Cancel</div>';
-    html += '<div class="button primary" role="button" tabindex="0" aria-label="' + esc(submitLabel) +
-      '" data-peek-submit="' + (approve ? 'peek_finish_login' : 'peek_start_login') + '"' + (busy ? ' aria-disabled="true"' : '') + '>' +
-      (busy ? 'Working…' : esc(submitLabel)) + '</div>';
-    html += '</div></div></div>';
-    return html;
-  }
-
-  // Grist API-key modal (see settings_controller.py's grist_connect/
-  // grist_cancel_auth). Shown only when grist_signin === 'api_key'.
-  var GRIST_DEFAULT_URL = 'https://docs.getgrist.com';
-
-  function renderGristModal(state) {
-    if (!ui.gristModalOpen) return '';
-    var auth = state.grist_auth || { error: '' };
-    var pinned = state.grist_server_url_pinned || '';
-    var busy = (state.connectors.find(function (c) { return c.key === 'grist'; }) || {}).busy;
-
-    var html = '<div class="pf-modal-overlay" role="presentation">';
-    html += '<div class="pf-modal" role="dialog" aria-modal="true" aria-label="Connect to Grist">';
-    html += '<div class="pf-modal-title">Connect to Grist</div>';
-    if (pinned) {
-      html += '<div class="pf-modal-desc">Your organization uses ' + esc(pinned) + '.</div>';
-    } else {
-      html += '<div class="pf-modal-desc">Server address</div>';
-      html += '<input type="url" class="field pf-modal-input" data-grist-field="server_url" aria-label="Server address" value="' +
-        esc(ui.gristServerUrl || GRIST_DEFAULT_URL) + '"' + (busy ? ' disabled' : '') + '/>';
-    }
-    html += '<div class="pf-modal-desc">API key</div>';
-    // The key is restored through .value after the render (see render()), not
-    // written into the markup.
-    html += '<input type="password" autocomplete="off" class="field pf-modal-input" data-grist-field="api_key" aria-label="API key"' +
-      (busy ? ' disabled' : '') + '/>';
-    html += '<div class="pf-modal-desc">Create a key in Grist under Account settings → Developer → API Key.</div>';
-    if (busy) html += '<div class="pf-modal-desc">Connecting…</div>';
-    else if (auth.error) html += '<div class="pf-modal-error">' + esc(auth.error) + '</div>';
-    html += '<div class="pf-modal-buttons">';
-    html += '<div class="button secondary" role="button" tabindex="0" aria-label="Cancel Grist sign-in" data-grist-cancel="1">Cancel</div>';
-    html += '<div class="button primary" role="button" tabindex="0" aria-label="Connect"' +
-      ' data-grist-submit="1"' + (busy ? ' aria-disabled="true"' : '') + '>' + (busy ? 'Working…' : 'Connect') + '</div>';
-    html += '</div></div></div>';
-    return html;
-  }
-
-  function closeGristModal() {
-    ui.gristModalOpen = false;
-    ui.gristSubmitted = false;
-    ui.gristSawBusy = false;
-    ui.gristApiKey = '';
-  }
-
-  function submitGristModal() {
-    var keyEl = document.querySelector('[data-grist-field="api_key"]');
-    var urlEl = document.querySelector('[data-grist-field="server_url"]');
-    var url = urlEl ? urlEl.value : '';
-    if (urlEl) ui.gristServerUrl = url;
-    var key = keyEl ? keyEl.value : '';
-    if (keyEl) keyEl.value = '';
-    ui.gristApiKey = '';
-    ui.gristSubmitted = true;
-    ui.gristSawBusy = false;
-    post('grist_connect', { server_url: url, api_key: key });
   }
 
   // A narrow tabstrip scrolls sideways inside itself, and a re-render starts
@@ -2987,53 +2635,6 @@ _JS = r"""
   function render(state) {
     pyState = state;
     if (CAPS.surface === 'admin') { renderAdmin(state); return; }
-    // Auto-close the modal once Python reports the sign-in is no longer in
-    // progress (success or explicit cancel) -- see telegram_cancel_auth/
-    // the success branches of telegram_submit_code/telegram_submit_2fa.
-    // Gated on telegramAuthWasActive (see its own comment above): a modal
-    // that's open but has never actually submitted anything also has
-    // telegram_auth.step === null, and must not be closed out from under
-    // the user before they've even typed a phone number.
-    var authStep = state.telegram_auth && state.telegram_auth.step;
-    if (authStep) ui.telegramAuthWasActive = true;
-    if (ui.telegramModalOpen && ui.telegramAuthWasActive && !authStep && !(state.telegram_auth && state.telegram_auth.error)) {
-      ui.telegramModalOpen = false;
-      ui.telegramAuthWasActive = false;
-    }
-    var peekStep = state.peek_auth && state.peek_auth.step;
-    if (peekStep) ui.peekAuthWasActive = true;
-    if (ui.peekModalOpen && ui.peekAuthWasActive && !peekStep && !(state.peek_auth && state.peek_auth.error)) {
-      ui.peekModalOpen = false;
-      ui.peekAuthWasActive = false;
-    }
-    // What is typed in the Grist form survives the rebuild below: capture it
-    // (and which field has focus) before the DOM is replaced.
-    var gristFocus = '', gristSel = null, gristWasOpen = false;
-    if (ui.gristModalOpen) {
-      var gristKeyEl = document.querySelector('[data-grist-field="api_key"]');
-      var gristUrlEl = document.querySelector('[data-grist-field="server_url"]');
-      gristWasOpen = !!gristKeyEl;
-      if (gristKeyEl && !gristKeyEl.disabled) ui.gristApiKey = gristKeyEl.value;
-      if (gristUrlEl && !gristUrlEl.disabled) ui.gristServerUrl = gristUrlEl.value;
-      var gristActive = document.activeElement;
-      if (gristActive && gristActive.getAttribute && gristActive.getAttribute('data-grist-field')) {
-        gristFocus = gristActive.getAttribute('data-grist-field');
-        gristSel = [gristActive.selectionStart, gristActive.selectionEnd];
-      }
-    }
-    // The Grist result arrives by snapshot push. A submitted form is settled
-    // only once its row has been seen busy and is idle again: no error means
-    // the connect worked (close the modal), an error stays visible in it.
-    if (ui.gristModalOpen && ui.gristSubmitted) {
-      var gristRow = state.connectors.find(function (c) { return c.key === 'grist'; }) || {};
-      if (gristRow.busy) ui.gristSawBusy = true;
-      else if (ui.gristSawBusy) {
-        if (state.grist_auth && state.grist_auth.error) {
-          ui.gristSubmitted = false;
-          ui.gristSawBusy = false;
-        } else closeGristModal();
-      }
-    }
     // .split (base.css): the nav and the content, one column when narrow
     // and two from 900 px up (see _CSS).
     var html = '<div class="split pf-settings-layout">' + renderNav(state) + '<div class="pf-content">';
@@ -3042,36 +2643,15 @@ _JS = r"""
         '<div class="pf-banner-dismiss pf-error-dismiss" role="button" tabindex="0" aria-label="Dismiss error" data-dismiss-error="1">✕</div></div>';
     }
     html += renderSection(state) + '</div></div>';
-    html += renderTelegramModal(state);
-    html += renderPeekModal(state);
-    html += renderGristModal(state);
     document.getElementById('app').innerHTML = html;
     revealSelectedTabs();
-    if (ui.telegramModalOpen) {
-      var input = document.querySelector('[data-telegram-field]');
-      if (input) input.focus();
-    }
-    if (ui.peekModalOpen) {
-      var peekInput = document.querySelector('[data-peek-field]');
-      if (peekInput) peekInput.focus();
-    }
-    if (ui.gristModalOpen) {
-      var gristKeyNew = document.querySelector('[data-grist-field="api_key"]');
-      if (gristKeyNew && ui.gristApiKey) gristKeyNew.value = ui.gristApiKey;
-      var gristTarget = gristWasOpen ? document.querySelector('[data-grist-field="' + gristFocus + '"]') : gristKeyNew;
-      if (gristTarget && !gristTarget.disabled) {
-        gristTarget.focus();
-        // Not every input type has a selection (type=url throws).
-        try { if (gristSel) gristTarget.setSelectionRange(gristSel[0], gristSel[1]); } catch (err) { /* no selection */ }
-      }
-    }
   }
 
   window.__pfRender = render;
   window.__pfShowError = function (message) {
     if (pyState) { pyState.error = message; render(pyState); }
   };
-  window.__pfDebugHook = { ui: ui, render: render, TELEGRAM_STEP_COPY: TELEGRAM_STEP_COPY, onClick: null, onKeydown: null };
+  window.__pfDebugHook = { ui: ui, render: render, onClick: null, onKeydown: null };
 
   // -------------------------------------------------------------------- //
   // Event delegation
@@ -3177,53 +2757,6 @@ _JS = r"""
     var dismissEl = e.target.closest('[data-dismiss-error]');
     if (dismissEl) { pyState.error = ''; render(pyState); return; }
 
-    var welcomeDismissEl = e.target.closest('[data-dismiss-welcome]');
-    if (welcomeDismissEl) { ui.welcomeBannerDismissed = true; render(pyState); return; }
-
-    var telegramAuthEl = e.target.closest('[data-telegram-auth]');
-    if (telegramAuthEl) { ui.telegramModalOpen = true; ui.telegramAuthWasActive = false; render(pyState); return; }
-
-    var telegramCancelEl = e.target.closest('[data-telegram-cancel]');
-    if (telegramCancelEl) {
-      ui.telegramModalOpen = false;
-      ui.telegramAuthWasActive = false;
-      post('telegram_cancel_auth', {});
-      render(pyState);
-      return;
-    }
-
-    var telegramSubmitEl = e.target.closest('[data-telegram-submit]');
-    if (telegramSubmitEl) { submitTelegramModal(telegramSubmitEl.getAttribute('data-telegram-submit')); return; }
-
-    var peekAuthEl = e.target.closest('[data-peek-auth]');
-    if (peekAuthEl) { ui.peekModalOpen = true; ui.peekAuthWasActive = false; render(pyState); return; }
-
-    var peekCancelEl = e.target.closest('[data-peek-cancel]');
-    if (peekCancelEl) {
-      ui.peekModalOpen = false;
-      ui.peekAuthWasActive = false;
-      post('peek_cancel_login', {});
-      render(pyState);
-      return;
-    }
-
-    var peekSubmitEl = e.target.closest('[data-peek-submit]');
-    if (peekSubmitEl) { submitPeekModal(peekSubmitEl.getAttribute('data-peek-submit')); return; }
-
-    var gristAuthEl = e.target.closest('[data-grist-auth]');
-    if (gristAuthEl) { ui.gristModalOpen = true; ui.gristSubmitted = false; render(pyState); return; }
-
-    var gristCancelEl = e.target.closest('[data-grist-cancel]');
-    if (gristCancelEl) {
-      closeGristModal();
-      post('grist_cancel_auth', {});
-      render(pyState);
-      return;
-    }
-
-    var gristSubmitEl = e.target.closest('[data-grist-submit]');
-    if (gristSubmitEl) { if (gristSubmitEl.getAttribute('aria-disabled') !== 'true') submitGristModal(); return; }
-
     var stRuleEl = e.target.closest('[data-st-rule]');
     if (stRuleEl) { var rid = stRuleEl.getAttribute('data-st-rule'); ui.stRules[rid] = !ui.stRules[rid]; render(pyState); return; }
     var stDupRuleEl = e.target.closest('[data-st-dup-rule]');
@@ -3314,20 +2847,6 @@ _JS = r"""
   function saveServerAddress(service) {
     var input = document.querySelector('[data-admin-address="' + service + '"]');
     post('set_server_address', { service: service, value: input ? input.value : '' });
-  }
-
-  function submitPeekModal(action) {
-    var input = document.querySelector('[data-peek-field]');
-    post(action, action === 'peek_start_login' ? { base_url: input ? input.value : '' } : {});
-  }
-
-  function submitTelegramModal(action) {
-    var input = document.querySelector('[data-telegram-field]');
-    var value = input ? input.value : '';
-    var field = input ? input.getAttribute('data-telegram-field') : 'phone';
-    var payload = {};
-    payload[field] = value;
-    post(action, payload);
   }
 
 
@@ -3444,26 +2963,6 @@ _JS = r"""
   }
 
   function onKeydown(e) {
-    if (e.key === 'Escape' && ui.gristModalOpen) {
-      closeGristModal();
-      post('grist_cancel_auth', {});
-      render(pyState);
-      return;
-    }
-    if (e.key === 'Escape' && ui.peekModalOpen) {
-      ui.peekModalOpen = false;
-      ui.peekAuthWasActive = false;
-      post('peek_cancel_login', {});
-      render(pyState);
-      return;
-    }
-    if (e.key === 'Escape' && ui.telegramModalOpen) {
-      ui.telegramModalOpen = false;
-      ui.telegramAuthWasActive = false;
-      post('telegram_cancel_auth', {});
-      render(pyState);
-      return;
-    }
     // Enter/Space activates any of our ARIA-role'd interactive elements
     // (role="button"/"tab"/"radio"/"switch"/"checkbox") the same way a
     // click does -- they're plain <div>s with tabindex="0", not native
@@ -3492,13 +2991,6 @@ _JS = r"""
       return;
     }
     if (el.hasAttribute('data-st-new-value')) { addNewScopedRule(); return; }
-    if (el.hasAttribute('data-grist-field')) { submitGristModal(); return; }
-    if (el.hasAttribute('data-peek-field')) { submitPeekModal('peek_start_login'); return; }
-    if (el.hasAttribute('data-telegram-field')) {
-      var state = pyState || {};
-      var step = ((state.telegram_auth || {}).step) || 'phone';
-      submitTelegramModal(TELEGRAM_STEP_COPY[step].submitAction);
-    }
   }
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -3514,20 +3006,15 @@ _JS = r"""
 """
 
 
-_ALL_SECTIONS = (
-    "general", "connectors", "ai_client", "scoped_tokens", "auto_accept", "privacy", "audit", "stats", "about",
-)
-
 # The four actions web/routes_settings.py's own bridge shim intercepts
 # client-side rather than forwarding to the generic dispatcher (that
 # module's own docstring) -- none has an ACTION_SCOPES entry at all (it
 # isn't one of that dispatcher's actions), so org_settings_scope.
-# NOT_APPLICABLE_ACTIONS doesn't cover any of them either. Three are
-# local-desktop-install concepts with no org route or org-mode meaning
-# (checking this *install's* GitHub Releases feed, installing *this org's*
-# own config bundle onto itself, shutting down the whole shared daemon);
-# open_repo (a plain link) is deliberately not included -- equally
-# applicable in every mode. check_for_updates is the About page's own
+# NOT_APPLICABLE_ACTIONS doesn't cover any of them either. Three have no
+# org route or org-mode meaning (checking this *install's* GitHub Releases
+# feed, installing *this org's* own config bundle onto itself, shutting down
+# the whole shared daemon); open_repo (a plain link) is deliberately not
+# included. check_for_updates is the About page's own
 # action name for what SettingsController implements as
 # check_for_updates_now -- a naming mismatch that predates this phase (see
 # this phase's own PR description's "Follow-ups noticed"), listed here by
@@ -3562,26 +3049,13 @@ def _admin_section_defaults() -> dict[str, dict[str, Any]]:
     }
 
 
-def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
+def _admin_capabilities(*, is_admin: bool) -> dict[str, Any]:
     """The Admin page's sections and suppressed actions. It is a separate surface because its
     state is not the settings state: ``renderAdmin`` draws its own nav from these keys.
 
-    Local mode has no administrator distinction (the install owner is the only caller), so it
-    gets every section. In org mode only an administrator gets any: the route refuses anyone
-    else, and the same rule applies here to what is drawn. Services and Features are in both modes,
-    the bundle upload only in local mode, and the delivery, sign-in, step-up, scoped-token,
-    audit-forwarding, privacy and stats sections only in org mode.
+    Only an administrator gets any section: the route refuses anyone else, and the same rule
+    applies here to what is drawn.
     """
-    from .web.routes_admin import ADMIN_ACTIONS  # deferred: the route layer imports this module
-
-    if mode != ORG_MODE:
-        return {
-            "mode": LOCAL_MODE, "is_admin": False, "surface": "admin",
-            "sections": {"services": True, "features": True, "org_config": True},
-            "not_applicable_actions": sorted(
-                name for name, spec in ADMIN_ACTIONS.items() if LOCAL_MODE not in spec.modes
-            ),
-        }
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
         "sections": dict.fromkeys(
@@ -3592,8 +3066,8 @@ def _admin_capabilities(mode: str, *, is_admin: bool) -> dict[str, Any]:
     }
 
 
-def _capabilities_for(mode: str, *, is_admin: bool, surface: str = "settings") -> dict[str, Any]:
-    """Which of the inner-nav sections this ``(mode, is_admin, surface)``
+def _capabilities_for(*, is_admin: bool, surface: str = "settings") -> dict[str, Any]:
+    """Which of the inner-nav sections this ``(is_admin, surface)``
     combination gets, and which individual controls (see ``dataAttr``/
     ``toggleHtml`` call sites throughout ``_JS``) must never draw at all --
     kept out of ``state`` itself (a separate ``window.__pfCapabilities``
@@ -3602,43 +3076,25 @@ def _capabilities_for(mode: str, *, is_admin: bool, surface: str = "settings") -
     test_settings_window_html.py's own ``test_state_round_trips_byte_for_
     byte`` already checks.
 
-    Local mode (every existing caller) gets every section and no
-    suppressed action -- this function must be a no-op for ``mode !=
-    ORG_MODE``, since that's what keeps local mode's settings page
-    independent of org mode's filtering.
-
-    Org mode gets ``org_settings_scope.NOT_APPLICABLE_ACTIONS`` (every
+    The settings page gets ``org_settings_scope.NOT_APPLICABLE_ACTIONS`` (every
     action with no real org route at all -- see that module for the
     single source of truth) plus section-level decisions this function
-    itself owns, all narrower than "has an org route": Connectors has no
-    applicable action *and* nothing else worth showing (no read-only
-    connector list exists for org mode today), so the whole section is
-    hidden rather than rendered empty; Audit Log is shown to every
-    principal as a read-only list of their own recent decisions, its
-    local-only export and log-level controls suppressed through
-    ``not_applicable_actions``. Privacy Filter and Stats (ADR 0217) are
-    not on the org settings surface for anyone: an administrator's install-wide
+    itself owns, all narrower than "has an org route": Audit Log is shown to every principal as a read-only list of
+    their own recent decisions, its export and log-level controls suppressed
+    through ``not_applicable_actions``. Privacy Filter and Stats (ADR 0217) are
+    not on the settings surface for anyone: an administrator's install-wide
     policy and the usage counts are Admin sections, so an administrator's
-    Settings is the same page as everyone else's. Stats is never shown in
-    local mode either; Privacy Filter there is the owner's own policy.
+    Settings is the same page as everyone else's.
 
     ``surface="admin"`` is the Admin page instead (``_admin_capabilities``).
     """
     if surface == "admin":
-        return _admin_capabilities(mode, is_admin=is_admin)
-    if mode != ORG_MODE:
-        return {
-            "mode": LOCAL_MODE, "is_admin": False, "surface": "settings",
-            # Stats counts an org server's principals; local mode has one user.
-            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "stats": False},
-            "not_applicable_actions": [],
-        }
+        return _admin_capabilities(is_admin=is_admin)
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "settings",
         "sections": {
-            # Org mode's clients connect with OAuth 2.1, not a local token
-            # (ADR 0011), so the local "Connect an AI client" page is never shown.
-            "general": True, "connectors": False, "ai_client": False, "scoped_tokens": False, "auto_accept": True,
+            # Clients connect with OAuth 2.1 (ADR 0011), so there is no token page.
+            "general": True, "scoped_tokens": False, "auto_accept": True,
             # The install-wide policy and the usage stats are Admin sections.
             "privacy": False, "audit": True, "stats": False, "about": True,
         },
@@ -3648,25 +3104,20 @@ def _capabilities_for(mode: str, *, is_admin: bool, surface: str = "settings") -
 
 def build_html(
     state: dict, *, nonce: str | None = None, initial_section: str | None = None,
-    mode: str = LOCAL_MODE, is_admin: bool = False, ai_client: dict[str, str] | None = None,
+    mode: str = ORG_MODE, is_admin: bool = False,
     scoped_tokens: dict[str, Any] | None = None, personal_transfer: bool = False,
     scoped_proposal: dict[str, Any] | None = None, surface: Literal["settings", "admin"] = "settings",
 ) -> str:
-    """Full self-contained HTML document for local mode's settings page
-    (``mode="local"``) *and* for
-    org mode's own ``GET /settings`` -- one
-    implementation rendering a capability-filtered subset for each, not one
-    page (see ADR 0033 and ADR 0032): the nav items and page content below
-    differ by mode, but every section both modes keep
-    (Auto-accept, General, Audit Log, About) is the exact same template, reading the exact same
-    ``state`` shape, posting through the exact same bridge.
+    """Full self-contained HTML document for the organization server's
+    ``GET /settings`` and ``GET /admin`` -- one implementation rendering a
+    capability-filtered page for each surface (see ADR 0033 and ADR 0032).
 
     ``state`` is embedded directly as ``window.__pfInitialState`` so the
     first paint needs no round trip to Python -- see this module's
     docstring for the bridge protocol Python's re-renders (``window.
-    __pfRender``) follow afterwards. Unchanged by ``mode``/``is_admin``:
-    those two only ever affect the separate ``window.__pfCapabilities``
-    global below, never ``state`` itself.
+    __pfRender``) follow afterwards. Unchanged by ``is_admin``: it only ever
+    affects the separate ``window.__pfCapabilities`` global below, never
+    ``state`` itself.
 
     ``nonce``: the
     current response's CSP nonce (``request.state.csp_nonce``) -- this
@@ -3678,54 +3129,38 @@ def build_html(
 
     ``initial_section``: a deliberate, narrow exception
     to ``ui.section`` otherwise being purely client-side state (see this
-    module's own docstring) -- ``GET /settings/connectors`` passes
-    ``"connectors"`` so a link opened while un-onboarded lands
-    directly on the screen that unblocks the user, instead of ``/settings``'s
-    default General page. ``None`` (every other route) emits no script at
-    all, leaving the JS's own ``'general'`` fallback exactly as before.
-    Org mode's callers pass ``"auto_accept"``/``"privacy"`` for
-    the same reason -- org mode's own General page is empty (hidden
+    module's own docstring) -- ``None`` emits no script at all, leaving the
+    JS's own ``'general'`` fallback. The organization routes pass
+    ``"auto_accept"``/``"privacy"`` -- the General page is empty (hidden
     entirely, in fact) for a non-admin principal, so falling back to it
     would land every non-admin on a blank nav selection.
 
-    ``mode``/``is_admin``: see ``_capabilities_for`` above for
-    exactly what each combination hides. Both default to local mode's own
-    values, so a call site that passes neither (every one except
-    web/routes_settings.py's org routes, which pass ``mode="org"``)
-    renders the full local page.
+    ``mode`` is accepted and ignored: organization mode is the only mode.
 
-    ``ai_client`` (``{"mcp_url": ...}``) turns on the "Connect an AI client"
-    section (ADR 0104); without it -- org mode, or a local install with no
-    ``/mcp`` endpoint -- the section is not drawn. Like ``mode``, it never
-    touches ``state``.
+    ``is_admin``: see ``_capabilities_for`` above for exactly what it hides.
 
-    ``scoped_tokens`` (the page data of ``web/server.py``'s scoped-token
-    wiring, or the org page's own for the signed-in principal once the
+    ``scoped_tokens`` (the org page's own data for the signed-in principal once the
     administrator has enabled the feature, ADR 0165) turns on the "Scoped
-    tokens" section the same way.
+    tokens" section.
 
     ``surface="admin"`` renders the Admin page from its own state (web/routes_admin.py) with the
-    same machinery: ``mode``/``is_admin`` pick its sections (``_admin_capabilities``), and the
-    settings-only inputs below (``ai_client``, ``scoped_tokens``, ``personal_transfer``) do not
+    same machinery: ``is_admin`` picks its sections (``_admin_capabilities``), and the
+    settings-only inputs below (``scoped_tokens``, ``personal_transfer``) do not
     apply to it. ``GET /admin`` passes ``initial_section="services"``.
 
     ``personal_transfer`` draws Auto-accept's "Move your settings" card (export and import of
-    the person's own rules, web/personal_settings_shim.py); like ``mode`` it only reaches
+    the person's own rules, web/personal_settings_shim.py); it only reaches
     ``window.__pfCapabilities``.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json_for_script(state)
-    capabilities = _capabilities_for(mode, is_admin=is_admin, surface=surface)
+    capabilities = _capabilities_for(is_admin=is_admin, surface=surface)
     if surface == "admin":
-        ai_client = scoped_tokens = scoped_proposal = None
+        scoped_tokens = scoped_proposal = None
     else:
-        capabilities["sections"]["ai_client"] = mode != ORG_MODE and ai_client is not None
         capabilities["sections"]["scoped_tokens"] = scoped_tokens is not None
         capabilities["personalTransfer"] = personal_transfer
     caps_json = json_for_script(capabilities)
-    ai_client_script = ""
-    if capabilities["sections"].get("ai_client"):
-        ai_client_script = f'<script nonce="{nonce}">window.__pfAiClient = {json_for_script(ai_client)};</script>'
     scoped_tokens_script = ""
     if capabilities["sections"].get("scoped_tokens"):
         # Rule sentences carry user-chosen values: no "</script>" may end the tag early.
@@ -3746,7 +3181,6 @@ def build_html(
         f'<script nonce="{nonce}">window.__pfInitialState = {state_json};</script>'
         f'<script nonce="{nonce}">window.__pfCapabilities = {caps_json};</script>'
         f"{section_script}"
-        f"{ai_client_script}"
         f"{scoped_tokens_script}"
         f'<script nonce="{nonce}">{_JS}</script>'
     )

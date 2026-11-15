@@ -1855,17 +1855,13 @@ class TestCardContainers:
         assert page.evaluate("document.querySelector('[data-pf-action=\"accept\"]').getAttribute('aria-disabled')") is None
 
 
-    @pytest.mark.parametrize("shape", ["confirm", "choice"])
     @pytest.mark.parametrize("width", [320, 393])
-    def test_the_dialogs_are_touch_sized_on_a_phone(self, browser, shape, width):
-        from privacyfence.dialog_window_html import build_choice_html, build_confirmation_html
+    def test_the_dialog_is_touch_sized_on_a_phone(self, browser, width):
+        from privacyfence.dialog_window_html import build_confirmation_html
 
-        html = (
-            build_confirmation_html(title="PrivacyFence — Possible PII Detected", message_lines=["An email address."],
-                                    cancel_label="Cancel", confirm_label="Allow")
-            if shape == "confirm" else
-            build_choice_html(title="PrivacyFence — Choose Auto-Accept Rule", prompt="Pick one",
-                              options=["i_am_owner", "approved_folder: Finance"])
+        html = build_confirmation_html(
+            title="PrivacyFence — Possible PII Detected", message_lines=["An email address."],
+            cancel_label="Cancel", confirm_label="Allow",
         )
         ctx = browser.new_context(**{**_MOBILE_EMULATION, "viewport": {"width": width, "height": 800}})
         try:
