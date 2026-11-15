@@ -1,7 +1,7 @@
 """T3 contract test: does a real, pinned Claude Code CLI connect to a real
 local-mode ``/mcp`` endpoint?
 
-The shape is the one ``docs/install-linux.md``'s "Connect Claude Code"
+The shape is the one ``docs/connect-claude-code.md``
 tells a user to run: ``claude mcp add --transport http --scope user
 privacyfence <url> --header "Authorization: Bearer <token>"``, then
 ``claude mcp list``, which performs a real MCP ``initialize`` against every

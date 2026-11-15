@@ -32,10 +32,6 @@ PUBLISHED_DOCS = (
     "SECURITY.md",
     "docs/getting-started.md",
     "docs/privacyfence-sync.md",
-    "docs/install-macos.md",
-    "docs/install-windows.md",
-    "docs/install-linux.md",
-    "docs/platform-support.md",
     "docs/how-it-works.md",
     "docs/approvals-and-policy.md",
     "docs/tools-reference.md",
@@ -67,9 +63,8 @@ CONTRIBUTOR_DOCS = (
     "docs/dev-vs-live-setup.md",
     "docs/testing-policy.md",
     "docs/release-testing.md",
-    "docs/packaging.md",
     "docs/connector-qa.md",
-    "docs/downloads-and-release-kpi.md",
+    "docs/release-archive.md",
     "docs/images/screenshots/README.md",
 )
 

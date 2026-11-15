@@ -49,7 +49,7 @@ You have two options:
    | Linux | `sudo apt remove privacyfence` | `sudo apt purge privacyfence` |
    | Windows | Uninstall PrivacyFence from Settings → Apps | the same, with **Delete PrivacyFence data** ticked |
 
-   See [`platform-support.md`](platform-support.md) for exactly what each platform's uninstall
+   See Platform support for exactly what each platform's uninstall
    removes.
 
 You cannot leave the packaged install stopped but in place, or give the source run a different
@@ -143,7 +143,7 @@ Use dedicated QA accounts for connector work, never personal or production ones.
 
 ## Packaged/release run
 
-Use the artifact from the build path in [`platform-support.md`](platform-support.md), on a machine
+Use the artifact from the build path in Platform support, on a machine
 or VM with no source run. Treat it as an end-user install: configure connectors and the Claude
 integration through the packaged app, and do not rely on the checkout or its venv.
 

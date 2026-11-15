@@ -12,7 +12,7 @@ PrivacyFence reads these configuration files and variables:
   (written by the Admin page) and signed connector configs
   ([Organization server settings](#organization-server-settings)).
 
-Where the files live on each platform is in [Platform support](platform-support.md). They are
+Where the files live on each platform is in Platform support. They are
 owned by PrivacyFence's service account on a packaged install, so editing one by hand needs
 administrator rights.
 

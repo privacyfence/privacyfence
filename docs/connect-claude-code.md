@@ -258,5 +258,5 @@ local program can register. There is nothing an administrator can do about it. S
 | Tools are listed but none of your services' tools | No service is connected yet. Ask Claude Code to call `privacyfence_status`; connect services in Settings (local mode) or at `/connect` (organization mode). See [Connecting a service](connecting-a-service.md). |
 | A call waits and nothing happens | It is waiting for your approval. Open Approvals from the companion, or `/approvals` in organization mode. |
 
-Platform-specific problems are on [macOS](install-macos.md#troubleshooting),
-[Windows](install-windows.md#troubleshooting) and [Linux](install-linux.md#troubleshooting).
+Platform-specific problems are on Install on macOS,
+Install on Windows and Install on Linux.

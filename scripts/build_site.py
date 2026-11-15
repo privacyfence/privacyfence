@@ -172,10 +172,9 @@ CONTRIBUTOR_DOCS: frozenset[str] = frozenset(
         "dev-vs-live-setup.md",
         "testing-policy.md",
         "release-testing.md",
-        "packaging.md",
         "connector-qa.md",
         "ai-client-qa.md",
-        "downloads-and-release-kpi.md",
+        "release-archive.md",
         "releasing.md",
     }
 )

@@ -71,8 +71,8 @@ asking. PrivacyFence's approval card appears either way; a client prompt comes o
 
 Take each client through these steps, in order. Set the client up as its
 own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude Code" sections of
-[`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md) and
-[`install-linux.md`](install-linux.md); for organization mode,
+Install on macOS, Install on Windows and
+Install on Linux; for organization mode,
 [`org-mode-setup-guide.md`, "Add PrivacyFence to an AI client"](org-mode-setup-guide.md#add-privacyfence-to-an-ai-client).
 
 1. **Tool list.** The client lists PrivacyFence's tools (`tools/list`): the connector tools of the
