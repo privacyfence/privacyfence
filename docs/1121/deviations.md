@@ -9,7 +9,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-create-with-approval
 
-- pending
+- worker: tests/unit/test_upstream_mcp_registry.py (not in touches; p1 owned it) had one test changed from the review tool kh_search to the auto tool kh_list_topics, because creating a token for a gated tool with no approval is now refused. Same intent, no collision.
+- scope: scope: tests/unit/test_upstream_mcp_registry.py (the test fix above; accepted)
+- retry: tld plugin absent in the worker container; the worker ran the verify.dod commands directly and reported done. No roles are required for this phase. Orchestrator re-ran ruff and the full unit suite on the merged tree: green.
 
 ## p3-refuse-before-forwarding
 
