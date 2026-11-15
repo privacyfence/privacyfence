@@ -613,3 +613,40 @@ class TestSettings:
         monkeypatch.setenv(cfg.ENV_VAR, str(path))
         with pytest.raises(ConfigurationError, match="not both"):
             cfg.load_settings()
+
+
+class TestDeclarationDigest:
+    @staticmethod
+    def _digest(doc, tool="propose_change"):
+        (server,) = _parse(doc)
+        return cfg.declaration_digest(server, next(t for t in server.tools if t.name == tool))
+
+    def test_declaration_digest_is_32_hex_characters(self):
+        digest = self._digest(_doc())
+        assert len(digest) == 32 and int(digest, 16) >= 0
+
+    def test_declaration_digest_changes_with_each_pinned_field(self):
+        base = self._digest(_doc())
+
+        def tool_changed(name="propose_change", **fields):
+            doc = _doc()
+            doc["upstreams"][0]["tools"][name].update(fields)
+            return self._digest(doc, name)
+
+        assert tool_changed(effect="Adds something else.") != base  # effect
+        assert tool_changed(verb="update") != base  # verb (a popup tool)
+        review = self._digest(_doc(), "get_doc")
+        assert tool_changed("get_doc", gate="auto") != review  # gate
+        assert self._digest(_doc(url="https://other.example.internal/mcp")) != base  # url
+        assert self._digest(_doc(audience="https://other.example.internal")) != base  # audience
+        assert self._digest(_doc(identity_claim="off")) != base  # identity_claim
+        renamed = _doc()
+        renamed["upstreams"][0]["tools"]["propose_other"] = renamed["upstreams"][0]["tools"].pop("propose_change")
+        assert self._digest(renamed, "propose_other") != base  # operation
+        assert self._digest(_doc()) == base
+
+    def test_declaration_digest_ignores_the_order_of_other_tools(self):
+        reordered = _doc()
+        tools = reordered["upstreams"][0]["tools"]
+        reordered["upstreams"][0]["tools"] = dict(reversed(list(tools.items())))
+        assert self._digest(reordered) == self._digest(_doc())

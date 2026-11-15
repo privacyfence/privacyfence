@@ -19,6 +19,7 @@ See ADR 0285 (upstream MCP servers as a connector) and ADR 0298 (audiences come 
 """
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import logging
@@ -89,6 +90,24 @@ class UpstreamServer:
     identity_claim: str = "required"  # "required" | "off"
     claim_lifetime_seconds: int = 60  # 5..60
     allowed_principal_types: tuple[str, ...] = _PRINCIPAL_TYPES
+
+
+def declaration_digest(upstream: UpstreamServer, tool: DeclaredTool) -> str:
+    """A fingerprint of what the operator declared for one tool: its audience, effect, gate,
+    identity-claim mode, operation, server URL and verb. An administrator's approval of the tool
+    for a scoped token is pinned to it, so changing any of those voids the approval. Other tools
+    of the file, and their order, do not enter it."""
+    pinned = {
+        "audience": upstream.audience,
+        "effect": tool.effect,
+        "gate": tool.gate,
+        "identity_claim": upstream.identity_claim,
+        "operation": tool.operation,
+        "url": upstream.url,
+        "verb": tool.verb,
+    }
+    text = json.dumps(pinned, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
 
 
 @dataclass(frozen=True)
