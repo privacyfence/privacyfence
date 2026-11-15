@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import sys
 
 import pytest
 
-from privacyfence import auto_accept, paths, scoped_tokens
+from privacyfence import auto_accept, paths, scoped_tokens, upstream_mcp_registry
 from privacyfence.policy import scope_rows
+from privacyfence.policy import scopes as policy_scopes
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import Verb
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
+from privacyfence.upstream_mcp_config import parse_upstreams
 from privacyfence.scoped_tokens import (
     ACTIVITY_FILE_NAME,
     MAX_TOKENS_PER_PRINCIPAL,
@@ -438,77 +441,87 @@ class TestAllowPersonalDataReads:
 class TestUpstreamDomains:
     HELD = {"kh": frozenset({"general", "hr"})}
 
-    def test_extend_keeps_the_domains_and_the_verified_flag(self):
+    def test_extend_keeps_the_audiences_and_the_verified_flag(self):
         store = _store()
         token, _ = _create(
-            store, label="scoped", days=10, upstream_domains={"kh": ["hr"]}, held_domains=self.HELD,
+            store, label="scoped", days=10, upstream_audiences={"kh": ["hr"]}, held_audiences=self.HELD,
             principal_email_verified=True,
         )
         _, extended = store.extend(LOCAL_PRINCIPAL, token.id, 30, policy=ENABLED, now=NOW)
-        assert extended.upstream_domains == {"kh": frozenset({"hr"})}
+        assert extended.upstream_audiences == {"kh": frozenset({"hr"})}
         assert extended.principal_email_verified is True
         found = _store().tokens_for(LOCAL_PRINCIPAL)[0]
-        assert found.upstream_domains == {"kh": frozenset({"hr"})}
+        assert found.upstream_audiences == {"kh": frozenset({"hr"})}
         assert found.principal_email_verified is True
 
     def test_fields_round_trip_and_are_written_only_when_set(self, tmp_path):
         store = _store()
         plain, _ = _create(store, label="plain")
         scoped, _ = _create(
-            store, label="scoped", upstream_domains={"kh": ["hr", "general"]}, held_domains=self.HELD,
+            store, label="scoped", upstream_audiences={"kh": ["hr", "general"]}, held_audiences=self.HELD,
             principal_email_verified=True,
         )
         entries = {e["label"]: e for e in json.loads(_file(tmp_path).read_text(encoding="utf-8"))["tokens"]}
-        assert "upstream_domains" not in entries["plain"]
+        assert "upstream_audiences" not in entries["plain"]
         assert "principal_email_verified" not in entries["plain"]
-        assert entries["scoped"]["upstream_domains"] == {"kh": ["general", "hr"]}
+        assert entries["scoped"]["upstream_audiences"] == {"kh": ["general", "hr"]}
         assert entries["scoped"]["principal_email_verified"] is True
-        assert scoped.upstream_domains == {"kh": frozenset({"general", "hr"})}
+        assert scoped.upstream_audiences == {"kh": frozenset({"general", "hr"})}
         restarted = _store()
         restarted.load()
-        assert restarted.get("local", scoped.id).upstream_domains == {"kh": frozenset({"general", "hr"})}
+        assert restarted.get("local", scoped.id).upstream_audiences == {"kh": frozenset({"general", "hr"})}
         assert restarted.get("local", scoped.id).principal_email_verified is True
-        assert restarted.get("local", plain.id).upstream_domains == {}
+        assert restarted.get("local", plain.id).upstream_audiences == {}
         assert restarted.get("local", plain.id).principal_email_verified is False
 
-    def test_an_old_file_without_the_keys_loads_with_no_domains(self, tmp_path):
-        token, _ = _create(_store())
-        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
-        assert "upstream_domains" not in data["tokens"][0]
+    def test_a_file_with_the_old_domains_key_loads_with_no_audiences(self, tmp_path):
+        token, _ = _create(_store(), upstream_audiences={"kh": ["hr"]}, held_audiences=self.HELD)
+        path = _file(tmp_path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["tokens"][0]["upstream_" + "domains"] = data["tokens"][0].pop("upstream_audiences")
+        path.write_text(json.dumps(data), encoding="utf-8")
         restarted = _store()
         restarted.load()
-        assert restarted.get("local", token.id).upstream_domains == {}
+        assert restarted.get("local", token.id).upstream_audiences == {}
+
+    def test_an_old_file_without_the_keys_loads_with_no_audiences(self, tmp_path):
+        token, _ = _create(_store())
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        assert "upstream_audiences" not in data["tokens"][0]
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).upstream_audiences == {}
         assert restarted.get("local", token.id).principal_email_verified is False
 
     def test_a_domain_the_person_does_not_hold_is_refused(self, tmp_path):
         store = _store()
-        with pytest.raises(ScopedTokenError, match="You can only give a token domains you have: finance"):
-            _create(store, upstream_domains={"kh": ["finance"]}, held_domains=self.HELD)
-        with pytest.raises(ScopedTokenError, match="domains you have: general"):
-            _create(store, upstream_domains={"kh": ["general"]})
-        with pytest.raises(ScopedTokenError, match="domains you have: general"):
-            _create(store, upstream_domains={"other": ["general"]}, held_domains=self.HELD)
+        with pytest.raises(ScopedTokenError, match="You can only give a token audiences you have: finance"):
+            _create(store, upstream_audiences={"kh": ["finance"]}, held_audiences=self.HELD)
+        with pytest.raises(ScopedTokenError, match="audiences you have: general"):
+            _create(store, upstream_audiences={"kh": ["general"]})
+        with pytest.raises(ScopedTokenError, match="audiences you have: general"):
+            _create(store, upstream_audiences={"other": ["general"]}, held_audiences=self.HELD)
         assert store.tokens_for(LOCAL_PRINCIPAL) == []
 
     def test_an_empty_domain_list_needs_nothing_held(self):
-        token, _ = _create(_store(), upstream_domains={"kh": []})
-        assert token.upstream_domains == {}
+        token, _ = _create(_store(), upstream_audiences={"kh": []})
+        assert token.upstream_audiences == {}
 
-    def test_normalisation_sorts_domains_and_changes_the_fingerprint(self):
+    def test_normalisation_sorts_audiences_and_changes_the_fingerprint(self):
         base = {"label": "x", "days": 5, "tools": [], "rules": []}
         plain = scoped_tokens.normalise_create_request(base)
-        one = scoped_tokens.normalise_create_request({**base, "upstream_domains": {"kh": ["hr", "general", "hr"]}})
-        two = scoped_tokens.normalise_create_request({**base, "upstream_domains": {"kh": ["general"]}})
+        one = scoped_tokens.normalise_create_request({**base, "upstream_audiences": {"kh": ["hr", "general", "hr"]}})
+        two = scoped_tokens.normalise_create_request({**base, "upstream_audiences": {"kh": ["general"]}})
         assert plain is not None and one is not None and two is not None
-        assert one["upstream_domains"] == {"kh": ["general", "hr"]}
-        assert plain["upstream_domains"] == {}
+        assert one["upstream_audiences"] == {"kh": ["general", "hr"]}
+        assert plain["upstream_audiences"] == {}
         assert one != two != plain
-        assert scoped_tokens.normalise_create_request({**base, "upstream_domains": {"kh": []}}) == plain
+        assert scoped_tokens.normalise_create_request({**base, "upstream_audiences": {"kh": []}}) == plain
 
     @pytest.mark.parametrize("bad", ["hr", ["hr"], {"kh": "hr"}, {"kh": [1]}, {1: ["hr"]}])
     def test_normalisation_refuses_a_malformed_value(self, bad):
         assert scoped_tokens.normalise_create_request(
-            {"label": "x", "days": 5, "tools": [], "rules": [], "upstream_domains": bad},
+            {"label": "x", "days": 5, "tools": [], "rules": [], "upstream_audiences": bad},
         ) is None
 
 
@@ -1488,6 +1501,179 @@ class TestChosenTokenId:
         _create(store, token_id=chosen)
         token, _ = _create(store, principal=other, token_id=chosen)
         assert token.id == chosen
+
+
+class TestSyncTokenIsAdminOnly:
+    SYNC = "privacyfence_update_group_membership"
+
+    def test_a_non_admin_cannot_create_it_and_nothing_is_stored(self):
+        store = _store()
+        with pytest.raises(ScopedTokenError, match="Only an administrator can create a token for " + self.SYNC):
+            _create(store, tools=[self.SYNC])
+        assert store.tokens_for(LOCAL_PRINCIPAL) == []
+
+    def test_an_admin_can_create_it(self):
+        store = _store()
+        token, _ = _create(store, tools=[self.SYNC], is_admin=True)
+        assert self.SYNC in token.tools
+
+    def test_other_tools_need_no_admin(self):
+        token, _ = _create(_store(), tools=[TOOL])
+        assert TOOL in token.tools
+
+    def test_an_expired_or_revoked_sync_token_no_longer_reaches_the_tool(self):
+        store = _store()
+        token, _ = _create(store, tools=[self.SYNC], is_admin=True)
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW + 1) == "live"
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=token.expires_at) == "expired"
+        store.revoke(LOCAL_PRINCIPAL, token.id)
+        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW + 1) == "absent"
+
+
+def _register_upstream():
+    """A knowledge hub with a popup write tool, a review tool and an auto tool; returns the current digests."""
+    upstream_mcp_registry.register(parse_upstreams({
+        "version": 1,
+        "upstreams": [{
+            "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+            "tools": {
+                "propose_change": {"gate": "popup", "verb": "update", "effect": "Proposes a change."},
+                "search": {"gate": "review", "verb": "search"},
+                "list_topics": {"gate": "auto", "verb": "read"},
+            },
+        }],
+    }, source="test"))
+    return {op: policy_scopes.UPSTREAM_DECLARATIONS[op] for op in ("kh.propose_change", "kh.search", "kh.list_topics")}
+
+
+class TestUpstreamApprovals:
+    POPUP = "kh_propose_change"
+
+    @staticmethod
+    def _approve(digests, tool="kh_propose_change"):
+        return [{"tool": tool, "digest": digests[auto_accept.TOOL_TO_OPERATION[tool]]}]
+
+    def test_an_administrator_ticking_a_popup_tool_gets_a_row_pinned_to_the_declaration(self, tmp_path):
+        digests = _register_upstream()
+        store = _store()
+        token, _ = _create(
+            store, rules=[], tools=[self.POPUP], is_admin=True, upstream_approvals=self._approve(digests),
+        )
+        value = f"kh.propose_change@{digests['kh.propose_change']}"
+        (row,) = token.rules
+        assert row.id == "r-" + hashlib.sha256(repr(("upstream", value)).encode()).hexdigest()[:10]
+        assert (row.scope, row.value, row.predicate, row.conditions) == (None, value, "upstream.approved_tool", ())
+        assert row.verbs == frozenset({Verb.UPDATE})
+        assert row.operations == frozenset({"kh.propose_change"})
+        # It survives a restart of the store.
+        (loaded,) = _store().tokens_for(LOCAL_PRINCIPAL)
+        assert loaded.rules == (row,)
+
+    def test_a_non_administrator_is_refused_a_gated_upstream_tool(self):
+        digests = _register_upstream()
+        store = _store()
+        with pytest.raises(ScopedTokenError, match="Only an administrator can create a token for kh_propose_change"):
+            _create(store, rules=[], tools=[self.POPUP], upstream_approvals=self._approve(digests))
+        assert store.tokens_for(LOCAL_PRINCIPAL) == []
+
+    def test_a_gated_tool_without_an_approval_is_refused(self):
+        _register_upstream()
+        for is_admin in (False, True):
+            with pytest.raises(ScopedTokenError, match="kh_search changes data or releases results unseen"):
+                _create(_store(), rules=[], tools=["kh_search"], is_admin=is_admin)
+
+    def test_a_stale_digest_is_refused(self):
+        _register_upstream()
+        with pytest.raises(ScopedTokenError, match="The server's declaration of kh_propose_change changed"):
+            _create(
+                _store(), rules=[], tools=[self.POPUP], is_admin=True,
+                upstream_approvals=[{"tool": self.POPUP, "digest": "0" * 32}],
+            )
+
+    def test_an_approval_for_an_auto_tool_is_refused(self):
+        digests = _register_upstream()
+        with pytest.raises(ScopedTokenError, match="The server's declaration of kh_list_topics changed"):
+            _create(
+                _store(), rules=[], tools=["kh_list_topics"], is_admin=True,
+                upstream_approvals=self._approve(digests, "kh_list_topics"),
+            )
+        # An approval for a tool the token does not list is refused too.
+        with pytest.raises(ScopedTokenError, match="declaration of kh_search changed"):
+            _create(
+                _store(), rules=[], tools=[self.POPUP], is_admin=True,
+                upstream_approvals=[*self._approve(digests), *self._approve(digests, "kh_search")],
+            )
+
+    def test_an_auto_only_token_is_unchanged(self):
+        _register_upstream()
+        token, _ = _create(_store(), rules=[], tools=["kh_list_topics"])
+        assert token.rules == ()
+        assert token.tools == frozenset({"kh_list_topics"})
+
+    def test_approvals_are_in_the_normalised_request(self):
+        base = {"label": "x", "days": 5, "tools": ["kh_propose_change"], "rules": []}
+        approvals = [{"tool": "kh_search", "digest": "b"}, {"tool": "kh_propose_change", "digest": "a"}]
+        body = scoped_tokens.normalise_create_request({**base, "upstream_approvals": [*approvals, approvals[0]]})
+        assert body["upstream_approvals"] == [approvals[1], approvals[0]]
+        assert scoped_tokens.normalise_create_request(base)["upstream_approvals"] == []
+        assert scoped_tokens.normalise_create_request({**base, "upstream_approvals": approvals}) != (
+            scoped_tokens.normalise_create_request(base)
+        )
+        for bad in (
+            "x", {"tool": "a", "digest": "b"}, ["a"], [{"tool": "a"}], [{"tool": "a", "digest": 1}],
+            [{"tool": "a", "digest": "b", "extra": "c"}],
+        ):
+            assert scoped_tokens.normalise_create_request({**base, "upstream_approvals": bad}) is None
+
+    def test_the_rule_limit_counts_approvals(self):
+        digests = _register_upstream()
+        rules = [_new(value=f"f{i}") for i in range(scoped_tokens.MAX_RULES_PER_TOKEN)]
+        with pytest.raises(ScopedTokenError, match="at most 50 rules"):
+            _create(
+                _store(), rules=rules, tools=[self.POPUP], is_admin=True, upstream_approvals=self._approve(digests),
+            )
+
+    def test_copy_and_duplicate_of_an_approval_row_are_refused(self, monkeypatch):
+        digests = _register_upstream()
+        store = _store()
+        source, _ = _create(
+            store, rules=[], tools=[self.POPUP], is_admin=True, upstream_approvals=self._approve(digests),
+        )
+        (row,) = source.rules
+        with pytest.raises(ScopedTokenError, match="That rule cannot be copied."):
+            _create(
+                store, label="second", tools=["kh_list_topics"],
+                rules=[{"kind": "duplicate", "token_id": source.id, "rule_id": row.id}],
+            )
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [row])
+        with pytest.raises(ScopedTokenError, match="That rule cannot be copied."):
+            _create(store, label="third", tools=["kh_list_topics"], rules=_copy(row.id))
+
+    def test_a_row_naming_another_tool_is_dropped_on_load(self, tmp_path):
+        digests = _register_upstream()
+        store = _store()
+        token, _ = _create(
+            store, rules=[], tools=[self.POPUP], is_admin=True, upstream_approvals=self._approve(digests),
+        )
+        data = json.loads(_file(tmp_path).read_text(encoding="utf-8"))
+        good = data["tokens"][0]["rules"][0]
+        other = {**good, "operations": ["kh.search"]}
+        no_at = {**good, "value": "kh.propose_change"}
+        listed = {**good, "value": ["kh.propose_change@x"]}
+        data["tokens"][0]["rules"] = [good, other, no_at, listed]
+        _file(tmp_path).write_text(json.dumps(data), encoding="utf-8")
+        (loaded,) = _store().tokens_for(LOCAL_PRINCIPAL)
+        assert [r.id for r in loaded.rules] == [token.rules[0].id]
+
+    def test_owned_entry_drops_a_token_only_row(self):
+        rule = PolicyRule(
+            id="r-1", predicate="upstream.approved_tool", value="kh.propose_change@abc",
+            operations=frozenset({"kh.propose_change"}),
+        )
+        owned = scoped_tokens.owned_entry(
+            {"id": "st-1", "label": "job", "rule_ids": ["r-1"], "tools": []}, [rule],
+        )
+        assert owned is not None and owned.entry["rules"] == []
 
 
 class TestTokenState:

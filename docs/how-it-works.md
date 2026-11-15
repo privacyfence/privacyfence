@@ -112,6 +112,9 @@ Every connector tool has a **gate**, fixed in code:
   covers the call. Otherwise PrivacyFence creates a pending approval, shown as a card on
   **Approvals** and, if you allow it, as a browser notification.
 
+On an organization server with [upstream MCP servers](upstream-mcp.md), the audit log records one entry per
+call forwarded to an upstream, with the `jti` and audiences of the signed claim that went with it.
+
 The [Tools reference](tools-reference.md) lists every tool's gate. A gated call waits up to
 30 seconds (`web.approvals.hold_window_seconds`) for you to decide. If you decide in time, the
 call returns its result as usual. If not, it returns straight away with:

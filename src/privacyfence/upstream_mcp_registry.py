@@ -3,8 +3,10 @@
 ``register`` runs once, before the web server serves (ADR 0285). For every declared tool it writes
 the gate, operation key, verb, effect text and approval-window layout into the same module-level
 tables the built-in connectors use, then rebuilds the two derived values (``TOOL_REGISTRY``,
-``propose.ALL_OPERATIONS``). No scope selector, catalogue entry or proposable scope is added, so an
-upstream tool gets no "Always allow" offer and no rule. ``unregister_all`` undoes it (tests only).
+``propose.ALL_OPERATIONS``). No catalogue entry or proposable scope is added, so an upstream tool
+gets no "Always allow" offer and no rule of a person's own. It also records each tool's declaration
+digest in ``policy.scopes.UPSTREAM_DECLARATIONS``, which the token-only ``upstream.approved_tool``
+selector compares an administrator's approval against. ``unregister_all`` undoes it (tests only).
 """
 from __future__ import annotations
 
@@ -15,10 +17,12 @@ from .approval_window_html import WIDE
 from .org_mode import ConfigurationError
 from .policy import propose
 from .policy import registry as policy_registry
+from .policy import scopes
 from .policy.registry import Verb
-from .upstream_mcp_config import ENV_VAR, UpstreamServer
+from .upstream_mcp_config import ENV_VAR, UpstreamServer, declaration_digest
 
 _added: set[str] = set()
+_added_operations: set[str] = set()
 
 
 def register(upstreams: Sequence[UpstreamServer]) -> None:
@@ -42,7 +46,9 @@ def register(upstreams: Sequence[UpstreamServer]) -> None:
                 write_effects.EFFECT_BY_TOOL[name] = tool.effect
             if tool.gate in ("review", "popup"):
                 gate._TOOL_LAYOUT[name] = WIDE
+            scopes.UPSTREAM_DECLARATIONS[tool.operation] = declaration_digest(upstream, tool)
             _added.add(name)
+            _added_operations.add(tool.operation)
     _refresh()
 
 
@@ -55,6 +61,9 @@ def unregister_all() -> None:
         write_effects.EFFECT_BY_TOOL.pop(name, None)
         gate._TOOL_LAYOUT.pop(name, None)
     _added.clear()
+    for operation in _added_operations:
+        scopes.UPSTREAM_DECLARATIONS.pop(operation, None)
+    _added_operations.clear()
     _refresh()
 
 

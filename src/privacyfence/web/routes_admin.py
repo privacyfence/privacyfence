@@ -42,15 +42,32 @@ import hashlib
 import json
 import logging
 import os
+import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from .. import admin_config, agent_runtimes, connector_configs, data_format, oauth_apps, org_mode, paths, relay_client, settings_window_html, web_shell
+from .. import (
+    admin_config,
+    agent_runtimes,
+    connector_configs,
+    data_format,
+    group_membership,
+    oauth_apps,
+    org_mode,
+    paths,
+    relay_client,
+    settings_window_html,
+    upstream_mcp_runtime,
+    web_shell,
+)
+from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector_registry import ConnectorRegistry
 from ..principal import Principal, principal_scope
 from ..settings_state import REPO_URL, _pii_general_fields, _privacy_state_from_config
@@ -107,10 +124,15 @@ ADMIN_ACTIONS: dict[str, AdminAction] = {
     "toggle_pii_category": AdminAction(_ORG_ONLY, True, "self"),
     "set_default_policy": AdminAction(_ORG_ONLY, True, "self"),
     "set_category_policy": AdminAction(_ORG_ONLY, True, "self"),
+    "approve_group_membership": AdminAction(_ORG_ONLY, True, "self"),
+    "decline_group_membership": AdminAction(_ORG_ONLY, True, "self"),
 }
 
 # The actions ``org_install_policy.apply_change`` carries out.
 _PRIVACY_ACTIONS = frozenset(org_install_policy.SUPPORTED_ACTIONS)
+
+# The actions that decide pending group additions (``group_membership``).
+_GROUP_MEMBERSHIP_ACTIONS = frozenset({"approve_group_membership", "decline_group_membership"})
 
 # (name, type, required) for each declared parameter, in the order the page posts them.
 _Param = tuple[str, type, bool]
@@ -147,6 +169,8 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
     "toggle_pii_category": (("category_key", str, True),),
     "set_default_policy": (("group", str, True), ("policy", str, True)),
     "set_category_policy": (("group", str, True), ("category", str, True), ("policy", str, True)),
+    "approve_group_membership": (("group", str, True), ("audience", str, True), ("email", str, False)),
+    "decline_group_membership": (("group", str, True), ("audience", str, True), ("email", str, False)),
 }
 
 # The sections that take effect only when the server starts again, with the name the page shows.
@@ -297,6 +321,64 @@ def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[st
     return signin
 
 
+# At most this many addresses are listed for one pending (group, audience) row.
+_MAX_PENDING_EMAILS = 50
+
+
+def _group_membership_state() -> dict[str, Any]:
+    """Where membership comes from, when it last changed, the last refused snapshot and who is
+    waiting for approval. A static file has no approvals, so its section is read-only."""
+    source = upstream_mcp_runtime.membership_source()
+    state: dict[str, Any] = {"source": source, "updated_at": None, "pending": [], "last_rejected": None}
+    if source == "static":
+        return state
+    store = group_membership.get_store()
+    state["updated_at"] = store.updated_at
+    state["pending"] = [
+        {"group": row.group, "audience": row.audience, "count": len(row.emails),
+         "emails": list(row.emails[:_MAX_PENDING_EMAILS])}
+        for row in store.pending(upstream_mcp_runtime.all_group_audiences())
+    ]
+    rejected = store.last_rejected()
+    if rejected:
+        state["last_rejected"] = {"reason": str(rejected.get("reason", "")), "at": rejected.get("at")}
+    return state
+
+
+def _decide_group_membership(action: str, params: dict[str, Any]) -> tuple[str, str] | None:
+    """Approve or decline; the audit decision and text, or ``None`` when nothing was waiting."""
+    store = group_membership.get_store()
+    decide = store.approve if action == "approve_group_membership" else store.decline
+    group, audience = params["group"], params["audience"]
+    count = decide(
+        group, audience, params.get("email") or None,
+        group_audiences=upstream_mcp_runtime.all_group_audiences(), now=time.time(),
+    )
+    if count == 0:
+        return None
+    approved = action == "approve_group_membership"
+    verb = "Approved" if approved else "Declined"
+    decision = "group_membership_approved" if approved else "group_membership_declined"
+    return decision, f"{verb} membership for {count} person(s) in {group} for audience {audience}"
+
+
+def _record_group_membership_audit(principal: Principal, decision: str, summary: str) -> None:
+    """An admin's approve or decline is its own audit decision (ADR 0299); no email address goes in."""
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="privacyfence", tool="", tool_name="",
+            summary=summary,
+            sender=principal.id,
+            decision=decision,
+            auto_accept_rule="", latency_seconds=0.0, pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for a group membership decision: %s", exc)
+
+
 def _admin_state(
     *, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     principal: Principal, install_wide_settings: dict[str, Any] | None = None, issuer_url: str = "",
@@ -327,6 +409,7 @@ def _admin_state(
     if install_wide_settings is not None:
         state["privacy"] = _privacy_rows(install_wide_settings)
     state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))
+    state["group_membership"] = _group_membership_state()
     return state
 
 
@@ -381,6 +464,17 @@ def _dispatch(
             logger.error("Could not write the install-wide settings.yaml: %s", exc)
             return _error("could not write settings.yaml", 500)
         changed: list[str] = []
+    elif action in _GROUP_MEMBERSHIP_ACTIONS:
+        membership_decision = ""
+        try:
+            decided = _decide_group_membership(action, params)
+        except OSError as exc:
+            logger.error("Could not write the group membership file: %s", exc)
+            return _error("Could not save the group membership.", 500)
+        if decided is None:
+            return _error("Nothing is waiting for that approval.", 409)
+        membership_decision, summary = decided
+        changed = []
     else:
         try:
             summary, changed = admin_config.apply_change(
@@ -394,7 +488,10 @@ def _dispatch(
     if summary:
         who = f"admin={principal.id}"
         with principal_scope(principal):
-            _record_settings_audit(principal, f"{summary} ({who})")
+            if action in _GROUP_MEMBERSHIP_ACTIONS:
+                _record_group_membership_audit(principal, membership_decision, f"{summary} ({who})")
+            else:
+                _record_settings_audit(principal, f"{summary} ({who})")
         if spec.applies == "live":
             refresh_live(changed)
     return JSONResponse({

@@ -377,16 +377,21 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md) | Only a person can extend a scoped token, from today and capped by max_days | Accepted; amends 0164, 0165 |
 | [0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md) | An expired token's n8n credential is kept until the token is revoked | Accepted; amends 0280, 0281; relates to 0283 |
 | [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196; amended by 0288 |
-| [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274 |
-| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272; amended by 0288 |
-| [0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) | The upstream MCP declaration can be YAML or inline, and seeds the grants | Accepted; amends 0285, 0287 |
+| [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274; amended by 0297 |
+| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272; amended by 0288, 0298 |
+| [0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) | The upstream MCP declaration can be YAML or inline, and seeds the grants | Accepted; amends 0285, 0287; amended by 0298 |
 | [0289](0289-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md) | The n8n node ships from this repository as an npm package and is published with provenance on stable tags | Accepted; relates to 0278 |
 | [0290](0290-the-delivered-credential-type-is-an-administrators-choice.md) | The delivered credential type is an administrator's choice, and the new type is checked against n8n before a token is minted | Accepted; amends 0278, 0280 |
 | [0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md) | The privacyFenceApi credential holds the address and the token, and has no authenticate block | Accepted; amends 0278 |
 | [0292](0292-the-n8n-node-carries-its-own-handshake-only-mcp-client.md) | The n8n node carries its own handshake-only MCP client with no dependencies | Accepted; relates to 0289 |
 | [0293](0293-the-n8n-node-never-follows-redirects-or-builds-errors-from-caught-values.md) | The n8n node never follows a redirect and never builds an error or an item from a caught error, a request or a credential value | Accepted; relates to 0291 |
 | [0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md) | n8n delivery can be switched on from the server environment | Accepted; amends 0253, 0279, 0282; relates to 0165, 0257 |
-| [0295](0295-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 |
+| [0295](0295-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 | Accepted |
+| [0296](0296-the-n8n-nodes-dev-tooling-advisories-wait-for-upstream-not-overrides.md) | The n8n node's dev-tooling advisories wait for upstream, not overrides | Accepted; relates to 0289 |
+| [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286 |
+| [0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) | Audiences come from group membership, and scoped tokens only narrow them | Accepted; amends 0287; supersedes the grant seeding of 0288 |
+| [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298 |
+| [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285 |
 | [0296](0296-desktop-mode-and-its-installers-are-removed-in-8.md) | Desktop mode and its installers are removed in 8.x | Accepted; supersedes 0002, 0003, 0261 |
 | [0297](0297-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262 |
 | [0298](0298-the-mode-setting-accepts-only-org.md) | The mode setting accepts only org | Accepted; relates to 0260 |

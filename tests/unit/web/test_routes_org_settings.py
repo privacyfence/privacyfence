@@ -1334,6 +1334,63 @@ class TestScopedTokenRoutes:
         assert self._post(client, "create", {"confirmed": True, "label": 3}, csrf).status_code == 400
         assert store.tokens_for(ALICE) == []
 
+    def _setup_gated(self, tmp_path, monkeypatch, principal):
+        from privacyfence import upstream_mcp_registry
+        from privacyfence.policy import scopes as policy_scopes
+        from privacyfence.upstream_mcp_config import parse_upstreams
+
+        upstream_mcp_registry.register(parse_upstreams({
+            "version": 1,
+            "upstreams": [{
+                "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+                "tools": {"propose_change": {"gate": "popup", "verb": "update", "effect": "Proposes a change."}},
+            }],
+        }, source="test"))
+        _seed(tmp_path, monkeypatch, principal.id)
+        store = self._store(principal)
+        app, sessions = _app(scoped_token_policy=self.ENABLED, scoped_token_store=store)
+        client = _client(app)
+        csrf = _signed_in(client, sessions, principal)
+        body = {
+            **self.BODY, "tools": ["kh_propose_change"], "confirmed": True,
+            "upstream_approvals": [
+                {"tool": "kh_propose_change", "digest": policy_scopes.UPSTREAM_DECLARATIONS["kh.propose_change"]},
+            ],
+        }
+        return client, csrf, store, body
+
+    def test_create_audit_line_names_each_approved_upstream_tool(self, tmp_path, monkeypatch):
+        client, csrf, store, body = self._setup_gated(tmp_path, monkeypatch, ADMIN)
+        recorded: list[str] = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        r = self._post(client, "create", body, csrf)
+
+        assert r.status_code == 200
+        [token] = store.tokens_for(ADMIN)
+        assert [row.predicate for row in token.rules] == ["upstream.approved_tool"]
+        [line] = [s for s in recorded if s.startswith("Created scoped token")]
+        assert ", upstream tools approved: kh_propose_change (popup) (principal=carol)" in line
+
+    def test_a_create_without_approvals_has_no_upstream_clause(self, tmp_path, monkeypatch):
+        client, csrf, store, _ = self._setup_gated(tmp_path, monkeypatch, ADMIN)
+        recorded: list[str] = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda principal, summary: recorded.append(summary))
+
+        r = self._post(client, "create", {**self.BODY, "confirmed": True}, csrf)
+
+        assert r.status_code == 200
+        assert not any("upstream tools approved" in s for s in recorded)
+
+    def test_a_non_administrator_create_with_a_gated_tool_is_400(self, tmp_path, monkeypatch):
+        client, csrf, store, body = self._setup_gated(tmp_path, monkeypatch, ALICE)
+
+        r = self._post(client, "create", body, csrf)
+
+        assert r.status_code == 400
+        assert r.json() == {"error": "Only an administrator can create a token for kh_propose_change."}
+        assert store.tokens_for(ALICE) == []
+
     def test_the_personal_data_flag_reaches_the_store(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
 
@@ -1358,6 +1415,32 @@ class TestScopedTokenRoutes:
         assert token.allow_personal_data_reads is True
         assert token.allow_personal_data is False
 
+    SYNC_BODY = {**BODY, "tools": ["privacyfence_update_group_membership"], "confirmed": True}
+
+    def test_a_non_admin_cannot_create_the_sync_token(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+
+        r = self._post(client, "create", self.SYNC_BODY, csrf)
+
+        assert r.status_code == 400
+        assert r.json() == {
+            "error": "Only an administrator can create a token for privacyfence_update_group_membership.",
+        }
+        assert store.tokens_for(ALICE) == []
+
+    def test_an_admin_can_create_the_sync_token(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "carol")
+        store = self._store(ADMIN)
+        app, sessions = _app(scoped_token_policy=self.ENABLED, scoped_token_store=store)
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ADMIN)
+
+        r = self._post(client, "create", self.SYNC_BODY, csrf)
+
+        assert r.status_code == 200, r.text
+        [token] = store.tokens_for(ADMIN)
+        assert "privacyfence_update_group_membership" in token.tools
+
     def _hold(self, monkeypatch, held):
         from privacyfence import upstream_mcp_runtime
 
@@ -1368,10 +1451,10 @@ class TestScopedTokenRoutes:
             seen.append((principal.id, email_verified))
             return held
 
-        monkeypatch.setattr(upstream_mcp_runtime, "held_domains", fake_held)
+        monkeypatch.setattr(upstream_mcp_runtime, "held_audiences", fake_held)
         return seen
 
-    def test_a_token_gets_the_domains_ticked_and_the_sessions_verified_bit(self, tmp_path, monkeypatch):
+    def test_a_token_gets_the_audiences_ticked_and_the_sessions_verified_bit(self, tmp_path, monkeypatch):
         client, _csrf, store = self._setup(tmp_path, monkeypatch)
         seen = self._hold(monkeypatch, {"kh": frozenset({"general", "hr"})})
         app, sessions = _app(scoped_token_policy=self.ENABLED, scoped_token_store=store)
@@ -1380,32 +1463,32 @@ class TestScopedTokenRoutes:
         client.cookies.set(org_session.SESSION_COOKIE, session_id)
 
         r = self._post(
-            client, "create", {**self.BODY, "upstream_domains": {"kh": ["hr"]}, "confirmed": True}, session_id,
+            client, "create", {**self.BODY, "upstream_audiences": {"kh": ["hr"]}, "confirmed": True}, session_id,
         )
 
         assert r.status_code == 200
         [token] = store.tokens_for(ALICE)
-        assert token.upstream_domains == {"kh": frozenset({"hr"})}
+        assert token.upstream_audiences == {"kh": frozenset({"hr"})}
         assert token.principal_email_verified is True
         assert seen == [("alice", True)]
 
-    def test_a_domain_the_person_does_not_hold_is_a_400_and_creates_nothing(self, tmp_path, monkeypatch):
+    def test_an_audience_the_person_does_not_hold_is_a_400_and_creates_nothing(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
         self._hold(monkeypatch, {"kh": frozenset({"general"})})
 
         r = self._post(
-            client, "create", {**self.BODY, "upstream_domains": {"kh": ["finance"]}, "confirmed": True}, csrf,
+            client, "create", {**self.BODY, "upstream_audiences": {"kh": ["finance"]}, "confirmed": True}, csrf,
         )
 
         assert r.status_code == 400
-        assert r.json() == {"error": "You can only give a token domains you have: finance"}
+        assert r.json() == {"error": "You can only give a token audiences you have: finance"}
         assert store.tokens_for(ALICE) == []
 
     def test_an_unverified_session_holds_what_the_runtime_gives_it(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)
         seen = self._hold(monkeypatch, {})
 
-        r = self._post(client, "create", {**self.BODY, "upstream_domains": {"kh": ["hr"]}, "confirmed": True}, csrf)
+        r = self._post(client, "create", {**self.BODY, "upstream_audiences": {"kh": ["hr"]}, "confirmed": True}, csrf)
 
         assert r.status_code == 400
         assert seen == [("alice", False)]
@@ -1767,6 +1850,22 @@ class TestScopedTokenProposalRoutes:
         client, csrf, store = self._setup(tmp_path, monkeypatch, policy=none)
         r = client.post(self.CREATE, json=self._body(proposal, csrf))
         assert r.status_code == 403 and r.json() == {"error": ros._SCOPED_TOKENS_DISABLED}
+
+    def test_accepting_a_proposal_ignores_approvals_in_the_body(self, tmp_path, monkeypatch):
+        client, csrf, store = self._setup(tmp_path, monkeypatch)
+        proposal = self._propose()
+        approvals = [{"tool": "kh_propose_change", "digest": "a" * 32}]
+
+        r = client.post(self.CREATE, json=self._body(proposal, csrf, upstream_approvals=approvals))
+
+        assert r.status_code == 400
+        assert r.json() == {"error": scoped_token_proposals.WIDENED_MESSAGE}
+        assert store.tokens_for(ALICE) == [] and self._live(proposal)
+        # The same body without them still creates a token, and it holds no approval.
+        ok = client.post(self.CREATE, json=self._body(proposal, csrf))
+        assert ok.status_code == 200
+        [token] = store.tokens_for(ALICE)
+        assert all(row.predicate != "upstream.approved_tool" for row in token.rules)
 
     def test_secret_shown_once_with_no_store(self, tmp_path, monkeypatch):
         client, csrf, store = self._setup(tmp_path, monkeypatch)

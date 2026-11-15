@@ -149,6 +149,11 @@ class TestNarrowing:
     def test_more_days_is_refused(self):
         assert stp.narrowing_error(_request(), _request(days=31)) == stp.WIDENED_MESSAGE
 
+    def test_the_review_cannot_add_an_approval(self):
+        final = _request(upstream_approvals=[{"tool": "kh_propose_change", "digest": "a" * 32}])
+        assert stp.narrowing_error(_request(), final) == stp.WIDENED_MESSAGE
+        assert stp.narrowing_error(_request(), _request(upstream_approvals=[])) is None
+
     def test_turning_on_a_personal_data_flag_is_refused(self):
         for flag in ("allow_personal_data", "allow_personal_data_reads"):
             assert stp.narrowing_error(_request(), _request(**{flag: True})) == stp.WIDENED_MESSAGE
@@ -350,10 +355,14 @@ class TestUpstreamTools:
         with pytest.raises(stp.ProposalError, match="Upstream tools cannot be proposed; create the token in Settings."):
             _proposal(request=_request(tools=["gmail_list_messages", "kh_search"]))
 
+    def test_a_proposal_naming_the_sync_tool_is_refused(self):
+        with pytest.raises(stp.ProposalError, match="This tool cannot be proposed; create the token in Settings."):
+            _proposal(request=_request(tools=["gmail_list_messages", "privacyfence_update_group_membership"]))
+
     def test_a_proposal_of_built_in_tools_is_unaffected(self):
         assert _proposal().request["tools"] == ["drive_download_file", "gmail_list_messages"]
 
     def test_the_review_cannot_add_a_domain(self):
         proposed = _request()
-        assert stp.narrowing_error(proposed, {**proposed, "upstream_domains": {}}) is None
-        assert stp.narrowing_error(proposed, {**proposed, "upstream_domains": {"kh": ["hr"]}}) == stp.WIDENED_MESSAGE
+        assert stp.narrowing_error(proposed, {**proposed, "upstream_audiences": {}}) is None
+        assert stp.narrowing_error(proposed, {**proposed, "upstream_audiences": {"kh": ["hr"]}}) == stp.WIDENED_MESSAGE

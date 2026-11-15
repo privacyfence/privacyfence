@@ -4,6 +4,7 @@
 
 Accepted — 2026-11-14. Amends [ADR 0036](0036-card-copy-names-the-caller-through-one-placeholder.md).
 Implemented: `src/privacyfence/upstream_claims.py`, `web/routes_upstream_mcp.py`.
+Amended by [ADR 0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md).
 
 ## Context
 

@@ -71,18 +71,21 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import (
-    agent_label, agent_runtimes, auto_accept, latency, paths, relay_client,
-    runtime_credentials, scoped_token_proposals, scoped_tokens, secure_files, web_shell,
+    agent_label, agent_runtimes, auto_accept, gate, latency, paths, relay_client,
+    runtime_credentials, scoped_token_proposals, scoped_tokens, secure_files, web_shell, write_effects,
 )
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpAuthzPolicy, IdpConfig
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe
 from ..policy import scope_rows
+from ..policy import scopes as policy_scopes
 from ..policy import propose as policy_propose
+from ..policy import registry as policy_registry
 from ..policy.registry import Verb
 from ..principal import ANONYMOUS_PRINCIPAL, Principal, principal_scope
 from ..resource_names import get_resolver
+from ..scoped_tokens import ScopedToken
 from ..settings_state import cached_row_value, row_value_items, sentence_parts
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
@@ -208,6 +211,48 @@ def _verb_tools(group_id: str, verbs: list[str]) -> dict[str, list[str]]:
     return tools
 
 
+_APPROVAL_PREDICATE = "upstream.approved_tool"
+_REVIEW_EFFECT = "The result goes to the token without a person seeing it. Personal data in it still blocks the call."
+
+
+def _gate_effect(name: str, tool_gate: str) -> str:
+    return write_effects.EFFECT_BY_TOOL.get(name, "") if tool_gate == "popup" else _REVIEW_EFFECT
+
+
+def _gated_tools(upstream_id: str) -> list[dict[str, str]]:
+    """The ``popup`` and ``review`` tools of one upstream an administrator may approve for a token
+    (ADR 0300), each with the digest of the operator's declaration the approval is pinned to."""
+    out = []
+    for name in sorted(auto_accept.TOOL_TO_GATE):
+        if not name.startswith(upstream_id + "_") or not gate.is_gated_upstream_tool(name):
+            continue
+        operation = auto_accept.TOOL_TO_OPERATION[name]
+        if not operation.startswith(upstream_id + "."):
+            continue
+        tool_gate = auto_accept.TOOL_TO_GATE[name]
+        out.append({
+            "name": name, "gate": tool_gate, "verb": policy_registry.TOOL_TO_VERB[name].value,
+            "effect": _gate_effect(name, tool_gate), "digest": policy_scopes.UPSTREAM_DECLARATIONS[operation],
+        })
+    return out
+
+
+def _approved_upstream_tools(token: ScopedToken) -> list[dict[str, str]]:
+    """The tools a token's approval rows approve, for the token list."""
+    by_operation = {op: name for name, op in auto_accept.TOOL_TO_OPERATION.items()}
+    out = []
+    for row in token.rules:
+        if row.predicate != _APPROVAL_PREDICATE:
+            continue
+        for operation in sorted(row.operations):
+            name = by_operation.get(operation)
+            if name is None:
+                continue
+            tool_gate = auto_accept.TOOL_TO_GATE.get(name, "popup")
+            out.append({"name": name, "gate": tool_gate, "effect": _gate_effect(name, tool_gate)})
+    return sorted(out, key=lambda item: item["name"])
+
+
 def scoped_token_page_data(
     principal: Principal, *, policy: scoped_tokens.ScopedTokenPolicy, delivery: str, connector_names: set[str],
 ) -> dict[str, Any]:
@@ -236,11 +281,14 @@ def scoped_token_page_data(
             token.id: [
                 _scoped_rule_entry(row, cached_row_value(row, resolver), row_value_items(row, resolver))
                 for row in token.rules
+                if row.predicate != _APPROVAL_PREDICATE
             ]
             for token in own_tokens
         }
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
+        if gate.is_gated_upstream_tool(name):
+            continue  # Offered only as an administrator's approval below (ADR 0300).
         connector = _tool_connector(name, connector_names)
         if connector is not None:
             by_connector.setdefault(connector, []).append(name)
@@ -262,10 +310,11 @@ def scoped_token_page_data(
             "expires_at": token.expires_at, "days_left": days_left,
             "expiring_soon": not expired and days_left <= scoped_tokens.WARN_DAYS, "expired": expired,
             "rules": token_rules[token.id],
+            "approved_upstream_tools": _approved_upstream_tools(token),
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
             "allow_personal_data_reads": token.allow_personal_data_reads,
-            "upstream_domains": {uid: sorted(doms) for uid, doms in sorted(token.upstream_domains.items())},
+            "upstream_audiences": {uid: sorted(doms) for uid, doms in sorted(token.upstream_audiences.items())},
             "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
             "last_denied_tool": seen.last_denied_tool,
             "runtime_credential": (
@@ -286,8 +335,8 @@ def scoped_token_page_data(
         "max_days": policy.max_days, "default_days": min(scoped_tokens.DEFAULT_DAYS, policy.max_days),
         "warn_days": scoped_tokens.WARN_DAYS, "tokens": tokens, "rules": rules,
         "auto_tools": sorted(
-            name for name, gate in auto_accept.TOOL_TO_GATE.items()
-            if gate == "auto" and _tool_connector(name, connector_names) is not None
+            name for name, tool_gate in auto_accept.TOOL_TO_GATE.items()
+            if tool_gate == "auto" and not gate.is_gated_upstream_tool(name) and _tool_connector(name, connector_names) is not None
         ),
         "tools": [{"connector": connector, "tools": names} for connector, names in sorted(by_connector.items())],
         "scope_groups": [
@@ -298,12 +347,13 @@ def scoped_token_page_data(
     from .. import upstream_mcp_runtime  # function-local, as in _build_org_app
 
     if upstream_mcp_runtime.configured():
-        # The data domains a token may narrow are the ones the person holds themselves.
-        held = upstream_mcp_runtime.held_domains(principal, principal.email_verified)
+        # The audiences a token may narrow are the ones the person holds themselves.
+        held = upstream_mcp_runtime.held_audiences(principal, principal.email_verified)
         page["upstreams"] = [
             {
                 "id": row["id"], "label": row["label"], "tools": by_connector.get(str(row["id"]), []),
-                "domains": sorted(held.get(str(row["id"]), frozenset())),
+                "audiences": sorted(held.get(str(row["id"]), frozenset())),
+                "gated_tools": _gated_tools(str(row["id"])) if principal.is_admin else [],
             }
             for row in upstream_mcp_runtime.status()
         ]

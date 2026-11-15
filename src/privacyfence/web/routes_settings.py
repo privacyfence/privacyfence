@@ -40,7 +40,7 @@ import typing
 import uuid
 from datetime import datetime, timezone
 from html import escape as _html_escape
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from starlette.exceptions import HTTPException
@@ -536,6 +536,18 @@ _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
 })
 
 
+
+def _approved_upstream_audit(approvals: Sequence[Mapping[str, str]]) -> str:
+    """The settings audit-line clause naming each approved upstream tool and its gate, sorted by name;
+    empty when nothing was approved."""
+    names = sorted({a["tool"] for a in approvals})
+    if not names:
+        return ""
+    return ", upstream tools approved: " + ", ".join(
+        f"{name} ({auto_accept.TOOL_TO_GATE.get(name, 'unknown')})" for name in names
+    )
+
+
 def build_org_routes(
     *,
     sessions: OrgSessionStore,
@@ -910,14 +922,15 @@ def build_org_routes(
 
     async def _create_and_deliver(
         principal: Principal, bound: dict[str, Any], *, session_email_verified: bool = False, audit_suffix: str = "",
+        upstream_approvals: Sequence[Mapping[str, str]] = (),
     ) -> tuple[ScopedToken | None, Response]:
         """Mint the token and answer with its secret, once. Returns the token (``None`` when
         nothing was created) and the response to give."""
         store = scoped_token_store or get_store()
         from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
 
-        held_domains = (
-            upstream_mcp_runtime.held_domains(principal, session_email_verified)
+        held_audiences = (
+            upstream_mcp_runtime.held_audiences(principal, session_email_verified)
             if upstream_mcp_runtime.configured() else {}
         )
         with principal_scope(principal):
@@ -932,9 +945,11 @@ def build_org_routes(
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
                         allow_personal_data_reads=bound["allow_personal_data_reads"],
-                        upstream_domains=bound.get("upstream_domains") or None,
+                        upstream_audiences=bound.get("upstream_audiences") or None,
                         principal_email_verified=session_email_verified,
-                        held_domains=held_domains,
+                        held_audiences=held_audiences,
+                        is_admin=principal.is_admin,
+                        upstream_approvals=upstream_approvals,
                     ),
                 )
             except ScopedTokenError as exc:
@@ -946,6 +961,7 @@ def build_org_routes(
                 f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)"
                 + (", personal data allowed" if token.allow_personal_data else "")
                 + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
+                + _approved_upstream_audit(upstream_approvals)
                 + audit_suffix
                 + f" (principal={principal.id})",
             )
@@ -962,6 +978,7 @@ def build_org_routes(
         principal, bound = gated
         _token, response = await _create_and_deliver(
             principal, bound, session_email_verified=_session_email_verified(request),
+            upstream_approvals=bound["upstream_approvals"],
         )
         return response
 
@@ -999,8 +1016,8 @@ def build_org_routes(
         store = scoped_token_store or get_store()
         from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
 
-        held_domains = (
-            upstream_mcp_runtime.held_domains(principal, session_email_verified)
+        held_audiences = (
+            upstream_mcp_runtime.held_audiences(principal, session_email_verified)
             if upstream_mcp_runtime.configured() else {}
         )
         with principal_scope(principal):
@@ -1012,7 +1029,7 @@ def build_org_routes(
                 lambda: runtime_credentials.deliver(
                     principal=principal, bound=bound, proposal=proposal, config=agent_runtime, api=api,
                     token_store=store, policy=token_policy, on_abandoned=runtime_credential_sweeper.wake,
-                    held_domains=held_domains, principal_email_verified=session_email_verified,
+                    held_audiences=held_audiences, principal_email_verified=session_email_verified,
                 ),
             )
             token = outcome.token

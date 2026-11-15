@@ -608,15 +608,32 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
-    def test_the_form_offers_a_domain_fieldset_for_an_upstream_with_a_ticked_tool(self):
+    def test_the_gated_fieldset_text_is_exact(self):
         html = build_html(_make_state(), scoped_tokens={
             **self.DATA, "delivery": "once",
-            "upstreams": [{"id": "kh", "label": "Knowledge </script><b>hub", "tools": ["kh_search"], "domains": ["general", "hr"]}],
+            "upstreams": [{"id": "kh", "label": "Hub", "tools": [], "audiences": [], "gated_tools": [
+                {"name": "kh_propose_change", "gate": "popup", "verb": "update", "effect": "Proposes.", "digest": "d"}]}],
         })
-        assert "Data domains for ' + esc(u.label)" in html
-        assert "The token sees only the domains you tick, and never more than you can see yourself." in html
-        assert "data-st-domain=" in html and "data-st-domain-upstream=" in html
-        assert "upstream_domains: scopedChosenDomains()" in html
+        assert "Upstream tools that change data or release results unseen" in html
+        assert 'data-st-gated-for="' in html and 'data-st-gated-tool="' in html
+        assert "data-st-gated-marker" in html and "data-st-gated-effect" in html
+        assert "writes data" in html and "result not reviewed by a person" in html
+        assert (
+            "Ticking approves this tool for every call the token makes, with no card. "
+            "If the operator later changes how the tool is declared, the approval stops working."
+        ) in html
+        assert "upstream_approvals: scopedUpstreamApprovals()" in html
+        assert "'results unseen'" in html and "a.gate === 'popup' ? 'writes data'" in html
+
+    def test_the_form_offers_an_audience_fieldset_for_an_upstream_with_a_ticked_tool(self):
+        html = build_html(_make_state(), scoped_tokens={
+            **self.DATA, "delivery": "once",
+            "upstreams": [{"id": "kh", "label": "Knowledge </script><b>hub", "tools": ["kh_search"], "audiences": ["general", "hr"]}],
+        })
+        assert "Audiences for ' + esc(u.label)" in html
+        assert "The token sees only the audiences you tick, and never more than you can see yourself." in html
+        assert "data-st-audience=" in html and "data-st-audience-upstream=" in html
+        assert "upstream_audiences: scopedChosenAudiences()" in html
         assert "scopedUpstreamsWithTools()" in html
         # The label rides in the JSON data, which cannot close the script element.
         assert "</script><b>hub" not in html
@@ -976,7 +993,7 @@ class TestAdminSurfaceCapabilities:
     def test_an_org_admin_gets_every_section_and_nothing_is_suppressed(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin", is_admin=True))
         assert caps["sections"] == dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats"), True,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "membership", "audit", "privacy", "stats"), True,
         )
         assert caps["not_applicable_actions"] == []
 
@@ -1019,7 +1036,8 @@ class TestAdminSurfaceCapabilities:
         assert pairs == [
             ("services", "Services"), ("features", "Features"),
             ("delivery", "File delivery"), ("access", "Sign-in"), ("step_up", "Step-up"),
-            ("tokens", "Scoped tokens"), ("runtimes", "Agent runtimes"), ("audit", "Audit forwarding"),
+            ("tokens", "Scoped tokens"), ("runtimes", "Agent runtimes"), ("membership", "Group membership"),
+            ("audit", "Audit forwarding"),
             ("privacy", "Privacy Filter"), ("stats", "Stats"),
         ]
 
@@ -1074,7 +1092,7 @@ class TestServicesSection:
     def test_the_nav_shows_only_the_sections_the_capabilities_include(self):
         org = _render_admin(_admin_state(_row("google", "Google")))
         assert re.findall(r'aria-label="([^"]+)" data-nav', org) == [
-            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes",
+            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Group membership",
             "Audit forwarding", "Privacy Filter", "Stats",
         ]
         assert 'aria-selected="true"' in org
@@ -1549,9 +1567,9 @@ class TestOrgAdminSections:
     def test_the_org_admin_surface_has_all_of_the_org_sections(self):
         caps = _admin_caps(build_html(_org_state(), surface="admin", is_admin=True))
         keys = [k for k, v in caps["sections"].items() if v]
-        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "audit", "privacy", "stats"]
+        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "membership", "audit", "privacy", "stats"]
         page = _render_org("services")
-        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Audit forwarding", "Privacy Filter", "Stats"):
+        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Group membership", "Audit forwarding", "Privacy Filter", "Stats"):
             assert f'aria-label="{label}"' in page
 
 
@@ -1609,6 +1627,37 @@ class TestOrgAdminSections:
         assert "Credential type in n8n" in page
         assert '<option value="httpBearerAuth" selected>' in page and '<option value="privacyFenceApi"' in page
         assert "n8n.internal.example\" " not in page and re.search(r'value="https://n8n', page) is None
+
+    def test_group_membership_empty_state(self):
+        state = _org_state(group_membership={"source": "snapshot", "updated_at": None, "pending": [], "last_rejected": None})
+        page = _render_org("membership", state)
+        for text in ("Group membership", "Source", "Last update", "Last rejected snapshot", "Nothing is waiting for approval."):
+            assert text in page, text
+        assert "approve_group_membership" not in page
+
+    def test_group_membership_pending_row_has_both_buttons_and_the_confirm_text(self):
+        state = _org_state(group_membership={
+            "source": "snapshot", "updated_at": 1700000000.0,
+            "pending": [{"group": "mgmt@acme.com", "audience": "mgmt", "count": 7,
+                         "emails": [f"p{i}@acme.com" for i in range(7)]}],
+            "last_rejected": {"reason": "too_many_additions", "at": 1700000100.0},
+        })
+        page = _render_org("membership", state)
+        assert "Approve all" in page and "Decline all" in page
+        assert 'data-action="approve_group_membership"' in page and 'data-action="decline_group_membership"' in page
+        assert "&quot;group&quot;:&quot;mgmt@acme.com&quot;" in page or '"group":"mgmt@acme.com"' in page
+        assert "Give 7 person(s) in mgmt@acme.com access to the mgmt audience?" in page
+        assert "p0@acme.com" in page and "and 2 more" in page
+        assert "too_many_additions" in page
+        assert "Nothing is waiting for approval." not in page
+
+    def test_group_membership_static_source_is_read_only(self):
+        state = _org_state(group_membership={
+            "source": "static", "updated_at": None, "pending": [], "last_rejected": None,
+        })
+        page = _render_org("membership", state)
+        assert "static" in page and "approve_group_membership" not in page
+        assert "Nothing is waiting for approval." in page
 
     def test_unset_address_and_key_say_which_variable_to_set(self):
         state = _org_state(agent_runtimes_status={"n8n": {
