@@ -1,6 +1,6 @@
-# Release and packaging tooling: what the build, SBOM, finalize, R2-upload, PyPI-publish and
-# MCP-registry steps install on top of (or instead of) the package itself. Deliberately not a
-# package extra -- an extra would ship in PyPI metadata as `privacyfence[release]`.
+# Release and packaging tooling: what the image's wheel build, the SBOM, finalize and the R2 upload
+# install on top of (or instead of) the package itself. Deliberately not a
+# package extra -- an extra would ship in the package metadata as `privacyfence[release]`.
 #
 # Compiled by scripts/update_dependency_locks.sh into requirements/release.lock.txt (these tools
 # alone) and, together with pyproject.toml's dev/test/lint extras, into requirements/dev.lock.txt.

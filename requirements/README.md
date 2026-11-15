@@ -8,14 +8,10 @@ hand-edit any of them; regenerate with
 change, and commit the result. `.github/workflows/dependency-audit.yml`'s `lockfile-freshness` job
 fails the build if a committed file has drifted from what `pyproject.toml` actually resolves to.
 
-- **`runtime.lock.txt`** — `pyproject.toml`'s `[project.dependencies]` only, no extras. This is not
-  what a plain `pip install privacyfence` resolves — pip doesn't auto-discover or apply a lock file,
-  so that command still resolves fresh from `pyproject.toml`'s version ranges (see the literal
-  install command in [`org-mode-setup-guide.md`](../docs/org-mode-setup-guide.md#3-service-account-and-install)). This file is
-  installed from explicitly, by name, in a handful of places: `build.yml`'s macOS/Windows/Linux
-  jobs and `macos-graphical-session.yml` (`pip install --require-hashes -r requirements/runtime.lock.txt`), before PyInstaller freezes
-  whatever's importable into the `.app`/installer/`.deb` — so it pins what actually ships in a
-  *packaged desktop build*, not what a `pip`/PyPI install resolves. It's also the blocking half of
+- **`runtime.lock.txt`** — `pyproject.toml`'s `[project.dependencies]` only, no extras. It is what the
+  organization image installs, explicitly and by name (`pip install --require-hashes -r
+  requirements/runtime.lock.txt`); pip doesn't auto-discover or apply a lock file, so a bare
+  `pip install` of the package still resolves fresh from `pyproject.toml`'s version ranges. It's also the blocking half of
   `dependency-audit.yml`'s `pip-audit` severity policy, and the input to the release SBOM
   (`cyclonedx-py requirements requirements/runtime.lock.txt` in `build.yml`) — see that workflow's
   own comments. Being one *universal* lock file (`--universal`, resolved with environment markers
@@ -34,9 +30,9 @@ fails the build if a committed file has drifted from what `pyproject.toml` actua
 
 - **`release.in`** — the hand-written input for the release tooling: `setuptools`, `wheel`,
   `setuptools_scm`, `build`, `boto3`, `cyclonedx-bom`, `uv` and `pip-audit`. It is not a package
-  extra, because an extra would ship in PyPI metadata as `privacyfence[release]`.
-- **`release.lock.txt`** — `release.in` compiled alone, for the SBOM, finalize, R2-upload, PyPI and
-  MCP-registry steps and the `floor-audit` job, which need only the tools. Audited, blocking, by
+  extra, because an extra would ship in the package metadata as `privacyfence[release]`.
+- **`release.lock.txt`** — `release.in` compiled alone: it builds the image's wheel and drives the SBOM and
+  the R2 upload, which need only the tools. Audited, blocking, by
   `dependency-audit.yml`, because these tools run next to signing and storage credentials.
 
 - **`docs.lock.txt`** — the `docs` extra only (the docs generator and its own dependencies), without
