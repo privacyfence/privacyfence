@@ -1,6 +1,6 @@
-# devflow toolkit profile (andras-tkcs/claude-toolkit; the toolkit's profile reference documents every key).
+# tld project profile (the tld plugin's profile reference documents every key).
 # verify.* mirrors docs/coding-and-testing-guidelines.md §2.7: change both together.
-# No toolkit.ref: the toolkit comes from the Claude Project's plugins, not from a SessionStart hook.
+# The tld plugin comes from the Claude Project's plugins, not from a SessionStart hook.
 
 tld:
   version: ">=1.0,<2"
@@ -81,8 +81,8 @@ verify:
       concrete version heading. Internal-only changes don't need one.
     - >-
       A decision that is hard to reverse, moves a trust boundary, changes the build/release/distribution
-      path, or rejects a non-obvious alternative needs an ADR in docs/adr/. A deleted plan document needs its
-      decisions extracted into ADRs first, or a PR description saying it made none (docs/adr/README.md).
+      path, or rejects a non-obvious alternative needs an ADR in docs/adr/. A plan document reaching `main`
+      (`docs/<issue>/plan.md`) needs its decisions extracted into ADRs first, or a PR description saying it made none (docs/adr/README.md).
     - >-
       Every new or changed tool call still resolves through `gated_call` or an explicit always-auto-approve
       connector, and leaves an audit trail either way.
@@ -109,9 +109,13 @@ ci:
     - workflow: build.yml
       use_when: The org image, the SBOM and the release assets
       notes: No inputs. The `build-org-image` legs each build and smoke-test the image before the run finishes; the registry push is publish-org-image.yml's.
-    - workflow: release.yml
-      use_when: Cutting a release tag (never from a session without the maintainer's say-so)
-      notes: Inputs `version` and `dry_run` (default true). Dispatch the dry run, report it, wait to be told.
+    - workflow: tld-release.yml
+      use_when: Cutting a release tag (never for real from a session without the maintainer's say-so)
+      notes: >-
+        Inputs `version` (always explicit; never leave it empty), `dry_run` (default true); never pass `skip_checks`.
+        Runs on `main` only; the owner approves the tld-release environment for every run. A real run from a
+        session needs the owner's yes on the tld board, then `tld guard allow-release tld-release.yml` first and
+        `tld guard end-allow` after. Dispatch the dry run, report it, wait for the yes. /cut-release is the procedure.
 
 stacks: [python]
 
@@ -127,19 +131,12 @@ hooks:
   board_gate:
     enabled: true
   protect_paths_allow:
-    - .github/workflows/build.yml
-    - .github/workflows/release.yml
-    - .tld/toolkit.yaml
-    - .github/workflows/tests.yml
     - .github/workflows/publish-pypi.yml
     - .github/workflows/publish-org-image.yml
     - .github/workflows/publish-n8n-node.yml
     - .github/workflows/deploy-oauth-relay-worker.yml
     - .github/workflows/ai-client-canary.yml
-    - .github/workflows/dependency-audit.yml
     - .github/workflows/pages.yml
-    - .github/workflows/website-build.yml
-    - .github/workflows/qa-record-fixture.yml
 
 admin:
   policy: .tld/admin-policy.yaml

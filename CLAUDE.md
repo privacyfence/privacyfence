@@ -16,7 +16,7 @@ with Claude Code.
 
 The workflow commands (`/tld:make-plan`, `/tld:implement`, `/tld:dod`, `/tld:review` and the rest) come
 from the tld plugin, enabled in the Claude Project; the plugin's own playbooks say what each one does. The
-project facts they read are in `.tld/toolkit.yaml`; ADR 0311 says why.
+project facts they read are in `.tld/toolkit.yaml`; [ADR 0313](docs/adr/0313-workflow-commands-come-from-the-tld-plugin.md) says why.
 
 - `.claude/skills/steward/SKILL.md` — PrivacyFence-specific steward policy, on top of the plugin's
   pr-steward policy. The workflows a session dispatches instead of running locally are
@@ -27,7 +27,7 @@ project facts they read are in `.tld/toolkit.yaml`; ADR 0311 says why.
 - `/qa-record` records a connector's live QA fixture on the self-hosted runner.
 - **Plans.** `/tld:make-plan` writes a plan to `docs/<issue>/plan.md` on its feature branch, and
   `/tld:implement` adds `docs/<issue>/deviations.md` and opens one PR to `main`, where both stay as the
-  record of the change (ADR 0312; the lifecycle is in [`CONTRIBUTING.md`](CONTRIBUTING.md#decisions-plans-and-adrs)).
+  record of the change ([ADR 0314](docs/adr/0314-plans-stay-on-main-as-the-record-of-their-change.md); the lifecycle is in [`CONTRIBUTING.md`](CONTRIBUTING.md#decisions-plans-and-adrs)).
   Steps only the user can do (third-party console setup, secrets, real-device checks) go only into the
   manifest's `manual_before` and `manual_after`, never between phases.
 - **New connectors.** A new connector is two PRs, connect then tools, and `/tld:make-plan` plans them that
