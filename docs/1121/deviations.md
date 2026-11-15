@@ -36,6 +36,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - None.
 - scope: scope: docs/adr/0164-*.md, docs/adr/0236-*.md, docs/adr/0285-*.md (the one Amended-by line each that the brief names; accepted)
 - retry: tld plugin absent in the worker container; the worker ran the verify.dod commands directly and reported done. No roles are required for this phase. Orchestrator re-ran ruff and the full unit suite on the merged tree: green.
+- scope: scope: docs/adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md (the one Amended-by line the brief names; accepted)
+- scope: scope: docs/adr/0236-a-scoped-token-holds-its-own-rules.md (the one Amended-by line the brief names; accepted)
+- scope: scope: docs/adr/0285-upstream-mcp-servers-are-declared-connectors.md (the one Amended-by line the brief names; accepted)
 
 ## Final review
 
