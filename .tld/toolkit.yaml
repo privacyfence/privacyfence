@@ -144,7 +144,6 @@ hooks:
     - .github/workflows/windows-graphical-session.yml
     - .github/workflows/pages.yml
     - .github/workflows/website-build.yml
-    - cloudflare/downloads/package-lock.json
 
 admin:
   policy: .tld/admin-policy.yaml
@@ -155,9 +154,6 @@ deps:
   audit:
     - ecosystem: "pip"
       run: "pip-audit --strict -r requirements/runtime.lock.txt"
-    - ecosystem: "npm"
-      run: "npm audit --omit=dev --audit-level=high"
-      cwd: "cloudflare/downloads"
     - ecosystem: "npm"
       run: "npm audit --omit=dev --audit-level=high"
       cwd: "cloudflare/oauth-relay"
