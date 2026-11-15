@@ -6,9 +6,8 @@ before a release are in [`release-testing.md`](release-testing.md).
 
 ## Principle
 
-**Do not test the full Cartesian product** (`OS × connector × operation × gate × browser × package
-type`). Each dimension is proven on its own, in one layer below — gate logic in layers 1–2, OS
-portability in layer 3, browser behavior in layer 4, providers in layer 5, packages in layer 6 —
+**Do not test the full Cartesian product** (`connector × operation × gate × browser × distribution`). Each dimension is proven on its own, in one layer below — gate logic in layers 1–2, the
+daemon as a separate process in layer 3, browser behavior in layer 4, providers in layer 5, the Docker image and the Ubuntu release smoke test in layer 6 —
 and only a few high-value end-to-end tests cross a boundary.
 
 ## The seven layers
@@ -20,20 +19,18 @@ below; a new test module carries the marker for its layer.
 |---|---|---|---|---|
 | 1 | Unit | Python logic in isolation, offline | `unit` | `tests.yml`, every PR |
 | 2 | Integration | Real internal stack (sockets, servers, the daemon process), no external network; real AI-client CLIs against it | `integration` | `tests.yml`, every PR; `ai-client-canary.yml`, weekly (each client's `@latest`) |
-| 3 | Cross-platform system | OS path/process/locking/daemon behavior; the full daemon → MCP → approval → audit scenario | `system`, `platform` | `tests.yml`, every PR, on Linux, Windows and macOS |
+| 3 | System | Process, locking and daemon behavior; the full daemon → MCP → approval → audit scenario | `system` | `tests.yml`, every PR, on Linux only ([ADR 0302](adr/0302-linux-is-the-only-ci-platform.md)) |
 | 4 | Browser system | JS, CSP and rendering in real Chromium | `browser` | `tests.yml`, every PR; `qa_web_smoke.py` by hand |
 | 5 | Live connector | Provider API drift | `live` | `connector-live-check.yml`, self-hosted runner, weekly |
-| 6 | Packaged artifact | Installer/package correctness, autostart, upgrade, uninstall | `packaged` | `build.yml`, `tests.yml`'s `org-docker-image` and the graphical-session workflows |
+| 6 | Packaged artifact | The Docker image and the Ubuntu release smoke test: the wheel as the image installs it, the container's user, data volume and health check | `packaged` | `build.yml`'s `build-org-image`, `tests.yml`'s `org-docker-image` and `org-mode-smoke` |
 | 7 | Manual | Subjective judgment, first-time consent, OS-native presentation | — | [`release-testing.md`](release-testing.md) |
 
 Markers are applied to new modules, not backfilled across old ones. `--strict-markers` makes an unregistered marker a collection
-error. Today `system` is on `tests/system/test_local_mode_system.py` and
-`test_org_ubuntu_release_smoke.py`; `platform` on every module under `tests/platform/`; `packaged` on
-every module in layer 6, `test_org_ubuntu_release_smoke.py` included; `browser` on every module that
-drives Chromium (`test_browser_smoke.py`, `test_settings_grist_modal_browser.py`,
-`test_settings_edit_verbs_browser.py`, `test_settings_scoped_token_form_browser.py`,
+error. Today `system` is on `test_org_ubuntu_release_smoke.py`; `packaged` on
+every module in layer 6 (`test_org_docker_image.py` and `test_org_ubuntu_release_smoke.py`); `browser` on every module that
+drives Chromium (`test_browser_smoke.py`, `test_settings_edit_verbs_browser.py`, `test_settings_scoped_token_form_browser.py`,
 `test_settings_scoped_token_proposal_browser.py`,
-`test_settings_update_rule_browser.py`, `test_settings_personal_transfer_browser.py`, `test_download_page.py`, `test_install_page.py`, `test_releases_page.py`,
+`test_settings_show_ids_browser.py`, `test_settings_update_rule_browser.py`, `test_install_page.py`,
 `test_website_layout.py`, `test_website_consent.py`, `test_website_csp.py`); `live` on nothing, since layer 5 is a
 script, not a pytest collection. When a `packaged`- or `system`-marked test fails,
 `tests/conftest.py` writes its diagnostics (environment, installed-file manifest, daemon and audit
@@ -43,42 +40,39 @@ logs) under `test-results/`, which CI uploads as an artifact of the failed job.
 |---|---|
 | Wrong logic or malformed output from a pure function | 1 |
 | Broken wiring between daemon, web routes, gate and audit | 2 |
-| Works on Linux, breaks on Windows/macOS (paths, locking, process spawning, discovery) | 3 |
+| Breaks only when the daemon runs as its own process (locking, process spawning, discovery) | 3 |
 | Script order, a CSP directive that silently blocks something, rendering at a viewport or color scheme | 4 |
 | A provider renamed a field, removed an endpoint, changed a response shape | 5 |
-| Files in the wrong place, autostart missing, uninstall leaves files, upgrade loses state | 6 |
+| The image runs as the wrong user, the data volume is not private, the health check lies, a restart loses state | 6 |
 | Contrast/spacing "looks wrong"; a provider's consent screen behaves unexpectedly | 7 |
 
 ## Layers 1–4: every PR
 
 `.github/workflows/tests.yml` runs on every pull request, every push to `main` or `releases/**`,
-and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout-minutes` (45; 90 for
-`platform-windows` and `platform-macos`), so a hung run fails instead of holding a runner.
+and on dispatch. A 100% pass rate is required to merge. Every job has a `timeout-minutes` (45), so a hung run fails instead of holding a runner.
 
 | Job | Runs |
 |---|---|
-| `test` (Ubuntu, Python 3.13) | `npm test` and `npm run typecheck` in `mcpb/shim/`; `npm ci --prefix tests/integration/ai_clients` (the pinned AI-client CLIs); the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
-| `platform-windows`, `platform-macos` | The full `pytest` suite on `windows-latest`/`macos-latest`; the Windows job then runs `check_coverage_floor.py --platform windows`, which holds the Windows-only modules at `WINDOWS_MODULE_FLOORS` |
-| `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_shim_mcp_contract.py` and `test_n8n_node_contract.py`); one check per version |
+| `test` (Ubuntu, Python 3.13) | `npm ci --prefix tests/integration/ai_clients` (the pinned AI-client CLIs); the full `pytest` suite with branch coverage; `scripts/check_coverage_floor.py coverage.json`; uploads `coverage-report` |
+| `test-python-compat` | The suite on Python 3.11, 3.12 and 3.14, without Node (`--ignore`s `test_n8n_node_contract.py`); one check per version |
 | `n8n-node` | The n8n community node in `n8n/`: `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build`, `npm test`, then `npm pack`, uploading the tarball as `n8n-nodes-privacyfence-tgz` |
 | `sync` (Python 3.11, 3.13) | `privacyfence-sync` alone: `pip install -e "./sync[test]"`, `pytest sync/tests` at 100 % branch coverage, `mypy sync/src`, `bandit -r sync/src`; one `Sync client (Python 3.x)` check per version |
-| `org-mode-smoke` | `test_org_ubuntu_release_smoke.py`, with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it) |
+| `org-mode-smoke` | The org guide's nginx configs (`nginx -t` and the static checks of `test_org_guide_configs.py`), then `test_org_ubuntu_release_smoke.py` with `PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1` (the module skips itself without it): it installs the daemon from the built wheel and runs it, as the image does |
 | `org-docker-image` | Builds the organization-mode Docker image (amd64) from the checkout's wheel and runs `test_org_docker_image.py` against it; the per-PR leg of `build.yml`'s `build-org-image`, deliberately not a required check |
 | `static-analysis` | `ruff check .`, `bandit -c pyproject.toml -r src`, whole-tree `mypy src/privacyfence`, `scripts/mypy_strict_modules.py` (all blocking); `ruff format` is not run (ADR 0150) |
 
 `pip install -e ".[test]"` installs everything the suite needs, Playwright included; the `test` job
 also runs `playwright install --with-deps chromium`. A skipped test is not a pass where CI
-expects it to run, so three switches turn a skip into a failure (two in `tests/conftest.py`, the third in `tests/system/test_local_mode_system.py`):
+expects it to run, so two switches in `tests/conftest.py` turn a skip into a failure:
 `PRIVACYFENCE_REQUIRE_BROWSER=1` (the `test` job's pytest step and `website-build.yml`'s test step) fails
 a `browser` test that skips because Chromium or Playwright is missing, and a module whose Playwright
 import skips it — a browser test that skips for another reason, such as a docs site that was not
-built, stays a skip; `PRIVACYFENCE_REQUIRE_PACKAGED=1` (the six packaged steps in `build.yml`, the
-`org-docker-image` step in `tests.yml`, and the pytest steps of the three graphical-session workflows) fails a `packaged` test that skips for a
+built, stays a skip; `PRIVACYFENCE_REQUIRE_PACKAGED=1` (the packaged steps in `build.yml` and the
+`org-docker-image` step in `tests.yml`) fails a `packaged` test that skips for a
 missing-artifact or missing-environment reason, and any module collection skip (each of those steps
-runs one module), while the skips a dispatched, unsigned build legitimately takes stay skips;
-`PRIVACYFENCE_REQUIRE_NODE=1` (the `test` job) fails the real-shim system test instead of skipping it
-without Node or the built shim. Without the switches, browser tests skip when Playwright or Chromium
-is missing and layer-6 tests skip when no built artifact is under `dist/`. On a machine whose
+runs one module), while the skips a dispatched, unsigned build legitimately takes stay skips.
+Without the switches, browser tests skip when Playwright or Chromium
+is missing and layer-6 tests skip when no built artifact is available. On a machine whose
 Chromium is not the revision the installed `playwright` expects, set `PRIVACYFENCE_TEST_CHROMIUM`
 to that binary rather than accepting the skips; the Claude Code on the web session-start hook
 probes for this and exports it.
@@ -87,12 +81,12 @@ probes for this and exports it.
 security-critical list (`MODULE_FLOORS`), drops below its recorded floor. Raise a floor in the PR
 that raises its coverage; lowering one is a regression, not a config edit. A module more than 1.0
 point above its floor, or overall coverage more than 0.5 above, prints a `stale coverage floor`
-warning (never a failure) as a prompt to raise it. The Windows job has its own, separate floors for the code the Linux run cannot execute (`WINDOWS_MODULE_FLOORS`, checked with `check_coverage_floor.py --platform windows`); the overall floor and `MODULE_FLOORS` stay the `test` job's.
+warning (never a failure) as a prompt to raise it. 
 
 **Required checks.** `REQUIRED_STATUS_CHECKS` in `scripts/update_branch_protection.py` is the
-reviewed list: `test`, `platform-windows`, `platform-macos`, the three `Test (Python 3.x, core
-suite)` checks, `static-analysis`, `org-mode-smoke`, the two `Sync client (Python 3.x)` checks, and `website-build` (`website-build.yml`'s
-job, which also runs on every PR). Update it in the PR that adds, renames or removes one of those
+reviewed list: `test`, the three `Test (Python 3.x, core
+suite)` checks, `static-analysis`, `org-mode-smoke`, the two `Sync client (Python 3.x)` checks, `website-build` (`website-build.yml`'s
+job, which also runs on every PR) and `n8n-node`. Update it in the PR that adds, renames or removes one of those
 jobs. It is applied to the live repository ruleset by hand (`... apply`, and
 `--branch "releases/**" apply` for the release branches) — no CI job does it; `... show` compares
 intent with what is live.
@@ -101,27 +95,16 @@ Key modules in the suite:
 
 - `tests/integration/test_mcp_daemon_contract.py` — a real `WebServer` on a loopback socket, driven
   by the official `mcp` client over TCP.
-- `tests/integration/test_shim_mcp_contract.py` — the built `mcpb/shim/dist/shim.js` against that
-  server, over MCP-over-stdio. Skips without Node.
 - `tests/integration/test_n8n_node_contract.py` — the n8n node's sources against the same server, over
   the node's own MCP client. Skips without Node and npm; the `test` job installs `n8n/` first so the install stays out of the timed test step.
 - `tests/integration/test_claude_code_contract.py` — the pinned Claude Code CLI against that
   server; see "AI-client contract tests (T3)" below.
-- `tests/system/test_local_mode_system.py` — `python -m privacyfence.daemon_main` as a separate
-  process: discovery, bootstrap into `/approvals` and `/settings`, a gated call allowed and denied
-  through the HTTP decide route, the audit log read back, and "Quit PrivacyFence". Runs in every
-  full-suite job, so on all three OSes.
-- `tests/integration/test_org_guide_configs.py` — the org guide's hardened systemd unit and nginx
-  block, read from the guide by heading name: `systemd-analyze verify` and `nginx -t` (each skips
-  without its binary; the `org-mode-smoke` job installs both), plus static checks of the hardening
-  lines, forwarded headers and upload size limit.
-- `tests/platform/` — atomic-write concurrency, cross-process single-instance locking, the browser
-  launch default, a spawned-daemon lifecycle, and real `icacls` behavior on Windows.
+- `tests/integration/test_org_guide_configs.py` — the org guide's nginx
+  block, read from the guide by heading name: `nginx -t` (skips without the binary; the
+  `org-mode-smoke` job installs it), plus static checks of the forwarded headers and upload size limit.
 - `tests/integration/test_browser_smoke.py` — real headless Chromium: login, decisions (including
   "Always allow", live SSE refresh, idempotency), PDF preview, CSP (including every native form post), org-mode WebAuthn, PII banners,
-  three viewports, light/dark structure. `test_download_page.py` covers `website/download/` and
-  `test_releases_page.py` covers `website/releases/`, both with the Worker's API stubbed.
-  `test_install_page.py` covers `website/install/`: the picker and its eight results, with and without JavaScript.
+  three viewports, light/dark structure. `test_install_page.py` covers `website/install/`: the picker and its results, with and without JavaScript.
 - Each connector's `TestLiveFixtureParsing` replays a committed fixture from
   `tests/fixtures/live/<connector>/` through the real parser; it skips if no fixture is recorded.
 
@@ -134,7 +117,7 @@ connectors, so it cannot see a principal's tool list or auto-accept rules; those
 
 ### AI-client contract tests (T3)
 
-A real, unmodified AI-client CLI is configured against a real local-mode `/mcp` endpoint the way
+A real, unmodified AI-client CLI is configured against a real `/mcp` endpoint the way
 the install guides tell a user to, and must report it connected. Today that is Claude Code
 (`test_claude_code_contract.py`: `claude mcp add --transport http --scope user …`, then
 `claude mcp list`). `tests/integration/ai_client_harness.py` starts the endpoint under a throwaway
@@ -162,20 +145,14 @@ variable removed: these tests need no vendor account or credential, and must kee
   `pip-audit` that CI itself installs, compiled from `requirements/release.in`) and reports
   `dev.lock.txt` informationally; `floor-audit` resolves `pyproject.toml` at the lowest version each
   range allows (`uv pip compile --resolution lowest-direct`) and blocks on any finding in that set,
-  because `pip install privacyfence` can land there; `npm-audit` blocks on high/critical in the shim's
-  runtime dependencies (`--omit=dev`); `npm-audit-worker` blocks on high/critical across the whole
-  `cloudflare/downloads/` tree, dev dependencies included, because `wrangler` deploys with a
-  production token.
-- **`deploy-download-worker.yml`'s `verify` job** — on a PR, or a push to `main`, that touches
-  `cloudflare/downloads/**`: `npm ci`, `npm run typecheck`, `npm test` (local Miniflare, no
-  Cloudflare credentials), `npm run dry-run`. Its `deploy` job needs `verify` and runs only on
-  `main`, in the `downloads-worker` environment. Not in `REQUIRED_STATUS_CHECKS`.
+  because `privacyfence-sync` and the image's wheel resolve from the ranges in `pyproject.toml`; `npm-audit` blocks on high/critical in the n8n node's
+  runtime dependencies (`--omit=dev`).
 - **`website-build.yml`** — on every PR and every push to `main`/`releases/**`: builds
   privacyfence.eu with `scripts/build_site.py` three ways (the newest stable tag, as `pages.yml`
   would deploy it; `v4.5.0`, which must hit the stale-tag guard; a throwaway local tag on the PR's
   commit, which renders its `/docs/`), then runs the website tests (`tests/unit/test_website_*.py`,
   `test_build_site.py`, and the browser tests `test_website_layout.py`, `test_website_consent.py`,
-  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0201](adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), `test_download_page.py`, `test_install_page.py` and `test_releases_page.py`) against that last build, `/docs/` pages included. Uploads the built
+  `test_website_csp.py` (every page loads under the Content-Security-Policy in `scripts/site_security_headers.py`, [ADR 0201](adr/0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md)), and `test_install_page.py`) against that last build, `/docs/` pages included. Uploads the built
   sites and the layout screenshots.
 
 ### The shared design system
@@ -187,7 +164,7 @@ The app and the website share one design system from `src/privacyfence/resources
 
 - **Phone layout** — `test_browser_smoke.py`'s `TestPhoneLayout` loads every app surface
   (`/approvals`, every `/settings` section as admin and as a member, every section of the
-  Admin page (`/admin`) in organization and desktop mode,
+  Admin page (`/admin`) 
   `/connect` and its Telegram sign-in steps, `/security`, the three fallback pages without a
   shell, and a WIDE read card of each preview kind) at 320 px, in the 393 px phone emulation
   and at 1024 px, and checks the measurable shared rules the way `test_website_layout.py` does
@@ -273,33 +250,16 @@ email, name or account id means the redaction needs fixing before the commit.
 
 | Test module | Workflow, job | Covers |
 |---|---|---|
-| `test_macos_packaged_smoke.py` | `build.yml`, `build` | DMG contents, the app from its `.pkg`, MCP approval round trip, `codesign`/`spctl`, upgrade keeps state |
-| `test_macos_pkg_smoke.py` | `build.yml`, `build` | `.pkg` structure, postinstall, OS/arch refusal, signature — no install |
-| `test_windows_packaged_smoke.py` | `build.yml`, `build-windows` | Silent install separates, upgrade over a running install, uninstall keeps data, purge, refusal of a user-writable install dir |
-| `test_deb_packaged_lifecycle.py` | `build.yml`, `build-deb` | Install, remove, reinstall, purge, upgrade, unattended install, a failing machine half failing the install |
 | `test_org_docker_image.py` | `build.yml`, `build-org-image`; also `tests.yml`, `org-docker-image` | The organization-mode Docker image: unprivileged user, private data volume, image metadata, refusal to start without or with an unsigned bundle, a running container behind the Host check, health check, clean `docker stop`, state surviving a new container |
-| `test_linux_graphical_session_autostart.py` | `linux-graphical-session.yml` | XDG autostart under a real `systemd --user` session; the OAuth loopback opening a browser under Xvfb |
-| `test_windows_graphical_session_autostart.py` | `windows-graphical-session.yml` | Task Scheduler's stored companion task against `tests/windows_task_contract.py`; the companion started as the signed-in user; SCM restart of a killed service |
-| `test_macos_graphical_session_autostart.py`, `test_macos_pkg_install.py` | `macos-graphical-session.yml` | `enable` and a real `installer -pkg` bringing up the LaunchDaemon as `_privacyfence` and the companion LaunchAgent |
+| `test_org_ubuntu_release_smoke.py` | `build.yml`, `build-org-image`; also `tests.yml`, `org-mode-smoke` | The daemon installed from the built wheel exactly as the image installs it: strict startup, reverse-proxy Host handling, per-principal sessions, MCP OAuth discovery, clean shutdown and restart |
 
 `build.yml` runs on a `v*` tag push and on dispatch. Each packaged test runs right after its job
-builds the artifact and before any upload; `build-deb` also runs `test_org_ubuntu_release_smoke.py`, and
-`build-org-image` (one leg per architecture, on native runners) runs `test_org_docker_image.py`.
-Every upload and publish step is gated on a tag ref, so a dispatched run builds and tests everything
-and publishes nothing — which is the pre-flight in [`release-testing.md`](release-testing.md).
-`publish-pypi.yml`'s `wait_for_build` job blocks every publish until `build.yml`'s run for the same
-commit succeeds.
-
-The three graphical-session workflows run on a push to `main` or `releases/**` that touches their
-packaging paths, weekly (Monday 07:00, 08:00, 09:00 UTC for Linux, Windows, macOS), and on dispatch —
-never on `pull_request`, never as part of `build.yml`. `build.yml`'s `finalize-release` runs
-`scripts/check_graphical_session_coverage.py`, which reads the latest completed run of each on the
-release branch: a run that is missing, not an ancestor of the tagged commit, red, or green but older than a
-change to a file in the workflow's `on.push.paths` warns on a
-pre-release tag and fails a stable one. It never waits for a new run. They run on GitHub-hosted
-runners with one secret, `TELEGRAM_API_ID`/`TELEGRAM_API_HASH`, the shared app identity every
-release build already carries ([ADR 0040](adr/0040-telegram-app-credentials-ship-in-every-distribution.md)),
-not a per-account credential.
+builds the artifact and before any upload. Every upload and publish step is gated on a tag ref, so a
+dispatched run builds and tests everything and publishes nothing — which is the pre-flight in
+[`release-testing.md`](release-testing.md). `publish-pypi.yml` publishes only `privacyfence-sync`
+([ADR 0304](adr/0304-the-organization-image-is-the-only-distribution.md)); its `wait_for_build` job
+blocks every publish until `build.yml`'s run for the same commit succeeds. The wheel is built only
+inside the image build and is never published.
 
 ## Layer 7: manual
 
@@ -310,8 +270,7 @@ Manual release checks, and the rule for what may stay manual, are in
 
 - **`/dod`** (from the devflow toolkit; its rows are `verify` in `.tld/toolkit.yaml`) — runs the blocking gate of
   [`coding-and-testing-guidelines.md` §2.7](coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo)
-  (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy src/privacyfence`/`mypy_strict_modules.py`, the shim's
-  `npm test`/`typecheck`), then checks the diff for the conditional items (live `--check` report,
+  (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy src/privacyfence`/`mypy_strict_modules.py`), then checks the diff for the conditional items (live `--check` report,
   contract tests, lock files, `CHANGELOG.md`) and reports a pass/fail table. Given a path, it narrows
   `pytest` and skips the coverage floor.
 - **`scripts/pre_release_check.py`** — the same blocking commands as one script, exiting non-zero on
