@@ -351,6 +351,10 @@ the shape into the new frame and the sticky note out of its frame. The client ha
 - [ ] Turn on **Jira Assets** under **Admin → Features** on the QA server, with the workspace id
       shown at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`, and set the
       same id as `assets.workspace_id`: the live checks do not read the QA server's Admin settings.
+- [ ] If the Assets check fails with `check_connection failed: HTTP 400` or `HTTP 404`, the text
+      after the second colon is Atlassian's own reason. Compare `assets.workspace_id` in the runner's
+      `qa_environment.yaml` with the id the workspace URL above shows, and check that the site still
+      has Jira Service Management with Assets.
 - [ ] Set `assets.schema_key` (default `PFQA`), `assets.seed_object_label` (default
       `PrivacyFence QA seed contract [QATEST]`) and optionally `assets.seed_object_key` (blank to
       resolve by label inside the schema).
