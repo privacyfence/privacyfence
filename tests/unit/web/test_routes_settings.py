@@ -1673,6 +1673,15 @@ class TestScopedTokenRoutes:
         assert r.status_code == 200
         assert calls[0][-2:] == (False, True)
 
+    def test_local_create_refuses_upstream_approvals(self, controller, sessions):
+        client, calls = self._client(controller, sessions)
+        csrf = _authed(client, sessions)
+        approvals = [{"tool": "kh_propose_change", "digest": "a" * 32}]
+        r = client.post(self.CREATE, json={"csrf": csrf, **{**self.BODY, "upstream_approvals": approvals}})
+        assert r.status_code == 400
+        assert r.json() == {"error": "Upstream tools are for organization servers."}
+        assert calls == []
+
     def test_non_bool_reads_flag_is_rejected(self, controller, sessions):
         client, calls = self._client(controller, sessions)
         csrf = _authed(client, sessions)
