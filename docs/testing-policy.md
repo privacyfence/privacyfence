@@ -83,13 +83,13 @@ that raises its coverage; lowering one is a regression, not a config edit. A mod
 point above its floor, or overall coverage more than 0.5 above, prints a `stale coverage floor`
 warning (never a failure) as a prompt to raise it. 
 
-**Required checks.** `REQUIRED_STATUS_CHECKS` in `scripts/update_branch_protection.py` is the
-reviewed list: `test`, the three `Test (Python 3.x, core
-suite)` checks, `static-analysis`, `org-mode-smoke`, the two `Sync client (Python 3.x)` checks, `website-build` (`website-build.yml`'s
-job, which also runs on every PR) and `n8n-node`. Update it in the PR that adds, renames or removes one of those
-jobs. It is applied to the live repository ruleset by hand (`... apply`, and
-`--branch "releases/**" apply` for the release branches) — no CI job does it; `... show` compares
-intent with what is live.
+**Required checks.** `rulesets.default_branch.required_status_checks` in `.tld/admin-policy.yaml` is the
+reviewed list: `test`, the three `Test (Python 3.x, core suite)` checks, `static-analysis`, `org-mode-smoke`, the two
+`Sync client (Python 3.x)` checks, `website-build` (`website-build.yml`'s job, which also runs on every PR) and
+`n8n-node`. Update it in the PR that adds, renames or removes one of those jobs;
+`tests/unit/test_required_checks.py` fails when the list and the workflows disagree. The owner applies it to the live
+`tld-main` ruleset with `tld ops repo-admin apply` after the PR merges; no CI job does it, and
+`tld ops repo-admin audit` shows what differs.
 
 Key modules in the suite:
 
@@ -274,7 +274,7 @@ Manual release checks, and the rule for what may stay manual, are in
 
 ## Running the gate yourself
 
-- **`/dod`** (from the devflow toolkit; its rows are `verify` in `.tld/toolkit.yaml`) — runs the blocking gate of
+- **`/tld:dod`** (from the tld plugin; its rows are `verify` in `.tld/toolkit.yaml`) — runs the blocking gate of
   [`coding-and-testing-guidelines.md` §2.7](coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo)
   (`pytest` with coverage, the coverage floor, `ruff`/`bandit`/`mypy src/privacyfence`/`mypy_strict_modules.py`), then checks the diff for the conditional items (live `--check` report,
   contract tests, lock files, `CHANGELOG.md`) and reports a pass/fail table. Given a path, it narrows
