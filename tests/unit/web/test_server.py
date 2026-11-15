@@ -301,13 +301,12 @@ def test_a_tokens_rules_come_from_its_own_rows(tmp_path, monkeypatch):
     """Each of a token's rules is drawn from the token's own row (ADR 0236), named like the
     Auto-accept page names a row; widening the person's row afterwards does not change it, and
     there is no "missing" or "limited_to" key any more."""
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence import auto_accept, paths, scoped_tokens
     from privacyfence.policy import catalogue as policy_catalogue
     from privacyfence.policy.registry import Verb
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     config_path = tmp_path / "settings.yaml"
     config_path.write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com")
@@ -340,11 +339,10 @@ def test_a_tokens_rules_come_from_its_own_rows(tmp_path, monkeypatch):
 
 
 def _page_data(tmp_path, monkeypatch, connector_names):
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence import auto_accept, paths, scoped_tokens
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     config_path = tmp_path / "settings.yaml"
     config_path.write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com")
@@ -382,11 +380,10 @@ def test_tools_are_grouped_under_the_longest_connector_name(tmp_path, monkeypatc
 
 
 def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence import auto_accept, paths, scoped_tokens
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     config_path = tmp_path / "settings.yaml"
     config_path.write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com")
@@ -418,11 +415,10 @@ def test_scoped_token_page_data_carries_each_tokens_activity(tmp_path, monkeypat
 
 
 def test_scoped_token_page_data_lists_upstreams_with_the_domains_the_person_holds(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens, upstream_mcp_runtime
+    from privacyfence import auto_accept, paths, scoped_tokens, upstream_mcp_runtime
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     (tmp_path / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com", email_verified=True)
     store = scoped_tokens.ScopedTokenStore(lambda: [alice])
@@ -457,11 +453,10 @@ def test_scoped_token_page_data_lists_upstreams_with_the_domains_the_person_hold
 
 
 def test_scoped_token_page_data_has_no_upstreams_key_when_none_is_configured(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, scoped_tokens
+    from privacyfence import auto_accept, paths, scoped_tokens
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     (tmp_path / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com")
     scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
@@ -474,11 +469,10 @@ def test_scoped_token_page_data_has_no_upstreams_key_when_none_is_configured(tmp
 
 
 def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_token(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, runtime_credentials, scoped_tokens
+    from privacyfence import auto_accept, paths, runtime_credentials, scoped_tokens
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     config_path = tmp_path / "settings.yaml"
     config_path.write_text("auto_accept: {}\n", encoding="utf-8")
     alice = Principal(id="alice", email="alice@example.com")
@@ -515,11 +509,10 @@ def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_to
 
 
 def test_scoped_token_page_data_does_not_touch_the_org_directory_on_a_local_install(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, privilege_separation, runtime_credentials, scoped_tokens
+    from privacyfence import auto_accept, paths, runtime_credentials, scoped_tokens
     from privacyfence.web.server import scoped_token_page_data
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     runtime_credentials.set_store(None)
     config_path = tmp_path / "settings.yaml"
     config_path.write_text("auto_accept: {}\n", encoding="utf-8")
@@ -693,10 +686,9 @@ def test_org_tokens_load_after_a_restart_on_an_unseparated_install(tmp_path, mon
     """An org server is not privilege-separated; its people's scoped tokens,
     under data_dir()/users/<id>/authority, must still load at startup
     (ADR 0165)."""
-    from privacyfence import paths, privilege_separation, scoped_tokens
+    from privacyfence import paths, scoped_tokens
 
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
     alice = Principal(id="alice", email="alice@example.com")
     previous_run = scoped_tokens.ScopedTokenStore(lambda: [alice])
     token, secret = previous_run.create(

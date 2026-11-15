@@ -71,8 +71,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import (
-    agent_label, agent_runtimes, auto_accept, latency, paths, privilege_separation, relay_client,
-    runtime_credentials, scoped_token_proposals, scoped_tokens, web_shell,
+    agent_label, agent_runtimes, auto_accept, latency, paths, relay_client,
+    runtime_credentials, scoped_token_proposals, scoped_tokens, secure_files, web_shell,
 )
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpAuthzPolicy, IdpConfig
@@ -316,16 +316,9 @@ def _write_mcp_url_file(url: str) -> None:
     file: WebServer.start() writes it when it binds, and clears it on
     shutdown. 0600 for the
     same reason web_token/mcp_token are: not a secret itself, but written
-    alongside them under the same directory.
-
-    ``handoff_dir()`` rather than ``data_dir()``: every
-    discovery file this module writes exists to be read by something in the
-    user's *own* session (the MCPB shim, the companion, a human following the
-    not-authorized page), so all of them stay on the user-reachable side of a
-    privilege-separated install. On every other install the two functions
-    return the same directory and nothing moves."""
-    path = paths.handoff_dir() / MCP_URL_FILE_NAME
-    privilege_separation.write_handoff_file(path, url)
+    alongside them under the same directory."""
+    path = paths.data_dir() / MCP_URL_FILE_NAME
+    secure_files.atomic_write_text(path, url)
 
 
 def _clear_mcp_url_file() -> None:
@@ -333,7 +326,7 @@ def _clear_mcp_url_file() -> None:
     finds no file rather than a stale, now-dead URL -- the same reasoning
     ipc_server.py's own shutdown has for not leaving a dangling PORT_FILE
     behind."""
-    (paths.handoff_dir() / MCP_URL_FILE_NAME).unlink(missing_ok=True)
+    (paths.data_dir() / MCP_URL_FILE_NAME).unlink(missing_ok=True)
 
 
 # The two org-mode OAuth paths a client's sign-in popup passes through on

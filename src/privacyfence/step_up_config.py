@@ -14,9 +14,7 @@ reads the org config's ``step_up:`` section, and ``from_local_config`` reads
 Enrolling a credential is necessary but not sufficient for the guarantee --
 see webauthn_stepup.py's own module docstring on where the credential store
 lives (``paths.authority_dir()``) and why write access to it is a full
-bypass, not merely a tamper-evidence gap. Privilege separation (ADR 0003) is
-what makes that store, and the ``require_passkey`` flag below, unwritable by
-the same agent the check defends against. This module only parses the
+bypass, not merely a tamper-evidence gap. This module only parses the
 config; web/routes_approvals.py and web/routes_settings.py enforce it.
 """
 from __future__ import annotations
@@ -28,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from . import paths, privilege_separation
+from . import paths
 from .org_mode import ConfigurationError
 from .secure_files import atomic_write_json
 
@@ -174,27 +172,12 @@ def default_local_step_up() -> bool:
     local mode when ``config/settings.yaml`` expresses no opinion about
     them -- the default ADR 0003's amendment under *Out of scope* records.
 
-    True on a **packaged** install, False everywhere else. That split is
-    the whole of the decision, and it is ADR 0003's own gate reused rather
-    than a second one: ``privilege_separation.enforce_separation()`` is
-    scoped to ``paths.is_bundled()`` too, and refuses to serve a packaged
-    install it could not separate -- so on exactly the builds this returns
-    True for, the credential store a passkey is checked against is already
-    out of the agent's reach by the time this is read. Everywhere else
-    (a source checkout, an editable install, ``pipx install privacyfence``)
-    nothing separates anything, and ADR 0002 decision 6's verdict on
-    turning this on there still stands: a passkey checked against a
-    credential store the agent can write is a checkbox a local process
-    ticks for itself.
-
-    The separation check is repeated here rather than assumed from
-    ``is_bundled()`` alone because a *default* must never be able to fail a
-    daemon's boot. ``from_local_config``'s ``ConfigurationError`` below is
-    the right answer for somebody who wrote ``require_passkey: true`` into
-    a file by hand; it is the wrong answer for a value nobody chose, which
-    would turn an unexpected packaging state into an install that will not
-    start at all. So a packaged install that somehow reaches this
-    unseparated defaults *off*, loudly, instead.
+    Always False: nothing separates the credential store from the agent,
+    and ADR 0002 decision 6's verdict on turning this on stands: a passkey
+    checked against a credential store the agent can write is a checkbox a
+    local process ticks for itself. A *default* must never be able to fail a
+    daemon's boot, so a packaged build that reaches this defaults *off*,
+    loudly, instead of raising.
 
     Deliberately not retroactive. This is consulted only for a key that is
     absent, and every install seeded from a settings.yaml.example older
@@ -208,12 +191,10 @@ def default_local_step_up() -> bool:
     """
     if not paths.is_bundled():
         return False
-    if privilege_separation.is_enabled() or privilege_separation.dev_allows_unseparated():
-        return True
     logger.warning(
-        "This is a packaged build that is not privilege-separated, so step-up is defaulting to "
-        "off rather than on -- a passkey checked against a credential store the agent can write "
-        "guarantees nothing (ADR 0002 decision 6).",
+        "This is a packaged build whose credential store the agent can write, so step-up is "
+        "defaulting to off rather than on -- a passkey checked against it guarantees nothing "
+        "(ADR 0002 decision 6).",
     )
     return False
 
@@ -390,34 +371,20 @@ class StepUpConfig:
         default_on = default_local_step_up()
         require_passkey_is_explicit = "require_passkey" in raw
         require_passkey = bool(raw.get("require_passkey", default_on))
-        # ADR 0003, "Why not gate the passkey instead": kept as a consequence
-        # of decision 1 rather than dropped, because it is unreachable on a
-        # shipped install (daemon_main.py's enforce_separation() already
-        # refused to start a packaged, unseparated one before load_config()
-        # -- and therefore this -- is ever reached) and catches exactly the
-        # developer path that gate does not cover: a non-packaged local-mode
-        # checkout with `require_passkey: true` in its own settings.yaml but
-        # no service account backing it. ADR 0002 decision 6 already named
-        # why that combination is worse than not having the feature at all --
-        # "a passkey checked against a credential store the agent can write
-        # is a checkbox a local process ticks for itself". The escape hatch
-        # is the same one decision 7 gives the daemon-startup gate's sibling
-        # case, in the same house spelling.
+        # ADR 0002 decision 6: a passkey checked against a credential store
+        # the agent can write is a checkbox a local process ticks for itself,
+        # so an explicit ``require_passkey: true`` is refused.
         # Only ever raised for a value somebody wrote down: the defaulted
         # one already answered this question for itself (``default_local_
         # step_up()``'s own docstring on why a default must not be able to
         # fail a boot), so ``require_passkey_is_explicit`` is what separates
         # "you asked for something this install cannot back" from "nobody
         # asked for anything".
-        separated_or_dev = privilege_separation.is_enabled() or privilege_separation.dev_allows_unseparated()
-        if require_passkey and require_passkey_is_explicit and not separated_or_dev:
+        if require_passkey and require_passkey_is_explicit:
             raise ConfigurationError(
-                "config/settings.yaml's \"step_up\".\"require_passkey\" is true, but this install "
-                "is not privilege-separated (ADR 0003) -- the credential store a "
-                "passkey is checked against is writable by the same account the agent runs as, so "
-                "turning this on makes the guarantee worse, not better. Separate this install "
-                f"first, or set {privilege_separation.DEV_ALLOW_UNSEPARATED_ENV}=1 for local "
-                "development (never in a real deployment)."
+                "config/settings.yaml's \"step_up\".\"require_passkey\" is true, but the "
+                "credential store a passkey is checked against is writable by the same account the "
+                "agent runs as, so turning this on makes the guarantee worse, not better."
             )
         return StepUpConfig(
             enabled=bool(raw.get("enabled", default_on)),
@@ -438,8 +405,7 @@ class LiveStepUpConfig:
     page) -- "one StepUpConfig, read once, drives ... alike" (build_app()'s
     own docstring). A plain ``StepUpConfig`` would make turning step-up
     *on* a config-file-plus-restart operation with no UI path at all:
-    editing ``config/settings.yaml`` by hand, which is ``sudo`` and a text
-    editor on a privilege-separated install.
+    editing ``config/settings.yaml`` by hand.
 
     This class gives it a UI path without touching any of those call sites:
     every attribute/method a ``StepUpConfig`` exposes (``enabled``,

@@ -418,31 +418,3 @@ class TestAllDownloadsDirs:
         (users_root / "not-a-directory").write_text("stray file")
 
         assert paths.all_downloads_dirs() == []
-
-
-class TestBundleMacosDir:
-    def test_none_when_not_bundled(self, monkeypatch):
-        monkeypatch.setattr(paths, "is_bundled", lambda: False)
-        assert paths.bundle_macos_dir() is None
-
-    def test_parent_of_executable_when_bundled(self, monkeypatch):
-        monkeypatch.setattr(paths, "is_bundled", lambda: True)
-        monkeypatch.setattr(sys, "executable", "/Applications/PrivacyFenceApp.app/Contents/MacOS/privacyfence-app")
-
-        result = paths.bundle_macos_dir()
-
-        assert result == Path("/Applications/PrivacyFenceApp.app/Contents/MacOS")
-
-
-class TestAppBundlePath:
-    def test_none_when_not_bundled(self, monkeypatch):
-        monkeypatch.setattr(paths, "is_bundled", lambda: False)
-        assert paths.app_bundle_path() is None
-
-    def test_app_bundle_root_when_bundled(self, monkeypatch):
-        monkeypatch.setattr(paths, "is_bundled", lambda: True)
-        monkeypatch.setattr(sys, "executable", "/Applications/PrivacyFenceApp.app/Contents/MacOS/privacyfence-app")
-
-        result = paths.app_bundle_path()
-
-        assert result == Path("/Applications/PrivacyFenceApp.app")

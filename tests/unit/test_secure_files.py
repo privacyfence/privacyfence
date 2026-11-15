@@ -37,11 +37,10 @@ class TestSecureMkdir:
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_foreign_owner_ok_leaves_a_directory_this_process_does_not_own(self, tmp_path, monkeypatch):
-        # On a separated install, a process running as the logged-in user resolves
-        # directories owned by the daemon's service account. chmod there is
-        # guaranteed to fail with EPERM on every single path resolution, and
-        # a warning per resolution would train a reader to ignore exactly the
-        # permission warnings this logging exists for. (Monkeypatched rather than
+        # chmod on a directory owned by another account is guaranteed to fail
+        # with EPERM on every call, and a warning per call would train a
+        # reader to ignore exactly the permission warnings this logging
+        # exists for. (Monkeypatched rather than
         # chown'd: creating a genuinely foreign-owned directory needs root,
         # which no test in this suite has.)
         target = tmp_path / "service-owned"
@@ -70,11 +69,9 @@ class TestSecureMkdir:
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_atomic_write_respects_an_explicit_dir_mode(self, tmp_path):
-        # The separated install's handoff directory is deliberately 3770, and the
-        # 0700 default would re-tighten it on every discovery-file write --
-        # locking out the accounts the installer just let in, one write at a
-        # time.
-        target = tmp_path / "handoff" / "mcp_token"
+        # A caller that writes into a directory with a deliberate mode passes it,
+        # so the 0700 default does not re-tighten it on every write.
+        target = tmp_path / "shared" / "mcp_token"
 
         secure_files.atomic_write_text(target, "token", mode=0o640, dir_mode=0o3770)
 

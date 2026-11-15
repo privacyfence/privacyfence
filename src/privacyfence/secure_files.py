@@ -8,9 +8,7 @@ could observe a partially-written file at whatever permissions the process
 umask left it with, and a failed ``chmod`` was silently swallowed at
 ``debug`` level rather than surfaced. The directories holding these files
 (``~/.privacyfence`` and its subdirectories) were created with the process's
-default umask rather than deliberately restricted, too -- see
-``docs/security-and-compliance.md``'s "Privilege separation" section for
-the directory layout and modes this enforces.
+default umask rather than deliberately restricted, too.
 
 ``atomic_write_text``/``atomic_write_json`` fix the file-write half: the
 real content is written to a freshly ``O_CREAT|O_EXCL``-created sibling temp
@@ -75,17 +73,11 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
     permissions) is logged at ``warning`` and otherwise non-fatal -- the
     directory is still created and usable, just not provably restricted.
 
-    ``foreign_owner_ok`` is for the directories privilege separation
-    deliberately shares between two accounts (``paths.py``'s
-    ``data_dir()`` and ``handoff_dir()`` on a separated install): there, a
-    process running as the logged-in user resolves a directory *owned by the
-    daemon's service account*, and ``chmod`` on it is guaranteed to fail with
-    ``EPERM`` every single time. Skipping the attempt when this process isn't
-    the owner keeps that from becoming a warning on every path resolution --
-    which would train a reader to ignore exactly the permission warnings this
-    logging exists for. The owner's own process still re-asserts the mode, so
-    the self-healing property is unchanged; and the separated layout gets a
-    check of its own regardless, in ``privilege_separation.audit_layout()``.
+    ``foreign_owner_ok`` is for a directory that may be owned by another
+    account: ``chmod`` on it is guaranteed to fail with ``EPERM``, so the
+    attempt is skipped when this process isn't the owner, instead of logging
+    a warning on every path resolution. The owner's own process still
+    re-asserts the mode, so the self-healing property is unchanged.
     On Windows it skips the attempt outright, for the related-but-distinct
     reason ``_is_owned_by_this_process()`` gives: there is no mode there for
     the ``chmod`` to assert in the first place.
@@ -94,15 +86,6 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
     path.mkdir(parents=True, exist_ok=True)
     if foreign_owner_ok and not _is_owned_by_this_process(path):
         return path
-    # A separated install's root and handoff/ are shared with the user's
-    # session on purpose, so their installer-set mode wins over whatever this
-    # caller asked for -- see privilege_separation.shared_dir_mode(). Imported
-    # here, not at the top: privilege_separation imports this module.
-    from . import privilege_separation
-
-    shared_mode = privilege_separation.shared_dir_mode(path)
-    if shared_mode is not None:
-        mode = shared_mode
     try:
         path.chmod(mode)
     except OSError as exc:  # pragma: no cover -- best effort on non-POSIX
@@ -113,22 +96,14 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
 def _is_owned_by_this_process(path: Path) -> bool:
     """True when ``path``'s owning uid is this process's effective uid.
 
-    Only ever consulted for a ``foreign_owner_ok`` call -- i.e. for the two
-    directories privilege separation deliberately shares between two accounts -- so
-    "I cannot tell" has to answer for that case specifically rather than in
-    general.
+    Only ever consulted for a ``foreign_owner_ok`` call, so "I cannot tell"
+    has to answer for that case specifically rather than in general.
 
     **False on Windows**, which is the answer that case wants and the
     opposite of what an "unknown, so assume yes" default would give. There is
     no POSIX ownership to compare there, but there is also nothing for the
     ``chmod`` to do: it is the documented no-op this module's own docstring
-    describes, and the separated Windows layout is NTFS ACLs the installer
-    writes and ``windows_acl.py`` audits instead. Attempting it anyway is not
-    merely useless -- the companion and the MCP client resolve
-    ``paths.handoff_dir()`` constantly and hold *read* access to it, so
-    ``os.chmod`` there raises ``PermissionError`` every single time, and the
-    warning below would fire on every path resolution in exactly the two
-    processes that are behaving correctly.
+    describes.
     """
     if os.name == "nt":  # pragma: no cover -- exercised by the platform-windows job
         return False
@@ -148,14 +123,8 @@ def atomic_write_bytes(
     exist yet, so callers no longer need their own
     ``os.makedirs(..., exist_ok=True)`` before calling this.
 
-    ``dir_mode`` exists because ``secure_mkdir`` re-asserts that mode on an
-    *existing* directory too, which is the right default everywhere except
-    the one directory privilege separation deliberately shares between two accounts:
-    writing ``mcp_token`` into ``paths.handoff_dir()`` with the ``0700``
-    default would silently re-tighten the ``3770`` the installer set, and
-    lock the agent out of its own credential on the next read. Callers that
-    write into such a directory pass its real mode -- see
-    ``privilege_separation.write_handoff_file()``, the only one that does.
+    ``dir_mode`` is the mode ``secure_mkdir`` asserts on the containing
+    directory; it defaults to ``0700``.
     """
     path = Path(path)
     secure_mkdir(path.parent, dir_mode)
