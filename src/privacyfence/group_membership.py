@@ -84,6 +84,26 @@ def normalize_email(value: Any) -> str | None:
     return email
 
 
+def lookup_email(value: object) -> str | None:
+    """The one address form shared by the claim ``email``, ``audiences`` and ``groups``.
+
+    ``value`` stripped and lower-cased when it is an ASCII email-shaped string (exactly one ``@``,
+    no whitespace or control character, non-empty local part and domain); otherwise ``None``.
+    ASCII only closes every look-alike (Kelvin sign, zero-width space) without a case list.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or not text.isascii() or text.count("@") != 1:
+        return None
+    if any(c.isspace() or not c.isprintable() for c in text):
+        return None
+    local, _, domain = text.partition("@")
+    if not local or not domain:
+        return None
+    return text.lower()
+
+
 def _normalized_map(group_audiences: Mapping[str, frozenset[str]]) -> dict[str, frozenset[str]]:
     return {str(g).lower(): frozenset(a) for g, a in group_audiences.items()}
 
@@ -512,6 +532,7 @@ __all__ = [
     "WINDOW_SECONDS",
     "current_store",
     "get_store",
+    "lookup_email",
     "normalize_email",
     "set_store",
 ]

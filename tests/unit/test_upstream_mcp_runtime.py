@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from types import SimpleNamespace
 
@@ -192,6 +193,29 @@ class TestCallerFor:
         assert claim.audiences == ()
         assert claim.email is None
 
+    def test_opted_in_a_verified_email_is_lowercased(self, configured):
+        upstream = dataclasses.replace(configured[0], email_for_visibility=True)
+        claim = _caller(upstream, Principal(id="u1", email="Ann@HR.example", email_verified=True))
+        assert claim.email == "ann@hr.example"
+
+    def test_opted_in_a_non_ascii_email_gives_none(self, configured):
+        upstream = dataclasses.replace(configured[0], email_for_visibility=True)
+        claim = _caller(upstream, Principal(id="u1", email="\u212Aate@hr.example", email_verified=True))
+        assert claim.email is None
+
+    def test_opted_in_an_unverified_email_gives_none(self, configured):
+        upstream = dataclasses.replace(configured[0], email_for_visibility=True)
+        claim = _caller(upstream, Principal(id="u2", email="ann@hr.example"))
+        assert claim.email is None
+
+    def test_opted_in_a_scoped_token_never_carries_email(self, configured):
+        upstream = dataclasses.replace(configured[0], email_for_visibility=True)
+        claim = _caller(
+            upstream, Principal(id="u1", email="ann@hr.example", email_verified=True),
+            _scope(principal_email_verified=True),
+        )
+        assert claim.email is None
+
     def test_scoped_token_is_an_n8n_workflow_named_after_the_token(self, configured):
         claim = _caller(
             configured[0], Principal(id="u1", email="ann@hr.example", email_verified=True),
@@ -246,6 +270,9 @@ class TestAudiencesForEmail:
         assert upstream_mcp_runtime.audiences_for_email("kh", " Ann@HR.example ", True) == {
             "general", "hr", "finance",
         }
+
+    def test_a_look_alike_address_holds_no_audience(self, configured):
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann\u200b@hr.example", True) == frozenset()
 
     def test_unverified_or_empty_email_gets_nothing(self, configured):
         assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", False) == frozenset()
