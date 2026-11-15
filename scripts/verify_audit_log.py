@@ -11,7 +11,7 @@ entry's ``prev_hash`` must match the previous entry's ``entry_hash``
 rather than reimplementing the hash logic here keeps the two from ever
 silently drifting apart on what "canonical" means.
 
-Needs PrivacyFence's own package installed (unlike build_org_bundle.py, this
+Needs PrivacyFence's own package installed (it
 imports audit_log.py directly rather than reimplementing its logic).
 
 The local-mode log is ``<data>/authority/logs/audit``. On a separated

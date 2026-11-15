@@ -4,12 +4,10 @@
 # This file is USER-level only — privacy policy, which connectors are
 # enabled, and auto-accept rules. It carries no secrets:
 #
-#   - Organization-level app credentials (the Google OAuth client, Slack app,
-#     Telegram app, Salesforce Connected App, Atlassian OAuth app) are
-#     installed as one bundle via "Install configuration file…" under
-#     Admin → Organization configuration in PrivacyFence Settings (the embedded web page, web.settings below). IT
-#     admins build that bundle once with scripts/build_org_bundle.py and
-#     distribute it.
+#   - An organization's own connector apps (Google, Slack, Salesforce,
+#     Atlassian, Miro, Grist) are uploaded as signed connector configs under
+#     Admin → Services. An administrator signs each one with
+#     scripts/sign_connector_config.py or the browser tool.
 #   - Per-user sign-in (browser OAuth, or Telegram's phone + code login) is
 #     done via "Authenticate…" per connector, also in PrivacyFence Settings.
 #

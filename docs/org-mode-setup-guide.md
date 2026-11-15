@@ -989,8 +989,9 @@ Everything install-wide, including the Privacy Filter, PII detection and Stats, 
 [Admin page](#the-admin-page) and is not on Settings: Settings is the same page for an
 administrator as for everyone else.
 
-Connector management, update checks, the log level, the Calendar free/busy and Gmail signature
-switches, and notification preferences are desktop-only settings and do not appear here.
+Connector management, the log level, the Calendar free/busy and Gmail signature switches, and
+notification preferences belong to the Admin page and the server's environment file, so they do not
+appear here.
 
 ### Moving a person from a desktop install
 
@@ -1014,10 +1015,9 @@ move:
 - Connector sign-ins and tokens: connect your accounts again on the new install.
 - Passkeys: enroll a passkey on the new install at `/security`.
 - Scoped tokens: create new ones if your administrator allows them.
-- Privacy filter and PII detection: install-wide, a desktop install's own or an administrator's on an
-  organization server.
-- Connector on/off switches, notification detail, AI system names, update checks and log level:
-  desktop-only settings.
+- Privacy filter and PII detection: install-wide, set by an administrator on the Admin page.
+- Connector on/off switches, notification detail, AI system names and log level: set install-wide by
+  an administrator, not per person.
 - The audit log: it stays on the install that wrote it.
 - Rules written by hand in `settings.yaml` that have no entry on the Auto-accept page (custom
   rules): add them again on the page.

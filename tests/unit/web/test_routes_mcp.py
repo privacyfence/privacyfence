@@ -1087,8 +1087,7 @@ class TestSessionIdentityDegradedPaths:
 # --------------------------------------------------------------------------- #
 # A refused request must not leave the client pinned to a dead session --
 # routes_mcp.py's _SessionIdOnlyOnSuccess. See its docstring for the full
-# cascade; mcpb/shim/src/sessionFetch.ts is the same guard on the client side,
-# for a shim talking to a daemon older than this.
+# cascade.
 # --------------------------------------------------------------------------- #
 
 class TestDeadSessionIdIsNotHandedOut:

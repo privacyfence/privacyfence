@@ -15,9 +15,8 @@ config at startup only catches malformed/unreadable files, not a
 well-formed-but-hostile one).
 
 Design -- trust-on-first-use (TOFU), the same model SSH host keys use:
-each organization generates an Ed25519 keypair once
-(``scripts/build_org_bundle.py --generate-signing-key``) and signs every
-bundle it builds with it (``--sign-key``). The *first* signed bundle an
+each organization generates an Ed25519 keypair once and signs every
+bundle with it. The *first* signed bundle an
 install ever sees has its embedded public key trusted on that basis
 alone and pinned to disk (``pinned_public_key_path()``); every bundle
 after that -- installed via PrivacyFence Settings' "Install
@@ -52,13 +51,8 @@ WebAuthn verification elsewhere in this codebase -- ``cryptography`` is
 already a runtime dependency there, so this adds nothing new to what's
 installed.
 
-``scripts/build_org_bundle.py`` does NOT import this module (see its own
-module docstring: it's meant to be runnable standalone, without a
-PrivacyFence install) -- it re-implements the same canonicalization/
-signing logic against ``cryptography`` directly. The two MUST stay
-byte-for-byte identical or a bundle signed by the script will fail to
-verify here; ``_canonical_payload_bytes`` below is deliberately simple
-(sorted-key compact JSON) to make that easy to keep in sync.
+The canonicalization (``_canonical_payload_bytes`` below) is deliberately simple
+(sorted-key compact JSON), so a bundle signed anywhere with the same rule verifies here.
 """
 from __future__ import annotations
 
@@ -85,7 +79,7 @@ from .secure_files import atomic_write_bytes, atomic_write_json, atomic_write_te
 
 logger = logging.getLogger(__name__)
 
-# Bundle fields written by scripts/build_org_bundle.py --sign-key, read
+# Bundle fields written by the organization's signing step, read
 # here. Both are standard-alphabet base64 of the raw fixed-size Ed25519
 # bytes -- 32 for the public key, 64 for the signature.
 SIGNATURE_FIELD = "signature"
@@ -350,8 +344,7 @@ def would_pin_new_key(bundle: dict[str, Any], org_dir: Path) -> bool:
     Deliberately a second copy of the condition rather than a shared
     helper verify_and_maybe_pin also calls: this module already accepts
     that kind of duplication for the sake of the two functions staying
-    independently readable (see the module docstring's own note on
-    scripts/build_org_bundle.py's canonicalization copy) -- keep this in
+    independently readable -- keep this in
     exact lockstep with verify_and_maybe_pin's pinning branch below, or a
     caller ends up asking for confirmation a pin never follows, or
     skipping it for one that happens anyway.
@@ -435,9 +428,7 @@ def verify_and_maybe_pin(bundle: dict[str, Any], org_dir: Path) -> BundleTrust:
 
 # ---------------------------------------------------------------------------- #
 # Signing side -- used by tests exercising the verification path above
-# against a real signature (scripts/build_org_bundle.py has its own,
-# deliberately independent copy of this for actual bundle production --
-# see module docstring).
+# against a real signature.
 # ---------------------------------------------------------------------------- #
 
 def generate_keypair() -> tuple[Ed25519PrivateKey, Ed25519PublicKey]:

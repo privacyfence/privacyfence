@@ -40,7 +40,6 @@ def _make_state(**overrides):
         "error": "",
         "general": {
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
-            "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
             "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "standard",
@@ -196,7 +195,6 @@ class TestToggleTemplate:
         html = build_html(_make_state())
         for action in (
             "toggle_pii_detection", "toggle_pii_category",
-            "toggle_update_check", "toggle_update_check_beta",
             "toggle_calendar_free_busy", "toggle_gmail_signature",
         ):
             assert f"'{action}'" in html, f"missing toggle wiring for {action}"
@@ -451,7 +449,6 @@ class TestNotificationsCard:
         # modal's own step transitions (see this class's own docstring).
         state = _make_state(general={
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
-            "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
             "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "detailed",
@@ -493,7 +490,6 @@ class TestStepUpCard:
     def test_state_embeds_step_up_fields_for_client_render_to_read(self):
         state = _make_state(general={
             "pii_enabled": True, "pii_ip": True, "pii_financial": False,
-            "update_check_enabled": True, "update_check_beta": False,
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
             "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "standard",

@@ -370,8 +370,10 @@ class TestLoadOrgConfig:
     def test_a_bundle_with_no_mode_key_is_organization_mode_and_needs_a_signature(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
         (tmp_path / "org_bundle.json").write_text(json.dumps({"slack": {"client_id": "abc"}}))
-        with pytest.raises(org_mode.ConfigurationError, match="requires a signed bundle"):
+        with pytest.raises(org_mode.ConfigurationError, match="requires a signed bundle") as excinfo:
             daemon_main.load_org_config()
+        assert "A new server needs no bundle: configure it with the environment file and the Admin page" in str(excinfo.value)
+        assert "build_org_bundle" not in str(excinfo.value)
 
     def test_explicit_org_mode_unsigned_raises_configuration_error(self, tmp_path, monkeypatch):
         """Org mode requires a signed bundle (ADR 0016) -- see
@@ -424,7 +426,7 @@ class TestLoadOrgConfig:
 
 def _write_signed_bundle(tmp_path, bundle, private_key=None):
     """Signs ``bundle`` (with a fresh keypair, unless one is given) the
-    same way scripts/build_org_bundle.py --sign-key does, and writes it
+    same way the organization's signing step does, and writes it
     to tmp_path/org_bundle.json. Returns the private key used, so a test
     can sign a second, deliberately different bundle with the same key."""
     from privacyfence import org_bundle_signing

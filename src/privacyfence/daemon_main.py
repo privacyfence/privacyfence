@@ -51,8 +51,9 @@ Configuration is split into two files (see paths.py):
     ``idp`` configure the organization server — a real OAuth 2.1 authorization
     server on ``/mcp``, human identity resolved via the org's own OIDC IdP
     (see ADR 0011); ``mode`` must be ``org`` (ADR 0301). See org_mode.py and
-    org_identity.py for the schema, or build a bundle with
-    ``scripts/build_org_bundle.py --mode org ...``.
+    org_identity.py for the schema. A bundle left by an earlier version is read
+    here; a new server is configured with environment variables and the Admin page
+    (docs/org-mode-setup-guide.md).
   - ``config/settings.yaml``   — per-user settings: privacy policy,
     connectors{enabled}, auto_accept (the policy rules),
     pii_detection{enabled, detect_ip_addresses, detect_financial_figures,
@@ -512,8 +513,9 @@ def load_org_config() -> dict[str, Any]:
     if not trust.signed:
         raise org_mode.ConfigurationError(
             f"Organization config at {path} has \"mode\": \"org\" but is not signed -- org mode "
-            "requires a signed bundle (build one with scripts/build_org_bundle.py --sign-key ...; "
-            "generate a signing key first with --generate-signing-key if you haven't yet)."
+            "requires a signed bundle (an org_bundle.json left by an earlier version, signed with the "
+            "organization's signing key). A new server needs no bundle: configure it with the environment "
+            "file and the Admin page, as docs/org-mode-setup-guide.md describes."
         )
     org_bundle_signing.record_accepted_serial(trust, org_dir())
     return data
