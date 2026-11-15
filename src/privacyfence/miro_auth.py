@@ -1,7 +1,7 @@
 """How PrivacyFence signs in to Miro.
 
 - The authorization code flow of a confidential client, with no PKCE (Miro
-  offers none); the ``state`` is checked by the loopback.
+  offers none); the ``state`` is checked by the Connect page's callback route.
 - Expiring tokens only, refreshed and rotated: a refresh returns a new refresh
   token and voids the old one.
 - One token per person, for the one team chosen at sign-in.

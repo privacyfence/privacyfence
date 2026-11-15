@@ -1,27 +1,20 @@
-"""Per-principal connector registry: org mode's connectors are per-principal,
-like everything else a principal owns.
+"""Per-principal connector registry: connectors are per-principal, like
+everything else a principal owns.
 
-``connector_host.py``'s ``ConnectorHost`` holds one process-wide
-``{name: Connector}`` map, built once by ``daemon_main.build_connectors()``
-at daemon startup -- correct for local mode, where there is exactly one
-principal for the life of the process. Org mode needs a *set* of these, one
+``connector_host.py``'s ``ConnectorHost`` holds one ``{name: Connector}``
+map. The organization server needs a *set* of these, one
 per principal, built lazily (a principal's connectors can't exist before
 that principal has authorized the underlying services) and evicted
 when idle, since "N users x up to 12 authenticated API clients" is "the
 main memory-scaling question."
 
 ``ConnectorRegistry`` is that: a lazy, bounded, principal-keyed cache of
-``ConnectorHost`` instances. It is deliberately **not** part of
-daemon_main.py's local-mode boot sequence, which builds exactly one
-``ConnectorHost`` for the local principal directly, so local mode does not
-depend on this class at all.
+``ConnectorHost`` instances.
 
-In org mode, ``daemon_main.py``'s ``_start_org_web_server``
-builds one ``ConnectorRegistry`` per daemon and the ``/mcp`` dispatcher's
+``daemon_main.py``'s ``_start_org_web_server`` builds one
+``ConnectorRegistry`` per daemon and the ``/mcp`` dispatcher's
 ``connectors_provider`` is ``lambda: registry.get(current_principal()).
-connectors`` -- ``local`` mode's own single ``ConnectorHost``, built once at
-startup for the local principal, is completely unaffected (this class is
-still never touched on that path). ``web/routes_connect.py``'s OAuth
+connectors``. ``web/routes_connect.py``'s OAuth
 callback route calls ``evict(principal.id)`` right after writing a new
 service token, so the very next call for that principal rebuilds its
 connector set instead of waiting out ``idle_evict_seconds``.

@@ -1278,8 +1278,7 @@ class DriveConnector(Connector):
         # File/Owner/Size/Modified are known via drive_get_file_metadata (or
         # this call's own fetch of it above) -- the only genuinely new fact
         # from approving this call is *how* the file reaches Claude, which
-        # is mode/delivery-conditional (ADR 0017): local mode's bytes never leave
-        # this machine; org mode's own preview must say plainly whether
+        # is delivery-conditional (ADR 0017): the preview must say plainly whether
         # bytes are about to flow into Claude's context or stay
         # server-side behind a one-time link, using drive_file.size (the
         # same field the "Size" row above already shows) as the size

@@ -235,7 +235,6 @@ def audit_directory_permissions(directories: Iterable[Path | str], mode: int = D
 
 
 class InsecurePermissionsError(RuntimeError):
-    """Raised by daemon startup (org mode only) when a data directory's
-    on-disk permissions are broader than ``0700`` -- see
-    daemon_main.py's ``check_storage_permissions``. Local mode logs the
-    same finding as a warning instead of refusing to start."""
+    """Raised by daemon startup when a data directory's on-disk
+    permissions are broader than ``0700`` -- see daemon_main.py's
+    ``check_storage_permissions``."""

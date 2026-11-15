@@ -255,7 +255,7 @@ class StepUpConfig:
 
 class LiveStepUpConfig:
     """A thread-safe, mutable holder around a ``StepUpConfig``: web/server.py's
-    own build_app()/WebServer resolve local mode's ``StepUpConfig`` exactly once, at daemon startup, and hand
+    own build_app()/WebServer resolve a ``StepUpConfig`` exactly once, at daemon startup, and hand
     that same object to every consumer that gates on it (web/
     routes_approvals.py's decide endpoint, web/routes_settings.py's
     sensitive-action gate and banner, web/routes_security.py's enrollment
@@ -270,7 +270,7 @@ class LiveStepUpConfig:
     ``off_notice``) is mirrored here, read
     fresh off whatever
     ``StepUpConfig`` is currently held rather than fixed at construction
-    time -- so daemon_main.py's local-mode boot path can hand *this*
+    time -- so a start-up path can hand *this*
     object, instead of a bare ``StepUpConfig``, to every one of the above
     consumers with no change to any of them, and settings_controller.py's
     ``enable_step_up`` (wired in via ``SettingsController.wire_step_up``,
@@ -283,8 +283,8 @@ class LiveStepUpConfig:
     Deliberately one-directional in what it's used for: only ``enable_step_
     up`` ever calls ``update()``, always turning step-up *on* (see that
     method's own docstring for why turning it back *off* stays a config-
-    file-plus-restart operation on purpose, and ADR 0068). Org mode has no equivalent of
-    this class -- its own ``StepUpConfig`` is re-derived from
+    file-plus-restart operation on purpose, and ADR 0068). The organization server does not
+    use this class -- its own ``StepUpConfig`` is re-derived from
     ``org.org_config`` on every ``_build_org_app`` call instead (web/
     server.py), which already has no restart problem to solve.
     """

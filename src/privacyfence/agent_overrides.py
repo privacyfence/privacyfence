@@ -1,4 +1,4 @@
-"""Local mode's ``agent_overrides:`` section -- ADR 0006 option D, as a relabel only.
+"""The ``agent_overrides:`` section -- ADR 0006 option D, as a relabel only.
 
 ``settings.yaml`` may map a claimed ``clientInfo.name`` to a registry ``agent_id``::
 
@@ -7,11 +7,9 @@
 
 A matching call is then *named* after that registry entry, but always recorded as
 ``agent_source: "client_info"`` -- claimed, on every install, separated or not. The mapping is
-selected by the name the caller sends, and local mode has one MCP token per OS user shared by
-every AI system on it, so any of them can send a mapped name. Recording the match as ``override``
-would turn that caller-supplied string into an attested source (ADR 0006 Verification 2,
-ADR 0035; ADR 0037). Local mode has no attested source until a credential identifies the client
-by itself (per-credential local tokens -- future work).
+selected by the name the caller sends, so any client holding a token can send a mapped name.
+Recording the match as ``override`` would turn that caller-supplied string into an attested
+source (ADR 0006 Verification 2, ADR 0035; ADR 0037).
 
 The section is read once at startup, like the rest of ``settings.yaml``'s web wiring; changing it
 takes a daemon restart.

@@ -660,7 +660,7 @@ _JS = r"""
     html += '</div>';
 
     // The update check is meaningless on a headless org server -- it asks
-    // GitHub Releases about this desktop install
+    // GitHub Releases about the install it runs on
     // (org_settings_scope.NOT_APPLICABLE_ACTIONS covers toggle_update_check).
     if (!notApplicable('toggle_update_check')) {
       html += '<div class="card pf-card">';
@@ -1135,7 +1135,7 @@ _JS = r"""
 
   // Static for the life of the page: a create or revoke
   // reloads it, so the list is always rebuilt from the server.
-  var SCOPED = window.__pfScopedTokens || { delivery: 'companion', max_days: 365, default_days: 90, warn_days: 14, tokens: [], rules: [], tools: [], scope_groups: [] };
+  var SCOPED = window.__pfScopedTokens || { delivery: 'once', max_days: 365, default_days: 90, warn_days: 14, tokens: [], rules: [], tools: [], scope_groups: [] };
 
   function scopedExpiryText(t) {
     var day = new Date(t.expires_at * 1000).toISOString().slice(0, 10);

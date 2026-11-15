@@ -91,8 +91,8 @@ LEGACY_BUNDLE_KEYS = (
     "peek",
 )
 
-# Services with built-in apps, offered on a fresh org-mode single-user install (desktop mode has
-# none, and a multi-user server's first offered service is the admin's opt-in).
+# Services with built-in apps, offered on a fresh single-user install (a multi-user server's
+# first offered service is the admin's opt-in).
 _BUILTIN_SERVICES = ("google", "slack", "salesforce", "atlassian", "miro", "telegram")
 
 _DEFAULT_KEY_ENV = {
