@@ -84,13 +84,8 @@ this module only tracks the state an entry needs to be written from:
   (``observe_step_up_requirement``/``step_up_disabled_notice``) -- daemon
   startup compares the freshly loaded ``step_up.require_passkey`` against
   what was last seen, which catches a change made by a config file edit
-  plus a restart. The one UI path (settings_controller.py's
-  ``enable_step_up``, see step_up_config.py's own ``LiveStepUpConfig``
-  docstring) only turns this *on*, and it calls this same function itself
-  right away rather than waiting for the next startup, so an enable is
-  observed -- and audited -- the moment it happens. Turning it back *off* is a
-  config-file-plus-restart operation with no UI of its own, deliberately:
-  that asymmetry is what keeps ``step_up_disabled_notice``'s "treat this
+  plus a restart. Turning it off has no UI of its own, deliberately: that
+  asymmetry is what keeps ``step_up_disabled_notice``'s "treat this
   install as compromised" banner trustworthy -- a disable this module ever
   observes did not come from a human clicking a button in their own
   browser. See ADR 0068.

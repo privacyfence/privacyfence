@@ -19,7 +19,7 @@ split by job:
 Consumers outside this package are `gate.py`, which evaluates every gated call against the rules in
 `auto_accept._AutoAcceptState.policy_v2_store_rules` and builds the popup's "Always allow" choices
 from `propose.py`; `daemon_main.py`, which loads those rules from the `auto_accept:` section when it
-loads a principal's settings; `settings_controller.py`/`web/routes_settings.py`, the Auto-accept
+loads a principal's settings; `web/routes_settings.py`, the Auto-accept
 Settings page; and `web/mcp_dispatch.py`, the `privacyfence_check_policy`/`list_policy`/
 `propose_policy_change` tools. Apps Script's tools, Gmail's filter tools and Slack's group-chat tool
 are governable only through scopes that have no old predicate name -- see `scopes.NEW_SCOPE_SELECTORS`

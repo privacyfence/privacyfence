@@ -1,6 +1,6 @@
 """Tests for web/routes_whats_new.py and the "What's new" strip on org mode's pages (ADR 0238):
 the page and its seen endpoint (session, Origin and CSRF checks), what the page lists for a person
-who upgraded, and local mode, which mounts none of it.
+who upgraded, and the plain route set, which mounts none of it.
 
 whats_new.py's own parsing and per-person state is tests/unit/test_whats_new.py.
 """

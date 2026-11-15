@@ -106,42 +106,6 @@ class TestOffNotice:
         assert config.off_notice() is not None
 
 
-class TestLiveStepUpConfig:
-    """``LiveStepUpConfig`` mirrors every read a plain ``StepUpConfig``
-    offers, off whatever value it currently holds, so every consumer that
-    was written against a bare ``StepUpConfig`` (web/routes_approvals.py,
-    web/routes_settings.py, web/routes_security.py) keeps working unchanged
-    when local mode hands it one of these instead -- see the class's own
-    docstring."""
-
-    def test_reads_mirror_the_initial_config(self):
-        initial = step_up_config.StepUpConfig(
-            enabled=False, scope="writes", rp_id="localhost", rp_name="PrivacyFence", require_passkey=False,
-            batch="per_item",
-        )
-        live = step_up_config.LiveStepUpConfig(initial)
-        assert live.enabled is False
-        assert live.scope == "writes"
-        assert live.rp_id == "localhost"
-        assert live.rp_name == "PrivacyFence"
-        assert live.require_passkey is False
-        assert live.batch == "per_item"
-
-    def test_update_is_visible_to_every_subsequent_read(self):
-        live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig())
-        assert live.enabled is False
-        assert live.require_passkey is False
-        live.update(step_up_config.StepUpConfig(enabled=True, require_passkey=True))
-        assert live.enabled is True
-        assert live.require_passkey is True
-
-    def test_off_notice_reflects_the_current_value(self):
-        live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig(enabled=False, require_passkey=False))
-        assert live.off_notice() is not None
-        live.update(step_up_config.StepUpConfig(enabled=True, require_passkey=True))
-        assert live.off_notice() is None
-
-
 class TestPersonalScopeWidensNeverNarrows:
     """ADR 0091: the configured ``step_up.scope`` is the minimum, a
     principal's own Settings choice can only add to it."""

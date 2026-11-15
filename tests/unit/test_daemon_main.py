@@ -352,9 +352,9 @@ class TestLoadConfig:
 
 class TestLoadOrgConfig:
     """Three states, not two -- absent is the only case that's
-    still allowed to silently resolve to {} (local mode); anything present
+    still allowed to silently resolve to {} (no bundle); anything present
     but broken must raise org_mode.ConfigurationError instead of quietly
-    collapsing into the same {} local-mode result absence gets."""
+    collapsing into the same {} result absence gets."""
 
     def test_returns_empty_dict_when_no_file_installed(self, tmp_path, monkeypatch):
         monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
@@ -667,7 +667,7 @@ class TestGetOrCreateDeploymentId:
 
 
 class TestCheckStoragePermissions:
-    """The storage-permissions startup check: local mode warns and keeps
+    """The storage-permissions startup check: an unmanaged install warns and keeps
     starting, org mode refuses to start -- same "detectable vs.
     preventable" split the org bundle's startup hash log draws (ADR 0016)
     for a similarly upgrade-sensitive problem."""
@@ -1653,7 +1653,7 @@ class TestSetupLogging:
 
 # ---------------------------------------------------------------------------- #
 # _maybe_start_web_server -- the web approval UI is unconditionally installed
-# and the embedded server unconditionally started in local mode -- there is
+# and the embedded server unconditionally started without an org -- there is
 # no native alternative to select (ADR 0001), and no config key that turns
 # the server off entirely. web.
 # mcp.enabled/web.settings.enabled remain independent levers for those two
@@ -1851,7 +1851,7 @@ class TestMaybeStartWebServerOrgMode:
     def test_org_mode_registry_gets_the_per_principal_approval_cap(self, monkeypatch, tmp_path):
         # This is the mode the cap actually matters in -- one registry
         # shared by every principal -- so it must be wired through org
-        # mode's own registry construction, not just local mode's.
+        # mode's own registry construction, not just the default one.
         from privacyfence.web_approval_ui import get_web_approval_ui
 
         self._no_bind(monkeypatch, tmp_path)
@@ -3405,16 +3405,14 @@ class TestRunApp:
         placeholder loop (the common case -- most of these tests don't care
         about cache-warming specifically); ``None`` simulates the org-mode
         "no server built" case (see TestMaybeStartWebServerOrgMode for the
-        real short-circuit this stands in for -- local mode always builds
+        real short-circuit this stands in for -- the default path always builds
         one); any other value is used as the loop a real, given
         _FakeWebServer.wait_until_ready() should return (itself ``None`` to
         simulate a loop that never became ready in time).
 
         Also stubs _wait_for_shutdown() to return immediately and
-        _run_update_check_timer() to a no-op (real SettingsController
-        instances aren't otherwise configured with a mocked check_for_update
-        in this class -- see test_settings_controller.py's own controller
-        fixture for that -- so the real timer thread must not run here).
+        _run_update_check_timer() to a no-op (no mocked check_for_update
+        is configured in this class, so the real timer thread must not run here).
 
         Every call run_app() makes into
         _maybe_start_web_server is recorded on
@@ -3592,7 +3590,7 @@ class TestRunApp:
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         # Simulates org mode's own "mcp.enabled off" short circuit (see
-        # TestMaybeStartWebServerOrgMode) -- local mode always builds a
+        # TestMaybeStartWebServerOrgMode) -- the default path always builds a
         # server, but run_app() itself doesn't care which mode
         # produced None here.
         self._patch_common(monkeypatch, web_server=None)
@@ -3685,7 +3683,7 @@ class TestRunApp:
     )
     def test_org_mode_passes_org_managed_through_to_privacy_filter(self, monkeypatch):
         # An org-managed install's genuinely-absent privacy groups
-        # should fail closed to "block", not inherit local mode's "allow".
+        # should fail closed to "block", not inherit the default "allow".
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         self._patch_common(monkeypatch)
@@ -3842,7 +3840,7 @@ class TestRunApp:
 class TestAuditForwardingWiring:
     """run_app() only builds an AuditForwarder when org mode's
     audit_forwarding config is both enabled and actually running in org
-    mode -- local mode (or an org_config with mode: local) never forwards,
+    mode -- an install without audit_forwarding (or with one disabled) never forwards,
     whatever the section says."""
 
     def _patch_common(self, *args, **kwargs):
@@ -4093,7 +4091,7 @@ class TestLoadPrincipalSettings:
 
     def test_populates_the_privacy_filter_registry_for_the_principal(self, tmp_path, monkeypatch):
         """Without this, privacy_filter._REGISTRY would keep its default
-        empty-dict entry for every principal but whichever one a local-mode
+        empty-dict entry for every principal but whichever one a default
         run_app() happened to call init_privacy_filter() for --
         category_policy()'s own "group absent from the registry" fallback is
         a hardcoded "allow", the opposite of org mode's intended fail-closed

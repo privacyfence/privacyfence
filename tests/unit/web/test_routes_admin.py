@@ -649,7 +649,7 @@ class TestPrivacyAndStatsState:
         assert (privacy["pii_enabled"], privacy["pii_ip"], privacy["pii_financial"]) == (True, True, True)
 
     def test_calendar_and_the_gmail_signature_are_left_out(self):
-        # toggle_calendar_free_busy and toggle_gmail_signature are local-mode settings.
+        # toggle_calendar_free_busy and toggle_gmail_signature are per-install settings.
         world = World()
         world.sign_in(ADMIN)
         privacy = world.client.get("/api/admin/state").json()["privacy"]

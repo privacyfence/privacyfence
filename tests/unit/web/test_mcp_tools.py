@@ -265,7 +265,7 @@ class TestMetaToolManifest:
 
     def test_nothing_on_this_server_mints_a_sign_in_link_any_more(self):
         """No meta-tool mints a sign-in link (ADR 0013): ADR 0003 makes the
-        companion mandatory on all three platforms, and a live session is not
+        browser sign-in mandatory, and a live session is not
         something to hand the party it governs. Asserted
         against the manifest as a whole rather than by name alone, so a
         differently-named tool that mints one lands here too."""

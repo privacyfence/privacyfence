@@ -592,7 +592,7 @@ class AuditLogger:
         self._last_hash = _load_chain_state(self._chain_state_path)
 
     def set_security_config_hash(self, value: str) -> None:
-        """Called (settings_controller.py's ``_save_config``) whenever
+        """Called whenever
         settings.yaml is rewritten, so every entry recorded *after* a
         policy change carries the new hash without needing a daemon
         restart -- the value passed to ``__init__`` is only ever this

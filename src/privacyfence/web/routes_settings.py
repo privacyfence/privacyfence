@@ -1203,8 +1203,7 @@ def build_org_routes(
             nav_items=web_shell.org_nav_items(principal.is_admin), principal_label=principal.email or principal.display_name or principal.id,
             # Org mode has no per-request settings push to subscribe a
             # live stream to (state_stream.py's own StateStream.push_
-            # settings is wired to one local SettingsController's own
-            # on_change, module docstring).
+            # settings is not wired to org mode, module docstring).
             live_updates=False, notifications_enabled=False,
             csrf=csrf, whats_new_version=whats_new_version,
         )

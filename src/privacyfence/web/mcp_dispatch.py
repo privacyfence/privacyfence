@@ -58,7 +58,7 @@ _CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm", "is_one_to_on
 
 def _policy_rule_row(row) -> dict:
     """One ``privacyfence_list_policy`` rule row -- the same fields
-    ``settings_controller.SettingsController._auto_accept_state`` renders for the Auto-accept
+    ``settings_state``'s Auto-accept state builder renders for the Auto-accept
     Settings page, minus that method's own name-resolution machinery (a friendly display name
     for an opaque id like a Drive folder), which is a web-page-only affordance an MCP client has no
     use for: a model reading ``covered_tools``/``sentence`` already gets the width of the rule, and raw
@@ -109,7 +109,7 @@ class McpDispatcher:
 
     ``connectors_provider`` is called fresh on every dispatch rather than
     captured once, so a connector rebuild pushed live elsewhere (e.g.
-    ``SettingsController.refresh_connectors``, which calls
+    whatever calls
     ``ConnectorHost.set_connectors``) is picked up here too, with nothing
     else needing a second push -- see daemon_main.py's wiring.
     """
@@ -159,7 +159,7 @@ class McpDispatcher:
         # this tool is asked about is simply "unknown".
         self._registry = registry
         # privacyfence_status's own per-connector view -- {name, enabled,
-        # authenticated, blocked_by} rows, reusing SettingsController's
+        # authenticated, blocked_by} rows, reusing the
         # already-tracked connector/config/failure state rather than this
         # dispatcher trying to derive enabled/blocked_by
         # itself from nothing but the built Connector objects it's handed.
@@ -190,10 +190,8 @@ class McpDispatcher:
         self._unattended_changed_listener = callback
 
     def set_connectors_state_provider(self, callback: Callable[[], list[dict[str, Any]]] | None) -> None:
-        """``callback`` is ``SettingsController.status_connectors`` in
-        production -- typed narrowly as a bare ``Callable`` here rather than
-        importing settings_controller.py just for the annotation, which would
-        be a circular import: that module reaches this one."""
+        """``callback`` returns the per-connector status rows -- typed
+        narrowly as a bare ``Callable`` here."""
         self._connectors_state_provider = callback
 
     def set_tools_changed_broadcaster(self, callback: Callable[[], None] | None) -> None:
@@ -206,7 +204,7 @@ class McpDispatcher:
         self._tools_changed_broadcaster = callback
 
     def notify_tools_changed(self) -> None:
-        """Called by ``SettingsController.refresh_connectors()`` (via
+        """Called whenever a connector rebuild lands (via
         ``set_connectors_changed_listener``, wired in daemon_main.py)
         whenever the live connector set actually changes -- fans a real
         ``tools/list_changed`` notification out to every open MCP session,
@@ -458,8 +456,8 @@ class McpDispatcher:
 
     def list_policy(self, claude_reason: str = "") -> dict:
         """privacyfence_list_policy's handler: the on-disk
-        ``auto_accept:`` scope rows, sentence-rendered the same way ``settings_controller.
-        SettingsController._auto_accept_state`` renders it for the Auto-accept Settings page, plus
+        ``auto_accept:`` scope rows, sentence-rendered the same way ``settings_state``'s Auto-accept
+        state builder renders it for the Auto-accept Settings page, plus
         the scope catalogue ``privacyfence_propose_policy_change``'s ``group``/``verbs`` validate
         against -- so a model can discover a real rule id and a real (group, verbs) pair before
         proposing anything, the same "list before you propose" contract ``propose_policy_change``
@@ -735,7 +733,7 @@ class McpDispatcher:
         # provider): the best available answer is "every connector this
         # dispatcher can actually see is authenticated, nothing is known
         # about any other", since only built Connector objects are visible
-        # at all without SettingsController's own config/failure state.
+        # at all without the config/failure state.
         return [
             {"name": name, "enabled": True, "authenticated": True, "blocked_by": None}
             for name in sorted(self.connectors)

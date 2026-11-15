@@ -1,5 +1,5 @@
 """T3 contract test: does a real, pinned Claude Code CLI connect to a real
-local-mode ``/mcp`` endpoint?
+``/mcp`` endpoint?
 
 The shape is the one ``docs/connect-claude-code.md``
 tells a user to run: ``claude mcp add --transport http --scope user

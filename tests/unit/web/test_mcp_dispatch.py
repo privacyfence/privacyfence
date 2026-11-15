@@ -973,7 +973,7 @@ class TestStatus:
 
     def test_no_connectors_state_provider_falls_back_to_built_connectors_only(self):
         # org mode today, or a test that never wires one -- the only thing
-        # knowable without SettingsController's own config/failure state is
+        # knowable without any config/failure state is
         # which connectors this dispatcher can actually see built.
         dispatcher = _dispatcher({"gmail": object()})
         result = dispatcher.status("checking")
@@ -1155,7 +1155,7 @@ class TestUnattendedSessions:
 # --------------------------------------------------------------------------- #
 # notify_tools_changed -- the actual notification send is
 # web/routes_mcp.py's own concern (its live ServerSession registry); this
-# dispatcher is just the wired seam SettingsController.refresh_connectors()
+# dispatcher is just the wired seam a connector rebuild
 # calls into, same shape as every other set_*_provider/listener above.
 # --------------------------------------------------------------------------- #
 

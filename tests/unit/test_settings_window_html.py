@@ -11,7 +11,7 @@ that module's output:
 
   1. The given ``state`` is embedded byte-for-byte (as JSON) in
      ``window.__pfInitialState`` -- so a page load reflects exactly the
-     values SettingsController.snapshot() computed, with no cross-field
+     values the settings state builder computed, with no cross-field
      transformation. Section content / toggle on-off / connector rows /
      policy values are all data the JS template reads straight off this
      blob, so correct embedding is the load-bearing part of "does the right
@@ -220,7 +220,7 @@ class TestInitialSection:
     def test_js_falls_back_to_general_when_unset(self):
         # The literal fallback is capability-aware (org mode's
         # own non-admin principal falls back to Auto-accept instead, see
-        # TestOrgCapabilities below) -- local mode's own capabilities
+        # TestOrgCapabilities below) -- the default capabilities
         # (CAPS.sections.general always true) still resolve this to
         # 'general', which is what this test is actually about.
         html = build_html(_make_state())
@@ -334,9 +334,9 @@ class TestAutoAcceptTemplate:
         assert "copyToClipboard" in html
 
     def test_old_rule_and_grant_row_actions_are_gone(self):
-        # add_rule_row/remove_rule_row/remove_grant_row still exist as SettingsController methods
-        # (see their own docstring), but only web/org_settings_pages.py's separate org-mode page
-        # -- a different module, with its own HTML template -- ever reaches them; this module's
+        # add_rule_row/remove_rule_row/remove_grant_row are reached only by
+        # web/org_settings_pages.py's separate page -- a different module, with its own HTML
+        # template; this module's
         # own JS bridge (build_html's output) must never reference any of the seven again.
         html = build_html(_make_state())
         for stale in (
@@ -517,11 +517,11 @@ class TestStepUpCard:
 
 
 class TestScopedTokensSection:
-    """The "Scoped tokens" section: drawn in local mode when the caller has
-    page data for it, never in org mode, and every value in it escaped."""
+    """The "Scoped tokens" section: drawn when the caller has page
+    data for it, and every value in it escaped."""
 
     DATA = {
-        "delivery": "companion", "max_days": 365, "default_days": 90, "warn_days": 14,
+        "delivery": "once", "max_days": 365, "default_days": 90, "warn_days": 14,
         "tokens": [
             {"id": "st-1", "label": "sales-sync", "created_at": 0, "expires_at": 1798675200, "days_left": 5,
              "expiring_soon": True, "expired": False,
@@ -547,7 +547,7 @@ class TestScopedTokensSection:
         assert match
         return json.loads(match.group(1))
 
-    def test_local_mode_with_an_mcp_url_shows_the_section(self):
+    def test_page_data_shows_the_section(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert self._caps(html)["sections"]["scoped_tokens"] is True
         assert "window.__pfScopedTokens = " in html

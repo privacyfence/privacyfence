@@ -57,7 +57,7 @@ class TestInitAndResolution:
     def test_absent_group_defaults_to_block_when_org_managed(self):
         # An org-managed install is expected to state its own
         # privacy policy explicitly rather than silently inherit the
-        # permissive local-mode default.
+        # permissive default.
         init_privacy_filter({}, org_managed=True)
         assert category_policy("privacy", "body") == "block"
 

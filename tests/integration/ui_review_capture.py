@@ -141,8 +141,8 @@ def test_connect_telegram(shot, monkeypatch, step):
 
 
 def test_local_security(shot, monkeypatch):
-    """Local mode's /security, a web_shell.plain_page document, with two passkeys enrolled. The
-    in-process local server mounts no /security, so the page is rendered directly."""
+    """The /security page, a web_shell.plain_page document, with two passkeys enrolled, rendered
+    directly."""
     from types import SimpleNamespace
 
     from privacyfence.step_up_config import StepUpConfig
@@ -150,8 +150,8 @@ def test_local_security(shot, monkeypatch):
 
     page, save = shot
     monkeypatch.setattr(routes_security, "_recent_mints", lambda: [
-        ("2026-09-26 09:14:02 UTC", "Issued a sign-in code that can approve (confirmed in the companion)"),
-        ("2026-09-25 17:40:51 UTC", "Refused a sign-in code that can approve: the companion did not confirm it"),
+        ("2026-09-26 09:14:02 UTC", "Issued a sign-in code that can approve (confirmed in the browser)"),
+        ("2026-09-25 17:40:51 UTC", "Refused a sign-in code that can approve: the browser did not confirm it"),
     ])
     creds = [
         SimpleNamespace(credential_id="c1", label="MacBook Touch ID", created_at=1_780_000_000, backed_up=True),

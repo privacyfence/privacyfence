@@ -21,8 +21,7 @@ bundle it builds with it (``--sign-key``). The *first* signed bundle an
 install ever sees has its embedded public key trusted on that basis
 alone and pinned to disk (``pinned_public_key_path()``); every bundle
 after that -- installed via PrivacyFence Settings' "Install
-configuration file..." (``settings_controller.install_org_config_
-bytes``) or dropped onto disk by hand and picked up at the next daemon
+configuration file..." (the web upload in ``routes_settings.py``) or dropped onto disk by hand and picked up at the next daemon
 start (``daemon_main.load_org_config``) -- must verify against that
 pinned key or is rejected outright. That closes the obvious downgrade
 this would otherwise still allow (an attacker replacing a signed bundle
@@ -37,9 +36,8 @@ Signing is mandatory for ``mode: org`` (see ``daemon_main.load_org_config``'s
 own enforcement of that).
 
 This module intentionally takes each caller's own ``org_dir`` as a
-parameter rather than importing ``paths.org_dir`` itself -- both
-``daemon_main.py`` and ``settings_controller.py`` already import ``org_dir``
-into their own module namespace and their tests monkeypatch it there
+parameter rather than importing ``paths.org_dir`` itself -- ``daemon_main.py`` already imports ``org_dir``
+into its own module namespace and its tests monkeypatch it there
 (see e.g. ``test_daemon_main.py``'s ``monkeypatch.setattr(daemon_main,
 "org_dir", ...)``); importing a second, independent reference to
 ``paths.org_dir`` here would silently bypass that and point the pinned-
@@ -340,7 +338,7 @@ def would_pin_new_key(bundle: dict[str, Any], org_dir: Path) -> bool:
     True exactly when calling that function on the same arguments would
     pin a new signing key as a side effect.
 
-    settings_controller.install_org_config_bytes's web caller (routes_settings.py's
+    The web caller (routes_settings.py's
     org_config_upload) wants to ask a human for an explicit confirmation
     before that TOFU pin happens, rather than letting it happen silently
     as a side effect of an upload verify_and_maybe_pin would otherwise
@@ -379,8 +377,7 @@ def verify_and_maybe_pin(bundle: dict[str, Any], org_dir: Path) -> BundleTrust:
 
     Mutates disk state (pins a new key) only in the "first signed bundle
     this install has ever seen" case below -- every other path is a pure
-    check. Callers (daemon_main.load_org_config, settings_controller.
-    install_org_config_bytes) both call this on every load/install, so
+    check. Callers (daemon_main.load_org_config, the web upload) both call this on every load/install, so
     the very first signed bundle wins the pin regardless of which of the
     two documented install methods (web upload vs. hand-editing the
     file) it arrived through.

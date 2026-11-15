@@ -125,7 +125,7 @@ def _reset() -> None:
     daemon_main._bundle_adopted_this_start = False
     state_stream._loop = None
     # daemon_main._shutdown_event: a test that calls request_shutdown()
-    # (directly, or via SettingsController.quit_app()) must not leave it set
+    # (directly, or via the quit action) must not leave it set
     # for the next test's own _wait_for_shutdown() call to find already
     # signaled.
     daemon_main._shutdown_event.clear()

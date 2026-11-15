@@ -1,8 +1,8 @@
 """Tests for org_bundle_signing.py -- the org-config bundle's Ed25519
 signature and trust-on-first-use verification core (ADR 0016), shared by daemon_main.load_org_config and
-settings_controller.install_org_config_bytes. See that module's own
+the web upload route. See that module's own
 docstring for the model these tests exercise directly (test_daemon_main.py
-and test_settings_controller.py cover the two call sites' own wiring)."""
+and the routes tests cover the two call sites' own wiring)."""
 from __future__ import annotations
 
 import base64

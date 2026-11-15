@@ -13,7 +13,7 @@ Also covers audience separation for org mode specifically: an
 access token minted by this same authorization server must never be
 accepted as an org-mode browser session (web/org_session.py), and a
 browser session cookie must never be accepted as a bearer token on
-``/mcp``. (Local mode's own audience-separation test predates this file --
+``/mcp``. (The base audience-separation test predates this file --
 see web/test_routes_mcp.py.)
 """
 from __future__ import annotations

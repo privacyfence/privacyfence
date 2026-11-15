@@ -46,7 +46,7 @@ def _seed_registries(settings: dict, *principals: Principal) -> None:
 class TestActionSurface:
     def test_every_supported_action_is_one_the_scope_split_calls_admin_only(self):
         # The whole point of routing these through the same action names
-        # local mode dispatches (ADR 0032): a route authorizes with
+        # the settings dispatcher uses (ADR 0032): a route authorizes with
         # is_action_permitted and applies with apply_change, using one
         # string. An action this module could apply but that split doesn't
         # gate on is_admin would be a hole.

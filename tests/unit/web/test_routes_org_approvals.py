@@ -1,9 +1,9 @@
 """Tests for org mode's own wiring of the principal-aware /approvals surface:
 web/routes_approvals.py's build_routes() (the list/show/decide/
-preview/stream/batch-decide routes, shared with local mode -- ADR 0033) plus
+preview/stream/batch-decide routes, ADR 0033) plus
 web/routes_org_stepup.py's own IdP step-up routes (the gate on write
 decisions: a WebAuthn passkey, with IdP re-authentication as org mode's
-fallback, which has no local-mode analogue at all).
+fallback).
 """
 from __future__ import annotations
 
@@ -180,7 +180,7 @@ class TestPrincipalScopedList:
 
     def test_the_list_is_served_in_the_shared_shell(self):
         # The org-mode list gets the same full shell -- header, brand, nav,
-        # favicon -- as local mode's identical list. It is also the surface a
+        # favicon -- as the base list. It is also the surface a
         # paying org actually uses.
         app, sessions, web_ui = _app()
         _register(web_ui, ALICE, dedupe_key="a1")
@@ -884,7 +884,7 @@ class TestIdpStepUp:
         # production, and nothing here spins one up (this test registered the
         # approval directly, bypassing gate.py entirely, same as every other
         # decide test in this file and in test_routes_approvals.py's own
-        # local-mode equivalent). event.is_set()/.result is the UI-step
+        # equivalent). event.is_set()/.result is the UI-step
         # outcome this route is actually responsible for.
         stored = web_ui.deferred_registry.get(approval.id)
         assert stored.event.is_set()
@@ -1220,7 +1220,7 @@ class TestBatchStepUp:
 
 class TestSensitiveConfirmDialog:
     """The passkey gate on a sensitive confirm dialog, org mode's half.
-    Local mode's counterpart (tests/unit/web/test_routes_approvals.py's
+    The base counterpart (tests/unit/web/test_routes_approvals.py's
     class of the same name) carries the reasoning; what differs here is
     that org mode has no session provenance to check -- every session
     reaching this surface is an IdP authentication -- so the passkey is the

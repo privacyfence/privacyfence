@@ -14,7 +14,7 @@ nothing here may reference a CDN, a bundler-emitted asset, or the network.
 directly, so this module stays a pure function of the state it is given.
 
 State shape consumed by ``build_html()``/the JS ``render()`` function is
-exactly ``SettingsController.snapshot()``'s return value, plus a per-
+exactly the settings state dict, plus a per-
 connector ``icon_data_uri`` field web/routes_settings.py's
 ``settings_page_state`` adds before handing the dict here (the icons are
 files, loaded by approval_icons.py).
@@ -469,7 +469,7 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   // Approval-notification permission (the tier-1 notifications of ADR 0064) is
-  // browser state, not anything SettingsController tracks or this window's
+  // browser state, not anything the server tracks or this window's
   // Python side could toggle -- Notification.permission lives per-origin in
   // the browser itself, so this reads it live off `window` at render time
   // rather than off `state`. Deliberately independent of window.
@@ -491,7 +491,7 @@ _JS = r"""
   // web.notifications.detail (settings.yaml.example; how much a notification
   // body may say, ADR 0064) -- unlike the enabled flag above, this one
   // *is* a real control: set_notifications_detail persists straight to
-  // config (settings_controller.py) and the returned snapshot's own
+  // config and the returned snapshot's own
   // general.notifications_detail is what drives this segmented control's
   // active option, so a click here needs no browser permission at all and
   // no page reload to take -- the response to that one POST already
@@ -628,9 +628,9 @@ _JS = r"""
     html += rowHtml('Security', 'Manage passkeys (Face ID, Touch ID, Windows Hello) enrolled against this install.',
       '<a class="button secondary" href="/security">Manage passkeys</a>');
     // The "turn step-up on" control -- one-directional (see
-    // SettingsController.enable_step_up's own docstring for why turning
+    // see ADR 0068 for why turning
     // it back off stays a config.yaml-plus-restart operation with no
-    // control here). Three states, mirroring what enable_step_up itself
+    // control here). Three states, mirroring what enable_step_up
     // will and won't accept: already on (nothing left to do -- a hand
     // edit is the only way back to any other state), on but no passkey
     // yet (the control would just 400/self.error -- hidden, with a hint
@@ -679,12 +679,12 @@ _JS = r"""
   // -------------------------------------------------------------------- //
   // Auto-accept (policy v2). One filterable rule list, sentence-rendered
   // server-side (policy.describe). Every "Add rule" submission writes straight to the v2
-  // auto_accept: section (settings_controller.add_policy_rule) -- there is
+  // auto_accept: section (the add_policy_rule action) -- there is
   // no rule_type dropdown here the way the old per-operation rows had one,
   // because a scope's own verb checkboxes (aa.scope_groups[].verbs) are
   // what a v2 rule is actually keyed on, not a v1 rule name.
   //
-  // Each row carries its own usage line (settings_controller._auto_accept_state, from
+  // Each row carries its own usage line (from
   // AuditLogger.rule_usage()) -- "Matched Nx, last <when>" for a rule that has actually let
   // something through, or a distinct stale badge next to the Remove link for one that never
   // has, answering "which of my rules have never matched".
@@ -1052,7 +1052,7 @@ _JS = r"""
     return html;
   }
 
-  // settings_controller.audit_rows()'s `agent` -- agent_label.AgentLabel.to_dict(), the
+  // the audit rows' `agent` -- agent_label.AgentLabel.to_dict(), the
   // same tiered wording the approval card and list use. A row with no agent (a log line from
   // before attribution) reads as unknown: never blank, never "Claude". No brand mark here --
   // the tier marker carries the distinction on a page this dense.
@@ -3099,7 +3099,7 @@ _JS = r"""
 # feed, installing *this org's* own config bundle onto itself, shutting down
 # the whole shared daemon); open_repo (a plain link) is deliberately not
 # included. check_for_updates is the About page's own
-# action name for what SettingsController implements as
+# action name for what the daemon implements as
 # check_for_updates_now -- a naming mismatch that predates this phase (see
 # this phase's own PR description's "Follow-ups noticed"), listed here by
 # the name the JS below actually posts.

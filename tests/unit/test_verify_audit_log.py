@@ -113,7 +113,7 @@ class TestMain:
 
 
 class TestExamplePaths:
-    """The daemon writes the local-mode log under ``authority/``; an example
+    """The daemon writes the audit log under ``authority/``; an example
     without it names a directory no install has."""
 
     def test_help_and_docstring_name_the_authority_log_directory(self):

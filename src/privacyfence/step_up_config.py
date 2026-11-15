@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -126,7 +125,7 @@ def set_personal_scope(principal: "Principal", scope: str, *, floor: str) -> Ste
     return effective
 
 
-def effective_scope(step_up: "StepUpConfig | LiveStepUpConfig", principal: "Principal") -> StepUpScope:
+def effective_scope(step_up: "StepUpConfig", principal: "Principal") -> StepUpScope:
     """The scope a decision by ``principal`` is actually checked against:
     the configured ``step_up.scope``, widened by the principal's own
     Settings choice, never narrowed by it."""
@@ -134,8 +133,8 @@ def effective_scope(step_up: "StepUpConfig | LiveStepUpConfig", principal: "Prin
     return widest_scope(step_up.scope, chosen) if chosen is not None else widest_scope(step_up.scope)
 
 
-def step_up_scope_fields(step_up: "StepUpConfig | LiveStepUpConfig | None", principal: "Principal") -> dict[str, Any]:
-    """The Settings page's view of the above, one shape for both modes'
+def step_up_scope_fields(step_up: "StepUpConfig | None", principal: "Principal") -> dict[str, Any]:
+    """The Settings page's view of the above, one shape for the
     ``general`` state: whether a scope is in force at all (``step_up.
     enabled``), the configured minimum, and the scope in effect for
     ``principal``. settings_window_html.py's Security card draws the
@@ -182,9 +181,7 @@ class StepUpConfig:
     # wants if it trusts pii_detector.py to have seen everything worth
     # confirming; this third value is for the installs that don't (a read
     # nobody flagged still discloses whatever the connector returned).
-    # Defaults to DEFAULT_STEP_UP_SCOPE in both modes -- one key name
-    # meaning two different things by mode is exactly what this module
-    # exists to stop. See that constant for why the floor is
+    # Defaults to DEFAULT_STEP_UP_SCOPE. See that constant for why the floor is
     # "writes_and_pii_reads" rather than "writes".
     scope: StepUpScope = DEFAULT_STEP_UP_SCOPE
     # WebAuthn's Relying Party ID -- must be this server's own registrable
@@ -195,9 +192,7 @@ class StepUpConfig:
     rp_name: str = DEFAULT_RP_NAME
     require_passkey: bool = False
     # The approval binder's own batch-decide knob -- see
-    # DEFAULT_STEP_UP_BATCH_MODE's own comment. One key, one meaning, in
-    # both modes -- the same reasoning every other field on this class
-    # already gives for living here instead of duplicated per mode.
+    # DEFAULT_STEP_UP_BATCH_MODE's own comment. One key, one meaning.
     batch: StepUpBatchMode = DEFAULT_STEP_UP_BATCH_MODE
 
     @staticmethod
@@ -253,95 +248,10 @@ class StepUpConfig:
         )
 
 
-class LiveStepUpConfig:
-    """A thread-safe, mutable holder around a ``StepUpConfig``: web/server.py's
-    own build_app()/WebServer resolve a ``StepUpConfig`` exactly once, at daemon startup, and hand
-    that same object to every consumer that gates on it (web/
-    routes_approvals.py's decide endpoint, web/routes_settings.py's
-    sensitive-action gate and banner, web/routes_security.py's enrollment
-    page) -- "one StepUpConfig, read once, drives ... alike" (build_app()'s
-    own docstring). A plain ``StepUpConfig`` would make turning step-up
-    *on* a config-file-plus-restart operation with no UI path at all:
-    editing ``config/settings.yaml`` by hand.
-
-    This class gives it a UI path without touching any of those call sites:
-    every attribute/method a ``StepUpConfig`` exposes (``enabled``,
-    ``scope``, ``rp_id``, ``rp_name``, ``require_passkey``,
-    ``off_notice``) is mirrored here, read
-    fresh off whatever
-    ``StepUpConfig`` is currently held rather than fixed at construction
-    time -- so a start-up path can hand *this*
-    object, instead of a bare ``StepUpConfig``, to every one of the above
-    consumers with no change to any of them, and settings_controller.py's
-    ``enable_step_up`` (wired in via ``SettingsController.wire_step_up``,
-    the same after-the-fact pattern ``wire_unattended_listener`` already
-    uses) can call ``update()`` to make a config change take effect for the
-    very next request -- no restart, matching every other settings.yaml
-    write this codebase already hot-reloads (auto-accept rules, the privacy
-    filter).
-
-    Deliberately one-directional in what it's used for: only ``enable_step_
-    up`` ever calls ``update()``, always turning step-up *on* (see that
-    method's own docstring for why turning it back *off* stays a config-
-    file-plus-restart operation on purpose, and ADR 0068). The organization server does not
-    use this class -- its own ``StepUpConfig`` is re-derived from
-    ``org.org_config`` on every ``_build_org_app`` call instead (web/
-    server.py), which already has no restart problem to solve.
-    """
-
-    def __init__(self, initial: StepUpConfig) -> None:
-        self._lock = threading.Lock()
-        self._current = initial
-
-    @property
-    def enabled(self) -> bool:
-        with self._lock:
-            return self._current.enabled
-
-    @property
-    def scope(self) -> StepUpScope:
-        with self._lock:
-            return self._current.scope
-
-    @property
-    def rp_id(self) -> str:
-        with self._lock:
-            return self._current.rp_id
-
-    @property
-    def rp_name(self) -> str:
-        with self._lock:
-            return self._current.rp_name
-
-    @property
-    def require_passkey(self) -> bool:
-        with self._lock:
-            return self._current.require_passkey
-
-    @property
-    def batch(self) -> StepUpBatchMode:
-        with self._lock:
-            return self._current.batch
-
-    def off_notice(self) -> str | None:
-        with self._lock:
-            current = self._current
-        return current.off_notice()
-
-    def update(self, cfg: StepUpConfig) -> None:
-        """Swap in a freshly loaded ``StepUpConfig`` -- called by
-        settings_controller.py's ``enable_step_up`` right after it persists
-        the same change to ``config/settings.yaml``, so every consumer
-        holding this object sees the new value on its very next read."""
-        with self._lock:
-            self._current = cfg
-
-
 __all__ = [
     "DEFAULT_RP_NAME",
     "DEFAULT_STEP_UP_BATCH_MODE",
     "DEFAULT_STEP_UP_SCOPE",
-    "LiveStepUpConfig",
     "STEP_UP_SCOPES",
     "StepUpBatchMode",
     "StepUpConfig",

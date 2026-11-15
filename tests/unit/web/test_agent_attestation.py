@@ -4,7 +4,7 @@ ADR 0037) and the audit viewer's agent column.
 - Org mode: a registration whose redirect URIs are all one AI system's own callbacks is attested
   as that system (ADR 0224), ``oauth_client``; any other stays ``client_info``, whatever its
   ``client_name``.
-- Local mode: ``settings.yaml``'s ``agent_overrides:`` relabels the name and records
+- Without an organization identity: ``settings.yaml``'s ``agent_overrides:`` relabels the name and records
   ``client_info`` on every install -- separated or not, whatever file it was read from. Its
   selector is the caller's own claimed name, and every local AI system shares one MCP token.
 """
