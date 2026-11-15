@@ -33,7 +33,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-retire-adr-docs-changelog
 
-- pending
+- None.
+- scope: scope: docs/adr/0164-*.md, docs/adr/0236-*.md, docs/adr/0285-*.md (the one Amended-by line each that the brief names; accepted)
+- retry: tld plugin absent in the worker container; the worker ran the verify.dod commands directly and reported done. No roles are required for this phase. Orchestrator re-ran ruff and the full unit suite on the merged tree: green.
 
 ## Final review
 
