@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Amends [ADR 0262](0262-7x-is-the-migration-checkpoint-for-8x.md).
+Accepted — 2026-11-14. Amends [ADR 0262](0262-7x-is-the-migration-checkpoint-for-8x.md). Implemented.
 
 ## Context
 

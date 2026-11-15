@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-20. Implemented: `.github/workflows/build.yml` (`build-org-image`), `.github/workflows/publish-org-image.yml`, `docs/releasing.md`.
 
+Amended by [ADR 0304](0304-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+
 ## Context
 
 `build.yml` already builds and tests every packaged artifact, and `publish-pypi.yml` waits for `build.yml` to succeed. The image has to be tested before it is pushed, and a registry outage must not be able to hold PyPI back ([ADR 0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md) kept the MCP registry out of the PyPI path).

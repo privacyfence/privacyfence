@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-15. Implemented.
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 The Linux companion elevates `/usr/sbin/privacyfence-privilege-separation` with `pkexec`. The

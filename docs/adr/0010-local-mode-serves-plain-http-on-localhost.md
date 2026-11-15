@@ -7,6 +7,8 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-08-28 in
 except the TLS opt-in the decision kept open for local mode, which has not been built (see
 Consequences).
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 Local mode's embedded web server carries the approval pages, the settings page and the `/mcp`

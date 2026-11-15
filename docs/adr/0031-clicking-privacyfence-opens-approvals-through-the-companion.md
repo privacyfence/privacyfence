@@ -6,6 +6,8 @@ Accepted — 2026-09-24.
 Amends [0002](0002-local-mode-trust-boundary-and-companion-app.md) (the bundle's entry point, and
 who may reach the companion channel on a separated install).
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 On macOS the bundle's main executable (`CFBundleExecutable`) was the daemon, as PyInstaller's

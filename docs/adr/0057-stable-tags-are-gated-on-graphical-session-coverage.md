@@ -7,6 +7,8 @@ Accepted (recorded retroactively on 2026-09-25; decided around 2026-09-21 in
 `ae1260ab` ([#436](https://github.com/privacyfence/privacyfence/pull/436), 2026-09-16) and the
 stable-only gate in `88603b64` ([#593](https://github.com/privacyfence/privacyfence/pull/593)).
 
+**Superseded by [ADR 0301](0301-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md), 2026-11-15.**
+
 ## Context
 
 `linux-graphical-session.yml`, `windows-graphical-session.yml` and `macos-graphical-session.yml`

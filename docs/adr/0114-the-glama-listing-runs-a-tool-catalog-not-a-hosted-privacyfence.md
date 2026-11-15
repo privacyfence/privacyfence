@@ -5,6 +5,8 @@
 Accepted — 2026-09-30. Implemented: `src/privacyfence/catalog_server.py`,
 `src/privacyfence/connector_catalog.py`.
 
+Amended by [ADR 0304](0304-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+
 ## Context
 
 Glama grades a listing "A" only after it can build the server, start it and introspect it

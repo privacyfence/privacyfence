@@ -5,6 +5,8 @@
 Accepted — 2026-09-24. Implemented in `build.yml`'s `build-windows` job, step "Install eSigner
 CodeSignTool".
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 `build-windows` signs the Windows installer with SSL.com's eSigner CodeSignTool, a Java CLI (with a

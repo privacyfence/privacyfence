@@ -8,6 +8,8 @@ Accepted — 2026-09-24. Implemented in `debian/control` (`Architecture: amd64`)
 Amends [ADR 0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md): its
 Consequences describe `debian/control` listing `amd64 arm64`; it now lists `amd64` only.
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 `debian/control` declared `Architecture: amd64 arm64`, but `scripts/build_deb.sh` builds only for
