@@ -352,7 +352,9 @@ the shape into the new frame and the sticky note out of its frame. The client ha
       shown at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`, and set the
       same id as `assets.workspace_id`: the live checks do not read the QA server's Admin settings.
 - [ ] If the Assets check fails with `check_connection failed: HTTP 400` or `HTTP 404`, the text
-      after the second colon is Atlassian's own reason. Compare `assets.workspace_id` in the runner's
+      after the second colon is Atlassian's own reason and the message ends with the failing route in
+      brackets (`GET servicedeskapi/assets/workspace` or `GET objectschema/list`). `no detail (empty
+      body)` means Atlassian sent no reason. Compare `assets.workspace_id` in the runner's
       `qa_environment.yaml` with the id the workspace URL above shows, and check that the site still
       has Jira Service Management with Assets.
 - [ ] Set `assets.schema_key` (default `PFQA`), `assets.seed_object_label` (default
