@@ -1,7 +1,7 @@
 """Settings on the web for an organization server (ADR 0033).
 
 ``build_org_routes()`` is the one entry point. ``GET /settings`` serves
-settings_window_html.build_html() (``mode="org"``, ``is_admin=principal.is_admin``) wrapped in
+settings_window_html.build_html() (``is_admin=principal.is_admin``) wrapped in
 web_shell.wrap(), and ``POST /api/settings/{action}`` is a generic dispatcher restricted to
 ``_ORG_ALLOWED_ACTIONS``, the actions ``web/org_settings_scope.py``'s ``ACTION_SCOPES`` declares
 a route for. The install-wide privacy policy and the usage stats are Admin sections
@@ -1192,7 +1192,7 @@ def build_org_routes(
             state = _org_state(principal)
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
-            mode=ORG_MODE, is_admin=principal.is_admin,
+            is_admin=principal.is_admin,
             scoped_tokens=_org_scoped_token_data(dataclasses.replace(principal, email_verified=_session_email_verified(request))),
             personal_transfer=True,
             scoped_proposal=scoped_proposal,

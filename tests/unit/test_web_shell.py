@@ -65,9 +65,8 @@ class TestWrap:
 
 
 class TestBanner:
-    """The "loud persistent banner" step_up_config.py's
-    StepUpConfig.local_enrollment_banner() drives -- see that function's
-    own docstring for when it fires."""
+    """The "loud persistent banner" the shell renders when a caller hands it
+    ``banner_html``."""
 
     def test_no_banner_by_default(self):
         html = web_shell.wrap("", title="t", active="approvals")

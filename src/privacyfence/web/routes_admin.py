@@ -167,7 +167,7 @@ RESTART_LABELS: dict[str, str] = {
 ROUTE_CLASSIFICATION: dict[str, Literal["action-dispatcher", "bespoke-sensitive"]] = {
     "/api/admin/{action}": "action-dispatcher",
     # Room names become tool output an agent reads, so replacing them is gated like a sensitive
-    # action: a fresh assertion bound to the file's hash, and a human session in local mode.
+    # action: a fresh assertion bound to the file's hash,.
     "/api/admin/rooms/upload": "bespoke-sensitive",
     # The file becomes an OAuth client secret on disk, and the first one pins the key every later
     # file must be signed with: a fresh assertion bound to the file's hash, and the key's
@@ -191,12 +191,12 @@ _ADMIN_PAGE_TITLE = "PrivacyFence — Admin"
 
 
 def _admin_page_body(
-    state: dict[str, Any], *, mode: str, is_admin: bool, csrf: str, nonce: str,
+    state: dict[str, Any], *, is_admin: bool, csrf: str, nonce: str,
 ) -> str:
     """The page's markup: the shared renderer on the admin surface, the WebAuthn helpers a
     sensitive action's passkey prompt needs, and the bridge shim that posts to ``/api/admin``."""
     body = settings_window_html.build_html(
-        state, nonce=nonce, initial_section="services", mode=mode, is_admin=is_admin, surface="admin",
+        state, nonce=nonce, initial_section="services", is_admin=is_admin, surface="admin",
     )
     body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
     return body + _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce, endpoint="/api/admin")
@@ -298,7 +298,7 @@ def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[st
 
 
 def _admin_state(
-    *, mode: str, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
+    *, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     principal: Principal, install_wide_settings: dict[str, Any] | None = None, issuer_url: str = "",
 ) -> dict[str, Any]:
     """What the Admin page renders from. It carries no secret: service rows hold a client id at
@@ -316,24 +316,23 @@ def _admin_state(
         "restart_needed": _restart_needed(admin, startup_admin),
         "upgrade_ready": data_format.status(),
     }
-    if mode == "org":
-        for key in _ORG_STATE_KEYS:
-            state[key] = admin.get(key, {})
-        state["agent_runtimes_status"] = _agent_runtimes_status()
-        state["environment_locks"] = _environment_locks_state()
-        state["relay_status"] = relay_client.status()
-        if paths.org_bundle_path().exists():
-            state["legacy_bundle_warning"] = connector_configs.LEGACY_BUNDLE_WARNING
-        state["signin"] = _signin_state(bundle, org_config)
-        if install_wide_settings is not None:
-            state["privacy"] = _privacy_rows(install_wide_settings)
-        state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))
+    for key in _ORG_STATE_KEYS:
+        state[key] = admin.get(key, {})
+    state["agent_runtimes_status"] = _agent_runtimes_status()
+    state["environment_locks"] = _environment_locks_state()
+    state["relay_status"] = relay_client.status()
+    if paths.org_bundle_path().exists():
+        state["legacy_bundle_warning"] = connector_configs.LEGACY_BUNDLE_WARNING
+    state["signin"] = _signin_state(bundle, org_config)
+    if install_wide_settings is not None:
+        state["privacy"] = _privacy_rows(install_wide_settings)
+    state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))
     return state
 
 
 def _dispatch(
     principal: Principal, action: str, body: dict[str, Any], *,
-    mode: str, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
+    bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
     refresh_live: Callable[[list[str]], None],
     install_wide_settings: dict[str, Any] | None = None, install_wide_settings_path: str = "",
@@ -343,7 +342,7 @@ def _dispatch(
     ``body`` is the request's JSON object with ``csrf`` already removed. ``install_wide_settings`` and its file's path are what
     the privacy actions rewrite."""
     spec = ADMIN_ACTIONS.get(action)
-    if spec is None or mode not in spec.modes:
+    if spec is None or "org" not in spec.modes:
         return _error("Unknown action.", 404)
     declared = ADMIN_PARAMS[action]
     unknown = sorted(set(body) - {name for name, _, _ in declared} - _ENVELOPE_KEYS)
@@ -393,14 +392,14 @@ def _dispatch(
             logger.error("Could not save the admin configuration: %s", exc)
             return _error("Could not save the admin configuration.", 500)
     if summary:
-        who = f"admin={principal.id}" if mode == "org" else "principal=local"
+        who = f"admin={principal.id}"
         with principal_scope(principal):
             _record_settings_audit(principal, f"{summary} ({who})")
         if spec.applies == "live":
             refresh_live(changed)
     return JSONResponse({
         **_admin_state(
-            mode=mode, bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+            bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
             install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
         ),
     })
@@ -432,12 +431,12 @@ def _apply_privacy_action(
 
 async def _replace_rooms_from_upload(
     form: Any, principal: Principal, *,  # noqa: ANN401 -- starlette's FormData
-    mode: str, bundle: dict[str, Any], step_up: StepUpConfig | None, step_up_origin: str,
+    bundle: dict[str, Any], step_up: StepUpConfig | None, step_up_origin: str,
     challenges: StepUpChallengeStore, refresh_live: Callable[[list[str]], None],
     state: Callable[[], dict[str, Any]],
 ) -> Response:
     """Everything after the caller has authenticated the principal and checked CSRF, origin and,
-    in local mode, the human session: size, parse, step-up bound to the file's hash, replace."""
+    size, parse, step-up bound to the file's hash, replace."""
     upload = form.get("file")
     if upload is None or not hasattr(upload, "read"):
         return _error("Missing file.")
@@ -470,7 +469,7 @@ async def _replace_rooms_from_upload(
     except OSError as exc:
         logger.error("Could not save the admin configuration: %s", exc)
         return _error("Could not save the admin configuration.", 500)
-    who = f"admin={principal.id}" if mode == "org" else "principal=local"
+    who = f"admin={principal.id}"
     with principal_scope(principal):
         _record_settings_audit(principal, f"{summary} ({who})")
     refresh_live(["rooms"])
@@ -625,7 +624,7 @@ def build_org_routes(
         if isinstance(principal, Response):
             return principal
         return JSONResponse(_admin_state(
-            mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+            bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
             install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
         ))
 
@@ -645,11 +644,11 @@ def build_org_routes(
         nonce = _csp_nonce_for(request)
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         state = _admin_state(
-            mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+            bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
             install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
         )
         html = web_shell.wrap(
-            _admin_page_body(state, mode="org", is_admin=True, csrf=csrf, nonce=nonce),
+            _admin_page_body(state, is_admin=True, csrf=csrf, nonce=nonce),
             title=_ADMIN_PAGE_TITLE, active="admin", nonce=nonce,
             nav_items=web_shell.org_nav_items(True),
             principal_label=principal.email or principal.display_name or principal.id,
@@ -674,7 +673,7 @@ def build_org_routes(
             return _error("Cross-origin request rejected.", 403)
         body = {key: value for key, value in payload.items() if key != "csrf"}
         return _dispatch(
-            principal, action, body, mode="org", bundle=bundle, org_config=org_config,
+            principal, action, body, bundle=bundle, org_config=org_config,
             startup_admin=startup_admin, step_up=step_up, step_up_origin=step_up_origin,
             challenges=challenges, refresh_live=refresh_live,
             install_wide_settings=install_wide_settings, install_wide_settings_path=install_wide_settings_path,
@@ -693,10 +692,10 @@ def build_org_routes(
         if not org_session.check_origin(request):
             return _error("Cross-origin request rejected.", 403)
         return await _replace_rooms_from_upload(
-            form, principal, mode="org", bundle=bundle, step_up=step_up, step_up_origin=step_up_origin,
+            form, principal, bundle=bundle, step_up=step_up, step_up_origin=step_up_origin,
             challenges=challenges, refresh_live=refresh_live,
             state=lambda: _admin_state(
-                mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+                bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
             install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
             ),
         )
@@ -717,7 +716,7 @@ def build_org_routes(
             form, principal, step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
             refresh_live=refresh_live,
             state=lambda: _admin_state(
-                mode="org", bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
+                bundle=bundle, org_config=org_config, startup_admin=startup_admin, principal=principal,
                 install_wide_settings=install_wide_settings, issuer_url=step_up_origin,
             ),
         )

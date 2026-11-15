@@ -148,7 +148,7 @@ class TestDataDir:
         assert result.is_dir()
 
     def test_installed_package_resolves_under_home_and_creates_it(self, monkeypatch, tmp_path):
-        # A real (non-editable) `pip install privacyfence` -- unbundled
+        # The organization image's wheel, installed non-editable -- unbundled
         # (is_bundled() False, no PyInstaller involved) but still not a
         # source checkout, so this must not fall through to the dev-mode
         # branch above and land inside site-packages itself.

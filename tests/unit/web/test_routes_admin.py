@@ -324,25 +324,6 @@ class TestAudit:
         assert world.post("withdraw_service", {"service": "slack"}, csrf).status_code == 200
         assert audit == [] and world.registry.evicted == evicted
 
-    def test_local_mode_audits_as_the_local_principal(self, audit):
-        world = World()
-        r = routes_admin._dispatch(
-            ADMIN, "withdraw_service", {"service": "slack"}, mode="local", bundle=world.bundle,
-            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
-            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
-        )
-        assert r.status_code == 200
-        assert audit == [("carol", "Stopped offering Slack (principal=local)")]
-
-    def test_an_org_only_action_is_unknown_in_local_mode(self):
-        world = World()
-        r = routes_admin._dispatch(
-            ADMIN, "set_web_push", {"enabled": False}, mode="local", bundle=world.bundle,
-            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
-            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
-        )
-        assert r.status_code == 404
-
 
 class TestAgentRuntimes:
     BODY = {"enabled": True, "project_id": "proj1", "mcp_url": "", "credential_type": "httpBearerAuth"}
@@ -390,15 +371,6 @@ class TestAgentRuntimes:
         spec = routes_admin.ADMIN_ACTIONS["set_agent_runtimes"]
         assert (spec.modes, spec.sensitive, spec.applies) == (frozenset({"org"}), True, "restart")
         assert routes_admin.RESTART_LABELS["agent_runtimes"] == "Agent runtimes"
-
-    def test_it_is_unknown_in_local_mode(self):
-        world = World()
-        r = routes_admin._dispatch(
-            ADMIN, "set_agent_runtimes", self.BODY, mode="local", bundle=world.bundle,
-            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
-            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
-        )
-        assert r.status_code == 404
 
     def test_it_needs_a_passkey_then_saves_and_flags_a_restart(self):
         world = World()
@@ -643,15 +615,6 @@ class TestPrivacyActions:
         world, csrf, _path = self._editable(tmp_path, {})
         _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "block"}, csrf)
         assert world.registry.evicted == 0 and relay_checks == []
-
-    def test_a_privacy_action_is_unknown_in_local_mode(self):
-        world = World()
-        r = routes_admin._dispatch(
-            ADMIN, "set_default_policy", {"group": "privacy", "policy": "allow"}, mode="local", bundle=world.bundle,
-            org_config=world.org_config, startup_admin=world.admin, step_up=StepUpConfig(rp_id="x"),
-            step_up_origin=BASE_URL, challenges=wa.StepUpChallengeStore(), refresh_live=lambda changed: None,
-        )
-        assert r.status_code == 404
 
 
 class TestPrivacyAndStatsState:

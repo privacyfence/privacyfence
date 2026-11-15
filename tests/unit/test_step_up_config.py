@@ -72,161 +72,10 @@ class TestStepUpConfigFromOrgConfig:
             step_up_config.StepUpConfig.from_org_config({"step_up": {"batch": "something_else"}})
 
 
-class TestStepUpConfigFromLocalConfig:
-    """Local mode's own entry point. Unlike org mode, ``rp_id``
-    defaults to a real value (``localhost``) rather than an empty string --
-    local mode's own embedded server always answers to it (ADR 0010), so
-    ``/security`` is reachable on a fresh install with no step_up section at
-    all, well before ``enabled`` is ever turned on."""
-
-    def test_absent_section_is_disabled_with_local_defaults(self):
-        config = step_up_config.StepUpConfig.from_local_config({})
-        assert config.enabled is False
-        assert config.scope == "writes_and_pii_reads"
-        assert config.scope == step_up_config.DEFAULT_STEP_UP_SCOPE
-        assert config.rp_id == step_up_config.DEFAULT_LOCAL_RP_ID
-        assert config.rp_id == "localhost"
-        assert config.rp_name == step_up_config.DEFAULT_RP_NAME
-        assert config.require_passkey is False
-
-    def test_explicit_rp_id_overrides_the_local_default(self):
-        config = step_up_config.StepUpConfig.from_local_config({"step_up": {"rp_id": "pf.local"}})
-        assert config.rp_id == "pf.local"
-
-    def test_enabled_and_scope(self):
-        config = step_up_config.StepUpConfig.from_local_config({
-            "step_up": {"enabled": True, "scope": "writes_and_pii_reads", "require_passkey": False},
-        })
-        assert config.enabled is True
-        assert config.scope == "writes_and_pii_reads"
-        assert config.require_passkey is False
-
-    def test_invalid_scope_raises(self):
-        with pytest.raises(org_mode.ConfigurationError):
-            step_up_config.StepUpConfig.from_local_config({"step_up": {"scope": "everything"}})
-
-    def test_the_widest_scope_is_accepted(self):
-        config = step_up_config.StepUpConfig.from_local_config({"step_up": {"scope": "writes_and_reads"}})
-        assert config.scope == "writes_and_reads"
-
-    def test_the_rejection_message_names_every_accepted_scope(self):
-        with pytest.raises(org_mode.ConfigurationError) as exc:
-            step_up_config.StepUpConfig.from_local_config({"step_up": {"scope": "everything"}})
-        for name in step_up_config.STEP_UP_SCOPES:
-            assert f'"{name}"' in str(exc.value)
-
-    def test_batch_defaults_to_single_assertion_and_reads_per_item(self):
-        assert step_up_config.StepUpConfig.from_local_config({}).batch == "single_assertion"
-        assert step_up_config.StepUpConfig.from_local_config(
-            {"step_up": {"batch": "per_item"}},
-        ).batch == "per_item"
-
-    def test_invalid_batch_raises(self):
-        with pytest.raises(org_mode.ConfigurationError):
-            step_up_config.StepUpConfig.from_local_config({"step_up": {"batch": "something_else"}})
-
-    def test_non_dict_section_is_treated_as_absent(self):
-        config = step_up_config.StepUpConfig.from_local_config({"step_up": "nonsense"})
-        assert config.rp_id == "localhost"
-        assert config.enabled is False
-
-
-class TestExplicitRequirePasskey:
-    """An explicit ``require_passkey: true`` is refused: a passkey checked
-    against a credential store the agent can write guarantees nothing
-    (ADR 0002 decision 6)."""
-
-    def test_refuses_an_explicit_true(self):
-        with pytest.raises(org_mode.ConfigurationError, match="writable by the same account"):
-            step_up_config.StepUpConfig.from_local_config(
-                {"step_up": {"enabled": True, "require_passkey": True}},
-            )
-
-    def test_false_require_passkey_is_accepted(self):
-        config = step_up_config.StepUpConfig.from_local_config(
-            {"step_up": {"enabled": True, "require_passkey": False}},
-        )
-        assert config.require_passkey is False
-
-
-class TestDefaultLocalStepUp:
-    """A passkey checked against a credential store the agent can write is a
-    checkbox a local process ticks for itself (ADR 0002 decision 6), so the
-    default is off."""
-
-    @pytest.fixture
-    def packaged(self, monkeypatch):
-        monkeypatch.setattr(step_up_config.paths, "is_bundled", lambda: True)
-
-    def test_off_on_a_source_checkout(self):
-        assert step_up_config.default_local_step_up() is False
-
-    def test_off_for_a_packaged_install_and_says_so(self, packaged, caplog):
-        # Deliberately not an error: a *default* that could fail a daemon's
-        # boot would turn an unexpected packaging state into an install nobody
-        # can start.
-        with caplog.at_level("WARNING"):
-            assert step_up_config.default_local_step_up() is False
-        assert "defaulting to off" in caplog.text
-
-
-class TestPackagedLocalDefaults:
-    """The same decision as it is reached through ``from_local_config``: an
-    explicit value still wins, and a hand-written ``require_passkey: true``
-    is refused outright rather than quietly downgraded."""
-
-    @pytest.fixture
-    def packaged(self, monkeypatch):
-        monkeypatch.setattr(step_up_config.paths, "is_bundled", lambda: True)
-
-    def test_an_explicit_false_wins_on_a_packaged_install(self, packaged):
-        config = step_up_config.StepUpConfig.from_local_config(
-            {"step_up": {"enabled": False, "require_passkey": False}},
-        )
-        assert (config.enabled, config.require_passkey) == (False, False)
-
-    def test_a_defaulted_value_never_fails_the_boot(self, packaged):
-        config = step_up_config.StepUpConfig.from_local_config({})
-        assert (config.enabled, config.require_passkey) == (False, False)
-
-    def test_an_explicit_true_on_a_packaged_install_still_raises(self, packaged):
-        with pytest.raises(org_mode.ConfigurationError):
-            step_up_config.StepUpConfig.from_local_config({"step_up": {"require_passkey": True}})
-
-    def test_org_mode_defaults_are_untouched(self, packaged):
-        # Guards against wiring the local default into the shared dataclass.
+class TestOrgDefaultsAreNotTheLocalOnes:
+    def test_an_organization_config_without_a_section_is_off(self):
         config = step_up_config.StepUpConfig.from_org_config({})
         assert (config.enabled, config.require_passkey) == (False, False)
-
-
-class TestLocalEnrollmentBanner:
-    """The loud, persistent "passkey required" banner -- fires only in the one
-    state that actually means something is blocked: step-up genuinely in
-    force (``enabled`` *and* ``require_passkey``) and nothing enrolled yet.
-    See web_shell.py's own TestBanner for how the string this returns is
-    rendered."""
-
-    def test_none_when_require_passkey_is_off(self):
-        config = step_up_config.StepUpConfig(enabled=True, require_passkey=False)
-        assert config.local_enrollment_banner(has_credentials=False) is None
-
-    def test_none_when_step_up_itself_is_disabled(self):
-        config = step_up_config.StepUpConfig(enabled=False, require_passkey=True)
-        assert config.local_enrollment_banner(has_credentials=False) is None
-
-    def test_none_once_a_credential_is_enrolled(self):
-        config = step_up_config.StepUpConfig(enabled=True, require_passkey=True)
-        assert config.local_enrollment_banner(has_credentials=True) is None
-
-    def test_banner_text_when_genuinely_unmet(self):
-        config = step_up_config.StepUpConfig(enabled=True, require_passkey=True)
-        banner = config.local_enrollment_banner(has_credentials=False)
-        assert banner is not None
-        assert "/security" in banner
-        # Only what step-up covers is blocked (ADR 0069) -- an approval
-        # outside ``scope`` is still released, so the banner must not
-        # claim every approving decision is.
-        assert "approvals that need step-up" in banner
 
 
 class TestOffNotice:
@@ -235,7 +84,7 @@ class TestOffNotice:
     step-up on. Fires exactly when step-up is *not* actually "required"
     (the same ``enabled and require_passkey`` pairing ``observe_step_up_
     requirement`` uses), regardless of ``has_credentials`` -- unlike
-    ``local_enrollment_banner`` this doesn't care whether a passkey is
+    the step-up-disabled notice this doesn't care whether a passkey is
     enrolled, only whether the requirement is in force at all."""
 
     def test_none_when_step_up_is_genuinely_required(self):
@@ -286,20 +135,8 @@ class TestLiveStepUpConfig:
         assert live.enabled is True
         assert live.require_passkey is True
 
-    def test_local_enrollment_banner_reflects_the_current_value(self):
-        live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig(enabled=False, require_passkey=False))
-        assert live.local_enrollment_banner(has_credentials=False) is None
-        live.update(step_up_config.StepUpConfig(enabled=True, require_passkey=True))
-        banner = live.local_enrollment_banner(has_credentials=False)
-        assert banner is not None
-        assert "/security" in banner
-        # Only what step-up covers is blocked (ADR 0069) -- an approval
-        # outside ``scope`` is still released, so the banner must not
-        # claim every approving decision is.
-        assert "approvals that need step-up" in banner
-
     def test_off_notice_reflects_the_current_value(self):
-        live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig())
+        live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig(enabled=False, require_passkey=False))
         assert live.off_notice() is not None
         live.update(step_up_config.StepUpConfig(enabled=True, require_passkey=True))
         assert live.off_notice() is None

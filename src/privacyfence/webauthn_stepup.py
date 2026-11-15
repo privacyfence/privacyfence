@@ -1,10 +1,7 @@
 """WebAuthn step-up: user-verified passkey proof (Face ID / Touch ID /
 Windows Hello, a security key with a PIN or biometric, or a phone over the
 hybrid flow) that a human -- not merely a possessed, stolen session cookie
--- is the one approving a gated *write*, in org mode and local mode alike
--- see step_up_config.py's own module docstring for why local mode gets
-this at all, and why it means something there only on a privilege-
-separated install (ADR 0003). The threat it closes: a borrowed or stolen
+-- is the one approving a gated *write* (ADR 0003). The threat it closes: a borrowed or stolen
 unlocked phone with a live session becomes a remote approval instrument for
 live write actions, and the control that actually closes that is a
 step-up check on the approval itself.
@@ -59,10 +56,8 @@ Five things this module exists to get right, not just the happy path:
   ``list_credentials``) is client-side-enforced in the same way and worth
   naming as such: it stops a *browser* offering to re-enroll an
   authenticator this principal already has, and stops nothing else.
-- **The RP ID must be a real registrable domain.** Local mode's own server
-  is bound to ``localhost`` for exactly this reason (ADR 0010);
-  ``StepUpConfig.rp_id`` here is org mode's own version of that constraint
-  -- an IP address or a non-HTTPS origin fails the ceremony at the browser
+- **The RP ID must be a real registrable domain.**
+  ``StepUpConfig.rp_id`` carries that constraint -- an IP address or a non-HTTPS origin fails the ceremony at the browser
   level, not here.
 - **The challenge is bound to a specific decision, not just "a human
   tapped something."** The challenge is a server nonce bound to the
@@ -80,26 +75,11 @@ routes_security.py, daemon_main.py) record the actual audit entries,
 this module only tracks the state an entry needs to be written from:
 
 - **A one-time recovery code** (``generate_recovery_code``/
-  ``consume_recovery_code``) -- with no IdP there is no remote reset in
-  local mode, and privilege separation takes ``config/settings.yaml`` off
-  the agent's uid, so losing the only enrolled
-  authenticator (a new machine, a wiped TPM) needs a sanctioned way back
-  in that isn't "edit the config file from a shell" -- the very door the
-  agent this feature defends against would also use. Generated once,
-  shown once, never recoverable again, stored only as a salted hash.
-
-  *Where* it is shown once is mode-dependent. Org mode hands it to the
-  browser in the same response that generates it
-  (``generate_recovery_code``). Local mode
-  does not: a packaged local-mode install mints the code
-  (``mint_recovery_code``), has the companion put it in front of the human
-  on their own desktop (web/control_channel.py's ``SHOW RECOVERY``), and
-  only then makes it live (``store_recovery_code``) -- so a credential-
-  store reset token is never a value a process that merely holds a
-  ``pf_session`` can read out of an HTTP response body, and a code nobody
-  was shown never becomes the one code on file. The companion can also
-  issue a replacement later, which is the only way this is ever shown
-  twice: a new one, with the old invalidated.
+  ``consume_recovery_code``) -- losing the only enrolled authenticator (a
+  new machine, a wiped TPM) needs a sanctioned way back in. Generated once,
+  shown once, never recoverable again, stored only as a salted hash. It is
+  handed to the browser in the same response that generates it: the
+  browser that reached ``/security`` is IdP-authenticated.
 - **Requirement enable/disable tracking**
   (``observe_step_up_requirement``/``step_up_disabled_notice``) -- daemon
   startup compares the freshly loaded ``step_up.require_passkey`` against
@@ -567,14 +547,9 @@ def mint_recovery_code() -> str:
     """A fresh recovery code's plaintext, stored nowhere -- the half of
     ``generate_recovery_code`` below that has no side effect.
 
-    Split out for plan item 1.3's delivery order: local mode hands the code
-    to the companion to put on screen (web/control_channel.py's ``SHOW
-    RECOVERY``), and a code that reached nobody must not become the one
-    live code on file -- ``has_recovery_code`` would then be True forever
-    for a value no human has, and no later enrollment would issue another.
-    So the caller mints, delivers, and only then calls
-    ``store_recovery_code``. Nothing but the ordering changes: the stored
-    shape and the verification path are exactly what they were."""
+    Split from ``store_recovery_code`` so a caller can mint, deliver and only
+    then store: a code that reached nobody must not become the one live code
+    on file."""
     return "-".join(
         secrets.token_hex(_RECOVERY_CODE_GROUP_CHARS // 2).upper() for _ in range(_RECOVERY_CODE_GROUPS)
     )
@@ -594,10 +569,9 @@ def store_recovery_code(principal: Principal, code: str) -> None:
 def generate_recovery_code(principal: Principal) -> str:
     """Mint and store in one step, returning the plaintext once -- the
     caller must surface it to the human in this same response; it is never
-    retrievable again. What org mode's enrollment still does, since it has
-    no companion to hand a code to and the browser that reached ``/security``
-    is IdP-authenticated (docs/security-and-compliance.md says so in the
-    same terms). Local mode uses the two halves above instead."""
+    retrievable again. The browser that reached ``/security`` is
+    IdP-authenticated (docs/security-and-compliance.md says so in the
+    same terms)."""
     raw_code = mint_recovery_code()
     store_recovery_code(principal, raw_code)
     return raw_code

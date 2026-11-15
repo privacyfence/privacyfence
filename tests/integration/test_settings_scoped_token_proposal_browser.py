@@ -59,7 +59,7 @@ def browser():
 def _open(browser, proposal):
     pg = browser.new_page()
     pg.set_content(build_html(_make_state(), initial_section="scoped_tokens",
-                              scoped_tokens=copy.deepcopy(DATA), scoped_proposal=copy.deepcopy(proposal), mode="org"))
+                              scoped_tokens=copy.deepcopy(DATA), scoped_proposal=copy.deepcopy(proposal)))
     pg.evaluate(CAPTURE)
     return pg
 
