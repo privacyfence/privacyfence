@@ -10,6 +10,7 @@ Amended by [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md): a token holds
 Amended by [ADR 0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md): a token carries per-upstream data domains that only narrow what its owner holds.
 Related: [ADR 0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) — an AI client can propose a token for a person to create.
 Amended by [ADR 0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md).
+Amended by [ADR 0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md): an administrator's tick on a gated upstream tool is a rule inside the token.
 
 ## Context
 

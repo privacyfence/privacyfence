@@ -192,9 +192,24 @@ The tool is also listed in the [tools reference](tools-reference.md).
 - An AI client cannot propose a scoped token that includes an upstream tool: the proposal is refused with
   `Upstream tools cannot be proposed; create the token in Settings.`
 
-**Known limitation.** An upstream tool declared `review` or `popup` has no scope-catalogue entry yet, so the
-New token form lists only the `auto` upstream tools. Scoped-token rules for upstream tools are a later
-change.
+### Letting a token call a gated upstream tool
+
+An upstream tool declared `popup` or `review` needs a person's card, and a scoped token has nobody to answer
+one. An administrator can approve such a tool for one token instead
+([ADR 0300](adr/0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md)):
+
+- In Settings → Scoped tokens → New token, an administrator ticks the tool under "Upstream tools that change
+  data or release results unseen". Nobody else sees that group, and a local server never does.
+- The tick approves the tool for every call of that token, with no card. The tool's effect text is shown next
+  to the tick, with "writes data" for a `popup` tool and "result not reviewed by a person" for a `review` one.
+- If the operator changes the tool's declaration (gate, verb, effect, url, audience or identity claim mode),
+  the approval stops working and the call is refused before it reaches the upstream.
+- A `review` result goes to the token without a person seeing it, but personal data in it still blocks the
+  call.
+- An AI client cannot propose such a token.
+- An administrator who later loses the role keeps the token until it expires or is revoked.
+- In the audit log look for `upstream_forwarded` with `metadata.gate` (`auto`, `review` or `popup`), and for
+  `auto_accepted` whose rule is the token's approval row.
 
 ### Rotating the claim key
 
@@ -256,8 +271,8 @@ checklist and the versioning, is [identity-claim.md](identity-claim.md). The sho
 ## Reference upstream
 
 `scripts/upstream_mcp_reference_server.py` is a small upstream for trying all of this and for tests. It is
-not for production. It verifies claims with `pf_claim_verify.py` and serves `search`, `get_doc` and
-`propose_change` over four in-memory documents in the `general` (two), `hr` and `finance` audiences, returning
+not for production. It verifies claims with `pf_claim_verify.py` and serves `search`, `get_doc`,
+`list_proposals` and `propose_change` over four in-memory documents in the `general` (two), `hr` and `finance` audiences, returning
 only the caller's audiences; a service claim gets the tool list and no documents.
 
 Run it against a PrivacyFence server (the Ed25519 keys come from its JWKS address):
@@ -272,7 +287,7 @@ Use `--jwks-file <file>` (a saved copy of the JWKS) instead of `--jwks-url` when
 PrivacyFence. The `--issuer` is your PrivacyFence address with no suffix.
 
 The operator file the manual check uses (`ref`, tools exposed as `ref_search`, `ref_get_doc`,
-`ref_propose_change`), with a static membership file so no sync job is needed:
+`ref_list_proposals`, `ref_propose_change`), with a static membership file so no sync job is needed:
 
 ```json
 {
@@ -287,6 +302,7 @@ The operator file the manual check uses (`ref`, tools exposed as `ref_search`, `
       "tools": {
         "search":         {"gate": "auto",  "verb": "search"},
         "get_doc":        {"gate": "auto",  "verb": "read"},
+        "list_proposals": {"gate": "review", "verb": "read"},
         "propose_change": {"gate": "popup", "verb": "add", "effect": "Adds a change proposal to the reference upstream."}
       }
     }
