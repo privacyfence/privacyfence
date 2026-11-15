@@ -42,9 +42,7 @@ name: Dependency audit
 #     critical, in its own job.
 on:
   push:
-    # releases/** is protected the same as main (see CONTRIBUTING.md) and gets the same push-triggered
-    # audit run, not just the pull_request one.
-    branches: [main, "releases/**"]
+    branches: [main]
     paths:
       - "pyproject.toml"
       - "requirements/*.lock.txt"

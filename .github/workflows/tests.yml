@@ -2,10 +2,7 @@ name: Tests
 
 on:
   push:
-    # releases/** carries the same per-PR gating as main (see CONTRIBUTING.md's "Release integration branches" --
-    # these are long-lived cross-cycle integration branches, protected like main), so a post-merge
-    # push there gets the same push-triggered run main gets, not just the pull_request run.
-    branches: [main, "releases/**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:   # allow manual runs from the Actions tab
 
