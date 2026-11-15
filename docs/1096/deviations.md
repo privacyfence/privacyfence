@@ -215,7 +215,12 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p15a-packaging
 
-- pending
+- worker: tests/unit/test_mcp_registry_server_json.py and tests/unit/test_minimum_os_versions.py were deleted here (orchestrator decision: they only tested the deleted mcpb registry template and the deleted specs and build scripts; p15c and p19 would have deleted them).
+- worker: The mcpb/shim/package-lock.json entry was removed from hooks.protect_paths_allow in .tld/toolkit.yaml (orchestrator decision, so the acceptance grep for mcpb prints nothing); the cloudflare/downloads/package-lock.json entry stays for p15c.
+- worker: A cloudflare/oauth-relay checkbox was added to .github/pull_request_template.md so the definition-of-done drift test still finds the `npm run dry-run` line; scripts/mcp_registry_server_json.py is orphaned and left for p15b; docs, build.yml, publish-pypi.yml, ADRs and several scripts still mention the deleted scripts and belong to later phases.
+- scope: scope: tests/unit/test_mcp_registry_server_json.py
+- scope: scope: tests/unit/test_minimum_os_versions.py
+- retry: Sent back once for the two decisions above. No tld CLI in the worker container; the orchestrator ran the checks, including profile validation of the edited .tld/toolkit.yaml and the coverage ratchet (owner choice orch_roles); no roles are required for this diff.
 
 ## p15b-build-workflow
 
