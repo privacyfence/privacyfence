@@ -22,7 +22,7 @@
     {
       "name": "ChatGPT",
       "slug": "chatgpt",
-      "deployments": ["local", "organization"],
+      "deployments": ["organization"],
       "connects": "from ChatGPT on the web as a Developer Mode app, with OAuth sign-in"
     },
     {
