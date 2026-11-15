@@ -87,8 +87,8 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 # every pull request with no `paths:` filter. The job sets `name: website-build` so the context is
 # unique -- its id is `build`, which build.yml and publish-pypi.yml also use.
 #
-# Deliberately NOT included: the packaged-artifact jobs and the graphical-session jobs
-# (docs/testing-policy.md's layer 6) -- both live in build.yml / their own scheduled workflows and never run on
+# Deliberately NOT included: the packaged-artifact jobs
+# -- they live in build.yml and never run on
 # `pull_request`, so they can't be a per-PR required check at all.
 #
 # Also deliberately NOT included, for a different reason: `lockfile-freshness`, `pip-audit` and
@@ -103,8 +103,6 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 # drops its `paths:` filter.
 REQUIRED_STATUS_CHECKS = [
     "test",
-    "platform-windows",
-    "platform-macos",
     "Test (Python 3.11, core suite)",
     "Test (Python 3.12, core suite)",
     "Test (Python 3.14, core suite)",

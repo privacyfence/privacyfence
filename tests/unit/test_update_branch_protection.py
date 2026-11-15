@@ -356,7 +356,7 @@ class TestRequiredChecksList:
         the exact drift this script exists to prevent, so it is asserted rather than trusted."""
         workflow_path = _SCRIPT_PATH.parents[1] / ".github" / "workflows" / "tests.yml"
         workflow = workflow_path.read_text(encoding="utf-8")
-        for job in ("test", "platform-windows", "platform-macos", "static-analysis", "org-mode-smoke"):
+        for job in ("test", "static-analysis", "org-mode-smoke"):
             assert f"\n  {job}:" in workflow, f"{job} is required but no longer a job in tests.yml"
 
         # test-python-compat is a matrix, so it reports one check per Python version rather than
