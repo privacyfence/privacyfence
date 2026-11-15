@@ -527,6 +527,25 @@ class TestOperatorClaimKeys:
     def test_principal_types_refused(self, value):
         _refused(_doc(allowed_principal_types=value), "upstreams[0].allowed_principal_types")
 
+    def test_email_for_visibility_defaults_to_false(self):
+        (server,) = _parse(_doc())
+        assert server.email_for_visibility is False
+
+    def test_email_for_visibility_true_is_read(self):
+        (server,) = _parse(_doc(email_for_visibility=True))
+        assert server.email_for_visibility is True
+
+    @pytest.mark.parametrize("value", ["true", 1, None])
+    def test_email_for_visibility_refuses_a_non_boolean(self, value):
+        message = _refused(_doc(email_for_visibility=value), "upstreams[0].email_for_visibility")
+        assert "must be true or false" in message
+
+    def test_email_for_visibility_needs_the_claim_on(self):
+        message = _refused(
+            _doc(email_for_visibility=True, identity_claim="off"), "upstreams[0].email_for_visibility",
+        )
+        assert "needs identity_claim required" in message
+
     def test_a_grants_key_is_refused_with_the_groups_message(self):
         message = _refused(_doc(grants=[{"match": "*", "domains": ["general"]}]), "upstreams[0].grants")
         assert "grants were replaced by groups" in message
@@ -644,6 +663,9 @@ class TestDeclarationDigest:
         renamed["upstreams"][0]["tools"]["propose_other"] = renamed["upstreams"][0]["tools"].pop("propose_change")
         assert self._digest(renamed, "propose_other") != base  # operation
         assert self._digest(_doc()) == base
+
+    def test_declaration_digest_ignores_email_for_visibility(self):
+        assert self._digest(_doc(email_for_visibility=True)) == self._digest(_doc(email_for_visibility=False))
 
     def test_declaration_digest_ignores_the_order_of_other_tools(self):
         reordered = _doc()

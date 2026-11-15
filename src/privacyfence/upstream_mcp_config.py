@@ -59,6 +59,7 @@ _VERBS = frozenset(verb.value for verb in Verb)
 _UPSTREAM_KEYS = frozenset({
     "id", "label", "url", "audience", "tools",
     "identity_claim", "claim_lifetime_seconds", "allowed_principal_types",
+    "email_for_visibility",
 })
 _IDENTITY_CLAIM_MODES = ("required", "off")
 _PRINCIPAL_TYPES = ("claude_client", "n8n_workflow")
@@ -90,6 +91,7 @@ class UpstreamServer:
     identity_claim: str = "required"  # "required" | "off"
     claim_lifetime_seconds: int = 60  # 5..60
     allowed_principal_types: tuple[str, ...] = _PRINCIPAL_TYPES
+    email_for_visibility: bool = False  # the claim carries the verified, lower-cased email (ADR 0310)
 
 
 def declaration_digest(upstream: UpstreamServer, tool: DeclaredTool) -> str:
@@ -327,10 +329,16 @@ def _parse_one(raw: object, base: str, seen: set[str], fail, source: str) -> Ups
         or any(not isinstance(item, str) or item not in _PRINCIPAL_TYPES for item in types)
     ):
         raise fail(f"{base}.allowed_principal_types", "must be a non-empty list of claude_client and n8n_workflow")
+    email_for_visibility = raw.get("email_for_visibility", False)
+    if type(email_for_visibility) is not bool:
+        raise fail(f"{base}.email_for_visibility", "must be true or false")
+    if email_for_visibility and claim_mode == "off":
+        raise fail(f"{base}.email_for_visibility", "needs identity_claim required")
     return UpstreamServer(
         id=upstream_id, label=label, url=url, audience=audience, tools=tools,
         identity_claim=claim_mode, claim_lifetime_seconds=lifetime,
         allowed_principal_types=tuple(sorted(set(types))),
+        email_for_visibility=email_for_visibility,
     )
 
 

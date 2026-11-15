@@ -256,6 +256,30 @@ class TestResolvers:
         assert StaticFileResolver(tmp_path / "nope.json").audiences_for("a@x.example", MAP) == frozenset()
 
 
+class TestLookupEmail:
+    def test_lowercases_and_strips(self):
+        assert gm.lookup_email(" Ann@HR.Example ") == "ann@hr.example"
+
+    @pytest.mark.parametrize(
+        "value", [None, 5, b"a@b.example", "", "ann", "a@b@c", "a b@c.example", "@c.example", "a@", "a\x00b@c.example"],
+    )
+    def test_malformed_gives_none(self, value):
+        assert gm.lookup_email(value) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "\u212Aate@x.example",  # Kelvin sign
+            "\u212Bsa@x.example",  # Angstrom sign
+            "\u0130nes@x.example",
+            "ann\u200b@x.example",  # zero-width space
+            "k\u00f6ln@x.example",
+        ],
+    )
+    def test_look_alikes_give_none(self, value):
+        assert gm.lookup_email(value) is None
+
+
 class TestSingleton:
     def test_set_and_get_store(self, tmp_path):
         custom = MembershipStore(tmp_path / gm.FILENAME)
