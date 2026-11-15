@@ -42,6 +42,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p9-adrs
 
 - level: Renumbered by the orchestrator: ADRs 0310 and 0311 are taken on main, so the five ADRs are 0312 to 0316 (plan 0310 to 0312, 0311 to 0313, 0312 to 0314, 0313 to 0315, 0314 to 0316). The ADR mentions in scripts/release_check.py and scripts/tag_release.py were changed from 0310 to 0312 by this phase; CLAUDE.md and docs/releasing.md follow in the retirement phase.
+- scope: scope: the five ADR files are renumbered 0312 to 0316 and the two script docstring edits were authorised by the orchestrator (see the renumbering entry above).
+- review: ADRs are 48 to 70 lines each, carry the Status lines of the design, and the index rows and old-ADR status cells use the renumbered numbers. Old ADR files 0021, 0132 and 0185 are untouched here.
 
 ## p10-retirement
 
