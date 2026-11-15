@@ -42,8 +42,8 @@ from .principal import Principal, PrincipalRegistry, principal_scope
 logger = logging.getLogger(__name__)
 
 _VALID_POLICIES = ("allow", "redact", "block")
-# Public alias for the same tuple. settings_controller.py has imported the
-# private name as PRIVACY_POLICIES since long before this; the org-mode
+# Public alias for the same tuple. The settings code historically imported the
+# private name as PRIVACY_POLICIES; the org-mode
 # admin policy editor needs to validate an HTTP form value against it
 # too, and two modules reaching for a leading-underscore name is one too
 # many.

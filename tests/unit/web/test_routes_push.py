@@ -1,6 +1,6 @@
 """Tests for web/routes_push.py and its wiring into org mode's app (ADR 0081): the manifest and
 icons (public, classified), the subscription routes (session + CSRF + Origin), the org-wide off
-switch, and local mode, which mounts none of it.
+switch, and the plain route set, which mounts none of it.
 
 web_push.py's own crypto, allowlist, store and payload are tests/unit/test_web_push.py.
 """
@@ -346,7 +346,7 @@ def _route_set(routes, prefix: str = "") -> set[str]:
     return out
 
 
-# Local mode's full route set as it was before web push existed, captured from this same build.
+# The plain route set as it was before web push existed, captured from this same build.
 LOCAL_ROUTES_BEFORE_PUSH = {
     "* /mcp",
     "GET /", "HEAD /",

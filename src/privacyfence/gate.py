@@ -1563,7 +1563,7 @@ async def propose_policy_change(
     ``privacyfence_list_policy``'s own rule ids: required for ``remove``, and for ``update`` names
     the existing rule being replaced (removed, then re-added under the new ``group``/``value``/
     ``verbs`` -- the same "narrowing is always remove-and-re-add-narrower" posture
-    ``SettingsController.remove_policy_rule``'s own docstring gives the Auto-accept Settings page,
+    the Auto-accept Settings page's rule removal follows,
     since v2 rules are additive-only by construction).
 
     Raises ``ValueError`` -- before any popup is shown -- for an unknown ``rule_id``, or for a

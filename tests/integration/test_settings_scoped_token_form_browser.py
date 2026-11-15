@@ -26,7 +26,7 @@ TOOLS = {
     "tasks": ["tasks_list_tasks"],
 }
 DATA = {
-    "delivery": "companion", "max_days": 365, "default_days": 90, "warn_days": 14,
+    "delivery": "once", "max_days": 365, "default_days": 90, "warn_days": 14,
     "tokens": [
         {"id": "st-1", "label": "Daily sync", "created_at": 0, "expires_at": 30 * DAY, "days_left": 20,
          "expiring_soon": False, "expired": False,

@@ -1,6 +1,6 @@
 """privacyfence.settings_state -- the helpers the settings page and its routes share: the
 main-thread dispatcher seam, ``_run_async``, the pure state builders and the Auto-accept row
-renderers. ``SettingsController``'s own behaviour is covered in test_settings_controller.py."""
+renderers."""
 from __future__ import annotations
 
 import threading

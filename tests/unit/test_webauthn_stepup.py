@@ -390,7 +390,7 @@ class TestRecoveryCodeMintAndStore:
         assert wa.consume_recovery_code(ALICE, code) is True
 
     def test_storing_a_second_one_invalidates_the_first(self):
-        # What the companion's "New Recovery Code" action does, and what its
+        # What the "New Recovery Code" action does, and what its
         # confirmation dialog warns about in as many words.
         first = wa.mint_recovery_code()
         wa.store_recovery_code(ALICE, first)

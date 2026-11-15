@@ -288,7 +288,7 @@ class TestAutoAcceptPath:
 
 class TestPolicyV2StoreRules:
     """gate._evaluate_auto_accept reads the on-disk v2 auto_accept: section
-    (auto_accept.get_policy_v2_store_rules(), refreshed by settings_controller.add_policy_rule and
+    (auto_accept.get_policy_v2_store_rules(), refreshed by the Settings page's add-rule action and
     at daemon startup) unconditionally -- there is no v1 evaluator (ADR 0004), no policy.engine
     switch to gate this behind and no second evaluator to compare against (see auto_accept.py's
     own module docstring)."""

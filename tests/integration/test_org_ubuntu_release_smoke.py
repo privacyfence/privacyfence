@@ -215,7 +215,7 @@ from tests.packaged_policy_probe import (  # noqa: E402
 # --target install" docstring section), not a built artifact --
 # same taxonomy tier as tests/system/test_local_mode_system.py's own daemon/
 # MCP/approval/audit scenario, just against a real Ubuntu org-mode service
-# instead of local mode. Also what tests/diagnostics.py's own CI-diagnostics
+# rather than an in-process app. Also what tests/diagnostics.py's own CI-diagnostics
 # capture keys off of.
 pytestmark = [pytest.mark.system, pytest.mark.packaged, pytest.mark.timeout(300)]
 
@@ -551,8 +551,7 @@ def _find_pending_approval_id(list_page_html: str) -> str | None:
 class TestStrictStartup:
     def test_refuses_to_start_on_an_unsigned_org_mode_bundle(self, installed_privacyfence, tmp_path):
         # "mode": "org" with no signature at all -- load_org_config()'s own
-        # documented refusal (org_bundle_signing.py's TOFU model is opt-in
-        # for local mode, mandatory for org mode).
+        # documented refusal (org_bundle_signing.py's TOFU model is mandatory).
         home = tmp_path / "home"
         home.mkdir()
         _write_org_config(home, {
@@ -651,13 +650,13 @@ class TestRunningOrgModeService:
         # /settings itself is a real, read-only route in org mode now
         # -- see test_org_mode_routes_are_mounted below -- and org mode
         # mounts its own POST /api/settings/{action} too (the same
-        # path local mode's ~30-action dispatcher answers, restricted to
+        # path the full settings dispatcher answers, restricted to
         # routes_settings._ORG_ALLOWED_ACTIONS) -- so a GET here now 405s
         # (a real route, wrong method) rather than 404ing outright.
         # quit_app is one of the ~24 local-only actions org mode's own
         # allowlist never includes -- POSTing it still 404s, which is what
-        # actually proves local mode's unrestricted dispatcher surface
-        # isn't reachable. The local-mode-only state stream still 404s
+        # actually proves the unrestricted dispatcher surface
+        # isn't reachable. The state stream still 404s
         # outright, unchanged.
         assert self.client.get("/api/settings/quit_app").status_code == 405
         cookie = _complete_browser_login(self.client, self.idp, sub="dave")

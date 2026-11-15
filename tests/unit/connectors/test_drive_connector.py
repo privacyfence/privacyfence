@@ -807,9 +807,8 @@ class TestOrgModeDownloadDelivery:
     """In org mode, drive_download_file never writes to this daemon's own
     disk -- a small
     file's bytes come back inline (base64, in the tool result), a larger
-    one is staged behind a one-time link. Local mode (TestDownloadFile
-    above) is untouched -- see test_local_mode_return_shape_is_unchanged
-    below for the explicit pin."""
+    one is staged behind a one-time link. The inline return (TestDownloadFile
+    above) is untouched."""
 
     @pytest.fixture(autouse=True)
     def _isolated_data_dir(self, tmp_path, monkeypatch):

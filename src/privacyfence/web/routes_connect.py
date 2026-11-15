@@ -836,7 +836,7 @@ def build_routes(
 # principal who followed a Connect/Reconnect button (or a bookmark) onto this
 # page, or /security, or /settings, lost every way back to the other three
 # short of editing the URL bar. Not built from settings_window_html.py (which
-# is a pure function of SettingsController.snapshot()'s whole ~30-action
+# is a pure function of the settings snapshot's whole ~30-action
 # surface, not a per-service connect list) -- only the shared shell changed,
 # not what this page is a view of.
 # ---------------------------------------------------------------------------- #

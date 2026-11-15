@@ -3,7 +3,7 @@ own auto-accept rules (read + add + remove). The install-wide PII/privacy
 policy and the usage stats are Admin sections (tests/unit/web/test_routes_admin.py),
 so an administrator's Settings is the same page as anyone else's. Exercises web/routes_settings.py's
 ``build_org_routes``, which renders its pages with the exact same
-settings_window_html.build_html() local mode's own settings page uses and
+settings_window_html.build_html() and
 takes every write through one generic ``POST /api/settings/{action}``
 (ADR 0032; see that function's own docstring). There is no
 web/routes_org_settings.py module, despite this file's name.
@@ -11,14 +11,13 @@ web/routes_org_settings.py module, despite this file's name.
 What an org-mode settings write looks like:
 
 - Every write is ``POST /api/settings/<action>`` with a JSON body
-  (``{**payload, "csrf": csrf}``), the exact same path/shape local mode's
-  own dispatcher answers.
+  (``{**payload, "csrf": csrf}``), the dispatcher's path/shape.
 - A successful write returns ``200`` with the fresh page state as JSON
-  (matching local mode's own dispatcher), not a ``303`` redirect.
+  (matching the dispatcher), not a ``303`` redirect.
 - ``add_policy_rule`` takes ``{group, value, verbs: [...]}`` (a list of
   verbs, matching the shared JS's own multi-verb-checkbox "Add a rule"
   form).
-- The four privacy actions have no route here at all: they are local-mode
+- The four privacy actions have no route here at all: they are per-install
   settings, and an organization's administrator changes them through
   ``POST /api/admin/<action>``.
 - An unauthenticated write gets a JSON ``401`` (the generic dispatcher
@@ -168,7 +167,7 @@ class TestAuthRequired:
         # Unlike the two GET pages above, this is the generic fetch()-driven
         # dispatcher the shared page's own JS bridge posts to -- a redirect
         # to an HTML login page here would break its .json() parse, so this
-        # answers the same way local mode's own dispatcher does.
+        # answers the way the dispatcher does.
         app, _sessions = _app()
         r = _client(app).post(f"/api/settings/{action}", json={"csrf": "whatever"})
         assert r.status_code == 401
@@ -218,10 +217,9 @@ def _initial_state(body: str) -> dict:
 
 class TestPrivacyStateFromConfig:
     """Org mode's own Privacy Filter state comes from the exact same
-    ``_privacy_state_from_config`` local mode's page uses (see
-    settings_controller.py), called with ``fail_safe_default="block"`` --
+    ``_privacy_state_from_config`` helper, called with ``fail_safe_default="block"`` --
     org mode's fail-closed posture for an install-wide group nobody
-    configured, kept distinct from local mode's own ``"allow"`` default."""
+    configured, kept distinct from the helper's own ``"allow"`` default."""
 
     def test_a_group_absent_from_install_wide_settings_falls_back_to_block(self):
         state = _privacy_state_from_config({}, fail_safe_default="block")
@@ -229,7 +227,7 @@ class TestPrivacyStateFromConfig:
 
     def test_local_modes_own_default_stays_allow(self):
         # The regression this split exists to prevent: passing no
-        # fail_safe_default at all (local mode's own call site) must not
+        # fail_safe_default at all (the helper's default) must not
         # silently pick up org mode's fail-closed default.
         state = _privacy_state_from_config({})
         assert state["default_policy"]["privacy"] == "allow"
@@ -239,7 +237,7 @@ class TestPrivacyStateFromConfig:
         assert state["default_policy"]["privacy"] == "allow"
 
     def test_a_malformed_group_fails_closed_to_allow_rather_than_500ing(self):
-        # settings_controller._privacy_state_from_config's own defensive
+        # _privacy_state_from_config's own defensive
         # posture (init_privacy_filter already refuses to start the daemon
         # on a malformed group, so reaching this only happens if
         # settings.yaml was hand-edited after that) renders "allow" rather
@@ -255,7 +253,7 @@ class TestPrivacyStateFromConfig:
         # ACTION_SCOPES) -- routes_settings._org_state drops the group
         # entirely rather than render a control with nothing to post to;
         # this only asserts the underlying shared function still offers it
-        # (local mode keeps it), the dropping itself is an org_state test.
+        # (the shared function keeps it), the dropping itself is an org_state test.
         state = _privacy_state_from_config({}, fail_safe_default="block")
         assert any(g["key"] == "calendar" for g in state["groups"])
 
@@ -399,8 +397,7 @@ class _FakeConnectorRegistry:
 
 
 class TestRuleValueNames:
-    """Org mode shows a rule's resource ids by name, the way local mode's page does (both render
-    through ``settings_controller.cached_rule_value``), resolving a missing name through the
+    """Org mode shows a rule's resource ids by name (through ``cached_rule_value``), resolving a missing name through the
     viewing principal's own connectors."""
 
     FOLDER_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
@@ -624,7 +621,7 @@ class TestAddRule:
         assert {v.value for v in policy_describe.rule_verbs(rules[0])} >= {"read", "download"}
 
     def test_an_unknown_scope_group_is_a_no_op_not_an_error(self, tmp_path, monkeypatch):
-        # Matches SettingsController.add_policy_rule's own posture (the
+        # Matches the Settings page's add-rule posture (the
         # shared renderer's picker constrains the dropdown, so this is a
         # hand-crafted request, not a real user path) -- silently returns
         # the unchanged state rather than a 400, unlike the old bespoke
@@ -754,7 +751,7 @@ def _catalogue_rules_for(group: str, verbs: list[str], value: list | None = None
 
 
 class TestUpdateRule:
-    """update_policy_rule in organization mode: the same widening as local mode, on the signed-in
+    """update_policy_rule in organization mode: the widening, on the signed-in
     principal's own rules only, and audited with the rule and the operations added (ADR 0166)."""
 
     def test_adds_the_missing_operations_and_keeps_the_id(self, tmp_path, monkeypatch):
@@ -1121,12 +1118,12 @@ class TestWriteFailures:
 
 class TestStepUpRequirePasskey:
     """Every org-routed ``_SENSITIVE_ACTIONS`` member (``add_policy_rule``,
-    ``remove_policy_rule``) requires step-up, the same as local mode's own
-    generic dispatcher (ADR 0034). An agent that cannot forge a WebAuthn
+    ``remove_policy_rule``) requires step-up, the same as the generic
+    dispatcher (ADR 0034). An agent that cannot forge a WebAuthn
     assertion could otherwise add an always-allow rule while step-up is
     supposed to be in force. This page carries the
-    same PF_WEBAUTHN_JS/bridge-shim ceremony UI local mode's own settings
-    page does, so a 428/403 here shows the same passkey prompt instead of a
+    same PF_WEBAUTHN_JS/bridge-shim ceremony UI the shared settings
+    page carries, so a 428/403 here shows the same passkey prompt instead of a
     raw JSON body -- TestStepUpBridgeShim below covers that the shim is
     present; this class is server-side only."""
 
@@ -1217,12 +1214,11 @@ class TestStepUpRequirePasskey:
 
 class TestStepUpBridgeShim:
     """Org mode's settings page carries the WebAuthn ceremony UI, so a
-    step-up refusal shows the same passkey prompt local mode's own page
-    does rather than raw JSON. It carries the exact same shim local
-    mode's _render_settings_page does; this only asserts the shim itself is
+    step-up refusal shows the same passkey prompt the shared page
+    does rather than raw JSON. It carries the exact same shim
+    _render_settings_page does; this only asserts the shim itself is
     present (its own behavior -- retry-on-428, alert-on-403 -- is already
-    covered by routes_settings.py's TestStepUpBridgeShim-equivalent for
-    local mode and isn't mode-specific)."""
+    covered by routes_settings.py's TestStepUpBridgeShim-equivalent and isn't specific to this page)."""
 
     def test_the_page_carries_the_webauthn_bridge_shim(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "carol")

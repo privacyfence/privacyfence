@@ -246,7 +246,7 @@ class TestBuildCsp:
         return dict(part.strip().split(" ", 1) for part in csp.split(";") if part.strip())
 
     def test_local_mode_allows_no_form_submission(self):
-        """ADR 0082: local mode renders no native form, so it keeps form-action 'none'."""
+        """ADR 0082: without an org, no native form is rendered, so form-action stays 'none'."""
         directives = self._directives(build_csp("n"))
         assert directives["form-action"] == "'none'"
         assert directives["base-uri"] == "'none'"
@@ -262,8 +262,7 @@ class TestBuildCsp:
 
 
 # --------------------------------------------------------------------------- #
-# WebServer owns a ControlChannelServer alongside the ASGI app
-# in local mode -- test_control_channel.py covers the channel's own protocol
+# WebServer owns a ControlChannelServer alongside the ASGI app -- test_control_channel.py covers the channel's own protocol
 # and socket handling; this is just the wiring (built in __init__, started/
 # stopped alongside the rest of WebServer's own lifecycle).
 # --------------------------------------------------------------------------- #

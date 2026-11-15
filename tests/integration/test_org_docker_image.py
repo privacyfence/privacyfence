@@ -13,7 +13,7 @@ Covers:
   - **A fresh volume**: it inherits the image's private (``10001:10001``, mode ``0700``) data
     directory and its ``org/`` subdirectory.
   - **Strict startup**: an unsigned bundle (the daemon refuses) stops the container instead of
-    degrading to local mode. No bundle at all starts single-user mode on localhost.
+    starting without it.
   - **No bundle, an IdP from the environment**: the server starts as an organization server, says
     so, and ``/login`` redirects to the identity provider.
   - **A running container**: the issuer host is served, an unexpected Host header is rejected,

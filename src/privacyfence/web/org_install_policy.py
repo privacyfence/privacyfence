@@ -92,11 +92,8 @@ class PolicyChangeRejected(ValueError):
     """An install-wide policy change that names a group, category or policy
     value this install doesn't have.
 
-    Raised, not silently ignored the way ``SettingsController.
-    set_default_policy`` returns an unchanged snapshot for a bad policy
-    value: that controller is driven by a native UI whose only inputs are
-    the radio buttons it drew itself, while this one is driven by an HTTP
-    form body. The route maps it to a 400 -- an admin who gets a rejection
+    Raised, not silently ignored: the input here is an HTTP
+    form body, which can carry any value. The route maps it to a 400 -- an admin who gets a rejection
     should see one, not a page that re-renders looking like their change
     was applied.
     """

@@ -433,8 +433,7 @@ def _auto_accept_state_from_rows(
     rows: list[policy_scope_rows.ScopeRow], usage_by_rule_id: dict[str, Any], *,
     resolve_value: Callable[[policy_scope_rows.ScopeRow], str], resolver: ResourceNameResolver,
 ) -> dict[str, Any]:
-    """The Auto-accept page's state, factored out of ``SettingsController.
-    _auto_accept_state`` (ADR 0032) so web/routes_settings.py's own org-mode
+    """The Auto-accept page's state, factored out (ADR 0032) so web/routes_settings.py's org-mode
     state builder can share it. ``resolve_value`` renders one row's value; both modes
     pass ``cached_row_value`` (resource ids shown by their cached names), and differ only
     in how a missing name gets resolved -- local's ``_resolved_rule_value`` in the background

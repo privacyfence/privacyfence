@@ -258,7 +258,7 @@ class TestNotifications:
         # NOTIFICATIONS_DETAIL has no equivalent global: the card's own
         # detail-level control is sourced from state.general.
         # notifications_detail (a real, mutable setting -- see
-        # SettingsController.set_notifications_detail) instead of this
+        # the notifications-detail setting) instead of this
         # per-page-load constant, which stays local to notificationBody().
         html = web_shell.wrap("", title="t", active="approvals")
         assert "window.__pfNotificationsEnabled = NOTIFICATIONS_ENABLED;" in html
@@ -404,8 +404,7 @@ class TestBareLinksAreStyled:
 
 
 class TestPlainPage:
-    """The fallback documents (no longer pending, preparing, not authorized, local mode's
-    /security) share one helper: a phone lays them out at its own width, and they carry the
+    """The fallback documents (no longer pending, preparing, not authorized, /security) share one helper: a phone lays them out at its own width, and they carry the
     design system and dark mode like every other document."""
 
     def test_is_a_complete_document_a_phone_lays_out_at_its_own_width(self):
@@ -434,7 +433,7 @@ class TestPlainPage:
 
 
 class TestInstallableOrgAppAndPush:
-    """Org mode's manifest link and web push hook-up (ADR 0081). Local mode gets neither."""
+    """Org mode's manifest link and web push hook-up (ADR 0081). Pages without an org get neither."""
 
     def test_org_pages_link_the_manifest_and_home_screen_icon(self):
         html = web_shell.wrap("", title="t", active="approvals", nav_items=web_shell.ORG_NAV_ITEMS, live_updates=False)

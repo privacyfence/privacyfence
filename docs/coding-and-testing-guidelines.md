@@ -222,7 +222,7 @@ layout rules — see [`testing-policy.md`](testing-policy.md#the-shared-design-s
 
   | Source module | Tested in |
   |---|---|
-  | `connector_host.py` | its consumers' tests: `test_settings_controller.py`, `test_daemon_main.py`, `web/test_routes_settings.py`, `web/test_server.py` |
+  | `connector_host.py` | its consumers' tests: `test_daemon_main.py`, `web/test_routes_settings.py`, `web/test_server.py` |
   | `agent_overrides.py` | `web/test_agent_attestation.py` |
   | `web/step_up_decide.py` | `web/test_approval_step_up.py` |
   | `web/routes_org_stepup.py` | `web/test_routes_org_approvals.py` |
@@ -497,7 +497,7 @@ runtime or in review, so work through them deliberately.
 |---|---|---|
 | Import, credential path, build block honouring `connectors.<name>.enabled` | `daemon_main.py`: `TOKEN_FILES`, `build_connectors()` | review |
 | Interactive auth: a `run_<name>_oauth()` and `--<name>-oauth` flag | `daemon_main.py` | review |
-| Settings page: connector list, label, org-bundle section, client class | `settings_controller.py`: `ALL_CONNECTORS`, `_CONNECTOR_LABEL_OVERRIDES`, `ORG_CONFIG_SERVICE`, and for Google `GOOGLE_CONNECTORS`/`_GOOGLE_CLIENTS` | review |
+| Settings page: connector list, label, org-bundle section, client class | `settings_state.py`: `ALL_CONNECTORS`, `_CONNECTOR_LABEL_OVERRIDES`, `ORG_CONFIG_SERVICE`, and for Google `GOOGLE_CONNECTORS`/`_GOOGLE_CLIENTS` | review |
 | Org-mode per-user connect page: scopes, label, row | `web/routes_connect.py` | review |
 | Approval-card icon (real brand asset only) | `src/privacyfence/resources/connector_icons/<name>.png` | optional; no icon renders cleanly |
 

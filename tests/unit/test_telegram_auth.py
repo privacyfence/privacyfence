@@ -1,14 +1,8 @@
-"""Tests for telegram_auth.py's three coroutines -- extracted from settings_controller.py's own
-telegram_start_auth/telegram_submit_code/telegram_submit_2fa work()
-closures (see test_settings_controller.py's TestTelegramStartAuth/
-TestTelegramSubmitCode/TestTelegramSubmit2fa, which still pass unchanged
-and now exercise this module indirectly via asyncio.run()).
+"""Tests for telegram_auth.py's three coroutines -- start_auth, submit_code and submit_2fa.
 
-telethon is mocked the same way test_settings_controller.py's own Telegram
-tests do: MagicMock() with AsyncMock() for the awaited methods, patching
+telethon is mocked: MagicMock() with AsyncMock() for the awaited methods, patching
 the ``telethon.TelegramClient`` name directly (this module imports it
-inline inside each coroutine, same as settings_controller.py's closures
-did, so patching the module attribute is what actually takes effect).
+inline inside each coroutine, so patching the module attribute is what actually takes effect).
 """
 from __future__ import annotations
 

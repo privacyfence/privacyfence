@@ -112,14 +112,13 @@ async def test_connector_set_swap_pushes_a_real_tools_list_changed_notification(
     """End to end: a real client sees
     tools.list_changed=True at initialize (the NotificationOptions override
     without which the SDK advertises False), and a connector-set swap -- the same
-    call SettingsController.refresh_connectors() makes in production --
+    call a connector rebuild makes in production --
     actually reaches it as a real notifications/tools/list_changed message,
     not just a call that doesn't raise.
 
     ``state_stream.call_soon_threadsafe`` stands in for
-    ``settings_controller.call_on_main`` here: production reaches
-    ``dispatcher.notify_tools_changed()`` through that same marshaling seam
-    (see SettingsController.refresh_connectors's own done() callback), and
+    the main-thread marshaling seam here: production reaches
+    ``dispatcher.notify_tools_changed()`` through that same seam, and
     calling it directly from this test's own asyncio loop -- a different
     loop/thread than the one WebServer's own ASGI app actually runs on --
     would silently misbehave instead of proving anything.

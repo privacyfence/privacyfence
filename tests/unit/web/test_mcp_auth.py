@@ -61,7 +61,7 @@ class TestPrincipalFromAccessToken:
 
     def test_client_id_is_a_fallback_only_when_no_subject_is_present(self):
         # A hand-rolled/future verifier that doesn't populate subject --
-        # PerUserTokenVerifier's own local-mode case is handled above
+        # PerUserTokenVerifier's own case is handled above
         # already; OrgOAuthProvider always sets subject (see the next
         # test), so this branch exists for robustness, not as the org-mode
         # path itself.
@@ -102,7 +102,7 @@ class TestPrincipalFromAccessToken:
 
     def test_local_client_id_with_a_non_local_subject_resolves_to_that_principal(self):
         # ADR 0008: PerUserTokenVerifier sets client_id="local" for every
-        # token it issues (local mode's own scheme identifier), but subject
+        # token it issues (its own scheme identifier), but subject
         # is the presenting principal -- a second OS user's own token, not
         # the owner's.
         token = AccessToken(token="t", client_id="local", scopes=[], subject="os-1002")

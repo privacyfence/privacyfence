@@ -255,7 +255,7 @@ _STREAM_JS = """
   // page rendered without this script (org mode's) never sets it. There is no
   // equivalent __pfNotificationsDetail read anywhere else: the card's own
   // detail-level control is a real, mutable setting
-  // (SettingsController.set_notifications_detail) sourced from that page's
+  // (the notifications-detail setting) sourced from that page's
   // own `state.general.notifications_detail` on every render, not from
   // this per-page-load constant -- NOTIFICATIONS_DETAIL below stays local
   // to this closure, used only by notificationBody() to decide what an

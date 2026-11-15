@@ -654,7 +654,7 @@ class TestRulesChangedListener:
 #
 # gate.py's popup handling serializes calls through one asyncio.Lock, but
 # add_policy_v2_rules() is also reachable directly from the MCP bridge and
-# from settings_controller.py's own writer at the same time the IPC server's
+# from the Settings page's writer at the same time the IPC server's
 # thread is confirming an "Always allow". _AutoAcceptState.write_lock is
 # what's supposed to keep the read-modify-write of the YAML file race-free;
 # these tests hammer it with real threads rather than asyncio tasks, since

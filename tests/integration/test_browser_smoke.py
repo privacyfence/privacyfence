@@ -2051,7 +2051,7 @@ def _submit_and_wait(page, button, violations: list[str], until) -> None:
 
 class TestNativeFormsSubmitUnderCsp:
     """Org /connect's native ``<form method="post">``s -- Sign out and each Telegram step -- are
-    the app's only native forms (local mode has none). TestClient posts to their routes without
+    the app's only native forms. TestClient posts to their routes without
     enforcing CSP, which is how ``form-action 'none'`` once blocked every one of them in a real
     browser unnoticed. Each test here clicks the real button under the real policy and checks
     that the POST reached the server and the flow finished on the page it should, with no
@@ -2459,7 +2459,7 @@ class TestHostileContentStaysText:
                     thread.join(timeout=5)
 
 class TestSettingsPageRendering:
-    """Local mode's settings page and org mode's (admin and non-admin) all
+    """The settings page for an admin and a non-admin both
     render through the same settings_window_html.build_html() (ADR 0033) --
     this drives all three in a real headless browser and saves a full-page
     screenshot of each, as evidence a reviewer can look at."""

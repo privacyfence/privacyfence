@@ -123,7 +123,7 @@ async def _agent_of_call(**session_kwargs) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
-# Local mode: the handshake clientInfo
+# Without an organization identity: the handshake clientInfo
 # --------------------------------------------------------------------------- #
 
 class TestLocalModeCapture:
