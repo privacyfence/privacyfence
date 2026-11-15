@@ -299,7 +299,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p19-docs-platform
 
-- pending
+- worker: README.md (collides with p20-docs-user) and tests/unit/test_catalog_server.py were edited outside touches: links to deleted docs removed in README.md, and test_packaging_doc_names_the_catalog_command repointed to releasing.md and renamed; both fail otherwise.
+- worker: release-archive.md and the releasing.md R2 section describe what r2_release.py does now (manifest, latest.json, finalize/verify/promote already removed by p15b); 'Who can download a pre-release' removed; the DMG wording in releasing.md's 'macOS ships one file' and gating sections is left for the docs phase that owns it; build_site.py content_group still returns 'platform' for install-* stems (code, left alone).
 
 ## p20-docs-user
 
