@@ -10,7 +10,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-oidc-groups-provider
 
-- pending
+- worker: Worker added a small TestCoverageGaps class in tests/unit/test_oidc_provider.py covering three branches that were already untested, so the 100 percent coverage acceptance item holds.
+- worker: Worker could not run tld guard, the dod gate or roles: the toolkit directory was empty in its session.
+- review: Orchestrator ran the dod commands itself after the merge as the owner chose (ask gate-handling); required roles were empty. Unit suite, the manifest pytest line, mypy, strict mypy, bandit and ruff pass.
 
 ## p3-approved-groups
 
