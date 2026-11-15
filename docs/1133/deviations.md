@@ -28,7 +28,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-retire
 
-- pending
+- review: Worker reported no deviations. It ran ruff and the changelog and docs tests by hand because the toolkit was unavailable. Orchestrator ran the dod commands after the merge as the owner chose (ask gate-handling) and checked that every test name cited in ADRs 0310 and 0311 exists. The plan document stays in the branch as the plan itself says; CLAUDE.md still describes the older rule that the last phase deletes it.
 
 ## Final review
 
