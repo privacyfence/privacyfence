@@ -96,7 +96,7 @@ jobs:
             echo "##[error] Dispatch this workflow on main and name the branch in the 'branch' input."
             exit 1
           fi
-          # releases/* is protected the same as main (see CONTRIBUTING.md), and so is stable --
+          # main and stable are protected, and releases/* stays refused (ADR 0181) though no such branch is used any more --
           # this workflow commits straight to the branch, which a ruleset-protected branch must
           # never accept outside a PR merge. refs/ and pull/ would reach a pull-request ref, and
           # with it a fork's code, on the runner that holds the QA credentials.
