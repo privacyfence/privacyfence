@@ -29,7 +29,7 @@ from ..connector import Connector
 from ..agent_identity import current_agent
 from ..deny_feedback import DENIAL_FEEDBACK_KEY, await_entry
 from ..gate import (
-    GateDeniedError, preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, session_ref,
+    GateDeniedError, check_scoped_upstream_approval, preflight_auto_accept, propose_policy_change, reason_scope, request_args_scope, session_ref,
     unattended_scope,
 )
 from ..policy import catalogue as policy_catalogue
@@ -303,6 +303,7 @@ class McpDispatcher:
                 unattended_scope(self._is_unattended(session_key), session_ref(session_key)), reason_scope(reason),
                 request_args_scope(args), released_request_scope(),
             ):
+                check_scoped_upstream_approval(connector_name, tool, args)
                 result = await connector.call(tool, args)
                 if scope is None and (audit_log.current_released_request_id() or TOOL_TO_GATE.get(tool) == "auto"):
                     self._note_session_call(session_key, tool, args, connector)

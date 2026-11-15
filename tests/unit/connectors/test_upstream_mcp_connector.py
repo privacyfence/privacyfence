@@ -147,6 +147,25 @@ class TestAutoTool:
         assert await connector.call("kh_search", {"query": "x"}) == {"hits": 2}
 
 
+class TestReviewPiiScan:
+    async def test_the_scan_covers_structured_content(self, gated_call_spy):
+        connector, _, _ = make_connector(CallResult(text="visible", structured={"b": 2, "a": 1}, dropped_blocks=0))
+        await connector.call("kh_get_doc", {"query": "x"})
+        (call,) = gated_call_spy
+        assert call["pii_scan_text"] == 'visible\n{"a": 1, "b": 2}'
+        assert call["details_text"] == "visible"
+
+    async def test_the_scan_of_structured_only_is_the_json(self, gated_call_spy):
+        connector, _, _ = make_connector(CallResult(text="", structured={"a": 1}, dropped_blocks=0))
+        await connector.call("kh_get_doc", {"query": "x"})
+        assert gated_call_spy[0]["pii_scan_text"] == '{"a": 1}'
+
+    async def test_the_scan_of_text_only_is_unchanged(self, gated_call_spy):
+        connector, _, _ = make_connector()
+        await connector.call("kh_get_doc", {"query": "x"})
+        assert gated_call_spy[0]["pii_scan_text"] == "hello"
+
+
 class TestReviewTool:
     async def test_gates_the_result_with_pii_scan_text(self, gated_call_spy):
         connector, client, _ = make_connector()
@@ -171,12 +190,7 @@ class TestReviewTool:
         assert await connector.call("kh_get_doc", {"query": "x"}) == {"a": 1}
         (call,) = gated_call_spy
         assert call["raw_data"] == {"a": 1}
-        assert call["pii_scan_text"] == json.dumps({"a": 1}, indent=2, sort_keys=True)
-
-    async def test_text_is_scanned_when_both_text_and_structured_exist(self, gated_call_spy):
-        connector, _, _ = make_connector(CallResult(text="visible", structured={"a": 1}, dropped_blocks=0))
-        await connector.call("kh_get_doc", {"query": "x"})
-        assert gated_call_spy[0]["pii_scan_text"] == "visible"
+        assert call["pii_scan_text"] == '{"a": 1}'
 
     async def test_upstream_failure_never_reaches_the_gate(self, gated_call_spy):
         connector, client, _ = make_connector()
@@ -325,6 +339,13 @@ SECRET_ARG = "needle-argument-value"
 
 
 class TestForwardedAudit:
+    @pytest.mark.parametrize(("tool", "gate"), [("kh_search", "auto"), ("kh_get_doc", "review"), ("kh_propose_change", "popup")])
+    async def test_the_gate_is_recorded_in_metadata(self, audit_dir, gated_call_spy, tool, gate):
+        connector, _, _ = make_connector()
+        await connector.call(tool, {"query": "x"})
+        (row,) = _forwarded(audit_dir)
+        assert row["metadata"]["gate"] == gate
+
     async def test_ok(self, audit_dir):
         connector, _, _ = make_connector(CallResult(text="hello", structured=None, dropped_blocks=0, jti="j1", req="r1"))
         await connector.call("kh_search", {"query": "x"})
@@ -343,7 +364,7 @@ class TestForwardedAudit:
         assert row["claim_principal_type"] == "claude_client"
         assert row["claim_audiences"] == ["general"]
         assert row["claim_act"] == {}
-        assert row["metadata"] == {"upstream": "kh", "claim_version": "1", "identity_claim": "required"}
+        assert row["metadata"] == {"upstream": "kh", "claim_version": "1", "identity_claim": "required", "gate": "auto"}
 
     @pytest.mark.parametrize(
         ("kind", "status"),

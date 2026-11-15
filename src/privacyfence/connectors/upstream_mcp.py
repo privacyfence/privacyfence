@@ -115,7 +115,7 @@ class UpstreamMcpConnector(Connector):
             raw_data=value,
             filtered_data=value,
             gate="review",
-            pii_scan_text=text,
+            pii_scan_text=_scanned(result),
             details_text=text,
         )
 
@@ -214,6 +214,7 @@ class UpstreamMcpConnector(Connector):
                 "upstream": upstream.id,
                 "claim_version": "1",
                 "identity_claim": upstream.identity_claim,
+                "gate": declared.gate,
             }
             if caller is not None and caller.token_id:
                 metadata["token_id"] = caller.token_id
@@ -267,6 +268,14 @@ class UpstreamMcpConnector(Connector):
 
 def _value(result: CallResult) -> Any:
     return result.structured if result.structured is not None else result.text
+
+
+def _scanned(result: CallResult) -> str:
+    """Everything the caller receives, for the PII scan: the text plus any structured content."""
+    if result.structured is None:
+        return result.text
+    dumped = json.dumps(result.structured, sort_keys=True, default=str)
+    return f"{result.text}\n{dumped}" if result.text else dumped
 
 
 def _text(result: CallResult) -> str:
