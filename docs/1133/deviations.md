@@ -5,7 +5,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-email-visibility
 
-- pending
+- worker: Worker could not run tld guard, the dod gate or roles: the toolkit directory was empty in its session; code and tests were pushed and the report said blocked for that reason only.
+- review: Orchestrator ran the dod commands itself after the merge as the owner chose (ask gate-handling); required roles at implement_phase were empty. Unit suite, the manifest pytest line, mypy, strict mypy, bandit and ruff pass.
 
 ## p2-oidc-groups-provider
 
