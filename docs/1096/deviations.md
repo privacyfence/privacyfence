@@ -344,7 +344,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - final: final: website ChatGPT agent page still offers ChatGPT desktop and a local token (p18c-website-agents)
 - final: final: website claude-ai, gemini-enterprise, claude-code, agents index and faq pages still send people to ChatGPT desktop or a local token (p18c-website-agents, p18b-website-copy)
 - final: final: website security, faq, slack, jira-confluence and gdpr pages still claim privilege separation and describe desktop installs as current (p18b-website-copy)
+- final: final: second review approved with 0 blocking findings; its five non-blocking leftovers (build_org_bundle.py references, 'desktop-only settings' wording, dead update-check rendering, orphaned test comments, remaining current-tense desktop references) and the earlier 18 non-blocking findings were all fixed on the owner's request (fix-1 to fix-6).
 
 ## Finishing
 
-- pending
+- final: Scope disposition: every recorded out-of-scope path of the 39 manifest phases was still in the final diff or reverted by a later commit as the Scope section of the pull request lists; none was reverted by hand.
+- final: Sessions outside the manifest, merged with their own Plan-Phase trailers and not scope-checked (they have no touches): p20c-smoke-probe (restored the policy-probe test helper), merge-main (merge of origin/main and ADR renumbering 0296-0304 to 0301-0309; the plan text and this file keep the old numbers), fix-1 to fix-6 (final-review findings).
+- final: The Assets live QA recorded by the plan's live-QA phase failed again at the final review (run 43706086192: assets list_schemas, check_connection failed: HTTP 400: no detail); the owner handles it separately, so it stays a manual item. The pre-existing browser failure test_docs_navigation_drawer_opens_on_screen[320] is not caused by this branch.
