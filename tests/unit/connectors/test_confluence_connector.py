@@ -646,7 +646,6 @@ class TestOrgModeDownloadDelivery:
         from privacyfence.org_mode import DownloadDeliveryConfig
 
         connector, client = make_connector()
-        connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(
             inline_max_bytes=inline_max_bytes, allow_disk_staging=allow_disk_staging,
             link_ttl_seconds=link_ttl_seconds, agent_links=agent_links,
@@ -663,7 +662,7 @@ class TestOrgModeDownloadDelivery:
 
         result = await connector.call(
             "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
+            {"page_id": "p1", "attachment_name": "report.pdf"},
         )
 
         assert result["delivery"] == "inline"
@@ -685,7 +684,7 @@ class TestOrgModeDownloadDelivery:
 
         result = await connector.call(
             "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
+            {"page_id": "p1", "attachment_name": "report.pdf"},
         )
 
         assert result["delivery"] == "link"
@@ -703,7 +702,7 @@ class TestOrgModeDownloadDelivery:
 
         result = await connector.call(
             "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
+            {"page_id": "p1", "attachment_name": "report.pdf"},
         )
 
         assert result["delivery"] == "link"
@@ -718,7 +717,7 @@ class TestOrgModeDownloadDelivery:
         with pytest.raises(RuntimeError, match="disk staging is disabled"):
             await connector.call(
                 "confluence_download_attachment",
-                {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
+                {"page_id": "p1", "attachment_name": "report.pdf"},
             )
 
         client.fetch_attachment_bytes.assert_not_called()
@@ -743,7 +742,7 @@ class TestAttachmentPiiScanWiring:
 
         await connector.call(
             "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "notes.txt", "destination_dir": "/tmp"},
+            {"page_id": "p1", "attachment_name": "notes.txt"},
         )
 
         kwargs = gated_call_spy[0]
@@ -770,7 +769,7 @@ class TestAttachmentPiiScanWiring:
 
         await connector.call(
             "confluence_download_attachment",
-            {"page_id": "p1", "attachment_name": "photo.png", "destination_dir": "/tmp"},
+            {"page_id": "p1", "attachment_name": "photo.png"},
         )
 
         kwargs = gated_call_spy[0]
@@ -1124,3 +1123,13 @@ class TestWriteMentions:
 
         assert gated_call_spy[0]["preview"]["Mentions"] == "1 unrecognised user mention(s)"
         client.resolve_user_names.assert_not_called()
+
+
+def test_confluence_download_attachment_takes_no_destination_dir():
+    spec = next(
+        s for s in ConfluenceConnector(MagicMock()).tool_specs()
+        if s.name == "confluence_download_attachment"
+    )
+    names = {p.name for p in spec.params}
+    assert "destination_dir" not in names and "download_mode" not in names
+    assert "destination_dir" not in spec.description

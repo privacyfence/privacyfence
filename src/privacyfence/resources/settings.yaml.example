@@ -362,10 +362,9 @@ step_up:
   batch: single_assertion
 
 # ADR 0007 (docs/adr/0007-local-file-bridge.md): the local file bridge --
-# how a privilege-separated daemon moves bytes to/from a path an agent
-# named (drive_upload_file's local_path, drive_download_file's
-# destination_dir, the Gmail/Confluence attachment tools) through the
-# .mcpb shim instead of reading/writing the user's filesystem directly.
+# how the daemon hands an export or a download to the client as a one-time
+# link, and takes an upload through an upload slot, instead of reading or
+# writing the user's filesystem.
 # Unset means every default below applies -- most installs never need this
 # section at all.
 file_bridge:

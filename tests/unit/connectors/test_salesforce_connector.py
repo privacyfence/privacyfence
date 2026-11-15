@@ -1544,11 +1544,11 @@ def delivered(monkeypatch):
     calls = []
 
     def fake_deliver(
-        dest_dir, name, data, mime_type, *, download_config=None,
+        name, data, mime_type, *, download_config=None,
         download_base_url="",
     ):
         calls.append({
-            "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
+            "name": name, "data": data, "mime_type": mime_type,
             "download_config": download_config,
             "download_base_url": download_base_url,
         })

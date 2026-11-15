@@ -15,14 +15,12 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Iterator
 
-from .download_staging import DEFAULT_TTL_SECONDS as _DOWNLOAD_TTL_SECONDS
 from .download_staging import get_download_staging_store
 from .approvals import DEFAULT_LEDGER_TTL_SECONDS, DEFAULT_PENDING_TTL_SECONDS
 from .org_mode import DownloadDeliveryConfig
@@ -43,7 +41,7 @@ NO_BRIDGE_UPLOAD_MESSAGE = (
     "the file to the returned address, and pass the returned upload: reference."
 )
 
-# deliver_file() is synchronous and fully in memory (the whole file is staged before anything is
+# deliver_export() is synchronous and fully in memory (the whole file is staged before anything is
 # handed out), so this is a real memory cap, not just a transfer-size guideline.
 # Configurable via settings.yaml's `file_bridge: max_download_bytes:` -- daemon_main.py calls
 # configure_file_bridge() once at startup with whatever that section resolves to. 200MB:
@@ -117,12 +115,6 @@ def call_context(
 
 def _current_state() -> "_CallState | None":
     return _state_ctx.get()
-
-
-def can_access_user_files(download_mode: str = "org") -> bool:
-    """Always ``False``: the server never reads or writes a path on a user's disk. Connectors
-    still call it until their own phases drop it, and still pass ``download_mode``."""
-    return False
 
 
 def mark_staged_download() -> None:
@@ -205,7 +197,7 @@ def commit_uploads() -> None:
             )
 
 
-def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode: str = "org") -> None:
+def require_local_files(paths: list[str], *, max_total_bytes: int) -> None:
     """Called by a connector at the very top of its tool method, before any
     preview/PII-scan/gate work, so a missing or unreadable file is reported
     before the human is ever asked to approve anything.
@@ -275,7 +267,7 @@ def build_upload_slot(
     }
 
 
-def read_local_file(path: str, *, download_mode: str = "org") -> bytes:
+def read_local_file(path: str) -> bytes:
     """``path``'s bytes, from the per-call upload cache. Only valid to call after
     ``require_local_files([path], ...)`` has already succeeded for this path in this call."""
     state = _current_state()
@@ -284,7 +276,7 @@ def read_local_file(path: str, *, download_mode: str = "org") -> bytes:
     raise LocalFileAccessError(NO_BRIDGE_UPLOAD_MESSAGE)
 
 
-def local_file_size(path: str, *, download_mode: str = "org") -> int:
+def local_file_size(path: str) -> int:
     """The size of ``path``'s upload, with the same resolution as ``read_local_file``."""
     state = _current_state()
     if state is not None and path in state.resolved:
@@ -294,7 +286,7 @@ def local_file_size(path: str, *, download_mode: str = "org") -> int:
 
 def check_delivery_size(size: int) -> None:
     """Raise ``LocalFileAccessError`` if ``size`` bytes exceed ``file_bridge.
-    max_download_bytes``. ``deliver_file`` calls it; a caller that builds the
+    max_download_bytes``. ``deliver_export`` calls it; a caller that builds the
     data before asking for approval calls it first, so a file that can never
     be delivered does not cost an approval."""
     if size > _max_download_bytes:
@@ -305,28 +297,12 @@ def check_delivery_size(size: int) -> None:
         )
 
 
-def deliver_file(
-    dest_dir: str, name: str, data: bytes, mime_type: str, *, download_mode: str = "org",
-) -> dict[str, Any]:
-    """Hands ``data`` back as a one-time capability link: stages it in ``DownloadStagingStore``
-    for ``current_principal()`` and returns a ``download_url`` the caller can ``curl`` directly
-    (``dest_dir`` is ignored; the server never writes to a user's disk).
-
-    Raises ``LocalFileAccessError`` if ``data`` exceeds ``file_bridge.max_download_bytes`` (see
-    ``configure_file_bridge``) -- ``data`` is already fully in memory by the time this is called.
-    """
-    check_delivery_size(len(data))
-    return _deliver_link(_current_state(), name, data, mime_type)
-
-
 def deliver_export(
-    dest_dir: str, name: str, data: bytes, mime_type: str, *,
-    download_mode: str = "org", download_config: DownloadDeliveryConfig | None, download_base_url: str,
+    name: str, data: bytes, mime_type: str, *,
+    download_config: DownloadDeliveryConfig | None, download_base_url: str,
 ) -> dict[str, Any]:
-    """Where an export's file goes after its approval (ADR 0160): ``deliver_file`` outside organization mode;
-    on an organization-managed install, a one-time staged link like a large Drive download's."""
-    if download_mode != "org":
-        return deliver_file(dest_dir, name, data, mime_type, download_mode=download_mode)
+    """Where an export's file goes after its approval (ADR 0160): a one-time staged link like a
+    large Drive download's."""
     check_delivery_size(len(data))
     cfg = download_config or DownloadDeliveryConfig()
     token = get_download_staging_store().stage(
@@ -334,28 +310,6 @@ def deliver_export(
     )
     mark_staged_download()
     return cfg.link_result(name, len(data), f"{download_base_url}{cfg.staged_link_path(token)}")
-
-
-def _deliver_link(state: "_CallState | None", name: str, data: bytes, mime_type: str) -> dict[str, Any]:
-    """A capability link (``/mcp-files/fetch/<token>``, no bearer header needed -- the token in
-    the URL is the credential; ADR 0028), for a caller that may have no way to attach a custom
-    header (a sandboxed agent `curl`-ing a URL it was handed). See web/routes_file_bridge.py and
-    local_files.build_upload_slot's own docstring for the upload-side counterpart."""
-    principal = current_principal()
-    token = get_download_staging_store().stage(principal, data, name, mime_type)
-    base_url = (state.base_url if state is not None else "").rstrip("/")
-    download_url = f"{base_url}/mcp-files/fetch/{_encode_token(token)}"
-    mark_staged_download()
-    safe_name = os.path.basename(name) or "file"
-    return {
-        "path": None,
-        "name": safe_name,
-        "size_bytes": len(data),
-        "delivery": "link",
-        "download_url": download_url,
-        "expires_at": time.time() + _DOWNLOAD_TTL_SECONDS,
-        "note": "Fetch this URL directly -- it's a one-time capability link, no auth header needed.",
-    }
 
 
 __all__ = [
@@ -367,11 +321,9 @@ __all__ = [
     "build_upload_slot",
     "call_context",
     "call_produced_deliveries",
-    "can_access_user_files",
     "check_delivery_size",
     "configure_file_bridge",
     "deliver_export",
-    "deliver_file",
     "commit_uploads",
     "local_file_size",
     "mark_staged_download",

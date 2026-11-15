@@ -488,8 +488,8 @@ class TestCall:
             async def call(self, tool: str, args: dict) -> object:
                 await super().call(tool, args)
                 return local_files.deliver_export(
-                    "", "a.csv", b"abc", "text/csv",
-                    download_mode="org", download_config=None, download_base_url="https://pf.example",
+                    "a.csv", b"abc", "text/csv",
+                    download_config=None, download_base_url="https://pf.example",
                 )
 
         connector = ExportingConnector("gmail")

@@ -91,7 +91,7 @@ class AssetsConnector(Connector):
         return "assets"
 
     def tool_specs(self) -> list[ToolSpec]:
-        return export_files.visible_specs(self._all_tool_specs(), "org", self.download_config)
+        return export_files.visible_specs(self._all_tool_specs(), self.download_config)
 
     def _all_tool_specs(self) -> list[ToolSpec]:
         return [
@@ -247,7 +247,7 @@ class AssetsConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
-        export_files.refuse_if_exports_off(tool, "org", self.download_config)
+        export_files.refuse_if_exports_off(tool, self.download_config)
         if tool == "assets_list_schemas":
             return await self._list_schemas(**args)
         if tool == "assets_list_object_types":
@@ -507,7 +507,7 @@ class AssetsConnector(Connector):
         t0 = time.time()
         file_name, fmt = export_files.export_file_name(file_name, "assets-objects")
         export_files.refuse_org_without_staging(
-            "assets_export_objects", "org",
+            "assets_export_objects",
             (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
             "assets_search_objects",
         )
@@ -532,7 +532,7 @@ class AssetsConnector(Connector):
         data = await asyncio.to_thread(export_files.render, columns, rows, fmt)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = export_files.saved_to("", file_name, "org")
+        saved_to = export_files.ORG_SAVED_TO
         preview = {"AQL": aql[:200], "Attributes": ", ".join(names) or "none"}
         await gated_call(
             connector=self.name,
@@ -564,7 +564,7 @@ class AssetsConnector(Connector):
             },
         )
         delivered = local_files.deliver_export(
-            "", file_name, data, export_files.MIME_TYPES[fmt],
+            file_name, data, export_files.MIME_TYPES[fmt],
             download_config=self.download_config,
             download_base_url=self.download_base_url,
         )

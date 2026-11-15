@@ -27,7 +27,6 @@ would rotate the shared refresh token for nothing.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -114,32 +113,6 @@ def _validate_attachment_id(attachment_id: str) -> str:
     if not _ATTACHMENT_ID_RE.fullmatch(value):
         raise ConfluenceClientError(f"attachment_id must be a Confluence attachment id, got {value!r}")
     return value
-
-
-def resolve_attachment_destination(filename: str, destination_dir: str = "") -> str:
-    """Compute where an attachment will be saved, without touching disk.
-
-    ``destination_dir`` is mandatory -- there is no default. Callers must
-    deliberately choose between a location the user will find (e.g.
-    ~/Downloads) and Claude's own working/scratch directory, rather than a
-    file silently landing in Downloads just because nobody thought about it.
-    ``filename`` comes from Confluence and is untrusted, so only its basename
-    is kept -- this is what stops a crafted name like
-    "../../.ssh/authorized_keys" from writing outside ``destination_dir``.
-    Same shape and reasoning as ``gmail_client.resolve_attachment_destination``
-    / ``drive_client.resolve_download_destination``.
-    """
-    if not destination_dir.strip():
-        raise ConfluenceClientError(
-            "download_attachment requires a non-empty destination_dir -- "
-            "there is no default. Pass ~/Downloads (or another location the "
-            "user asked for) if this attachment is a deliverable the user "
-            "should find afterward, or your own working/scratch directory "
-            "if you're only downloading it to read or process it yourself."
-        )
-    dest_dir = os.path.expanduser(destination_dir.strip())
-    safe_name = os.path.basename(filename) or "attachment"
-    return os.path.join(dest_dir, safe_name)
 
 
 @dataclass
@@ -691,42 +664,6 @@ class ConfluenceClient:
         except Exception as exc:
             raise ConfluenceClientError(f"fetch_attachment_bytes failed: {exc}") from exc
         return response.content
-
-    def save_attachment_bytes(
-        self, data: bytes, filename: str, destination_dir: str = ""
-    ) -> dict:
-        """Save already-fetched attachment bytes to a local directory.
-
-        ``destination_dir`` is mandatory -- see ``resolve_attachment_destination``.
-        Returns a dict with ``path``, ``name``, and ``size_bytes``.
-        """
-        dest_path = resolve_attachment_destination(filename, destination_dir)
-        try:
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            with open(dest_path, "wb") as fh:
-                fh.write(data)
-        except OSError as exc:
-            raise ConfluenceClientError(
-                f"save_attachment_bytes: could not write to {dest_path!r}: {exc}. "
-                "Choose a different destination_dir."
-            ) from exc
-        name = os.path.basename(dest_path)
-        logger.info("save_attachment_bytes: name=%s size=%d", name, len(data))
-        return {"path": dest_path, "name": name, "size_bytes": len(data)}
-
-    def download_attachment(
-        self, page_id: str, attachment_id: str, filename: str, destination_dir: str = ""
-    ) -> dict:
-        """Fetch an attachment's bytes and save it to a local directory.
-
-        ``destination_dir`` is mandatory -- see ``resolve_attachment_destination``.
-        Returns a dict with ``path``, ``name``, and ``size_bytes``. See
-        ``fetch_attachment_bytes``/``save_attachment_bytes`` if the caller
-        already fetched the bytes for a preview and wants to avoid fetching
-        them twice.
-        """
-        data = self.fetch_attachment_bytes(page_id, attachment_id)
-        return self.save_attachment_bytes(data, filename, destination_dir)
 
     # ------------------------------------------------------------------ #
     # Parsing helpers
