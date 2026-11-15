@@ -120,6 +120,8 @@ Workspace groups name.
   next sign-in, and the app's session lifetime bounds the delay. Set a short session lifetime in the
   app.
 
+The decision is [ADR 0311](adr/0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md).
+
 ## The signing key
 
 PrivacyFence makes an RSA 2048 key on first start and keeps it in `org/oidc_signing_key.pem` in the

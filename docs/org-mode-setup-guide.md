@@ -584,6 +584,52 @@ refuses, naming the first difference, if it does not), imports the credentials i
 happened, records the retirement and deletes `org/org_bundle.json`. Until then a bundle with an `idp`
 section wins over the variables.
 
+### Signing Forgejo in with groups
+
+PrivacyFence can send Forgejo the Workspace groups a person belongs to, so Forgejo puts them in the
+matching teams. Only approved membership is sent ([OIDC provider, Groups](oidc-provider.md#groups);
+the decision is [ADR 0311](adr/0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md)).
+
+**On the PrivacyFence side**, in the environment file, restart afterwards:
+
+```ini
+PRIVACYFENCE_OIDC_CLIENTS=forgejo
+PRIVACYFENCE_OIDC_CLIENT_FORGEJO_REDIRECT_URIS=https://git.example.org/user/oauth2/privacyfence/callback
+PRIVACYFENCE_OIDC_CLIENT_FORGEJO_SECRET_FILE=/run/secrets/oidc_forgejo_secret
+PRIVACYFENCE_OIDC_CLIENT_FORGEJO_GROUPS=true
+PRIVACYFENCE_OIDC_CLIENT_FORGEJO_GROUPS_ALLOWED=kh-*
+```
+
+A groups app needs an upstream MCP declaration (`PRIVACYFENCE_UPSTREAM_MCP_FILE`): without one the start is
+refused. A group reaches Forgejo only if an upstream maps it in the `upstream_mcp` key of
+`admin_config.json`, for example:
+
+```json
+"upstream_mcp": {
+  "kh": {"groups": {
+    "kh-mgmt@example.org": ["forgejo-mgmt"],
+    "kh-hr@example.org": ["forgejo-hr"]
+  }}
+}
+```
+
+Each of these audiences is used for nothing else, and approving it on Admin → Group membership also grants
+the team. Map a group to `[]` only for a team a stolen sync token may grant, because additions to such a
+group apply at once.
+
+**On the Forgejo side**, add the authentication source:
+
+```bash
+forgejo admin auth add-oauth --name privacyfence --provider openidConnect --key forgejo --secret "$SECRET" --auto-discover-url https://pf.example.org/oidc/.well-known/openid-configuration --scopes "openid email profile groups" --group-claim-name groups --group-team-map '{"kh-mgmt@example.org":{"kh":["canonical-mgmt"]},"kh-hr@example.org":{"kh":["canonical-hr"]}}' --group-team-map-removal
+```
+
+These Forgejo flags are written against a recent Forgejo; check against your Forgejo version.
+
+**Limits.** Forgejo reads `groups` at sign-in only, so a removal takes effect at the person's next
+sign-in; set a short session lifetime in Forgejo. An addition to a group behind a restricted audience
+waits on Admin → Group membership until an administrator approves it. If the membership lookup fails, the
+sign-in fails with a retryable error instead of removing people from their teams.
+
 ## 7. Reverse proxy and TLS
 
 The daemon never needs to be reachable directly. The compose file in
