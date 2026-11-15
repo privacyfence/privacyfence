@@ -28,15 +28,14 @@ jobs:
     # macOS-only, and still covered separately by build.yml on a real
     # macos-latest runner.
     #
-    # This is the full suite (Python tests + the Node shim's own tests,
-    # typecheck and build) and runs on 3.13 only -- the version
+    # This is the full suite and runs on 3.13 only -- the version
     # pyproject.toml's [project.optional-dependencies].dev/build tooling
     # and the packaging workflows (build.yml) target. The other
     # supported versions (3.11, the `requires-python` floor, 3.12, and 3.14,
     # the default interpreter on current Ubuntu releases) are covered via
     # the `test-python-compat` job below with a reduced, Node-free suite --
-    # running the Node/shim steps again per Python version would be pure
-    # cost with no signal, since the shim is a separate Node runtime not
+    # running the Node steps again per Python version would be pure
+    # cost with no signal, since the n8n node is a separate Node runtime not
     # affected by which CPython version the daemon runs under.
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -53,12 +52,11 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-          # Cache ~/.npm keyed on mcpb/shim/package-lock.json -- without
+          # Cache ~/.npm keyed on the lockfiles below -- without
           # this, `npm ci` below is a fully cold install from the registry
           # on every run (no lockfile changes needed to trigger it).
           cache: npm
           cache-dependency-path: |
-            mcpb/shim/package-lock.json
             n8n/package-lock.json
             tests/integration/ai_clients/package-lock.json
 
@@ -73,30 +71,6 @@ jobs:
       # from downloading either.
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
-
-      - name: Install shim dependencies
-        run: npm ci
-        working-directory: mcpb/shim
-
-      # mcpb/shim/'s own suite (daemon discovery/launch, the stdio<->
-      # Streamable HTTP proxy) runs against mcpb/shim/src/*.ts directly via tsx. It's the
-      # only Node suite in this repo.
-      - name: Run shim test suite
-        run: npm test
-        working-directory: mcpb/shim
-
-      - name: Type-check shim
-        run: npm run typecheck
-        working-directory: mcpb/shim
-
-      # tests/integration/test_shim_mcp_contract.py spawns the real built
-      # shim.js against a real /mcp endpoint, so it needs to be built before
-      # pytest runs (the test builds it lazily on a cache miss too, but
-      # building here keeps that cost out of the timed test step and fails
-      # fast on a build error instead of a confusing test skip).
-      - name: Build shim
-        run: npm run build
-        working-directory: mcpb/shim
 
       # tests/integration/test_n8n_node_contract.py drives the n8n node's own
       # sources against a real /mcp endpoint, so n8n/'s dependencies must be
@@ -126,7 +100,6 @@ jobs:
         env:
           CLAUDE_CODE_BIN: ${{ github.workspace }}/tests/integration/ai_clients/node_modules/.bin/claude
           PRIVACYFENCE_REQUIRE_BROWSER: "1"
-          PRIVACYFENCE_REQUIRE_NODE: "1"
         run: |
           pytest -v --cov=src/privacyfence --cov-branch \
             --cov-report=term-missing \
@@ -202,16 +175,12 @@ jobs:
   # behind/wait on the full job.
   #
   # This is a reduced core suite for when CI cost
-  # matters: the Python test suite only, no Node/npm setup and no shim
-  # build. tests/integration/test_shim_mcp_contract.py and
-  # tests/integration/test_n8n_node_contract.py are explicitly
-  # excluded below rather than left to run -- the shim's built_shim_entry fixture
-  # would otherwise build the shim from scratch on every matrix leg (GitHub's
-  # ubuntu-latest runners ship npm preinstalled, so it wouldn't skip itself
-  # the way it does in an environment with no npm at all), and the n8n node's
-  # contract test needs n8n/'s dependencies installed, which is exactly
-  # the redundant Node-toolchain cost this job exists to avoid -- that
-  # coverage already comes from the `test` job's 3.13 run.
+  # matters: the Python test suite only, no Node/npm setup.
+  # tests/integration/test_n8n_node_contract.py is explicitly excluded
+  # below rather than left to run -- the n8n node's contract test needs
+  # n8n/'s dependencies installed, which is exactly the redundant
+  # Node-toolchain cost this job exists to avoid -- that coverage already
+  # comes from the `test` job's 3.13 run.
   test-python-compat:
     name: Test (Python ${{ matrix.python-version }}, core suite)
     runs-on: ubuntu-latest
@@ -248,7 +217,6 @@ jobs:
       - name: Run test suite (100% pass rate required)
         run: >-
           pytest -v
-          --ignore=tests/integration/test_shim_mcp_contract.py
           --ignore=tests/integration/test_n8n_node_contract.py
 
       # Same failure-diagnostics capture as the `test` job's identically-named step --

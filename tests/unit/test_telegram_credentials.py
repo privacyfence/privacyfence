@@ -160,9 +160,6 @@ def test_generated_module_is_git_ignored_but_packaged() -> None:
 
 def test_build_scripts_and_pypi_workflow_share_the_generator() -> None:
     callers = [
-        "scripts/build_dmg.sh",
-        "scripts/build_deb.sh",
-        "scripts/build_installer.ps1",
         ".github/workflows/publish-pypi.yml",
     ]
     for caller in callers:
