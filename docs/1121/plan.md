@@ -4,30 +4,28 @@
 
 ## Summary
 
-**Use it:** An administrator opens Settings → Scoped tokens → New token. Under each upstream server a new
-group, "Upstream tools that change data or release results unseen", lists the `popup` and `review` tools
-the operator declared, each with a "writes data" or "result not reviewed" marker and the operator's
-`effect` text, all unticked. Ticking one approves that tool for every call the token makes: an unattended
-n8n workflow can then call it with no card, and each call writes the usual `upstream_forwarded` audit
-entry. A token without the tick is refused for that tool with a clear error before anything reaches the
-upstream. A person who is not an administrator sees no such group.
+**Use it:** An administrator opens Settings → Scoped tokens → New token. Under each upstream server a group,
+"Upstream tools that change data or release results unseen", lists its `popup` and `review` tools, each
+marked "writes data" or "result not reviewed" with the operator's `effect` text, all unticked. Ticking one approves that tool for every call the token makes, so an unattended n8n workflow can call
+it with no card; each call writes the usual `upstream_forwarded` audit entry. A token cannot be created
+listing such a tool without the tick, and a token whose approval no longer matches the declaration is
+refused with a clear error before anything reaches the upstream. A non-administrator sees no such group.
 
 **Scope:** New: a token-only rule predicate `upstream.approved_tool` pinned to a digest of the operator's
 declaration; an `upstream_approvals` field in the create request; the form group; a refusal before
-forwarding; the PII scan of a `review` result now covers the structured part it returns; ADR 0300. Not
-changed: the claim (claim_version 1), audiences narrowing, verified-email rules, `allowed_principal_types`,
-AI token proposals (they still refuse upstream tools), `auto` upstream tools, the Auto-accept page, Always
-allow and `privacyfence_propose_policy_change`.
+forwarding (an existing token that lists a gated tool is covered too: a `review` call no longer reaches the
+upstream before being denied); the PII scan of a `review` result covers the structured part it returns (it
+can flag more personal data on a person's own `review` cards); a `gate` field in the audit metadata; ADR 0300. Unchanged: claim_version 1, audience narrowing,
+verified-email rules, `allowed_principal_types`, AI proposals, `auto` upstream tools, Auto-accept and "Always allow".
 
-**Security:** This lets a token write to an upstream with no card. The approval is a rule in the token
-(ADR 0164/0236 hold), made only by an administrator, only from the Settings form, and void if the
-operator changes the tool's gate, verb, effect, URL, audience or claim mode. The predicate is token-only:
-a person's own rules and imports never carry it. Personal data found in a `review` result still denies the
-call under a token. An administrator who later loses the role keeps the token until it expires.
+**Security:** A token may now write to an upstream with no card. The approval is a rule inside the token
+(ADR 0164 and 0236 hold), made only by an administrator on the Settings form, and void when the operator
+changes the tool's declaration. The predicate is token-only: a person's rules and imports never carry it.
+Personal data in a `review` result still denies the call. A demoted administrator's token works until expiry.
 
-**Review focus:** the token-only guard on every path that brings rules in (3.3); the declaration digest
-and what it covers (3.2); the refusal before forwarding and why it is not in the connector (3.5); `review`
-results under a token and the PII scan (3.6).
+**Review focus:** who may create an approval, the order of the create rules and why a proposal cannot carry
+one (3.4); the token-only guard and where it is enforced (3.3); the refusal before forwarding and why it is
+not in the connector (3.5); `review` results under a token and the PII scan (3.6).
 
 ## 1. Goal
 
@@ -89,7 +87,7 @@ Rejected:
   `TOKEN_ONLY_PREDICATES: frozenset[str] = frozenset({"upstream.approved_tool"})` and
   `UPSTREAM_DECLARATIONS: dict[str, str] = {}` (operation key to digest; filled by
   `upstream_mcp_registry.register`, cleared by `unregister_all`).
-- Value: one string `"<operation>@<digest>"`, e.g. `kh.propose_change@3f2a…` (the digest is the first 32 hex
+- Value: one string `"<operation>@<digest>"`, for example `kh.propose_change@3f2a…` (the digest is the first 32 hex
   characters). One string, not a dict, because rule ids, the settings import and the token page all expect a
   string or a list.
 - Digest: `upstream_mcp_config.declaration_digest(upstream: UpstreamServer, tool: DeclaredTool) -> str` =
@@ -109,14 +107,16 @@ Rejected:
 ### 3.3 The predicate is token-only
 
 The engine's selector table is global, so a person's own rule list carrying this predicate would auto-accept
-an upstream write in an interactive session. Guards, each with a test:
-1. `gate._rules_in_scope(None)` drops every rule whose predicate is in `TOKEN_ONLY_PREDICATES`. This one
-   place covers `_evaluate_auto_accept`, `preflight_auto_accept`, `rule_values` and
-   `_personal_data_rule`.
-2. `scope_rows.rows_from_section` and `rows_from_config` (the readers of a person's `auto_accept:` section)
-   drop such a row.
-3. The personal-settings import (`personal_settings.py`, the function that parses imported rules) refuses
-   such a row the same way it already skips custom rows; export leaves custom rows out already.
+an upstream write in an interactive session. The engine is reached only through the three callers in
+`gate.py` (`_evaluate_auto_accept`, `preflight_auto_accept`, `rule_values`), all via `_rules_in_scope`, so
+guard 1 is where the rule is enforced; guards 2 to 5 keep the row out of a person's files and tokens as
+defence in depth. Each has a test:
+1. `gate._rules_in_scope(None)` drops every rule whose predicate is in `TOKEN_ONLY_PREDICATES`.
+2. `scope_rows.rows_from_section` drops such a row, and the two v2 read paths
+   (`scope_rows.rows_from_config` v2 branch via `migrate_v2`, and `policy/store.compile_rules_from_config`)
+   skip a rule with such a predicate.
+3. The personal-settings import already skips every custom row (scope `None`, `personal_settings.py:269-274`),
+   and an approval row is a custom row; no code change, one regression test.
 4. `scoped_tokens.owned_entry` (legacy token conversion) drops such a row.
 5. `ScopedTokenStore.create` refuses a `copy` or `duplicate` request whose base row has the predicate.
 
@@ -137,12 +137,17 @@ an upstream write in an interactive session. Guards, each with a test:
      `UPSTREAM_DECLARATIONS[operation]` → `The server's declaration of <tool> changed; reload the page and
      review it again.`
   Then one approval row per approval is appended to the token's rows. `auto` upstream tools are untouched.
-- `create` is the one place that decides; the proposal-accept path passes no approvals, so a proposal that
-  somehow carried a gated tool is refused by rule 2.
+- `create` is the one place that decides. The proposal path cannot carry an approval, three times over:
+  `scoped_token_proposals.narrowing_error` returns `WIDENED_MESSAGE` when the final request has any
+  `upstream_approvals` (an approval is a widening, ADR 0250); the organization proposal-accept route passes
+  `upstream_approvals=()` to `_create_and_deliver` explicitly, whatever the browser's body says; and rule 2
+  refuses a gated tool without one.
 - Rejected: reading `is_admin` live when the token is used. Following ADR 0299 ("no live admin lookup"), a
   creator who later loses the role keeps the token until it expires; documented.
 - The organization create route passes `bound["upstream_approvals"]`; the local route passes `()` and
-  refuses a non-empty list with `Upstream tools are for organization servers.` (HTTP 400). The settings
+  refuses a non-empty list with `Upstream tools are for organization servers.` (HTTP 400) at the top of the
+  local `_create_and_deliver`, which covers both local callers. The third caller of `normalise_create_request`
+  (`web/mcp_dispatch.py`, `propose_scoped_token`) needs no change: it gets `[]`. The settings
   audit line of a created token lists each approved `<id>_<tool> (<gate>)`.
 
 ### 3.5 Refusing before forwarding
@@ -150,7 +155,7 @@ an upstream write in an interactive session. Guards, each with a test:
 `_review` forwards before it gates, and `_popup` can write its `auto_accepted` row before a forward that
 then fails. For a token call that no rule covers, the upstream must not be reached at all. A new function
 `gate.check_scoped_upstream_approval(connector: str, tool: str, args: dict) -> None` does nothing unless
-`current_token_scope()` is a live token, the tool is a gated upstream tool (3.4 definition) and
+`current_token_scope()` is a token (a `REVOKED_SCOPE` is refused too: it fails closed), the tool is a gated upstream tool (3.4 definition) and
 `preflight_auto_accept(TOOL_TO_OPERATION[tool], args, tool=tool)[0] != "auto_accept"`; then it calls
 `audit_scoped_refusal(connector, tool, scope, "No approval for this upstream tool in this token")` and raises
 `GateDeniedError("Request denied: this token has no administrator approval for <tool>, or the server's
@@ -191,8 +196,9 @@ reasonably be `review`).
   tool for every call the token makes, with no card. If the operator later changes how the tool is
   declared, the approval stops working.`
 - A ticked gated tool counts as a ticked tool of its upstream (the audiences fieldset appears) and is
-  included in `tools`; the create request also sends `upstream_approvals` with its digest. Duplicate leaves
-  gated tools unticked.
+  included in `tools`; the create request also sends `upstream_approvals` with its digest. Duplicate (`duplicateScopedToken`)
+  ticks only the token's tools that are listed in `SCOPED.tools` or `SCOPED.auto_tools`, so gated tools stay
+  unticked, for an administrator and for anyone else.
 - Local mode and non-administrators never see the fieldset.
 
 ### 3.8 Nothing widens
@@ -215,22 +221,23 @@ runs them.
   that becomes a token-only rule pinned to the operator's declaration. Amends 0164, 0236 and 0285. It
   records: the token-only guard, the digest fields, `review` results released unseen but PII still denied,
   creation-time-only admin check (ADR 0299 precedent), refusal before forwarding, and the rejected
-  alternatives of 3.1. Take the next free number when the PR is opened (rule 6 of the ADR README).
+  alternatives of 3.1. The number is fixed here; if it is taken by the time the PR is opened, the owner renumbers it (rule 6 of the ADR README).
 
 ## 5. Manual steps
 
 **After implementation**
 
-`ma1-real-token-call` (about 15 minutes, on an organization server with an upstream declared):
-1. Open Settings → Scoped tokens → New token as an administrator.
-2. Check that a `popup` tool of the upstream appears in a group named "Upstream tools that change data or
-   release results unseen", unticked, with its effect sentence.
-3. Tick it and one audience, create the token, and put the secret into an n8n credential (see
-   `docs/n8n-node.md`).
-4. Run an n8n workflow that calls the tool. You should see the upstream's result and no card.
-5. Open Admin → Audit log and find the `upstream_forwarded` entry for the call.
-6. Sign in as a non-administrator and check the group is absent.
-Report back: pass/fail for each of steps 2, 4, 5 and 6 on the pull request.
+`ma1-real-token-call` (about 15 minutes; needs a real n8n and a real administrator sign-in, which CI has not):
+1. Sign in to your organization server as an administrator and open `https://<your PrivacyFence address>/settings`,
+   then Scoped tokens → New token. You see the New token form.
+2. Under your upstream's name find "Upstream tools that change data or release results unseen". Tick one
+   `popup` tool and one audience. The tool shows "writes data" and its effect sentence.
+3. Create the token. A dialog shows the secret once; copy it into an n8n credential as described in
+   [docs/n8n-node.md](https://github.com/privacyfence/privacyfence/blob/feature/scoped-token-gated-upstream-tools/docs/n8n-node.md).
+4. Run an n8n workflow whose PrivacyFence node calls that tool. The workflow finishes with the upstream's
+   result and no approval card appears.
+5. In the upstream's own log, find the call with a PrivacyFence claim whose `principal_type` is `n8n_workflow`.
+Report back, as a pass/fail line on the pull request: steps 2, 4 and 5.
 
 ## 6. Risks and open questions
 
@@ -246,8 +253,13 @@ Report back: pass/fail for each of steps 2, 4, 5 and 6 on the pull request.
 - **Stale administrator.** A demoted administrator's tokens keep working until expiry; documented.
 - **Chromium absent here.** Form behaviour is proven by unit tests on the generated HTML and page data; the
   browser tests run in CI.
-- If `normalise_create_request` or `rows_from_section` have other callers than described, the worker stops
-  with `status=blocked` and names them.
+- If a call of `policy_engine.find_matching_rule`, `evaluate` or `preflight` exists outside `gate.py`
+  (`grep -rn "find_matching_rule\|policy_engine.evaluate\|engine.preflight" src/privacyfence`), guard 1 does not
+  cover it: the worker of p1 stops with `status=blocked` and names it.
+- Definition of done: p3 edits `connectors/upstream_mcp.py`, which matches the `connectors/**` row of
+  `verify.dod_conditional`, but `upstream_mcp` has no entry in `scripts/qa_fixture_recorder.py` and no live
+  provider, so no QA fixture is owed. p3 and p4 edit `web/mcp_dispatch.py` and `web/server.py`, whose
+  integration row applies only to `ToolSpec`, `ToolParam` and socket-binding changes; none is made.
 
 ## Implementation manifest
 
@@ -277,13 +289,14 @@ phases:
       - src/privacyfence/policy/scopes.py
       - src/privacyfence/policy/scope_rows.py
       - src/privacyfence/gate.py
-      - src/privacyfence/personal_settings.py
+      - src/privacyfence/policy/store.py
       - src/privacyfence/upstream_mcp_config.py
       - src/privacyfence/upstream_mcp_registry.py
       - tests/unit/policy/test_scopes.py
       - tests/unit/policy/test_scope_rows.py
       - tests/unit/test_gate.py
       - tests/unit/test_personal_settings.py
+      - tests/unit/policy/test_store.py
       - tests/unit/test_upstream_mcp_config.py
       - tests/unit/test_upstream_mcp_registry.py
     brief: |
@@ -303,17 +316,19 @@ phases:
          declared tool of every upstream (all gates); in `unregister_all`, pop every operation `register`
          added (keep a module set `_added_operations` beside `_added`). Update the module docstring.
       4. `gate.py`: in `_rules_in_scope`, for `scope is None` return
-         `[r for r in get_policy_v2_store_rules() if r.predicate not in scopes.TOKEN_ONLY_PREDICATES]`
-         (import `scopes` from `.policy` as the file already imports its policy modules). Add
+         `[r for r in get_policy_v2_store_rules() if r.predicate not in policy_scopes.TOKEN_ONLY_PREDICATES]`
+         (add `from .policy import scopes as policy_scopes` beside the file's other `policy_` imports at `gate.py:177-181`
+         and use `policy_scopes.TOKEN_ONLY_PREDICATES`). Add
          `check_scoped_upstream_approval(connector, tool, args)` exactly as plan 3.5, plus a helper
          `is_gated_upstream_tool(tool) -> bool` (operation in `UPSTREAM_DECLARATIONS` and gate in
          `("review", "popup")`) that p2 also uses; put both next to `audit_scoped_refusal`.
       5. `policy/scope_rows.py`: make `rows_from_section` drop a row whose predicate is in
-         `TOKEN_ONLY_PREDICATES` (and so `rows_from_config`, which calls it; confirm by reading `:237-263`).
-         Do not change `row_from_dict` (tokens use it).
-      6. `personal_settings.py`: in the function that parses imported auto-accept rules (grep
-         `row_from_dict` / `_value_ok`), skip a row with a token-only predicate the same way a custom row is
-         already skipped, with the same warning style.
+         `TOKEN_ONLY_PREDICATES`, and make the v2 branch of `rows_from_config` (`:259-262`, which calls
+         `migrate_v2`) drop any resulting row with such a predicate. `policy/store.py`
+         `compile_rules_from_config` (`:207-215`): skip a rule from `rule_from_dict` whose predicate is in
+         `TOKEN_ONLY_PREDICATES`. Do not change `row_from_dict` (tokens use it).
+      6. `personal_settings.py` needs no change: `plan_import` already skips every custom row
+         (`:269-274`). The test of step 7 is a regression test of that.
       7. Tests (write them first): `tests/unit/policy/test_scopes.py::TestUpstreamApprovedTool`:
          `test_selector_matches_only_the_current_digest`, `test_selector_fails_closed_with_an_empty_table`,
          `test_selector_refuses_a_malformed_value`. `tests/unit/test_gate.py::TestTokenOnlyPredicates`:
@@ -323,14 +338,16 @@ phases:
          `test_a_built_in_tool_with_an_upstream_looking_name_is_not_gated_upstream`.
          `tests/unit/policy/test_scope_rows.py`: `test_rows_from_section_drops_a_token_only_row`.
          `tests/unit/test_personal_settings.py`: `test_import_skips_a_token_only_row`.
+         `tests/unit/policy/test_store.py`: `test_compile_rules_from_config_skips_a_token_only_rule`.
          `tests/unit/test_upstream_mcp_config.py`: `test_declaration_digest_changes_with_each_pinned_field`
-         (one assertion per field) and `test_declaration_digest_ignores_the_tools_name_order`.
+         (one assertion per field) and `test_declaration_digest_ignores_the_order_of_other_tools` (the same tool declared in a file whose
+         other tools are listed in another order gives the same digest).
          `tests/unit/test_upstream_mcp_registry.py`: `test_register_fills_and_unregister_clears_the_declaration_table`.
       8. `tests/conftest.py` already unregisters upstream tools after each test; if
          `UPSTREAM_DECLARATIONS` still holds entries after `unregister_all`, stop with `status=blocked`.
-      Stop with `status=blocked` if a reader of a person's rules exists that plan 3.3 does not list.
+      Stop with `status=blocked` if the grep named in the plan's Risks finds a call of the engine outside `gate.py`.
     acceptance:
-      - python3 -m pytest tests/unit/policy/test_scopes.py tests/unit/policy/test_scope_rows.py tests/unit/test_gate.py tests/unit/test_personal_settings.py tests/unit/test_upstream_mcp_config.py tests/unit/test_upstream_mcp_registry.py -q passes
+      - python3 -m pytest tests/unit/policy/test_scopes.py tests/unit/policy/test_scope_rows.py tests/unit/policy/test_store.py tests/unit/test_gate.py tests/unit/test_personal_settings.py tests/unit/test_upstream_mcp_config.py tests/unit/test_upstream_mcp_registry.py -q passes
       - python3 -m pytest tests/unit/policy/test_scopes.py::TestUpstreamApprovedTool tests/unit/test_gate.py::TestTokenOnlyPredicates -q passes
       - ruff check . passes
       - python3 -m pytest tests/unit/test_systemic_gate_invariants.py -q passes
@@ -340,6 +357,7 @@ phases:
     complexity: M
     touches:
       - src/privacyfence/scoped_tokens.py
+      - src/privacyfence/scoped_token_proposals.py
       - src/privacyfence/web/routes_settings.py
       - tests/unit/test_scoped_tokens.py
       - tests/unit/test_scoped_token_proposals.py
@@ -353,27 +371,33 @@ phases:
          that is not a list of dicts with exactly the string keys `tool` and `digest` returns `None`; the
          result gets `"upstream_approvals"`: the list de-duplicated and sorted by `tool`. (The step-up
          fingerprint is computed from this output, so no other change is needed there.)
-      2. `ScopedTokenStore.create`: add `upstream_approvals: Sequence[Mapping[str, str]] = ()`. Before
-         `_prepare`, apply the three rules of plan 3.4 in that order, using
+      2. `ScopedTokenStore.create`: add `upstream_approvals: Sequence[Mapping[str, str]] = ()`. After the
+         group-membership check (`:680`) and before the audiences check, apply the three rules of plan 3.4 in that order, using
          `gate.is_gated_upstream_tool` (function-local import; the module is import-cycle sensitive) and
          `scopes.UPSTREAM_DECLARATIONS`. After the token's rows are built from `rules`, append one
          `ScopeRow` per approval exactly as plan 3.2 (row id, scope `None`, predicate, value
          `"<operation>@<digest>"`, verbs `{Verb(TOOL_TO_VERB[tool])}`, operations `{operation}`); the
-         operation comes from `TOOL_TO_OPERATION[tool]`, never from the request. Count them within the
-         existing 50-rule limit.
+         operation comes from `TOOL_TO_OPERATION[tool]`, never from the request. The 50-rule limit becomes
+         `len(rules) + len(upstream_approvals) > MAX_RULES_PER_TOKEN` in `_prepare`, with its existing message
+         (pass the approvals count to `_prepare`).
       3. `_check_locked`: a `copy` or `duplicate` base row whose predicate is in `TOKEN_ONLY_PREDICATES`
          raises `ScopedTokenError("That rule cannot be copied.")`.
       4. `_from_json`: after `row_from_dict`, a row whose predicate is in `TOKEN_ONLY_PREDICATES` is kept only
-         when its `operations` equal `{value.split("@")[0]}`; otherwise skip it with a warning (as a
-         row that cannot be read).
+         when `isinstance(row.value, str)`, `row.value.count("@") == 1` and
+         `row.operations == frozenset({row.value.split("@")[0]})`; otherwise skip it with the existing
+         "cannot be read" warning.
       5. `owned_entry`: drop rows whose predicate is in `TOKEN_ONLY_PREDICATES` before building
          `entry["rules"]`.
-      6. `web/routes_settings.py` `_create_and_deliver`: pass `upstream_approvals=bound["upstream_approvals"]`
-         to `store.create`; extend the settings audit line with
+      6. `scoped_token_proposals.py` `narrowing_error`: return `WIDENED_MESSAGE` when
+         `final.get("upstream_approvals")` is non-empty. `web/routes_settings.py` `_create_and_deliver` gains a
+         keyword `upstream_approvals: Sequence[Mapping[str, str]] = ()` and passes it to `store.create`;
+         `scoped_token_create` (New token) passes `bound["upstream_approvals"]`; the proposal-accept route
+         (`scoped_token_create_from_proposal`) passes nothing, so it stays `()`; extend the settings audit line with
          `, upstream tools approved: kh_propose_change (popup), ...` (only when non-empty, sorted by name, the
-         gate from `TOOL_TO_GATE`). The local create route (grep the callers of
-         `normalise_create_request` in this file): a non-empty `upstream_approvals` returns HTTP 400
-         `{"error": "Upstream tools are for organization servers."}` before anything is created.
+         gate from `TOOL_TO_GATE`). The local `_create_and_deliver` (`routes_settings.py` near `:1304`): a non-empty
+         `bound["upstream_approvals"]` returns HTTP 400 `{"error": "Upstream tools are for organization
+         servers."}` before anything is created. `mcp_dispatch.py:581` (`propose_scoped_token`) calls
+         `normalise_create_request` too and needs no change.
       7. Tests (first): `tests/unit/test_scoped_tokens.py::TestUpstreamApprovals`:
          `test_an_administrator_ticking_a_popup_tool_gets_a_row_pinned_to_the_declaration`,
          `test_a_non_administrator_is_refused_a_gated_upstream_tool`,
@@ -383,18 +407,19 @@ phases:
          `test_copy_and_duplicate_of_an_approval_row_are_refused`,
          `test_a_row_naming_another_tool_is_dropped_on_load`,
          `test_owned_entry_drops_a_token_only_row`, `test_an_auto_only_token_is_unchanged`.
-         `tests/unit/test_scoped_token_proposals.py::TestUpstreamTools::test_a_proposal_cannot_carry_approvals`
-         (build the proposal request with `upstream_approvals` non-empty; `create` of the accepted proposal
-         refuses). `tests/unit/web/test_routes_org_settings.py`: `test_create_audit_line_names_each_approved_upstream_tool`
+         `tests/unit/test_scoped_token_proposals.py::TestNarrowing::test_the_review_cannot_add_an_approval`
+         (`narrowing_error` returns `WIDENED_MESSAGE`), and in `tests/unit/web/test_routes_org_settings.py`
+         `test_accepting_a_proposal_ignores_approvals_in_the_body` (the accept route is posted a body with
+         `upstream_approvals`; the created token has none and the response is a refusal). `tests/unit/web/test_routes_org_settings.py`: `test_create_audit_line_names_each_approved_upstream_tool`
          and `test_a_non_administrator_create_with_a_gated_tool_is_400`.
          `tests/unit/web/test_routes_settings.py`: `test_local_create_refuses_upstream_approvals`.
          Use the fixtures the neighbouring tests use (`_create`, `_store`, `held_audiences`); register a
          popup upstream tool in the test with `upstream_mcp_registry.register(parse_upstreams(...))`.
-      Stop with `status=blocked` if `create` is also called from a path not named here that passes
-      `is_admin`.
+      Stop with `status=blocked` if `create` is called from a path not named here that passes `is_admin`.
     acceptance:
       - python3 -m pytest tests/unit/test_scoped_tokens.py::TestUpstreamApprovals -q passes
-      - python3 -m pytest tests/unit/test_scoped_token_proposals.py -q passes
+      - python3 -m pytest tests/unit/test_scoped_token_proposals.py::TestNarrowing -q passes
+      - python3 -m pytest tests/unit/test_scoped_token_proposals.py -k "upstream_tool_is_refused" -q passes
       - python3 -m pytest tests/unit/web/test_routes_org_settings.py tests/unit/web/test_routes_settings.py tests/unit/test_scoped_tokens.py -q passes
       - ruff check . passes
   - id: p3-refuse-before-forwarding
@@ -455,8 +480,9 @@ phases:
          tick state in `ui.stGated` (a dict keyed by tool name), clicking toggles it, and a ticked gated tool
          also sets `ui.stTools[name]`. `scopedUpstreamsWithTools` counts a ticked gated tool so the audiences
          fieldset appears. The create post gains `upstream_approvals: [{tool, digest}]` for each ticked gated
-         tool, sorted by tool. In the Duplicate handler (it sets `ui.stAudiences`, near line 1426) skip any
-         tool name found in an upstream's `gated_tools`. Show each token's `approved_upstream_tools` in the
+         tool, sorted by tool. In `duplicateScopedToken` (`settings_window_html.py:1413-1428`) tick only the token's tools that are
+         in `SCOPED.tools` or `SCOPED.auto_tools`. `scopedUpstreamsWithTools` (`:1463-1466`) also returns an
+         upstream when any of its `gated_tools` names is ticked in `ui.stGated`. Show each token's `approved_upstream_tools` in the
          token list line as `<tool> (writes data)` or `<tool> (results unseen)`.
       3. Tests (first): `tests/unit/web/test_server.py::TestScopedTokenPageData`:
          `test_an_administrator_page_lists_gated_tools_with_effect_and_digest`,
@@ -485,32 +511,36 @@ phases:
       Read first: `tests/integration/test_upstream_mcp_org.py` (the `stack` fixture) and sections 3.4 to 3.6
       of docs/1121/plan.md.
       1. In `stack`, declare one more tool `ref_list_proposals` (`gate: review`, `verb: read`) beside
-         `propose_change`; the reference server needs a `list_proposals` tool returning the stored proposals
-         as structured content with one proposal text containing `contact: ann@example.com` for the PII case.
-         Add the tool and its unit test in `tests/unit/test_upstream_mcp_reference_server.py`
-         (`test_list_proposals_returns_proposals_for_the_callers_audiences`).
-      2. Add a fixture `token_stack` that, from `stack`, creates an administrator-made scoped token with
-         `ScopedTokenStore.create` (principal `Principal(id="u1", email="ann@example.com", email_verified=True,
-         is_admin=True)`, `tools=["ref_propose_change", "ref_list_proposals", "ref_search"]`,
-         `upstream_approvals` for `ref_propose_change` only, digest from
-         `scopes.UPSTREAM_DECLARATIONS["ref.propose_change"]`, `upstream_audiences={"ref": ["general"]}`,
-         `held_audiences` from `upstream_mcp_runtime.held_audiences`), registers the store with
-         `scoped_tokens.set_store`, and yields the secret; reset with `set_store(None)`. Copy the store set-up
-         from `tests/integration/test_n8n_node_contract.py:99-126`; the `McpDispatcher` and `WebServer` in
-         `stack` must be given `scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=True)`
-         (check the `OrgAuth` wiring in `web/server.py:1497-1525`).
+         `propose_change`. In `scripts/upstream_mcp_reference_server.py` add a module-level
+         `PROPOSALS = [{"id": "p1", "audience": "general", "text": "contact: bob@example.org"}]`, the
+         `list_tools` entry `tool("list_proposals", "List change proposals.", [])`, and a handler that returns
+         `CallToolResult(content=[TextContent(type="text", text="1 proposal")], structured_content={"proposals": [...]})`
+         with the proposals filtered by the caller's audiences through the same `allowed()` the other tools
+         use (the personal data is only in the structured part, so the test exercises `_scanned`). Add
+         `test_list_proposals_returns_proposals_for_the_callers_audiences` in
+         `tests/unit/test_upstream_mcp_reference_server.py` and update the two assertions that count the tools:
+         `test_upstream_mcp_reference_server.py:131-133` (now four names) and `test_upstream_mcp_org.py:180-182`
+         (now `("ref", "ready", 4, [])`).
+      2. Add a fixture `token_stack` over `stack` that creates tokens in the store the running server already
+         uses (`scoped_tokens.get_store()`; `ScopedTokenVerifier` reads it on every request, `mcp_auth.py:229-246`):
+         `store.create(Principal(id="u1", email="ann@example.com", email_verified=True, is_admin=True), label=...,
+         days=30, rules=[], tools=[...], policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
+         upstream_audiences={"ref": ["general"]}, held_audiences=upstream_mcp_runtime.held_audiences(principal, True),
+         principal_email_verified=True, is_admin=True, upstream_approvals=[...])`. The token owner needs
+         `principal_email_verified=True`, or the claim has no audiences and no document is returned. The
+         fixture yields a function `make_token(tools, approved)` returning the secret. Do not pass
+         `scoped_token_policy` to `WebServer` (it has no such parameter).
       3. Tests, each driving the `mcp` client with the token as bearer:
          `test_a_token_with_a_ticked_popup_tool_can_call_it_unattended` (result returned, upstream saw one
-         more POST, no pending approval); `test_the_same_token_cannot_call_an_unticked_gated_tool` (a second
-         token with only `ref_search` and `ref_list_proposals` calling `ref_propose_change` gets
-         `this token may not call`; a token that lists the tool but has no approval is refused by
-         `create`); `test_each_call_writes_an_upstream_forwarded_entry_with_the_token` (read the audit log
+         more POST, no pending approval); `test_a_token_without_the_tool_cannot_call_it` (a second token with
+         `tools=["ref_search"]` calling `ref_propose_change` gets `this token may not call`) and
+         `test_creating_a_token_with_a_gated_tool_and_no_approval_is_refused` (`create` raises
+         `ScopedTokenError`); `test_each_call_writes_an_upstream_forwarded_entry_with_the_token` (read the audit log
          rows: `decision == "upstream_forwarded"`, `claim_principal_type == "n8n_workflow"`, `claim_jti`
          non-empty, `claim_req` non-empty, `metadata["token_id"]`, `metadata["gate"] == "popup"`);
-         `test_a_changed_declaration_voids_the_approval` (after the token exists, call
-         `upstream_mcp_registry.register` again with a different `effect` after `unregister_all`, or patch
-         `scopes.UPSTREAM_DECLARATIONS["ref.propose_change"]`; the call is refused and the upstream's POST
-         count is unchanged); `test_a_review_result_with_personal_data_is_still_denied_for_a_token`
+         `test_a_changed_declaration_voids_the_approval` (after the token exists,
+         `monkeypatch.setitem(scopes.UPSTREAM_DECLARATIONS, "ref.propose_change", "0" * 32)`; the call is
+         refused with `no administrator approval` and the upstream's POST count is unchanged); `test_a_review_result_with_personal_data_is_still_denied_for_a_token`
          (token with an approval for `ref_list_proposals`; the call is refused and the review result is not
          returned); `test_an_auto_only_token_behaves_as_before` (token with `ref_search` only returns the
          general documents).
@@ -540,8 +570,8 @@ phases:
          `Amends 0285` lines; Context (section 1 and 2 of the plan, without path:line); Decision (3.1 to
          3.8, one bullet each); Alternatives considered (the four rejected in 3.1, the schema digest in 3.2,
          refusing `review` in 3.6, live admin lookup in 3.4); Consequences (the Risks of the plan);
-         Verification (the named tests of p1 to p5). Link no plan document. If 0300 is taken when you
-         start, use the next free number and keep the file name pattern. Add the row to
+         Verification (the named tests of p1 to p5). Link no plan document. If a file
+         numbered 0300 already exists when you start, stop with `status=blocked`. Add the row to
          `docs/adr/README.md` after the 0299 row; add one `Amended by` line to the Status of ADR 0164, 0236
          and 0285 (the only permitted edit of an accepted ADR).
       2. `docs/upstream-mcp.md`: replace the whole "**Known limitation.**" paragraph with a subsection
@@ -553,8 +583,8 @@ phases:
          unseen but personal data still blocks them; an AI client cannot propose such a token; an
          administrator who loses the role keeps the token until it expires; the audit entries to look for
          (`upstream_forwarded` with `metadata.gate`, and `auto_accepted` whose rule is the approval row).
-         Update the sentence in "Operators" bullets and the "Group membership" cross-reference only if they
-         contradict this. Link ADR 0300.
+         In "## Reference upstream" add `list_proposals` to the list of tools the reference server serves, and
+         in the operator-file example there. Link ADR 0300.
       3. `scripts/generate_tools_reference.py`: in the "## Gates" text add one paragraph: `Tools of an
          upstream MCP server (declared by an operator, see [Upstream MCP servers](upstream-mcp.md)) are
          not listed here. Their gate is the one the operator declared, and an administrator can approve a
