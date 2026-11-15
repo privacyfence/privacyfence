@@ -6,6 +6,7 @@ Accepted — 2026-11-14. Relates to [ADR 0164](0164-scoped-tokens-are-named-expi
 and [ADR 0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md).
 Implemented: `src/privacyfence/connectors/group_membership.py`, `group_membership.py`, `scoped_tokens.py`,
 the Admin page's "Group membership" section. Issue [#1103](https://github.com/privacyfence/privacyfence/issues/1103).
+Amended by [ADR 0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md), 2026-11-15.
 
 ## Context
 

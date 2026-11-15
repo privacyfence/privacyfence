@@ -1201,9 +1201,25 @@ def _start_org_web_server(
     oidc_clients = oidc_provider.clients_from_env()
     oidc = None
     if oidc_clients:
+        for client in oidc_clients.values():
+            if not client.groups:
+                continue
+            stem = client.client_id.upper().replace("-", "_")
+            if not upstream_mcp_runtime.configured():
+                raise org_mode.ConfigurationError(
+                    f"PRIVACYFENCE_OIDC_CLIENT_{stem}_GROUPS needs an upstream MCP declaration: without one "
+                    "the groups are always empty and the app would remove everyone from their teams."
+                )
+            if not client.groups_allowed:
+                logger.warning(
+                    "OIDC client %s receives every mapped group; set PRIVACYFENCE_OIDC_CLIENT_%s_GROUPS_ALLOWED "
+                    "to send only the groups the app maps.",
+                    client.client_id, stem,
+                )
         oidc = oidc_provider.OidcProvider(
             issuer=server_config.issuer_url.rstrip("/") + "/oidc",
             clients=oidc_clients,
+            member_groups=upstream_mcp_runtime.approved_groups_for_email,
             key=oidc_provider.load_or_create_signing_key(org_dir() / "oidc_signing_key.pem"),
         )
         logger.info("OIDC provider for %d app(s) at %s", len(oidc_clients), oidc.issuer)

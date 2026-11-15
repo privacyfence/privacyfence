@@ -107,10 +107,20 @@ def connectors_for_principal() -> list[UpstreamMcpConnector]:
 def audiences_for_email(upstream_id: str, email: str, verified: bool) -> frozenset[str]:
     """The audiences ``email`` holds on ``upstream_id`` now; empty unless the email is verified."""
     assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
-    address = email.strip().lower()
+    address = group_membership.lookup_email(email)
     if not verified or not address:
         return frozenset()
     return _runtime.resolver.audiences_for(address, _runtime.groups.group_audiences(upstream_id))
+
+
+def approved_groups_for_email(email: str, verified: bool) -> tuple[str, ...]:
+    """The groups ``email`` holds with every restricted audience approved; empty unless verified and configured."""
+    if _runtime is None or not verified or not email:
+        return ()
+    address = group_membership.lookup_email(email)
+    if address is None:
+        return ()
+    return tuple(sorted(_runtime.resolver.groups_for(address, all_group_audiences())))
 
 
 def all_group_audiences() -> dict[str, frozenset[str]]:
@@ -165,9 +175,12 @@ def caller_for(upstream: UpstreamServer) -> IdentityCaller:
         agent = current_agent()
         if agent.is_attested():
             act["agent"] = agent.id
+        email = principal.email if principal.email_verified else None
+        if email and upstream.email_for_visibility:
+            email = group_membership.lookup_email(email)
         caller = IdentityCaller(
             sub=principal.id, principal_type=principal_type,
-            email=principal.email if principal.email_verified else None,
+            email=email,
             audiences=tuple(sorted(audiences)), tools=_native_tool_names(upstream, entry, None),
             act=act or None,
         )
