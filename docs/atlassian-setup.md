@@ -144,7 +144,7 @@ for anything new.
 | Item | Value |
 |---|---|
 | Assets scopes (granular, under the Jira API) | `read:cmdb-schema:jira`, `read:cmdb-type:jira`, `read:cmdb-attribute:jira`, `read:cmdb-object:jira` |
-| Where it is switched on | **Admin → Features → Jira Assets**: a switch and an optional workspace id. The bundle flags `--atlassian-assets` and `--atlassian-assets-workspace-id` are refused; they moved to the Admin page. |
+| Where it is switched on | **Admin → Features → Jira Assets**: a switch and an optional workspace id. |
 | Workspace id setting | `connectors.assets.workspace_id` in a person's own settings, which wins over the Admin page's |
 
 1. In the [developer console](https://developer.atlassian.com/console/myapps/), open the app, go to

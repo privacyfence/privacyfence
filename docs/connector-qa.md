@@ -411,11 +411,7 @@ browser on the QA server's `/connect` page, and `scripts/qa_runner_tokens.py` co
 [Connecting the QA accounts](#connecting-the-qa-accounts)). Reconnecting an account there is how a
 token is minted again.
 
-`scripts/qa_authenticate_connectors.py` and the per-connector `--<connector>-oauth` flags remain for
-local mode on a developer's own machine, where the recorder is run with the checkout's own
-`credentials/` folder. The runner does not use them, and they go away with local mode in 8.
-Telegram's local sign-in is `privacyfence-app --telegram-setup` (see
-[`telegram-setup.md`](telegram-setup.md)). The token files are named in `daemon_main.TOKEN_FILES`
+The token files are named in `daemon_main.TOKEN_FILES`
 (`token.json` for Gmail, `<connector>_token.json` for the others, `atlassian_token.json` shared by
 Jira and Confluence, `telegram.session`).
 
@@ -542,8 +538,7 @@ GitHub-hosted runner, not on this host.
 
 ### Organization mode and the `qa-live` principal
 
-The recorder runs in organization mode as the fixed principal `qa-live`, so it needs no change when
-local mode is removed, and it tests the apps most people use. `_qa_context()` enters that principal's
+The recorder runs in organization mode as the fixed principal `qa-live`, and it tests the apps most people use. `_qa_context()` enters that principal's
 scope once, before any connector is built, and every token path then resolves to
 `users/qa-live/credentials/` of the checkout, in the same file formats as before. `_qa_org_config()`
 builds the connector configuration the way an organization server does, offering every service:
@@ -561,8 +556,8 @@ Google sign-in client) in that step's environment and nowhere else. The last ste
 always runs, deletes `src/privacyfence/_builtin_apps.py`, because the runner is not ephemeral. Only
 the client ID and secret are used: refreshing a token needs no redirect.
 
-Local-mode loopback sign-in, and an organization's own app unless the optional bundle carries one,
-are no longer live-tested. Unit tests cover both.
+An organization's own app, unless the optional bundle carries one, is not live-tested. Unit tests
+cover it.
 
 ### Connecting the QA accounts
 
