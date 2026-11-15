@@ -314,6 +314,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p20b-docs-org-guide
 
 - scope: Orchestrator-approved extra: README.md, website/canonical-description.md and website/index.html description sentences rewritten for the Docker-only organization product (the three texts stay verbatim-identical; p18a/p20 own those files). org-guide systemd tests, the tests.yml systemd-analyze check and the guide's systemd/pip sections were removed as the brief says.
+- gate: Extra fix merged after this phase (not a manifest phase): tests/integration/test_org_ubuntu_release_smoke.py imported the deleted tests/packaged_policy_probe.py, so it failed at collection with PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS=1 (set by the org-mode-smoke CI job). A trimmed organization-only helper was restored, and the smoke test now writes data_format.json into its data directory because startup refuses an unmarked one; 17 smoke tests pass.
 
 ## p24a-pypi-workflow
 
