@@ -5,7 +5,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-build-permissions
 
-- pending
+- retry: First attempt stopped at rule 0 because the tld plugin is not installed in worker containers; the orchestrator told the worker to skip rule 0 and run ruff and pytest directly. The orchestrator ran tld roles required: none required.
+- review: Diff is the four planned lines only.
 
 ## p2-release-check-script
 
