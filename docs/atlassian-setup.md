@@ -10,9 +10,7 @@ and each person approves it in their browser from PrivacyFence; there is nothing
 Do not mark the built-in PrivacyFence app as trusted or pre-approved: that trust would extend to
 every PrivacyFence server and to anyone using the public app. To trust an app, register your own.
 
-Your own app is a signed connector config uploaded on **Admin → Services** on an organization
-server, and an `atlassian` section in the bundle on a desktop install (desktop installs have no
-built-in app; see [moving to organization mode](moving-to-organization-mode.md)).
+Your own app is a signed connector config uploaded on **Admin → Services**.
 
 PrivacyFence supports Atlassian Cloud (`*.atlassian.net` sites) only, not Jira or Confluence Data
 Center or Server.
@@ -21,20 +19,14 @@ Center or Server.
 
 - An Atlassian account that can create apps in the
   [developer console](https://developer.atlassian.com/console/myapps/).
-- Python 3 to run `scripts/sign_connector_config.py` (organization server) or
-  `scripts/build_org_bundle.py` (desktop install), or a browser for the offline signing page.
-- Which deployment you are building for. An Atlassian app has a single callback URL, so desktop
-  installs and an organization server each need **their own app** (and their own connector config or bundle). If you
-  run only one kind, you need only one app.
+- Python 3 to run `scripts/sign_connector_config.py`, or a browser for the offline signing page.
 
 ## Register the app
 
 1. In the [developer console](https://developer.atlassian.com/console/myapps/), **Create → OAuth
-   2.0 integration**. Name it (for example `PrivacyFence`, or `PrivacyFence (server)` for the
-   organization server's app) and click **Create**.
-2. **Authorization → OAuth 2.0 (3LO) → Add/Configure:** set the **Callback URL** to the local
-   redirect (desktop installs' app) or the org redirect (the server's app) from the
-   [values table](#values).
+   2.0 integration**. Name it (for example `PrivacyFence`) and click **Create**.
+2. **Authorization → OAuth 2.0 (3LO) → Add/Configure:** set the **Callback URL** to the
+   redirect from the [values table](#values).
 3. **Permissions:** add the **Jira API** and **Confluence API**, then their scopes from the values
    table. The two products need different kinds of scope:
    - **Jira: classic scopes.** Jira works with them, and Atlassian recommends classic scopes for
@@ -50,8 +42,7 @@ Center or Server.
 5. **Distribution → Edit:** set **Distribution status** to **Sharing**. A new app is in
    development, and Atlassian lets only the account that created it sign in; everyone else gets
    *"You don't have access to this app"*. Sharing is required, even for an app used only inside
-   your organization; it publishes nothing, and nobody can sign in without the client ID from your
-   bundle. Atlassian asks for:
+   your organization; it publishes nothing, and nobody can sign in without the client ID. Atlassian asks for:
    - **Vendor name, privacy policy and support contact:** your organization's own. Your
      organization runs the app and is responsible for the data it handles; PrivacyFence's privacy
      policy covers only its website and download service, not the software.
@@ -59,22 +50,20 @@ Center or Server.
      it uses the Personal Data Reporting API. PrivacyFence caches the account ids and display
      names it shows, and reports them (see [Personal data reporting](#personal-data-reporting)).
 
-   Sharing takes effect at once and changes neither the client ID nor the secret, so a bundle built
-   before it keeps working. If you run both kinds of deployment, share both apps.
+   Sharing takes effect at once and changes neither the client ID nor the secret, so a connector config signed
+   before it keeps working.
 
-Changing an app's scopes later does not change existing tokens: each user must **Reconnect…** Jira
+Changing an app's scopes later does not change existing tokens: each user must **Reconnect** Jira
 or Confluence to get a token with the new scopes.
 
 ## Values
 
 | Item | Value |
 |---|---|
-| Local redirect (desktop installs' app) | `http://127.0.0.1:53684/callback` — exactly this; Atlassian matches the string literally, so `localhost` does not match |
-| Org redirect (organization server's app) | `https://<server>/oauth/callback/atlassian`, with `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`). The same URL serves both Jira and Confluence. |
+| Redirect | `https://<server>/oauth/callback/atlassian`, with `<server>` your server's public address (`PRIVACYFENCE_ISSUER_URL`). The same URL serves both Jira and Confluence. |
 | Jira scopes (classic) | `read:jira-work`, `write:jira-work`, `read:jira-user` |
 | Confluence scopes (granular) | `read:space:confluence`, `read:page:confluence`, `write:page:confluence`, `read:content:confluence`, `read:content-details:confluence`, `write:content:confluence`, `read:attachment:confluence` |
 | Added automatically | `offline_access` |
-| Bundle flags | `--atlassian-client-id <Client ID>` and `--atlassian-client-secret <Secret>` (both required together) |
 
 What the Confluence scopes gate: `read:content-details:confluence` covers CQL and text search and
 content details; `write:content:confluence` is needed with `write:page:confluence` to create pages;
@@ -144,19 +133,6 @@ fingerprint). **Remove our own app** on the row goes back to the built-in app. E
 everyone who connected Jira or Confluence sign in again. The signing tools and the serial rule are
 described in [org-mode-setup-guide.md](org-mode-setup-guide.md).
 
-On a desktop install, put them in the bundle:
-
-```bash
-python3 scripts/build_org_bundle.py \
-  --atlassian-client-id abcdef01234567890 \
-  --atlassian-client-secret abcdef0123456789abcdef0123456789 \
-  -o org_bundle.json --merge
-```
-
-`--merge` adds Atlassian to an existing bundle; drop it if this is the first service in the bundle.
-Install it on **Admin → Organization configuration**
-([connecting-a-service.md](connecting-a-service.md)).
-
 ## Jira Assets
 
 The optional **Jira Assets** connector (read-only) lets an agent browse Assets schemas, search
@@ -180,34 +156,30 @@ for anything new.
    `connectors.assets.workspace_id`. PrivacyFence cannot look it up itself: Atlassian answers that
    lookup only for the Jira Service Management scope `read:servicedesk-request`, which the developer
    console does not offer every app, and asking for a scope the app lacks fails the whole sign-in.
-3. Switch Assets on: turn on **Jira Assets** under **Admin → Features** for everyone, or, on a
-   desktop install, enable it in **Settings → Connectors**. An explicit `connectors.assets.enabled`
+3. Switch Assets on: turn on **Jira Assets** under **Admin → Features** for everyone. An explicit `connectors.assets.enabled`
    setting wins over the Admin page's switch.
-4. Authenticate again (**Authenticate…** on Jira Assets, or **Reconnect…**) so Atlassian shows the
+4. Reconnect so Atlassian shows the
    extra consent. Tokens made before Assets was on do not have the permissions.
-   In org mode, Assets has no sign-in of its own: it uses the Jira and Confluence sign-in on
+   Assets has no sign-in of its own: it uses the Jira and Confluence sign-in on
    `/connect`, where a **Jira Assets** row says whether that sign-in has the Assets permissions and
    offers **Reconnect** when it does not.
 
 ## Users connect
 
-Users click **Authenticate…** next to Jira or Confluence (desktop install, after the bundle is installed) or
-**Connect** (organization server), then sign in and click **Accept** on Atlassian's page. Either
+Users click **Connect** next to Jira or Confluence, then sign in and click **Accept** on Atlassian's page. Either
 button connects both products. The shared flow is described in
 [connecting-a-service.md](connecting-a-service.md). Atlassian-specific points:
 
-- **More than one site:** a desktop install asks which site to connect; an organization server
-  connects the first site the account can reach. A user who needs a different site on an
-  organization server needs an Atlassian account limited to that site.
+- **More than one site:** PrivacyFence connects the first site the account can reach. A user who
+  needs a different site needs an Atlassian account limited to that site.
 - The token refreshes itself; users sign in again only when it is revoked or the app's scopes
   change.
 
 ## Troubleshooting
 
 **"The app's callback URL is invalid" during sign-in** — the app's Callback URL does not match the
-deployment it is used for: exactly `http://127.0.0.1:53684/callback` for desktop installs, or
-`https://<server>/oauth/callback/atlassian` for an organization server. An app holds only one, so
-check that the connector config or bundle contains the right app's credentials.
+server: exactly `https://<server>/oauth/callback/atlassian`. Check that the connector config
+contains the right app's credentials.
 
 **"You don't have access to this app. This application is in development"** on Atlassian's page —
 the app is not shared, so only its creator can sign in. Set its **Distribution status** to
@@ -223,14 +195,14 @@ Confluence API, with their scopes, are on the app.
 
 **Confluence connects, but space or page calls fail with 401 "scope does not match"** — the
 Confluence scopes were added as classic scopes. Add the granular ones listed above, then have users
-**Reconnect…**.
+**Reconnect**.
 
 **Jira fails with 401 "scope does not match"** — the Jira scopes were added as granular scopes.
-Switch Jira back to the classic scopes listed above, then have users **Reconnect…**.
+Switch Jira back to the classic scopes listed above, then have users **Reconnect**.
 
 **`confluence_list_attachments` or `confluence_download_attachment` fail with 401** — the
 `read:attachment:confluence` scope is missing from the app, or the user's token predates it. Add
-the scope if needed, then have the user **Reconnect…**.
+the scope if needed, then have the user **Reconnect**.
 
 **Page authors show raw account ids, mentions show "unknown user" (Confluence) or Jira's own label, or a write fails with "Unknown Atlassian account id"** — the site
 has no Jira product, or the "Browse users and groups" global permission was removed for the user.
@@ -238,12 +210,13 @@ has no Jira product, or the "Browse users and groups" global permission was remo
 **403 on specific projects or spaces** — the user's Atlassian account has no access to that project
 or space. Check permissions in Jira or Confluence.
 
-**Wrong site connected** — on a desktop install, **Reconnect…** and pick the other site.
+**Wrong site connected** — PrivacyFence connects the first site the account can reach; see
+[Users connect](#users-connect).
 
 **Jira Assets says "needs an extra Atlassian permission. Use Authenticate… on Jira Assets in
 PrivacyFence Settings."** — the saved sign-in was made before Assets was switched on, or without
 the four Assets scopes. Check that Assets is on, that the app has the scopes, then use
-**Authenticate…** on Jira Assets.
+**Reconnect** on the Jira Assets row.
 
 **Jira Assets says "This Atlassian site has no Assets workspace (Jira Service Management Assets is
 not enabled)."** — the connected site has no Assets workspace. Enable Assets on a Jira Service

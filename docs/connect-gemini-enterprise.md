@@ -2,11 +2,11 @@
 
 Gemini Enterprise, Google's assistant for businesses, connects to PrivacyFence as a **custom MCP
 server data store**, in organization mode only. Gemini Enterprise calls MCP servers from Google's
-servers, not from your computer, so it needs a PrivacyFence it can reach over public HTTPS. A local
-install listens on `localhost` only, on purpose, so Gemini Enterprise cannot use it.
+servers, not from your computer, so it needs a PrivacyFence it can reach over public HTTPS. A single-user
+Docker install listens on `localhost` only, on purpose, so Gemini Enterprise cannot use it.
 
 Which deployment you have is explained in
-[Local mode and organization mode](how-it-works.md#local-mode-and-organization-mode).
+[Single-user and organization deployments](how-it-works.md#single-user-and-organization-deployments).
 
 Unlike claude.ai and ChatGPT, Gemini Enterprise does not register itself with PrivacyFence. An
 administrator registers it once, then creates the data store in the Google Cloud console. Each

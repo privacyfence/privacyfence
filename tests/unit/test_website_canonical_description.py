@@ -47,7 +47,7 @@ def test_description_appears_verbatim(target):
 
 
 def test_readme_opens_with_it():
-    # The description is what a reader of the repository (and of PyPI's project page, which
+    # The description is what a reader of the repository (and of any listing that
     # renders README.md) sees first, before any other section.
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     first_section = readme.split("\n## ", 1)[0]

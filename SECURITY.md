@@ -15,12 +15,12 @@ Please include:
   third party);
 - steps to reproduce or a proof of concept;
 - the affected version (shown in the app and its logs) or commit;
-- the deployment mode (local or organization) and any connector or setting involved;
+- the deployment (organization server or single-user Docker image) and any connector or setting involved;
 - whether you believe the issue is already public or exploited;
 - whether you would like to be credited.
 
-**In scope:** the code in this repository (the daemon, the web UI, the companion app, the `.mcpb`
-shim, organization mode) and its packaging and release pipeline. **Out of scope** (as `NOTICE`
+**In scope:** the code in this repository (the server, the web UI, organization mode and the
+single-user Docker image) and its packaging and release pipeline. **Out of scope** (as `NOTICE`
 sets out): content AI models generate while using PrivacyFence, data returned by connected
 services, and vulnerabilities in those services themselves (Google, Slack, Salesforce, Atlassian,
 Telegram, Grist, Peek); report those to the vendor.

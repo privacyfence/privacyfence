@@ -1,22 +1,12 @@
 # Connect claude.ai
 
-claude.ai works with **organization mode only**. claude.ai connects to MCP servers from
+claude.ai works with **organization deployments only**. claude.ai connects to MCP servers from
 Anthropic's servers, not from your computer, so it needs a PrivacyFence it can reach over public
-HTTPS. A local install listens on `localhost` only and is unreachable from outside your computer,
-on purpose. Which deployment you have is explained in
-[Local mode and organization mode](how-it-works.md#local-mode-and-organization-mode).
-
-## Local mode
-
-Not available. On your own computer, use [Claude Desktop](connect-claude-desktop.md) or
-[Claude Code](connect-claude-code.md) instead: both work with a local install on every platform
-they run on.
-
-| Platform | claude.ai with a local install |
-|---|---|
-| macOS | Not available; use Claude Desktop or Claude Code. |
-| Windows | Not available; use Claude Desktop or Claude Code. |
-| Linux | Not available; use Claude Code. |
+HTTPS. A single-user Docker install on your computer listens on `localhost` only and is unreachable
+from outside it, on purpose. Which deployment you have is explained in
+[Single-user and organization deployments](how-it-works.md#single-user-and-organization-deployments).
+On your own computer, use [Claude Desktop](connect-claude-desktop.md) or
+[Claude Code](connect-claude-code.md) instead.
 
 ## Organization mode
 
@@ -42,13 +32,12 @@ see [A cloud routine with a scoped token](connect-claude-code.md#a-cloud-routine
 
 ## Files
 
-A local path means nothing to the server, and claude.ai does not run PrivacyFence's Claude Desktop
-extension. Files travel through one-time links instead
+A local path means nothing to the server. Files travel through one-time links instead
 ([ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)):
 
 - **Upload** (for example `drive_upload_file`, or an email attachment): claude.ai calls
   `privacyfence_create_upload_slot`, sends the file to the returned URL with an HTTP `PUT`, and
-  passes the returned `upload_id` to the tool.
+  passes the returned `upload:` reference to the tool.
 - **Download** (for example `drive_download_file`): a file of up to about 75 KB comes back in the
   tool result; a larger one becomes a short-lived, one-time link. claude.ai truncates a tool
   result over about 150,000 characters, which is why the default inline limit is well below that

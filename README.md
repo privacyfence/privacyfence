@@ -10,7 +10,7 @@ PrivacyFence enforces, independently of the AI, what an assistant may see and do
 
 PrivacyFence runs on an employee’s own computer (macOS, Windows, or Linux) or as a central deployment on infrastructure the organization controls, allowing web clients such as claude.ai to connect as well. Connector credentials stay with PrivacyFence, never with the AI client, and no data passes through a PrivacyFence-operated server. When an organization server uses PrivacyFence’s built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead.
 
-**Website:** [privacyfence.eu](https://privacyfence.eu/) · **Download:** [privacyfence.eu/download](https://privacyfence.eu/download/) · **Docs:** [privacyfence.eu/docs](https://privacyfence.eu/docs/)
+**Website:** [privacyfence.eu](https://privacyfence.eu/) · **Install:** [privacyfence.eu/install](https://privacyfence.eu/install/) · **Docs:** [privacyfence.eu/docs](https://privacyfence.eu/docs/)
 
 ## Why
 
@@ -30,8 +30,8 @@ your systems: the AI asks, PrivacyFence decides, and you see what is at stake be
   channel, a Jira project) let routine requests run without a card.
 - **An audit log** of every accepted, denied and automatically approved request, chained so that
   an edit made without its key is detected.
-- **Credentials stay with PrivacyFence.** On a packaged install it runs under its own service
-  account, so the AI client, which runs as you, cannot read them or approve its own request.
+- **Credentials stay with PrivacyFence.** The server runs in its own container, and an
+  approval needs your passkey, which the AI client does not hold, so the client cannot approve its own request.
 - **A defined set of connectors**, each tool with a gate fixed in code. PrivacyFence is not a
   generic proxy for arbitrary MCP tools.
 
@@ -39,26 +39,22 @@ your systems: the AI asks, PrivacyFence decides, and you see what is at stake be
 
 ## How it works
 
-![How a request travels through PrivacyFence: an AI client (Claude Desktop through the extension, Claude Code over HTTP, or claude.ai through an organization deployment) calls PrivacyFence over MCP; PrivacyFence applies policy, the local PII check, human approval and audit, then calls the service with credentials that stay inside it](https://raw.githubusercontent.com/privacyfence/privacyfence/main/website/assets/architecture.svg)
+![How a request travels through PrivacyFence: an AI client (Claude Desktop or Claude Code, or claude.ai, ChatGPT and Gemini Enterprise through a public address) calls PrivacyFence over MCP; PrivacyFence applies policy, the local PII check, human approval and audit, then calls the service with credentials that stay inside it](https://raw.githubusercontent.com/privacyfence/privacyfence/main/website/assets/architecture.svg)
 
-Claude Desktop connects through the PrivacyFence extension (`PrivacyFence.mcpb`); Claude Code and
-other clients that speak Streamable HTTP connect to the local `/mcp` endpoint directly; in an
-organization deployment, clients such as claude.ai, ChatGPT (Developer Mode) and Gemini Enterprise
-sign in with OAuth through the organization's identity provider. [How it works](https://privacyfence.eu/how-it-works/) walks one read and one
+Every client connects to the server's `/mcp` endpoint as a custom connector and signs in with OAuth:
+through the organization's identity provider on an organization deployment, or with your passkey on a
+single-user install. Clients such as claude.ai, ChatGPT (Developer Mode) and Gemini Enterprise need
+an organization deployment on a public HTTPS address. [How it works](https://privacyfence.eu/how-it-works/) walks one read and one
 write through, card by card.
 
 ## Platforms
 
 | Install | Runs on |
 |---|---|
-| macOS (`.dmg`) | macOS 13 or newer, Apple silicon |
-| Windows (`-setup.exe`) | Windows 10 / Windows Server 2016 or newer, x64 |
-| Linux (`.deb`) | Ubuntu 24.04, Debian 13 or newer, amd64 |
-| Organization deployment | A Linux server with Python 3.11.5 or newer and systemd (`pip install privacyfence`) |
+| Organization deployment, or single-user mode on one computer | Docker Engine 24 or newer with the Compose plugin 2.24 or newer (the image is `linux/amd64` and `linux/arm64`) |
 
-Tested with Claude Desktop and Claude Code on every install, with ChatGPT desktop on macOS, and
-with claude.ai, ChatGPT (Developer Mode) and Gemini Enterprise through an organization deployment; any
-MCP-compatible client can connect.
+Tested with Claude Desktop and Claude Code, and with claude.ai, ChatGPT (Developer Mode) and Gemini
+Enterprise through an organization deployment; any MCP-compatible client can connect.
 
 ## Connectors
 
@@ -85,12 +81,11 @@ tool and its gate.
 
 ## Quick start
 
-1. Download the installer for your platform from [privacyfence.eu/download](https://privacyfence.eu/download/) and run it.
-2. Sign out and back in once, so your account's new group membership takes effect.
-3. Add a passkey when the companion app (menu bar, tray, or applications menu) asks, and keep the recovery code.
-4. Open **Settings** from the companion and connect your services.
-5. Connect Claude Desktop with `PrivacyFence.mcpb`, or Claude Code with the `/mcp` endpoint.
-6. Ask your assistant for something, and approve it on the card.
+1. Run the Docker image ([Organization deployment with Docker](https://privacyfence.eu/docs/org-mode-docker/)): `docker run` on your own computer for one person, or the Compose file for a server.
+2. Open `http://localhost:8765`, enter the setup code from the container's log, and add a passkey.
+3. Connect your services at `/connect`.
+4. Add `http://localhost:8765/mcp` to Claude Desktop or Claude Code as a connector, and sign in.
+5. Ask your assistant for something, and approve it on the card.
 
 Step by step: [Getting started](https://privacyfence.eu/docs/getting-started/). For claude.ai, ChatGPT or a whole team, see
 [Organization deployment](https://privacyfence.eu/docs/org-mode-setup-guide/).
@@ -102,17 +97,15 @@ Step by step: [Getting started](https://privacyfence.eu/docs/getting-started/). 
 - [How it works](https://privacyfence.eu/docs/how-it-works/): the daemon, the MCP endpoint, PrivacyFence's own tools, unattended sessions
 - [Configuration reference](https://privacyfence.eu/docs/configuration-reference/): every `settings.yaml` and organization-bundle key
 - [Organization deployment](https://privacyfence.eu/docs/org-mode-setup-guide/): running PrivacyFence centrally
-- [Security and compliance](https://privacyfence.eu/docs/security-and-compliance/): trust boundary, privilege separation, audit log
+- [Security and compliance](https://privacyfence.eu/docs/security-and-compliance/): trust boundary, audit log
 - All published docs: [privacyfence.eu/docs](https://privacyfence.eu/docs/). Contributing: [CONTRIBUTING.md](https://github.com/privacyfence/privacyfence/blob/main/CONTRIBUTING.md). Changes per release: [CHANGELOG.md](https://github.com/privacyfence/privacyfence/blob/main/CHANGELOG.md).
 
 ## Limitations
 
 PrivacyFence is independent open-source software, not a certified compliance product. It has no
 certification, business-continuity plan or SLA, and does not by itself make a deployment compliant
-with any regulation. It does not protect against root or a local Administrator, or against local
-code on an install that is not packaged (a source checkout or a `pip` install). A process running
-as you can read the local review screen, though not approve from it, and in local mode the name an
-AI client gives is never verified. The full list is
+with any regulation. It does not protect against root or a local Administrator, or against anyone who can run `docker` on a single-user install's computer. A name an
+AI client gives is a claim, not verified. The full list is
 [What PrivacyFence does not claim](https://privacyfence.eu/docs/security-and-compliance/#what-privacyfence-does-not-claim).
 To report a vulnerability, see [SECURITY.md](https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md).
 

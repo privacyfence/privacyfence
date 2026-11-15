@@ -46,22 +46,16 @@ python3 -m venv ~/.venvs/privacyfence-sync
 ~/.venvs/privacyfence-sync/bin/pip install privacyfence-sync openpyxl
 ```
 
-Its version matches the PrivacyFence release it ships with. It needs no local PrivacyFence install
-of its own: in organization mode it talks to your organization's server over HTTPS.
+Its version matches the PrivacyFence release it ships with. It needs no PrivacyFence install of
+its own: it talks to a PrivacyFence server over HTTP or HTTPS.
 
 ## Connecting to PrivacyFence
 
-### Local mode (PrivacyFence on your own computer)
+`privacyfence-sync` talks to a PrivacyFence server: your organization's, or the single-user Docker
+image on your own computer. The server address defaults to `http://127.0.0.1:8765/mcp`; pass
+`--server` or set it in the recipe for any other.
 
-1. Get your AI client token: choose **Copy AI Client Token** in the PrivacyFence companion, or run
-   `privacyfence-app --print-mcp-token`. It is the same token Claude Code uses.
-2. Put it in the environment variable `PRIVACYFENCE_TOKEN` of the process that runs
-   `privacyfence-sync`. A token is never accepted as a command-line argument, because other users
-   on the machine can read the process list.
-3. The server address defaults to `http://127.0.0.1:8765/mcp`. If you changed PrivacyFence's port,
-   pass `--server` or set it in the recipe.
-
-### Organization mode (a PrivacyFence server)
+### Signing in
 
 1. Sign in once:
 
@@ -87,8 +81,7 @@ off `download_delivery.agent_links`, steps that receive a file fail with a messa
 ### Unattended sessions must be allowed
 
 A plain sign-in (the stored `login`, or your own AI client token) needs unattended sessions turned
-on: the **Unattended sessions** switch under **Admin → Features** (an administrator on an
-organization server, the install owner on a desktop install). Without it, a run stops before the
+on: the **Unattended sessions** switch under **Admin → Features** (an administrator). Without it, a run stops before the
 first step with:
 
 ```
@@ -131,8 +124,7 @@ Notes:
   email addresses, phone numbers and names are not detected). The two that most often catch a
   recipe out are on by default: **Financial figures** (a currency amount such as `€120` or
   `5000 HUF`) and **IP address** (an IPv4 address). If your data holds them and they are not
-  personal data for you, they can be turned off: on a desktop install under **Settings → General →
-  PII Detection Gate**, on an organization server by an administrator under **Admin → Privacy
+  personal data for you, they can be turned off: by an administrator under **Admin → Privacy
   Filter**. When the scan finds any of these, it asks a person, and an unattended
   run is denied, even when a rule matches. For the tools whose data goes to a file or a page
   rather than to an AI model, the recipe's scoped token can say otherwise. When you create the
@@ -252,10 +244,8 @@ Two kinds of reference use them:
 - `file_name` is required. It must be a plain file name ending in `.csv` or `.json`, which picks
   the format. The file lands in the work folder under that name.
 - Don't give `destination_dir`: `privacyfence-sync` sets it.
-- How the file arrives depends on the install, and the recipe doesn't change: a PrivacyFence that
-  can write to your folders writes it there; a privilege-separated local install or an
-  organization server hands out a one-time download link, which `privacyfence-sync` fetches at
-  once (the link expires after 5 minutes). Either way the file's SHA-256 is checked against what
+- The PrivacyFence server hands out a one-time download link, which `privacyfence-sync` fetches at
+  once (the link expires after 5 minutes). The file's SHA-256 is checked against what
   PrivacyFence reported, and the step fails if they differ.
 - A `jira_export_issues` or `assets_export_objects` query that matches nothing writes no file on PrivacyFence's side;
   `privacyfence-sync` writes a CSV with just the header row (or `[]` for `.json`), so later steps
@@ -897,100 +887,6 @@ scheduler entry. Recipes hand data to each other through Grist, not through each
 folders. Code several recipes share can't be linked in, since a symbolic link that points outside
 the recipe's folder is refused; make it a small package and install it into the same virtual
 environment (`pip install -e ~/datalake/lib`), and keep the scripts in each folder thin.
-Keep `~/datalake` out of `~/Documents`, `~/Desktop` and `~/Downloads` on macOS: a background job
-is not allowed to read them.
-
-### macOS: launchd and the Keychain
-
-Use a launchd agent, not cron. A launchd calendar job that was due while the Mac slept runs once
-when it wakes; cron skips it. (Neither runs a job that was due while the Mac was shut down.)
-
-Keep each recipe's token in your login Keychain, under the recipe's folder name. `-U` replaces an
-existing item, so the same command renews an expired token; `-w` with no value asks for the token,
-so it stays out of your shell history:
-
-```sh
-security add-generic-password -U -s privacyfence-sync -a 10-sf-opportunities -T /usr/bin/security -w
-```
-
-`-T /usr/bin/security` lets the wrapper read the item without a prompt. One token for all recipes
-works too; store it under each name, or change the lookup below.
-
-The wrapper, `~/bin/pf-sync.sh` (`chmod 700`), runs every recipe of a schedule with its own token,
-carries on after a failure, and shows a notification naming the recipes that failed:
-
-```zsh
-#!/bin/zsh
-set -u
-group="${1:-daily}"
-S="$HOME/.venvs/privacyfence-sync/bin/privacyfence-sync"
-cd "$HOME/datalake" || exit 1
-
-# Just after wake, give PrivacyFence up to two minutes to come up.
-for i in {1..24}; do /usr/bin/curl -s -o /dev/null http://127.0.0.1:8765/mcp && break; sleep 5; done
-
-failed=()
-for recipe in $group/*/recipe.yaml(N); do
-  name="${recipe:h:t}"
-  token="$(/usr/bin/security find-generic-password -s privacyfence-sync -a "$name" -w 2>/dev/null)" \
-    || { echo "$(date) $name: no token in the Keychain"; failed+="$name(no token)"; continue; }
-  echo "$(date) start $name"
-  PRIVACYFENCE_TOKEN="$token" "$S" run "$recipe"
-  rc=$?
-  echo "$(date) end $name rc=$rc"
-  [ $rc -ne 0 ] && failed+="$name($rc)"
-done
-
-if (( ${#failed} )); then
-  /usr/bin/osascript -e "display notification \"${failed[*]}\" with title \"privacyfence-sync: $group\""
-  exit 2
-fi
-```
-
-A recipe with a trigger step stores the task's token as a second Keychain item, under the same
-recipe folder name:
-
-```sh
-security add-generic-password -U -s privacyfence-sync-trigger -a 10-notes-inbox -T /usr/bin/security -w
-```
-
-The wrapper's run line then becomes the following, with the variable name the recipe's `token_env`
-gives:
-
-```zsh
-PRIVACYFENCE_TOKEN="$token" PRIVACYFENCE_TRIGGER_NOTES="$(/usr/bin/security find-generic-password -s privacyfence-sync-trigger -a "$name" -w 2>/dev/null)" "$S" run "$recipe"
-```
-
-The agent, `~/Library/LaunchAgents/local.pf-sync.daily.plist`, runs it every day at 06:10. launchd
-does not expand `~` or `$HOME`, so write your home folder out, and create the log folder first:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>local.pf-sync.daily</string>
-  <key>ProgramArguments</key>
-  <array><string>/Users/you/bin/pf-sync.sh</string><string>daily</string></array>
-  <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>10</integer></dict>
-  <key>StandardOutPath</key><string>/Users/you/datalake/logs/daily.log</string>
-  <key>StandardErrorPath</key><string>/Users/you/datalake/logs/daily.log</string>
-</dict>
-</plist>
-```
-
-For weekdays only, make `StartCalendarInterval` an array of five such dicts, each with a `Weekday`
-key (1 to 5). Load it, and run it once now to check it:
-
-```sh
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.pf-sync.daily.plist
-launchctl kickstart -p gui/$(id -u)/local.pf-sync.daily
-```
-
-`launchctl bootout gui/$(id -u)/local.pf-sync.daily` turns it off. The job runs only while you are
-logged in (a locked screen is fine), which is also when the Keychain and a local PrivacyFence are
-available.
 
 ### Linux: cron
 

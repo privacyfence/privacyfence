@@ -1,99 +1,15 @@
 # Connect Claude Code
 
-Claude Code works with both deployments:
+Claude Code connects to PrivacyFence's `/mcp` endpoint and signs in through OAuth. It works with both
+deployments:
 
-- **Local mode** (desktop mode, deprecated): PrivacyFence installed on the same computer. Claude Code
-  connects to the daemon's `/mcp` endpoint on `localhost` with your own bearer token.
 - **Single-user Docker**: PrivacyFence's Docker image on the same computer. Claude Code connects to
   `http://localhost:8765/mcp` and you sign in with your passkey.
 - **Organization mode**: PrivacyFence run centrally by your organization. Claude Code registers
   itself with PrivacyFence's OAuth server and you sign in with your organization account.
 
 Which one you have is explained in
-[Local mode and organization mode](how-it-works.md#local-mode-and-organization-mode).
-
-## Local mode
-
-Run this from your own account (not elevated, not as the service account), after logging out and
-back in once following the install.
-
-**Without a terminal command for the token:** open **Settings → AI clients**. It shows the `/mcp`
-URL and the exact `claude mcp add` command; **Copy token** there, or **Copy AI Client Token** in
-the companion's menu (the macOS menu bar, the Windows tray, or on Linux the **Copy AI client token**
-action of the PrivacyFence Applications-menu entry), puts your token on the clipboard. Paste it in
-place of `<token>`. Treat it like a password.
-
-The commands below get both from the command line instead, and need two things, both specific to
-your platform:
-
-| Platform | `/mcp` URL file | Token command |
-|---|---|---|
-| macOS | `/Library/Application Support/PrivacyFence/handoff/mcp_url` | `/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp --print-mcp-token` |
-| Windows | `%ProgramData%\PrivacyFence\handoff\mcp_url` | `& "$env:ProgramFiles\PrivacyFence\privacyfence-app.exe" --print-mcp-token`, captured into a variable (the program has no console window, so run bare it prints nothing visible) |
-| Linux (`.deb`) | `/var/lib/privacyfence/handoff/mcp_url` | `privacyfence-app --print-mcp-token` |
-
-On macOS:
-
-```bash
-PF_HANDOFF="/Library/Application Support/PrivacyFence/handoff"
-claude mcp add --transport http --scope user privacyfence "$(cat "$PF_HANDOFF/mcp_url")" \
-  --header "Authorization: Bearer $(/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp --print-mcp-token)"
-```
-
-On Windows, from PowerShell:
-
-```powershell
-$url = Get-Content "$env:ProgramData\PrivacyFence\handoff\mcp_url"
-$token = & "$env:ProgramFiles\PrivacyFence\privacyfence-app.exe" --print-mcp-token
-claude mcp add --transport http --scope user privacyfence $url --header "Authorization: Bearer $token"
-```
-
-On Linux:
-
-```bash
-PF_HANDOFF=/var/lib/privacyfence/handoff
-claude mcp add --transport http --scope user privacyfence "$(cat "$PF_HANDOFF/mcp_url")" \
-  --header "Authorization: Bearer $(privacyfence-app --print-mcp-token)"
-```
-
-- `mcp_url` holds `http://localhost:8765/mcp` unless you changed `web.port`
-  ([Configuration reference](configuration-reference.md)).
-- `--print-mcp-token` mints your account's token the first time and prints the same one afterwards,
-  the same token **Copy AI Client Token** copies. **Rotate token** in **Settings → AI clients**
-  replaces it; every client using the old one must then be given the new one.
-  Each OS account gets its own token, and its own connectors, rules and approvals
-  ([ADR 0008](adr/0008-one-principal-per-os-user.md)).
-- `--scope user` makes PrivacyFence available in every project. Leave it out to add it to the
-  current project only.
-- Run `/mcp` inside Claude Code to check that `privacyfence` is connected.
-
-Any other MCP client that speaks Streamable HTTP takes the same URL and header.
-
-### Scoped tokens
-
-A scheduled job or a single script needs less than your own token. In **Settings → Scoped tokens**
-create one: give it a name, a lifetime (90 days by default, at most 365), the rules it
-holds (new ones for this token, or copies of your Auto-accept rules) and the tools it may call. The companion copies the token to your clipboard once; it cannot
-be shown again. Use it as the bearer token in place of your own, for example
-`PRIVACYFENCE_TOKEN` for `privacyfence-sync`.
-
-A client holding it sees only the tools you chose, and a call goes through only if one of its rules
-auto-accepts it. Anything else is denied at once; a scoped token never raises an approval card.
-Settings flags a token with 14 days or fewer left, and `privacyfence_status` tells the client its
-expiry. **Revoke** stops one token at once; **Revoke all** stops every one. Your own token and your
-other clients are not affected. A token's rules and tools cannot be edited. Deleting or changing an Auto-accept rule does not change a token. **Rename** changes only its name, and clients using it keep working. **Extend** moves the expiry to the number of days you choose from today, never earlier than it is now, with the same secret, rules and tools, so clients using it keep working. For any other change, **Duplicate** fills the New token form
-from an existing token, with a numbered name, so you can create a replacement and revoke the old
-one, with a copy of its rules. The form lists only the tools the selected rules cover, plus the tools that need no rule. On the New token form, a second checkbox, **Let reads return personal data**, lets covered Gmail message and thread reads, Slack reads and Drive file content reads return personal data (the scan still runs and is audited). The rules are the token's own: add them on the form (a scope, a value and verbs, as on the Auto-accept page) or copy one of your Auto-accept rules, and they never auto-accept anything for your other AI clients ([ADR 0236](adr/0236-a-scoped-token-holds-its-own-rules.md)). A Gmail query rule such as `in:inbox` does not match a message you sent, so a thread holding your own reply is not covered by it. See
-[Scoped tokens](security-and-compliance.md#scoped-tokens).
-
-#### Let Claude propose a token
-
-Instead of building the token by hand, ask Claude to propose one for the routine. Claude calls `privacyfence_propose_scoped_token`, built from what you approved in the session or from rules it names, and hands you a review link. A local install always allows it, for the computer's owner.
-
-- Open the link: **Settings → Scoped tokens** shows the proposal. You can only narrow it: untick a rule, a verb or a tool, or shorten the lifetime. To add more, use **New token**.
-- If Claude asked for personal data to be allowed, those boxes start unticked; only you can tick them.
-- Continue, then type the token's name to confirm that you are delegating access.
-- The companion copies the token to your clipboard once. Claude never receives the token, and is not told whether you created it. A proposal lasts one hour and can be used once; Decline discards it. See [ADR 0250](adr/0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md).
+[Single-user and organization deployments](how-it-works.md#single-user-and-organization-deployments).
 
 ## Single-user Docker
 
@@ -194,18 +110,16 @@ recorded in the audit log under the token's name. Things to keep in mind:
 
 ## Files
 
-Claude Code does not run PrivacyFence's Claude Desktop extension, so PrivacyFence never opens a
-path on your computer for it. Files travel through one-time links instead
-([ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)):
+PrivacyFence never opens a path on your computer for Claude Code. Files travel through one-time
+links instead ([ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)):
 
 - **Upload** (for example `drive_upload_file`, or an email attachment): Claude Code calls
   `privacyfence_create_upload_slot`, sends the file to the returned URL with an HTTP `PUT`, and
-  passes the returned `upload_id` to the tool.
-- **Download** (for example `drive_download_file`): the tool returns a one-time link, or in
-  organization mode the file itself when it is small enough.
+  passes the returned `upload:` reference to the tool.
+- **Download** (for example `drive_download_file`): the tool returns a one-time link, or the file
+  itself when it is small enough.
 
-Sizes, lifetimes and the organization settings are in [Files](how-it-works.md#files). A source
-checkout or `pip` install that runs as you reads and writes paths directly.
+Sizes, lifetimes and the organization settings are in [Files](how-it-works.md#files).
 
 ## Confirmations
 
@@ -228,18 +142,14 @@ always-allow PrivacyFence's tools in Claude Code: choose the option not to ask a
 time it asks about a PrivacyFence tool, or allow `mcp__privacyfence` as above for all of them at
 once. Every call still goes through PrivacyFence's gate.
 
-**What we observed** (Claude Code 2.1.283, PrivacyFence 5.0.0a2, 2026-09-28, local mode,
+**What we observed** (Claude Code 2.1.283, PrivacyFence 5.0.0a2, 2026-09-28,
 [evidence](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865032001)): with no permission rules configured, Claude Code did not ask before
 `calendar_create_event` or any other PrivacyFence tool in the run; PrivacyFence's approval card was the only
 confirmation. If your permission mode or rules make it ask, always-allow as above.
 
 ## How the client is identified
 
-In local mode every approval card and Audit Log row shows the requester as **Undetected**: every AI
-system on your computer uses the same credential, so PrivacyFence cannot tell them apart. The audit
-log still records the name Claude Code sent.
-
-In organization mode, Claude Code sends its own name when it registers and in the MCP handshake. It
+Claude Code sends its own name when it registers and in the MCP handshake. It
 registers as `Claude Code (<name>)`, where `<name>` is the server name you gave `claude mcp add`,
 and PrivacyFence recognises that as Claude Code whatever the name is. That name is a **claim**: the card says the caller *says* it is Claude Code and marks it **Not verified**,
 because any program can send the same name, and its redirect URI is a loopback address that any
@@ -251,12 +161,6 @@ local program can register. There is nothing an administrator can do about it. S
 
 | What you see | What to do |
 |---|---|
-| `--print-mcp-token` cannot reach the daemon | Log out and back in once after installing, then check that the daemon is running (your platform's install page, "Troubleshooting"). |
-| On Windows the token variable is empty | Run the command as yourself, not elevated, and capture it into a variable as above. |
-| `/mcp` shows `privacyfence` as failed in local mode | The daemon is stopped, or `web.port` changed after you added it. Start the daemon, then run the `claude mcp add` command again (remove the old entry first with `claude mcp remove privacyfence`). |
-| `/mcp` shows `privacyfence` as needing authentication in organization mode | Choose it in `/mcp` and sign in again. |
-| Tools are listed but none of your services' tools | No service is connected yet. Ask Claude Code to call `privacyfence_status`; connect services in Settings (local mode) or at `/connect` (organization mode). See [Connecting a service](connecting-a-service.md). |
-| A call waits and nothing happens | It is waiting for your approval. Open Approvals from the companion, or `/approvals` in organization mode. |
-
-Platform-specific problems are on Install on macOS,
-Install on Windows and Install on Linux.
+| `/mcp` shows `privacyfence` as needing authentication | Choose it in `/mcp` and sign in again. |
+| Tools are listed but none of your services' tools | No service is connected yet. Ask Claude Code to call `privacyfence_status`; connect services at `/connect`. See [Connecting a service](connecting-a-service.md). |
+| A call waits and nothing happens | It is waiting for your approval. Open `/approvals` on the PrivacyFence server. |
