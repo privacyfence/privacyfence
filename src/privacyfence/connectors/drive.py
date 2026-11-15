@@ -19,7 +19,7 @@ from ..drive_client import (
     DriveClient,
     DriveClientError,
     _parse_a1_range,
-    resolve_download_destination,
+    resolve_download_name,
 )
 from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
@@ -30,18 +30,9 @@ from ..text_extraction import EXTRACTABLE_MIME_TYPES, extract_text, guess_mime_t
 
 logger = logging.getLogger(__name__)
 
-# Cap on how big a local_path file we'll read into memory pre-approval just to
-# build an upload preview -- unlike content_base64 (already fully decoded in
-# memory regardless, and naturally bounded by the MCP/IPC wire size limit),
-# local_path can point at an arbitrarily large file on disk.
+# Cap on how big an uploaded file we'll read into memory pre-approval just to build an upload
+# preview.
 _UPLOAD_PREVIEW_MAX_BYTES = 5_000_000
-
-# ADR 0007: the ceiling passed to local_files.require_local_files() for
-# drive_upload_file's local_path -- the file bridge buffers an upload
-# entirely in memory (upload_staging.UploadStagingStore.fill()), unlike
-# MediaFileUpload's own disk-streamed upload, so this is a real memory cap,
-# not just a preview-read cap like _UPLOAD_PREVIEW_MAX_BYTES above.
-_UPLOAD_MAX_BYTES = 50_000_000
 
 # Reuses the same 5MB value gmail.py's
 # _ATTACHMENT_PREFETCH_MAX_BYTES already uses for "small enough to just
@@ -154,11 +145,7 @@ class DriveConnector(Connector):
         self._drive = client
         self.my_email: str = ""
         # Set post-construction by daemon_main.py's build_connectors,
-        # exactly like my_email above. "local" (download_config/
-        # download_base_url left unset) is the original default:
-        # drive_download_file keeps writing straight to destination_dir
-        # unless a caller explicitly switches this to "org".
-        self.download_mode: str = "local"
+        # exactly like my_email above.
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
         self.session_created_ids: set[str] = set()
@@ -372,34 +359,25 @@ class DriveConnector(Connector):
                     "Upload any file (e.g. a PDF or image) to Drive as a new file — "
                     "use this instead of drive_write_file_content for any binary "
                     "file, since that tool only writes UTF-8 text. Provide exactly "
-                    "one of local_path (a path on the user's computer, absolute or "
-                    "starting with ~/), content_base64 (base64-encoded file bytes; "
-                    "'name' is then required), or upload_id (the id "
-                    "privacyfence_create_upload_slot returned after you PUT the "
-                    "file's bytes to its upload_url — use this if local_path fails "
-                    "because PrivacyFence cannot read files in your home folder). "
-                    "On an organization-managed install, local_path is read from "
-                    "the server, not the user's machine: prefer content_base64 or "
-                    "upload_id there. Returns {id, name, mime_type, size_bytes}. "
-                    "Requires user approval."
+                    "one of upload_id (the id privacyfence_create_upload_slot "
+                    "returned after you PUT the file's bytes to its upload_url) or "
+                    "content_base64 (base64-encoded file bytes, for a small file; "
+                    "'name' is then required). Returns {id, name, mime_type, "
+                    "size_bytes}. Requires user approval."
                 ),
                 params=[
-                    ToolParam("local_path", "str", required=False, default="", description=(
-                        "Path of the file to upload, absolute or starting with ~/. Give exactly "
-                        "one of local_path, content_base64 and upload_id; empty otherwise."
-                    )),
                     ToolParam("content_base64", "str", required=False, default="", description=(
                         "The file's bytes, base64-encoded. Requires name. Give exactly one of "
-                        "local_path, content_base64 and upload_id; empty otherwise."
+                        "content_base64 and upload_id; empty otherwise."
                     )),
                     ToolParam("upload_id", "str", required=False, default="", description=(
                         "Id returned by privacyfence_create_upload_slot after you PUT the bytes "
-                        "to its upload_url. Give exactly one of local_path, content_base64 and "
-                        "upload_id; empty otherwise."
+                        "to its upload_url. Give exactly one of content_base64 and upload_id; "
+                        "empty otherwise."
                     )),
                     ToolParam("name", "str", required=False, default="", description=(
-                        "Name for the new Drive file. Required with content_base64; otherwise "
-                        "empty uses the local file's own name."
+                        "Name for the new Drive file. Required with content_base64; with "
+                        "upload_id, empty names it \"(unnamed file)\"."
                     )),
                     ToolParam("parent_folder_id", "str", required=False, default="", description=(
                         "Id of the folder to upload into. Empty uploads to My Drive's root."
@@ -588,33 +566,15 @@ class DriveConnector(Connector):
                 name="drive_download_file",
                 description=(
                     "Download a Drive file. Google Workspace documents are exported "
-                    "as text/CSV. On a local install: saved to destination_dir, and it "
-                    "Returns {path, name, size_bytes, truncated} -- destination_dir "
-                    "is required, there is no default, so choose deliberately: pass "
-                    "~/Downloads (or a path the user asked for) for a deliverable, or "
-                    "your own scratch directory to just read or process it. On an "
-                    "organization-managed install: destination_dir is ignored -- a "
-                    "small file's bytes come back directly in the result, a larger "
-                    "file as a one-time link the human opens in their own browser. "
+                    "as text/CSV. Returns {delivery: 'inline', name, mime_type, "
+                    "size_bytes, content_base64} for a small file, or {delivery: "
+                    "'link', name, size_bytes, download_url, expires_at, note} for a "
+                    "larger one: a one-time link the human opens in their own browser. "
                     "Use drive_get_file_content instead to read a file's text. "
                     "Requires user approval."
                 ),
                 params=[
                     ToolParam("file_id", "str", description=_FILE_ID_HELP),
-                    ToolParam(
-                        "destination_dir",
-                        "str",
-                        required=True,
-                        description=(
-                            "Local install only: where to save the file -- required, no default. "
-                            "On an organization-managed install it is ignored and nothing is "
-                            "saved to it; any value will do. Use "
-                            "~/Downloads (or a path the user specified) if the user "
-                            "should find this file afterward; use your own "
-                            "working/scratch directory if it's only for you to read "
-                            "or process."
-                        ),
-                    ),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
                 read_only=True,
@@ -1300,53 +1260,25 @@ class DriveConnector(Connector):
             },
         )
 
-    async def _download_file(
-        self, file_id: str, destination_dir: str = ""
-    ) -> Any:
+    async def _download_file(self, file_id: str) -> Any:
         import os
         drive_file = await self._fetch(self._drive.get_file_metadata, file_id)
         owners = getattr(drive_file, "owners", [])
         modified = getattr(drive_file, "modified_time", "")
-        # destination_dir stays a mandatory tool parameter in every mode
-        # (no MCP client/test needs to change), but only local mode ever
-        # actually writes there -- see this method's own org-mode branch
-        # below and the tool description's own note. resolve_download_
-        # destination is still called unconditionally here purely to
-        # compute `name` the same way local mode always has.
-        dest_path = resolve_download_destination(drive_file, destination_dir)
-        name = os.path.basename(dest_path)
-        # ADR 0007: shown to the human, and handed to local_files.
-        # deliver_file(), exactly as the agent typed destination_dir --
-        # never the daemon-expanded dest_path above, which mixes in this
-        # process's own idea of "~" and is meaningless to a shim writing
-        # the file as a different, real user.
-        displayed_dest = f"{destination_dir.strip().rstrip('/')}/{name}" if destination_dir.strip() else dest_path
+        name = os.path.basename(resolve_download_name(drive_file)) or drive_file.id or "file"
 
         cfg = self.download_config or DownloadDeliveryConfig()
-        # ADR 0007: whether this download can still write straight to this
-        # process's own filesystem (a dev checkout or an unseparated pip/
-        # pipx install, where the daemon *is* the user) or needs the file
-        # bridge instead -- see local_files.can_access_user_files's own
-        # docstring.
-        direct_write = local_files.can_access_user_files(self.download_mode)
-        # Audit trail: the delivery path this call is about to take, estimated from
-        # metadata size the same way the preview below is -- may not match
-        # the eventual actual delivery in the rare case a Google Workspace
-        # export ends up a different size than drive_file.size, but that's
-        # exactly the same approximation the human-facing preview already
-        # makes, and this is an audit record of the *decision*, not a
-        # guarantee about what happens after it.
+        # Audit trail: the delivery path this call is about to take, estimated from metadata
+        # size the same way the preview below is (ADR 0160).
         delivery = (
-            ("local_disk" if direct_write else "client_bridge") if self.download_mode != "org"
-            else "inline_base64" if cfg.fits_inline(drive_file.size, name, drive_file.mime_type)
+            "inline_base64" if cfg.fits_inline(drive_file.size, name, drive_file.mime_type)
             else "staged_link"
         )
 
         # File/Owner/Size/Modified are known via drive_get_file_metadata (or
         # this call's own fetch of it above) -- the only genuinely new fact
         # from approving this call is *how* the file reaches Claude, which
-        # is mode/delivery-conditional (ADR 0017): local mode's bytes never leave
-        # this machine; org mode's own preview must say plainly whether
+        # is delivery-conditional (ADR 0017): the preview must say plainly whether
         # bytes are about to flow into Claude's context or stay
         # server-side behind a one-time link, using drive_file.size (the
         # same field the "Size" row above already shows) as the size
@@ -1359,32 +1291,22 @@ class DriveConnector(Connector):
             "Size": f"{drive_file.size:,} bytes",
             "Modified": str(modified) if modified else "(unknown)",
         }
-        if self.download_mode == "org":
-            if cfg.fits_inline(drive_file.size, name, drive_file.mime_type):
-                new_info = {
-                    "Content returned to {agent}": (
-                        f"Yes — file bytes are included in the tool result (file is "
-                        f"{drive_file.size:,} bytes, {base64_length(drive_file.size):,} once "
-                        f"base64-encoded, within this org's {cfg.inline_max_bytes:,}-byte "
-                        "inline-delivery limit)"
-                    ),
-                }
-            else:
-                new_info = {
-                    "Content returned to {agent}": (
-                        "None — a one-time link is generated for you to open in your own browser"
-                    ),
-                }
+        if cfg.fits_inline(drive_file.size, name, drive_file.mime_type):
+            new_info = {
+                "Content returned to {agent}": (
+                    f"Yes — file bytes are included in the tool result (file is "
+                    f"{drive_file.size:,} bytes, {base64_length(drive_file.size):,} once "
+                    f"base64-encoded, within this org's {cfg.inline_max_bytes:,}-byte "
+                    "inline-delivery limit)"
+                ),
+            }
         else:
             new_info = {
-                "Content returned to {agent}": "None — file bytes are never sent",
-                "Saved to": displayed_dest,
+                "Content returned to {agent}": (
+                    "None — a one-time link is generated for you to open in your own browser"
+                ),
             }
-        details = (
-            "The file above will be delivered as described above."
-            if self.download_mode == "org"
-            else "The file above will be downloaded to the destination shown."
-        )
+        details = "The file above will be delivered as described above."
 
         # Drive already generates a small preview image for many file types
         # (Docs/Sheets/Slides, images, PDFs) -- cheaper to fetch that than the
@@ -1422,11 +1344,7 @@ class DriveConnector(Connector):
         # anything usable ("EOF marker not found"). Below a sane size, fetch
         # the whole file instead of guessing at a cap; above it, skip extract_text() on a
         # truncated result rather than feed it something it can't parse.
-        # `full_bytes` is reused below for the actual delivery when this
-        # download turns out to need the file bridge, so a small file is
-        # never fetched from Drive twice.
         pii_scan_text = ""
-        full_bytes: bytes | None = None
         try:
             if drive_file.size and drive_file.size <= _FULL_FETCH_PII_SCAN_MAX_BYTES:
                 content = await self._fetch(self._drive.get_file_content, file_id, drive_file.size + 1)
@@ -1444,19 +1362,16 @@ class DriveConnector(Connector):
                     )
                 else:
                     pii_scan_text = await asyncio.to_thread(extract_text, content.content_bytes, drive_file.mime_type)
-                    full_bytes = content.content_bytes
         except RuntimeError:
             pass
 
-        # Gate before touching disk: gated_call raises on denial, and only a
-        # decision made here should ever cause the file to be written --
-        # otherwise a Deny would still leave the file on disk. Mirrors
-        # gmail.py's _download_attachment, which uses the same ordering.
+        # Gate before any delivery: gated_call raises on denial, and only a decision made here
+        # should ever cause the file to be handed out. Mirrors gmail.py's _download_attachment.
         await gated_call(
             connector=self.name,
             tool="drive_download_file",
             tool_name="Download Drive File",
-            summary=f"Download \"{name}\" to {os.path.dirname(dest_path)}",
+            summary=f"Download \"{name}\"",
             sender=", ".join(owners) or "(unknown)",
             raw_data=drive_file,
             filtered_data=None,
@@ -1471,27 +1386,10 @@ class DriveConnector(Connector):
             pii_already_reviewed=self._pii_already_reviewed(file_id, modified),
             my_email=self.my_email,
             session_created_ids=self.session_created_ids,
-            args={"file_id": file_id, "destination_dir": destination_dir},
+            args={"file_id": file_id},
             delivery=delivery,
             content_reaches_result=(delivery == "inline_base64"),
         )
-        if self.download_mode != "org":
-            if direct_write:
-                return await self._fetch(self._drive.download_file, file_id, destination_dir)
-            # ADR 0007: privilege separation means this process cannot
-            # write into the real user's destination_dir -- reuse the
-            # bytes the PII scan above already fetched when it had them
-            # (small file, not truncated), otherwise fetch the full file
-            # now. local_files.deliver_file stages it for the shim (or,
-            # with no bridge-capable client, a one-time link -- SS1.4).
-            data = full_bytes
-            mime_type = drive_file.mime_type or "application/octet-stream"
-            if data is None:
-                result = await self._fetch(self._drive.download_file_bytes, file_id)
-                data, mime_type = result["data"], result["mime_type"]
-            return local_files.deliver_file(
-                destination_dir, name, data, mime_type, download_mode=self.download_mode,
-            )
         # The estimate the gate was told about is binding (ADR 0157): a file approved as "not
         # inline" is never returned inline because its real size turned out smaller.
         return await self._deliver_org_download(
@@ -1533,6 +1431,7 @@ class DriveConnector(Connector):
             get_download_staging_store().stage, current_principal(), data, name, mime_type,
             ttl_seconds=cfg.link_ttl_seconds,
         )
+        local_files.mark_staged_download()
         return cfg.link_result(name, size_bytes, f"{self.download_base_url}{cfg.staged_link_path(token)}")
 
     # ------------------------------------------------------------------ #
@@ -1648,111 +1547,50 @@ class DriveConnector(Connector):
 
     async def _upload_file(
         self,
-        local_path: str = "",
         name: str = "",
         parent_folder_id: str = "",
         content_base64: str = "",
         upload_id: str = "",
     ) -> Any:
         import base64
-        import os
 
-        provided = (bool(local_path.strip()), bool(content_base64.strip()), bool(upload_id.strip()))
+        provided = (bool(content_base64.strip()), bool(upload_id.strip()))
         if sum(provided) != 1:
-            raise ValueError(
-                "drive_upload_file: provide exactly one of local_path, content_base64, or upload_id"
-            )
+            raise ValueError("drive_upload_file: provide exactly one of content_base64 or upload_id")
 
         preview_bytes = b""
         preview_mime_type = ""
         upload_pii_scan_text = ""
         local_data: bytes | None = None
 
-        # ADR 0007 is Claude-Desktop-only (the file bridge exists because
-        # the .mcpb shim runs on the user's own machine): org mode's own
-        # daemon runs wherever PrivacyFence's server runs, not the user's
-        # machine, and local_path there has always meant "read from the
-        # server's own filesystem" -- the file bridge does not apply, exactly
-        # like drive_download_file's own org-mode branch.
-        is_org_local_path = local_path.strip() and self.download_mode == "org"
-
-        # Capability uploads (ADR 0028): upload_id names bytes
-        # already staged by privacyfence_create_upload_slot, via the
-        # local_files.py ``upload:`` convention -- this works in every
-        # mode, org mode included, since a capability slot needs neither
-        # can_access_user_files() nor a bridge-capable shim, only the
-        # token itself (see local_files.require_local_files' own
-        # docstring). Treated as a variant of the local_path/file-bridge
-        # branch below: once claimed, an uploaded file behaves exactly
-        # like a bridge-fetched local_path.
+        # Capability uploads (ADR 0304): upload_id names bytes already staged by
+        # privacyfence_create_upload_slot, via the local_files.py ``upload:`` convention.
         upload_ref = f"{local_files.UPLOAD_REF_PREFIX}{upload_id.strip()}" if upload_id.strip() else ""
-        effective_local_path = local_path if (local_path.strip() and not is_org_local_path) else upload_ref
 
-        if effective_local_path:
-            # ADR 0007: raises immediately -- LocalFileAccessError if
-            # there's no way to reach this path at all, or LocalFilesNeeded
-            # to start the upload handshake -- rather than letting a plain
-            # os.path.getsize() report "0 bytes" for a file this process
-            # can't read and only failing once the human has already
-            # approved the upload.
-            local_files.require_local_files(
-                [effective_local_path], max_total_bytes=_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
-            )
-            display_name = name.strip() or (os.path.basename(local_path) if local_path.strip() else "(unnamed file)")
-            size_bytes = local_files.local_file_size(effective_local_path, download_mode=self.download_mode)
-            source = local_path.strip() or "uploaded via privacyfence_create_upload_slot"
-            sender = "(local file)" if local_path.strip() else "(uploaded file)"
-            # The connector never used to read this file's bytes at all --
-            # only stat its size -- so the popup showed a human nothing about
-            # what's actually in it, and nothing was ever scanned for PII
-            # either. Unlike drafted text (every other popup-gate tool), this
-            # can be an arbitrary local file Claude never saw the contents
-            # of, so it's worth reading -- but only for types is_prefetch_
-            # worthy() recognizes, under a sane cap, since it's a disk read
-            # of a file that could be arbitrarily large.
+        if upload_ref:
+            # Raises immediately -- LocalFileAccessError if the slot is unknown, expired or
+            # already used -- rather than failing only once the human has already approved.
+            local_files.require_local_files([upload_ref])
+            display_name = name.strip() or "(unnamed file)"
+            size_bytes = local_files.local_file_size(upload_ref)
+            source = "uploaded via privacyfence_create_upload_slot"
+            sender = "(uploaded file)"
+            # Only types is_prefetch_worthy() recognizes are read for the preview and the PII
+            # scan, under a sane cap.
             guessed_mime = guess_mime_type(display_name)
             if (
                 guessed_mime and is_prefetch_worthy(guessed_mime)
                 and 0 < size_bytes <= _UPLOAD_PREVIEW_MAX_BYTES
             ):
                 try:
-                    read_bytes = local_files.read_local_file(effective_local_path, download_mode=self.download_mode)
+                    read_bytes = local_files.read_local_file(upload_ref)
                 except local_files.LocalFileAccessError:
                     logger.warning(
                         "drive_upload_file: failed to read %r for preview/PII scan",
-                        effective_local_path, exc_info=True,
+                        upload_ref, exc_info=True,
                     )
                 else:
                     local_data = read_bytes
-                    if guessed_mime.startswith("image/"):
-                        preview_bytes = read_bytes
-                        preview_mime_type = guessed_mime
-                    # Not an image (or extract_text() finding nothing for one,
-                    # same no-op as before) -- feeds upload_pii_scan_text below,
-                    # which also becomes a rich "markdown" preview_blocks entry
-                    # (see this function's own preview construction further
-                    # down) instead of a visual thumbnail.
-                    upload_pii_scan_text = await asyncio.to_thread(extract_text, read_bytes, guessed_mime)
-        elif is_org_local_path:
-            display_name = name.strip() or os.path.basename(local_path)
-            expanded = os.path.expanduser(local_path)
-            size_bytes = os.path.getsize(expanded) if os.path.isfile(expanded) else 0
-            source = local_path
-            sender = "(local file)"
-            guessed_mime = guess_mime_type(display_name)
-            if (
-                guessed_mime and is_prefetch_worthy(guessed_mime)
-                and 0 < size_bytes <= _UPLOAD_PREVIEW_MAX_BYTES
-            ):
-                try:
-                    with open(expanded, "rb") as fh:
-                        read_bytes = fh.read()
-                except OSError:
-                    logger.warning(
-                        "drive_upload_file: failed to read %r for preview/PII scan",
-                        local_path, exc_info=True,
-                    )
-                else:
                     if guessed_mime.startswith("image/"):
                         preview_bytes = read_bytes
                         preview_mime_type = guessed_mime
@@ -1766,12 +1604,9 @@ class DriveConnector(Connector):
             size_bytes = len(decoded)
             source = "inline content"
             sender = "(inline content)"
-            # Already fully decoded in memory above regardless (needed just to
-            # measure size) -- no extra cost to reuse it for the preview/scan,
-            # and no separate size cap needed: content_base64 arrives as an
-            # MCP tool argument, already bounded by the daemon's own
-            # wire-protocol line limit (ipc.py's LINE_LIMIT), unlike
-            # local_path's unbounded disk read above.
+            # Already fully decoded in memory above (needed just to measure size) -- no extra
+            # cost to reuse it, and content_base64 arrives as an MCP tool argument, already
+            # bounded by the wire-protocol size limit.
             guessed_mime = guess_mime_type(display_name) if name.strip() else None
             if guessed_mime and decoded:
                 if guessed_mime.startswith("image/"):
@@ -1792,7 +1627,7 @@ class DriveConnector(Connector):
             tool_name="Upload File to Drive",
             summary=f"Upload \"{display_name}\" to Drive",
             sender=sender,
-            raw_data={"local_path": local_path, "upload_id": upload_id, "name": display_name, "size_bytes": size_bytes},
+            raw_data={"upload_id": upload_id, "name": display_name, "size_bytes": size_bytes},
             filtered_data=None,
             gate="popup",
             preview=preview,
@@ -1804,7 +1639,6 @@ class DriveConnector(Connector):
             my_email=self.my_email,
             session_created_ids=self.session_created_ids,
             args={
-                "local_path": local_path,
                 "upload_id": upload_id,
                 "name": name,
                 "parent_folder_id": parent_folder_id,
@@ -1813,19 +1647,13 @@ class DriveConnector(Connector):
         )
         # ADR 0102: the upload slot is consumed only now, once the gate has passed.
         local_files.commit_uploads()
-        if effective_local_path:
-            # ADR 0007: MediaFileUpload can't read a path this process
-            # doesn't have access to under privilege separation -- upload
-            # from the bytes the file bridge (or an upload slot claim, or a
-            # direct read in an unseparated install) already produced,
-            # reusing the preview read above when there was one instead of
-            # reading twice.
+        if upload_ref:
             if local_data is None:
-                local_data = local_files.read_local_file(effective_local_path, download_mode=self.download_mode)
+                local_data = local_files.read_local_file(upload_ref)
             result = await self._fetch(self._drive.upload_file_bytes, local_data, display_name, parent_folder_id)
         else:
             result = await self._fetch(
-                self._drive.upload_file, local_path, name, parent_folder_id, content_base64
+                self._drive.upload_file, name, parent_folder_id, content_base64
             )
         file_id = result.get("id", "")
         if file_id:

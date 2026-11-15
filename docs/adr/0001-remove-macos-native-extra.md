@@ -4,6 +4,8 @@
 
 Accepted and reflected in the current implementation. Superseded in part by [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md), which re-admits AppKit on macOS for the companion app's menu-bar item only — the daemon, and the "one implementation of approvals and settings" rationale below, are unchanged.
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Decision
 
 PrivacyFence does not declare or require a `macos-native` optional dependency containing `rumps` or PyObjC/AppKit frameworks.

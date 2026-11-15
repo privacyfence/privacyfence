@@ -2,7 +2,7 @@ name: Deploy OAuth relay Worker
 
 # docs/oauth-relay.md. Deploys cloudflare/oauth-relay/ -- the Worker backing
 # https://oauth.privacyfence.eu, the redirect relay for PrivacyFence's built-in OAuth apps --
-# whenever it changes on `main`. Like the download Worker it ships on every merge to `main`, not on
+# whenever it changes on `main`. It ships on every merge to `main`, not on
 # a release tag: a release tag never changes the relay, and a relay change never needs an app
 # release. It must stay compatible with every released 7.x server (docs/oauth-relay.md,
 # "Compatibility rule").
@@ -10,8 +10,7 @@ name: Deploy OAuth relay Worker
 # `verify-oauth-relay` also runs on `pull_request` (same path filter as `push`) so a PR that
 # breaks the Worker fails its own checks. `deploy-oauth-relay` only runs on a push to `main` (or a
 # manual dispatch on `main`): it needs the verify job to pass first and needs Cloudflare and Gmail
-# credentials a fork PR's `pull_request` run must never receive. The job names differ from
-# deploy-download-worker.yml's `verify`/`deploy` so the PR checks list has no ambiguous duplicates.
+# credentials a fork PR's `pull_request` run must never receive. The job names are specific to the relay so the PR checks list has no ambiguous duplicates.
 on:
   push:
     branches: [main]
@@ -43,7 +42,7 @@ jobs:
           cache-dependency-path: cloudflare/oauth-relay/package-lock.json
 
       # A plain `npm ci`: package.json's `overrides.vitest` pin works around the npm/arborist
-      # resolution bug described in deploy-download-worker.yml.
+      # resolution bug in this dependency set.
       - name: Install dependencies
         run: npm ci
 

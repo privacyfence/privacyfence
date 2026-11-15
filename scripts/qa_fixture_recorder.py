@@ -74,6 +74,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+import requests
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -134,7 +135,7 @@ def _qa_org_config() -> dict[str, Any]:
     Google, Slack, Salesforce, Atlassian and Miro sections, Peek's and Grist's addresses from the
     environment, and anything the runner's optional bundle adds."""
     bundle = daemon_main.load_org_config()
-    return oauth_apps.effective_org_config({"mode": "org", **bundle}, QA_ADMIN, mode="org")
+    return oauth_apps.effective_org_config({"mode": "org", **bundle}, QA_ADMIN)
 
 # Only used for the diagnostic logging around lifecycle_calendar/_tasks'
 # eventually-consistent-delete retries below -- every *_client.py already
@@ -977,7 +978,7 @@ def check_confluence(record: bool, manifest: dict[str, Any]) -> list[CheckResult
 
 
 def _build_peek_client() -> PeekClient:
-    pinned = peek_client.bundle_base_url(_qa_org_config().get("peek") or {}, org_mode=True)
+    pinned = peek_client.bundle_base_url(_qa_org_config().get("peek") or {})
     record = peek_client.load_token_file(daemon_main._resolve_path(daemon_main.TOKEN_FILES["peek"]))
     return PeekClient(peek_client.resolve_server(pinned, record), record["token"])
 
@@ -1210,6 +1211,86 @@ def _deidentify_assets(raw: Any) -> Any:
     return _redact_assets_identifiers(deidentify_structural_fields(numbered, id_map))
 
 
+_UNKNOWN_WORKSPACE = "00000000-0000-0000-0000-000000000000"
+
+
+def _probe_assets_connection(client: Any) -> str:
+    """One report line telling apart why ``check_connection`` failed.
+
+    Plain GETs through ``client._send`` only: never the token-refresh path. The line holds fixed labels,
+    status codes and exception class names, never a response text, URL or id, so it is safe in the report.
+    """
+    try:
+        configured = client._workspace_id
+
+        def read(url: str, params: dict[str, Any] | None, lookup: bool = False) -> str:
+            try:
+                body = client._send("GET", url, params=params)
+            except requests.HTTPError as exc:
+                if exc.response is None:
+                    return "error HTTPError"
+                text = f"HTTP {exc.response.status_code}"
+                if not (exc.response.text or "").strip():
+                    text += " (empty body)"
+                return text
+            except Exception as exc:  # noqa: BLE001 - a probe reports the class, never the message
+                return f"error {type(exc).__name__}"
+            if not lookup:
+                return "HTTP 200"
+            if configured is None:
+                return "HTTP 200, none configured"
+            values = body.get("values") if isinstance(body, dict) else None
+            first = values[0] if isinstance(values, list) and values and isinstance(values[0], dict) else None
+            found = first.get("workspaceId") if first else None
+            if isinstance(found, str) and found:
+                if found.lower() == str(configured).lower():
+                    return "HTTP 200, id matches configured"
+                return "HTTP 200, id differs from configured"
+            return "HTTP 200, no workspace"
+
+        t1 = read(f"{client._jira_url}/rest/servicedeskapi/assets/workspace", None, lookup=True)
+        try:
+            base: str | None = client._api()
+        except Exception:  # noqa: BLE001
+            base = None
+        if base is None:
+            t2 = t3 = t4 = "unavailable"
+        else:
+            url = f"{base}/objectschema/list"
+            t2 = read(url, None)
+            t3 = read(url, {"startAt": 0, "maxResults": 25})
+            t4 = read(url, {"startAt": 0, "maxResults": 1})
+        t5 = read(
+            f"{client._jira_url}/jsm/assets/workspace/{_UNKNOWN_WORKSPACE}/v1/objectschema/list",
+            {"startAt": 0, "maxResults": 25},
+        )
+
+        def ok(text: str) -> bool:
+            return text.startswith("HTTP 200")
+
+        if ok(t2) and ok(t3) and ok(t4):
+            verdict = "the reads answer now; the failure was intermittent"
+        elif t1.endswith("id differs from configured"):
+            verdict = "the configured workspace id is not the site's; set assets.workspace_id to the site's"
+        elif t1.endswith("no workspace"):
+            verdict = "the site has no Assets workspace; check that Jira Service Management Assets is enabled"
+        elif ok(t3) and not ok(t4):
+            verdict = "Atlassian rejects maxResults=1; raise the proof read's page size in check_connection"
+        elif not ok(t2) and not ok(t3) and not ok(t4) and t5 == t4:
+            verdict = (
+                "the configured workspace id behaves like an unknown one; either it is not the site's "
+                "or the site's Assets changed, compare assets.workspace_id with the site's"
+            )
+        else:
+            verdict = "undetermined; send these statuses to the maintainer"
+        return (
+            f"probes: lookup={t1}; list without params={t2}; list maxResults=25={t3}; "
+            f"list maxResults=1={t4}; unknown workspace={t5}; verdict: {verdict}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"probes: error {type(exc).__name__}"
+
+
 def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     cfg = manifest.get("assets") or {}
     schema_key = cfg.get("schema_key", "PFQA")
@@ -1219,10 +1300,14 @@ def check_assets(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     results: list[CheckResult] = []
     try:
         client = _build_assets_client(str(cfg.get("workspace_id") or ""))
+    except AssetsClientError as exc:
+        return [CheckResult("assets", "list_schemas", schema_key, False, str(exc))]
+    try:
         # Resolve the workspace id first so its lookup is not among the captured calls.
         client.check_connection()
     except AssetsClientError as exc:
-        return [CheckResult("assets", "list_schemas", schema_key, False, str(exc))]
+        note = f"{exc} -- {_probe_assets_connection(client)}"
+        return [CheckResult("assets", "list_schemas", schema_key, False, note)]
 
     # list_schemas -- only ever recorded filtered to the one QA schema.
     schema_id = ""
@@ -1315,7 +1400,7 @@ def _check_jira_export(client: JiraClient, page_jql: str, project_key: str) -> C
 def _build_grist_client() -> tuple[GristClient, bool]:
     """The client and whether its credential is an OAuth one. The runner holds
     an API-key file; the same code serves an OAuth sign-in."""
-    bundle = grist_auth.bundle_settings(_qa_org_config().get("grist") or {}, org_mode=True)
+    bundle = grist_auth.bundle_settings(_qa_org_config().get("grist") or {})
     token_path = daemon_main._resolve_path(daemon_main.TOKEN_FILES["grist"])
     server, credential = grist_auth.resolve_credential(bundle, grist_auth.load_token_file(token_path), token_path)
     return GristClient(server, credential), bool(credential.can_refresh)

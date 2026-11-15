@@ -43,8 +43,7 @@ deletion, the same required status checks `scripts/update_branch_protection.py` 
 `main`; run it with `--branch "releases/**"` to sync that ruleset too) and the same CI: every
 `.github/workflows/*.yml` push trigger scoped to `branches: [main]` for a test, audit or lint job
 also lists `"releases/**"`. This deliberately does **not** extend to the production-deploy
-triggers (`pages.yml`'s website deploy, `deploy-download-worker.yml`'s Worker deploy and live
-database migrations) — those stay `main`-only, so merging into a `releases/*` branch never ships to
+triggers (`pages.yml`'s website deploy) — those stay `main`-only, so merging into a `releases/*` branch never ships to
 production ahead of that branch's eventual merge into `main`.
 
 ## Decisions, plans and ADRs
@@ -72,14 +71,14 @@ source files, never to a plan document, which will not outlive it.
 ## Releasing
 
 Cutting a release is a git tag, not a commit; everything else follows from the tag push. The whole
-process — versioning, release notes, gating, PyPI, the R2 archive — is
+process — versioning, release notes, gating, publishing `privacyfence-sync` to PyPI, the R2 archive — is
 [`docs/releasing.md`](docs/releasing.md).
 
 ## Issues
 
 Use GitHub Issues for bug reports and feature requests. Include:
-- Your operating system and version, and how PrivacyFence is installed (the macOS, Windows or Linux
-  package, or a source checkout — then also your Python version)
+- How PrivacyFence runs (the Docker image and its tag, or a source checkout — then also your
+  Python version)
 - The PrivacyFence version (shown in Settings, under About)
 - Steps to reproduce (for bugs)
 - What connector is involved, if relevant
@@ -88,11 +87,9 @@ Do not report a security vulnerability in a public issue — follow [`SECURITY.m
 
 ## Code Style
 
-- `src/privacyfence/` (the daemon): Python 3.11+, standard library preferred over new dependencies
-- `mcpb/shim/` (the `.mcpb`'s stdio-to-Streamable-HTTP transport proxy, which is how Claude
-  Desktop reaches the daemon): TypeScript/Node, so the `.mcpb` extension ships without a bundled
-  Python runtime. It carries no tool-schema knowledge and stays small on purpose — read its
-  `src/index.ts` module docstring before adding anything to it
+- `src/privacyfence/` (the daemon): Python 3.11.5+, standard library preferred over new dependencies
+- `n8n/` (the n8n community node `n8n-nodes-privacyfence`): TypeScript, an npm package published from CI
+  on each stable release tag, held to n8n's strict community-node lint. [`docs/n8n-node.md`](docs/n8n-node.md)
 - No comments unless the *why* is non-obvious
 - Match the surrounding code's style
 
@@ -103,8 +100,8 @@ involves.
 
 ## Running from source
 
-`./scripts/dev_start.sh` runs the daemon from your checkout. A source run refuses to start on a
-machine that has a packaged PrivacyFence install, so develop on a separate machine or VM — see
+`privacyfence-app` (after `pip install -e ".[test]"`) runs the daemon from your checkout. A development server can run next to a
+live one on the same machine with its own data directory and port — see
 [`docs/dev-vs-live-setup.md`](docs/dev-vs-live-setup.md).
 
 ## License

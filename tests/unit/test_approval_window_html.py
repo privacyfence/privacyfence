@@ -593,7 +593,6 @@ class TestButtonRow:
         html = build_card_stack_html(**_minimal_kwargs())
         assert "window.webkit.messageHandlers.pf.postMessage" in html
         assert "DOMContentLoaded" in html
-        assert "window.__pfEnableButtons" in html
 
 
 class TestPreviewBody:

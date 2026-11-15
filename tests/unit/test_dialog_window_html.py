@@ -1,9 +1,8 @@
-"""Tests for dialog_window_html.py -- the small confirmation/list-picker
-HTML template dialog_window.py's DialogWindowController renders.
+"""Tests for dialog_window_html.py -- the small confirmation dialog HTML
+template.
 
-Pure-function module, no AppKit (same as approval_window_html.py, which this
-imports from) -- these assert directly on the generated HTML strings, no
-macOS/PyObjC required.
+Pure-function module (same as approval_window_html.py, which this imports
+from) -- these assert directly on the generated HTML strings.
 
 The real, injection-relevant escaping coverage this replaces used to live in
 test_approval_popup_escaping.py, round-tripping content through a real
@@ -11,8 +10,8 @@ test_approval_popup_escaping.py, round-tripping content through a real
 impossible. That vector doesn't exist anymore -- a webview bridge call takes
 a string as a real DOM text value, never source text to be interpreted (see
 this module's own docstring) -- so what's worth pinning down here is just
-that build_confirmation_html/build_choice_html actually HTML-escape
-everything they interpolate, the same defensive posture
+that build_confirmation_html actually HTML-escapes
+everything it interpolates, the same defensive posture
 build_card_stack_html takes with details_text.
 """
 from __future__ import annotations
@@ -20,8 +19,6 @@ from __future__ import annotations
 from privacyfence.approval_window_html import extract_csp_nonce
 from privacyfence.dialog_window_html import (
     CONFIRM_WIDTH,
-    PICKER_WIDTH,
-    build_choice_html,
     build_confirmation_html,
 )
 
@@ -111,68 +108,9 @@ class TestBuildConfirmationHtml:
         assert "window.webkit.messageHandlers.pf.postMessage" in html
 
 
-class TestBuildChoiceHtml:
-    def test_title_and_prompt_render(self):
-        html = build_choice_html(
-            title="PrivacyFence — Choose Auto-Accept Rule",
-            prompt="More than one rule could be created from this item — choose one:",
-            options=["i_am_owner", "approved_folder: f1"],
-        )
-        assert "PrivacyFence — Choose Auto-Accept Rule" in html
-        assert "More than one rule could be created from this item — choose one:" in html
-
-    def test_every_option_renders_as_its_own_row_with_its_index(self):
-        html = build_choice_html(
-            title="T", prompt="p", options=["i_am_owner", "approved_folder: f1"],
-        )
-        assert 'data-pf-action="choice" data-pf-index="0">i_am_owner<' in html
-        assert 'data-pf-action="choice" data-pf-index="1">approved_folder: f1<' in html
-
-    def test_cancel_button_present_and_not_primary(self):
-        html = build_choice_html(title="T", prompt="p", options=["a", "b"])
-        assert 'data-pf-action="cancel"' in html
-        # Scoped to the `="1"`-valued attribute, not a bare "data-pf-primary"
-        # substring search -- _JS's own embedded script text (inlined into
-        # every document regardless of shape) references the bare attribute
-        # name too, in its keydown-handler selector -- same distinction
-        # test_approval_window.py's own data-pf-primary tests draw.
-        assert 'data-pf-primary="1"' not in html
-
-    def test_options_are_html_escaped(self):
-        # The real bug this replaces: settings_controller._osascript_pick
-        # used to interpolate an unescaped option (e.g. a live Atlassian
-        # accessible-resources URL) directly into AppleScript source text.
-        html = build_choice_html(
-            title="T", prompt="p",
-            options=['https://x.atlassian.net/" with administrator privileges'],
-        )
-        assert 'https://x.atlassian.net/" with administrator privileges' not in html
-        assert "&quot;" in html
-
-    def test_prompt_is_html_escaped(self):
-        html = build_choice_html(title="T", prompt="<script>alert(1)</script>", options=["a"])
-        assert "<script>alert(1)</script>" not in html
-        assert "&lt;script&gt;" in html
-
-    def test_empty_options_renders_no_rows(self):
-        html = build_choice_html(title="T", prompt="p", options=[])
-        assert 'data-pf-action="choice"' not in html
-        assert 'data-pf-action="cancel"' in html
-
-    def test_uses_the_picker_width(self):
-        html = build_choice_html(title="T", prompt="p", options=["a"])
-        # See TestBuildConfirmationHtml.test_uses_the_confirm_width's own
-        # comment -- same min(...,100%) responsive shape, same reason.
-        assert f"width: min({PICKER_WIDTH}px, 100%)" in html
-
-    def test_buttons_start_disabled_in_markup(self):
-        html = build_choice_html(title="T", prompt="p", options=["a", "b"])
-        # Two option rows + the Cancel button, all start disabled.
-        assert html.count('role="button" aria-disabled="true"') == 3
-
 
 class TestCspNonce:
-    """Both shapes share approval_window_html.py's own document-shell/
+    """The dialog shares approval_window_html.py's own document-shell/
     extraction conventions (see that module's own docstring on the CSP
     nonce)."""
 
@@ -182,11 +120,6 @@ class TestCspNonce:
         assert nonce
         assert f'<style nonce="{nonce}">' in html
 
-    def test_choice_html_style_and_script_share_a_random_nonce(self):
-        html = build_choice_html(title="T", prompt="p", options=["a"])
-        nonce = extract_csp_nonce(html)
-        assert nonce
-        assert f'<style nonce="{nonce}">' in html
 
     def test_each_call_gets_its_own_nonce(self):
         a = build_confirmation_html(title="T", message_lines=["m"], cancel_label="Cancel", confirm_label="OK")
@@ -195,15 +128,12 @@ class TestCspNonce:
 
 
 class TestResponsiveViewport:
-    """Both dialog shapes are served in an ordinary browser tab by the web
-    approval surface, not only inside a fixed native frame -- so both need
-    the same device-width viewport build_card_stack_html declares, for the
-    same reason (see that function's own head)."""
+    """The dialog is served in an ordinary browser tab by the web approval
+    surface -- so it needs the same device-width viewport
+    build_card_stack_html declares, for the same reason (see that function's
+    own head)."""
 
     def test_confirmation_declares_a_device_width_viewport(self):
         html = build_confirmation_html(title="T", message_lines=["m"], cancel_label="Cancel", confirm_label="OK")
         assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
 
-    def test_choice_declares_a_device_width_viewport(self):
-        html = build_choice_html(title="T", prompt="p", options=["a"])
-        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html

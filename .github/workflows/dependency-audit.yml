@@ -9,8 +9,8 @@ name: Dependency audit
 #
 # Severity policy:
 #   - Python runtime dependencies (requirements/runtime.lock.txt -- what
-#     `pip install privacyfence` actually installs, and what PyInstaller
-#     bundles into the .app) are audited with pip-audit and BLOCK the job on
+#     `pip install privacyfence` actually installs, and what the org
+#     Docker image installs) are audited with pip-audit and BLOCK the job on
 #     any known vulnerability, at any severity. There's no per-severity cutoff
 #     here because OSV, pip-audit's data source, doesn't consistently carry a
 #     normalized severity score across every Python advisory the way GitHub's
@@ -24,25 +24,22 @@ name: Dependency audit
 #     audited too, but informationally -- they run in CI and on contributors'
 #     machines, never on an end user's, so a finding there is worth seeing
 #     but not worth blocking every unrelated PR over.
-#   - The Node shim's runtime dependency (mcpb/shim/package.json's
-#     `dependencies`, the only ones bundled into the shipped .mcpb --
-#     `devDependencies` are build/test-only) is audited with
-#     `npm audit --omit=dev` and BLOCKS on high or critical; moderate/low
-#     findings are reported by the same command's exit status but don't fail
-#     the job -- see the "informational" step below.
-#   - The download Worker (cloudflare/downloads/package.json) declares zero
+#   - The n8n node (n8n/package.json) ships only dist/ and declares no
+#     runtime `dependencies`; `n8n-workflow` is a peer the n8n host
+#     provides, and is also a pinned devDependency so the lock file marks
+#     its tree dev-only. `npm audit --omit=dev` BLOCKS on high or critical,
+#     which guards against a runtime dependency being added later; the
+#     whole tree, dev included, is reported informationally. n8n's
+#     community-node lint forbids `overrides`, so an unpatched transitive
+#     finding in n8n's own pins waits for upstream -- see ADR 0296.
+#   - The OAuth relay Worker (cloudflare/oauth-relay/package.json) declares zero
 #     runtime `dependencies` -- everything, `wrangler` included, is a
-#     devDependency -- so the shim's `--omit=dev` policy can't be copied
-#     verbatim here: it would audit an empty set and always pass. And unlike
-#     the shim's dev deps (build-time only, never touch a credential), this
-#     tree's `wrangler` runs in deploy-download-worker.yml's `deploy` job
-#     holding CLOUDFLARE_API_TOKEN against a production endpoint -- a
-#     materially larger blast radius than the shim's. So the whole tree,
-#     dev deps included, is audited with plain `npm audit --audit-level=high`
-#     (no `--omit=dev`) and BLOCKS on high or critical, same threshold as the
-#     shim but a deliberately wider scope. The OAuth relay Worker
-#     (cloudflare/oauth-relay/package.json) has the same shape and the same
-#     policy, in its own job.
+#     devDependency -- so an `--omit=dev` audit would cover an empty set and
+#     always pass. Its `wrangler` runs in deploy-oauth-relay-worker.yml's
+#     `deploy` job holding CLOUDFLARE_API_TOKEN against a production
+#     endpoint, so the whole tree, dev deps included, is audited with plain
+#     `npm audit --audit-level=high` (no `--omit=dev`) and BLOCKS on high or
+#     critical, in its own job.
 on:
   push:
     # releases/** is protected the same as main (see CONTRIBUTING.md) and gets the same push-triggered
@@ -52,10 +49,8 @@ on:
       - "pyproject.toml"
       - "requirements/*.lock.txt"
       - "requirements/release.in"
-      - "mcpb/shim/package.json"
-      - "mcpb/shim/package-lock.json"
-      - "cloudflare/downloads/package.json"
-      - "cloudflare/downloads/package-lock.json"
+      - "n8n/package.json"
+      - "n8n/package-lock.json"
       - "cloudflare/oauth-relay/package.json"
       - "cloudflare/oauth-relay/package-lock.json"
       - ".github/workflows/dependency-audit.yml"
@@ -64,10 +59,8 @@ on:
       - "pyproject.toml"
       - "requirements/*.lock.txt"
       - "requirements/release.in"
-      - "mcpb/shim/package.json"
-      - "mcpb/shim/package-lock.json"
-      - "cloudflare/downloads/package.json"
-      - "cloudflare/downloads/package-lock.json"
+      - "n8n/package.json"
+      - "n8n/package-lock.json"
       - "cloudflare/oauth-relay/package.json"
       - "cloudflare/oauth-relay/package-lock.json"
       - ".github/workflows/dependency-audit.yml"
@@ -111,20 +104,20 @@ jobs:
       - name: Regenerate lock files into a scratch copy
         run: |
           mkdir -p /tmp/lockcheck
-          uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
+          uv pip compile --universal --python-version 3.11.5 --generate-hashes --no-strip-extras \
             --output-file=/tmp/lockcheck/runtime.lock.txt pyproject.toml
           # dev.lock.txt is constrained by the runtime lock and carries requirements/release.in too;
           # the constraint is the committed runtime lock, by the same relative path as in
           # update_dependency_locks.sh (the path is recorded in the `# via` trail, which is diffed;
           # a stale runtime lock fails its own diff below).
-          uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
+          uv pip compile --universal --python-version 3.11.5 --generate-hashes --no-strip-extras \
             --extra dev --extra test --extra lint \
             -c requirements/runtime.lock.txt \
             --output-file=/tmp/lockcheck/dev.lock.txt pyproject.toml requirements/release.in
-          uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
+          uv pip compile --universal --python-version 3.11.5 --generate-hashes --no-strip-extras \
             --output-file=/tmp/lockcheck/release.lock.txt requirements/release.in
           python3 -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["docs"]))' \
-            | uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
+            | uv pip compile --universal --python-version 3.11.5 --generate-hashes --no-strip-extras \
               --output-file=/tmp/lockcheck/docs.lock.txt -
 
       # Ignores every top-level `#...` line (uv's own autogenerated header,
@@ -163,7 +156,7 @@ jobs:
         if: always()
         run: pip-audit --strict -r requirements/docs.lock.txt
 
-      # The release tooling (build, SBOM, R2 upload, PyPI publish) runs holding signing and
+      # The release tooling (build, SBOM, R2 upload, `privacyfence-sync` publish) runs holding signing and
       # storage credentials, so it blocks like the runtime set.
       - name: Audit release tooling (blocking)
         if: always()
@@ -174,29 +167,6 @@ jobs:
         continue-on-error: true
         run: pip-audit --strict -r requirements/dev.lock.txt
 
-  floor-audit:
-    # The runtime lock pins what packaged builds ship, but `pip install privacyfence` resolves
-    # fresh from pyproject.toml's ranges, so a user can land on the lowest version each range
-    # allows. This audits that lowest-direct resolution; a failure means a floor in pyproject.toml
-    # needs raising (with a one-line comment saying why).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.13'
-
-      # release.lock.txt carries uv and pip-audit, hash-pinned.
-      - name: Install audit tooling
-        run: pip install --require-hashes -r requirements/release.lock.txt
-
-      - name: Resolve the lowest direct versions
-        run: uv pip compile --resolution lowest-direct --python-version 3.11 pyproject.toml -o /tmp/lowest.txt
-
-      - name: Audit the lowest-direct set (blocking)
-        run: pip-audit --strict --no-deps --disable-pip -r /tmp/lowest.txt
-
   npm-audit:
     runs-on: ubuntu-latest
     steps:
@@ -206,51 +176,23 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: mcpb/shim/package-lock.json
+          cache-dependency-path: n8n/package-lock.json
 
-      - name: Install shim dependencies
+      - name: Install n8n node dependencies
         run: npm ci
-        working-directory: mcpb/shim
+        working-directory: n8n
 
-      - name: Audit shim runtime dependencies (blocking - high/critical)
+      - name: Audit n8n node runtime dependencies (blocking - high/critical)
         run: npm audit --omit=dev --audit-level=high
-        working-directory: mcpb/shim
+        working-directory: n8n
 
-      - name: Audit shim runtime dependencies (informational - full report)
-        if: always()
-        run: npm audit --omit=dev || true
-        working-directory: mcpb/shim
-
-  npm-audit-worker:
-    # Separate job (not folded into npm-audit above) because the policy is
-    # deliberately different: the whole tree, dev deps included -- see the
-    # severity-policy comment at the top of this file (R8).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: cloudflare/downloads/package-lock.json
-
-      - name: Install Worker dependencies
-        run: npm ci
-        working-directory: cloudflare/downloads
-
-      - name: Audit Worker dependencies (blocking - high/critical, dev deps included)
-        run: npm audit --audit-level=high
-        working-directory: cloudflare/downloads
-
-      - name: Audit Worker dependencies (informational - full report)
+      - name: Audit n8n node dependencies (informational - full tree, dev included)
         if: always()
         run: npm audit || true
-        working-directory: cloudflare/downloads
+        working-directory: n8n
 
   npm-audit-oauth-relay:
-    # Same policy as npm-audit-worker, for the OAuth relay Worker: the whole tree, dev deps
-    # included, because its `wrangler` runs in deploy-oauth-relay-worker.yml's `deploy` job holding
+    # The OAuth relay Worker is audited over the whole tree, dev deps included, because its `wrangler` runs in deploy-oauth-relay-worker.yml's `deploy` job holding
     # CLOUDFLARE_API_TOKEN against a production endpoint.
     runs-on: ubuntu-latest
     steps:

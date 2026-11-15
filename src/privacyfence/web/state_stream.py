@@ -1,37 +1,20 @@
 """SSE state-push channel: ``GET /api/state/stream``, one connection per
-open tab, carrying two
-independently-updating event types --
+open tab, carrying ``event: approvals`` --
+``approvals.PendingApprovalRegistry.list_pending()`` summaries, polled the
+same way ``web/routes_approvals.py``'s own ``/api/approvals/stream`` already
+does. The registry can hold several of these at once.
 
-- ``event: settings`` -- ``SettingsController.snapshot()``, pushed the
-  moment something changes it out from under an open page: a rule edited
-  over MCP, an OAuth flow finishing on its own background thread, a grant's
-  resource name resolving. Without this channel a browser tab showing
-  ``/settings`` would need a manual refresh for every one of those, and the
-  snapshot a mutating POST returns is a promise the page can't otherwise
-  keep -- see settings_controller.py's own docstring on ``on_change``.
-- ``event: approvals`` -- ``approvals.PendingApprovalRegistry.list_pending()``
-  summaries, polled the same way ``web/routes_approvals.py``'s own
-  ``/api/approvals/stream`` already does. The registry can hold several
-  of these at once; carrying them on this shared channel too means the
-  approvals page's own SSE
-  subscription (routes_approvals.py, unchanged) and this settings-shaped
-  one agree on the same underlying data without either needing to know
-  about the other.
-
-Every open page re-renders from a *full* state dict, never a patch --
-``window.__pfRender(state)``/``window.__pfRenderApprovals(state)`` are both
-idempotent full re-renders (settings_window_html.py's/the approval list's
-own convention) -- so there is no ordering or patch-application problem to
+Every open page re-renders from a *full* state list, never a patch --
+``window.__pfRenderApprovals(state)`` is an idempotent full re-render
+(the approval list's own convention) -- so there is no ordering or patch-application problem to
 solve here, only "deliver the latest snapshot, promptly, to every open
 connection", including on first connect/reconnect (a reconnect delivers
 full state rather than a patch).
 
-This module also owns the one piece of plumbing settings_controller.py's
-``call_on_main`` dispatcher seam needs once a web server is
-actually running: ``set_loop``/``call_soon_threadsafe`` marshal a
-background-thread callback (an OAuth flow finishing, a rules-changed
-broadcast) onto this stream's own asyncio event loop, so the subscriber
-queues are only ever touched from that one loop.
+This module also owns the loop plumbing a running web server needs:
+``set_loop``/``call_soon_threadsafe`` marshal a background-thread callback
+(a rules-changed broadcast) onto this stream's own asyncio event loop, so the
+subscriber queues are only ever touched from that one loop.
 """
 from __future__ import annotations
 
@@ -42,24 +25,19 @@ from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
-# How often a connection checks the approvals registry for a change, absent
-# any settings push arriving first -- same interval and reasoning as
+# How often a connection checks the approvals registry for a change, -- same interval and reasoning as
 # routes_approvals.py's own _STREAM_POLL_SECONDS: short enough that a human
 # watching the page doesn't perceive a lag, cheap enough (an in-memory dict
-# scan) that polling it beats adding a second pub/sub mechanism just for
-# approvals.
+# scan) that polling it beats adding a second pub/sub mechanism.
 _APPROVALS_POLL_SECONDS = 1.0
 
 # Broadcast by StateStream.close() to wake every open subscription; never a real event name.
 _CLOSED_EVENT = "__closed__"
 
 # The web server's own asyncio event loop, captured once at startup (see
-# server.py's lifespan wiring) -- settings_controller.call_on_main's
-# fallback dispatcher for a process with no AppKit run loop hosting
-# marshals onto this loop rather than running inline, once one is
-# known. Module-level, not stashed on StateStream, because
-# set_main_dispatcher() needs a plain function reference it can register
-# once and never touch again -- see call_soon_threadsafe below.
+# server.py's lifespan wiring), so ``call_soon_threadsafe`` can marshal a
+# background-thread callback onto it. Module-level so a plain function
+# reference can be registered once and never touched again.
 _loop: asyncio.AbstractEventLoop | None = None
 
 
@@ -87,11 +65,9 @@ def get_loop() -> asyncio.AbstractEventLoop | None:
 
 
 def call_soon_threadsafe(fn: Callable[..., None], *args: Any) -> None:
-    """settings_controller.set_main_dispatcher()'s target once the web
-    server is up -- see settings_controller.call_on_main's own docstring.
-    Runs ``fn(*args)`` inline if no loop has been captured yet (e.g. called
-    before the ASGI app's startup event has fired), the same safe fallback
-    call_on_main itself takes when nothing is hosting yet."""
+    """Run ``fn(*args)`` on the captured loop. Runs inline if no loop has
+    been captured yet (e.g. called before the ASGI app's startup event has
+    fired)."""
     if _loop is not None:
         _loop.call_soon_threadsafe(fn, *args)
     else:
@@ -103,39 +79,15 @@ def _sse(event: str, data: Any) -> str:
 
 
 class StateStream:
-    """One instance per running web server (server.py owns it, alongside
-    ``WebApprovalUI``), shared by every ``/api/state/stream`` connection.
-
-    ``settings_snapshot`` is a zero-arg callable returning
-    ``SettingsController.snapshot()``, or ``None`` when no controller is
-    wired (``web.settings.enabled: false`` -- the approvals-only surface
-    still gets its own event on this channel). ``list_pending`` is
+    """One instance per running web server, shared by every
+    ``/api/state/stream`` connection. ``list_pending`` is
     ``WebApprovalUI.deferred_registry.list_pending``.
     """
 
-    def __init__(
-        self,
-        *,
-        settings_snapshot: Callable[[], dict[str, Any] | None],
-        list_pending: Callable[[], list[Any]],
-    ) -> None:
-        self._settings_snapshot = settings_snapshot
+    def __init__(self, *, list_pending: Callable[[], list[Any]]) -> None:
         self._list_pending = list_pending
-        # queue -> receives_settings: the settings snapshot is the owner's, never another OS user's.
-        self._subscribers: dict[asyncio.Queue, bool] = {}
+        self._subscribers: set[asyncio.Queue] = set()
         self._closed = False
-
-    # ------------------------------------------------------------------ #
-    # Push side -- settings_controller.SettingsController.add_change_
-    # listener's target (see routes_settings.py's wiring).
-    # ------------------------------------------------------------------ #
-
-    def push_settings(self, state: dict[str, Any]) -> None:
-        """Called via call_on_main's dispatch, so always on this stream's
-        own event loop by the time a real web server is running (see
-        server.py's wiring of set_main_dispatcher(call_soon_threadsafe))
-        -- never directly from a background thread."""
-        self._broadcast("settings", state)
 
     def close(self) -> None:
         """End every open subscription and refuse new ones. Called on this stream's own loop by
@@ -145,15 +97,10 @@ class StateStream:
         self._broadcast(_CLOSED_EVENT, None)
 
     def _broadcast(self, event: str, data: Any) -> None:
-        for queue, receives_settings in list(self._subscribers.items()):
-            if event == "settings" and not receives_settings:
-                continue
+        for queue in list(self._subscribers):
             # maxsize=1, replace-not-append: each subscriber only ever
-            # holds the *latest* pending message per stream, which is what
-            # "pushes are debounced" means here -- a burst of rapid
-            # changes (several grant names resolving back to back) collapses
-            # to one flush of the newest snapshot instead of a growing
-            # backlog the reader falls behind on.
+            # holds the *latest* pending message, so a burst of rapid
+            # changes collapses to one flush instead of a growing backlog.
             try:
                 queue.get_nowait()
             except asyncio.QueueEmpty:
@@ -161,15 +108,13 @@ class StateStream:
             queue.put_nowait((event, data))
 
     # ------------------------------------------------------------------ #
-    # Read side -- web/routes_settings.py's /api/state/stream route.
+    # Read side -- the /api/state/stream route.
     # ------------------------------------------------------------------ #
 
     async def subscribe(
         self,
         is_disconnected: Callable[[], Awaitable[bool]],
         touch: Callable[[], bool] | None = None,
-        *,
-        receives_settings: bool,
     ):
         """Async generator of SSE-formatted strings for one connection.
 
@@ -180,16 +125,10 @@ class StateStream:
         opened. It returns whether the session is still live -- once it
         returns False (idle- or absolute-expired), the loop breaks and the
         connection closes, the same way a client disconnect does, rather
-        than streaming to a tab whose session no longer exists.
-
-        ``receives_settings`` is True only for the owner's connections: the settings snapshot is
-        not principal-filtered, so a second OS user's stream gets approvals events only."""
+        than streaming to a tab whose session no longer exists."""
         queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-        self._subscribers[queue] = receives_settings
+        self._subscribers.add(queue)
         try:
-            settings_state = self._settings_snapshot() if receives_settings else None
-            if settings_state is not None:
-                yield _sse("settings", settings_state)
             last_ids = self._approvals_ids()
             yield _sse("approvals", self._approvals_payload())
 
@@ -212,7 +151,7 @@ class StateStream:
                     last_ids = ids
                     yield _sse("approvals", self._approvals_payload())
         finally:
-            self._subscribers.pop(queue, None)
+            self._subscribers.discard(queue)
 
     def _approvals_ids(self) -> tuple[str, ...]:
         return tuple(a.id for a in self._list_pending())

@@ -7,29 +7,15 @@ guard, partials, the /download/ pre-render, how doc links are rewritten, and the
 
 from __future__ import annotations
 
-import io
 import json
 import re
 import subprocess
-import urllib.error
 
 import pytest
 
 from tests.website_site import REPO, WEBSITE, build_site, read_page
 
 pytestmark = pytest.mark.unit
-
-MANIFEST = {
-    "schema": 1,
-    "version": "4.5.0",
-    "channel": "stable",
-    "artifacts": [
-        {"id": "macos-arm64", "filename": "PrivacyFence-4.5.0.dmg", "size": 104857600, "sha256": "a" * 64},
-        {"id": "linux-x64", "filename": "privacyfence_4.5.0_amd64.deb", "size": 900, "sha256": "c" * 64},
-        {"id": "linux-arm64", "filename": "privacyfence_4.5.0_arm64.deb"},
-    ],
-}
-
 
 def _has_tag(tag: str) -> bool:
     return (
@@ -62,7 +48,7 @@ def test_latest_stable_tag_from_the_repository():
 @pytest.mark.skipif(not _has_tag("v4.5.0"), reason="needs the repository's tags (fetch-depth: 0)")
 def test_the_stale_tag_guard_skips_docs_for_a_tag_without_the_published_set(tmp_path):
     # v4.5.0 predates the published doc set: publishing it would put the old docs online.
-    report = build_site.build(tmp_path / "_site", docs_ref="v4.5.0", fetch_manifest=False)
+    report = build_site.build(tmp_path / "_site", docs_ref="v4.5.0")
     assert report.docs == "skipped: stale tag"
     assert report.docs_pages == []
     site = tmp_path / "_site"
@@ -96,7 +82,7 @@ def test_docs_source_at_a_ref_reads_that_ref():
 
 
 def test_export_without_rendering_writes_llms_full(tmp_path):
-    report = build_site.build(tmp_path / "_site", docs_ref="worktree", render=False, fetch_manifest=False)
+    report = build_site.build(tmp_path / "_site", docs_ref="worktree", render=False)
     assert report.docs == "published"
     assert (tmp_path / "_site" / "llms-full.txt").is_file()
     assert report.docs_pages == []  # nothing rendered, so nothing to list or lay out
@@ -172,26 +158,25 @@ def test_clients_need_a_unique_slug(tmp_path, monkeypatch, clients):
 def test_clients_requirement_sentence():
     assert build_site.clients_requirement() == (
         "An MCP-compatible AI client, such as Claude Desktop, Claude Code, claude.ai (organization deployment), ChatGPT"
-        " or Gemini Enterprise (organization deployment)"
+        " (organization deployment) or Gemini Enterprise (organization deployment)"
     )
 
 
 def test_every_page_gets_the_same_header_and_footer():
-    # The partials render one header, menu and footer: the four pages must
-    # be identical there, the download page's CTA aside.
+    # The partials render one header, menu and footer: every page must be identical there.
     def chrome(path):
         page = read_page(path)
         header = page[page.index('<a class="skip-link"') : page.index("</header>")]
         footer = page[page.index('<footer class="site-footer') : page.index("</footer>")]
-        return header.replace('href="/releases/">All releases', 'href="/install/">Install'), footer
+        return header, footer
 
     assert len({chrome(path) for path in build_site.PAGES}) == 1
     header, footer = chrome("/")
     assert '<details class="nav-menu">' in header and "nav-menu-panel" in header
     assert '<li><a href="/privacy/" data-privacy-link>Privacy</a></li>' in footer
     assert '<li><a href="/privacy/#your-choice" data-cookie-settings>Cookie settings</a></li>' in footer
-    assert '<li><a href="/releases/">Releases</a></li>' in footer
-    assert '<a class="nav-cta" href="/releases/">All releases</a>' in read_page("/download/")
+    assert "/releases/" not in footer
+    assert '<a class="nav-cta" href="/install/">Install</a>' in read_page("/download/")
 
 
 def test_no_include_line_survives_the_build():
@@ -200,308 +185,46 @@ def test_no_include_line_survives_the_build():
         assert "{{" not in read_page(path)
 
 
-# ---- /download/ pre-render -----------------------------------------------------------------------
+# ---- /download/ stub and the retired pages -------------------------------------------------------
 
 
-def test_prerender_writes_cards_version_and_release_notes():
-    source = (WEBSITE / "download" / "index.html").read_text(encoding="utf-8")
-    page = build_site.prerender_download(build_site.assemble_page(source), MANIFEST)
-    assert build_site.LOADING_ROW not in page
-    assert "<span>Version 4.5.0</span>" in page
-    assert 'href="https://github.com/privacyfence/privacyfence/releases/tag/v4.5.0">Release notes</a>' in page
-    assert page.count('class="download-card"') == 3
-    assert 'href="https://downloads.privacyfence.eu/download/stable/macos-arm64"' in page
-    # A crawler following a card's button would be counted as a download.
-    downloads = re.findall(r"<a [^>]*download-button[^>]*>", page)
-    assert len(downloads) == 3 and all('rel="nofollow"' in a for a in downloads)
-    assert "PrivacyFence-4.5.0.dmg · 100.0 MB" in page
-    assert "privacyfence_4.5.0_amd64.deb · 1 KB" in page
-    assert "<h3>linux-arm64</h3>" in page  # an id the display map lacks still gets a card
-    assert f"<code>{'a' * 64}</code>" in page
+def test_download_is_a_stub_that_links_to_install_and_github_releases():
+    # ADR 0305: no installers, no counter and no Worker; the old URL still answers.
+    page = read_page("/download/")
+    assert 'href="/install/"' in page
+    assert 'href="https://github.com/privacyfence/privacyfence/releases"' in page
+    assert "<script src=\"/site.js" in page
+    assert "download.js" not in page and "downloads.privacyfence.eu" not in page
+    assert "download-card" not in page
 
 
-def test_prerender_needs_its_placeholders():
-    with pytest.raises(build_site.BuildError):
-        build_site.prerender_download("<html></html>", MANIFEST)
+def test_the_releases_page_and_the_download_counter_are_gone():
+    # ADR 0305.
+    assert "/releases/" not in build_site.PAGES
+    assert not (WEBSITE / "releases").exists()
+    assert not (WEBSITE / "stats.js").exists()
+    assert not (WEBSITE / "download" / "download.js").exists()
+    assert not any("releases/" in dest or "download.js" in dest or dest == "stats.js" for dest in build_site.STATIC)
+    for path in build_site.PAGES:
+        page = read_page(path)
+        assert 'href="/releases/"' not in page, path
+        assert "stats.js" not in page, path
 
 
-def test_software_version_goes_into_json_ld():
-    for source in ("index.html", "download/index.html"):
-        page = build_site.set_software_version((WEBSITE / source).read_text(encoding="utf-8"), "4.5.0")
+def test_the_build_makes_no_network_request_for_releases():
+    assert not hasattr(build_site, "fetch_stable_manifest")
+    assert not hasattr(build_site, "fetch_all_releases")
+    assert "downloads.privacyfence.eu" not in (REPO / "scripts" / "build_site.py").read_text(encoding="utf-8")
+
+
+def test_no_software_node_advertises_a_download_or_a_pypi_package():
+    for path in ("/", "/download/"):
+        page = read_page(path)
         blocks = re.findall(r'<script type="application/ld\+json">(.*?)</script>', page, flags=re.S)
         nodes = [n for b in blocks for d in [json.loads(b)] for n in d.get("@graph", [d])]
-        assert next(n for n in nodes if n["@type"] == "SoftwareApplication")["softwareVersion"] == "4.5.0"
-
-
-def test_platform_names_match_download_js():
-    script = (WEBSITE / "download" / "download.js").read_text(encoding="utf-8")
-    in_js = dict(
-        (match[1], (match[2], match[3]))
-        for match in re.finditer(r"'([\w-]+)': \{ name: '([^']*)', detail: '([^']*)'", script)
-    )
-    assert in_js == build_site.PLATFORMS
-
-
-def test_an_unreachable_worker_is_a_warning_not_a_failure(monkeypatch, capsys):
-    def fail(*args, **kwargs):
-        raise urllib.error.URLError("offline")
-
-    monkeypatch.setattr(build_site.urllib.request, "urlopen", fail)
-    assert build_site.fetch_stable_manifest() is None
-    assert "could not read the stable release manifest" in capsys.readouterr().err
-
-
-def test_a_manifest_without_artifacts_is_ignored(monkeypatch, capsys):
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def read(self, *args):
-            return b'{"version": "4.5.0", "artifacts": []}'
-
-    monkeypatch.setattr(build_site.urllib.request, "urlopen", lambda *a, **k: Response())
-    assert build_site.fetch_stable_manifest() is None
-    assert "no version or artifacts" in capsys.readouterr().err
-
-
-def test_the_build_prerenders_when_given_a_manifest(tmp_path):
-    report = build_site.build(tmp_path / "_site", docs_ref=None, manifest=MANIFEST)
-    assert report.download_version == "4.5.0"
-    page = (tmp_path / "_site" / "download" / "index.html").read_text(encoding="utf-8")
-    assert "<span>Version 4.5.0</span>" in page
-    assert '"softwareVersion": "4.5.0"' in (tmp_path / "_site" / "index.html").read_text(encoding="utf-8")
-
-
-# ---- /releases/ pre-render -----------------------------------------------------------------------
-
-
-def _installer(artifact_id, filename, **extra):
-    return {"id": artifact_id, "kind": "installer", "filename": filename, **extra}
-
-
-RELEASES = {
-    "channels": {
-        "stable": {
-            "version": "4.6.1",
-            "channel": "stable",
-            "published_at": "2026-09-25T10:00:00Z",
-            "artifacts": [
-                _installer("macos-arm64", "PrivacyFence-4.6.1.dmg", size=104857600, sha256="a" * 64),
-                _installer("linux-arm64", "privacyfence_4.6.1_arm64.deb"),
-            ],
-        },
-        "alpha": {
-            "version": "4.7.0a2",
-            "channel": "alpha",
-            "published_at": "2026-09-26T08:00:00Z",
-            "artifacts": [_installer("windows-x64", "PrivacyFence-4.7.0a2-setup.exe", size=900)],
-        },
-        # A leftover from an older cycle: listed, and marked as older than stable.
-        "rc": {
-            "version": "4.0.0rc3",
-            "channel": "rc",
-            "published_at": "2026-08-30T08:00:00Z",
-            "artifacts": [
-                _installer("linux-x64", "privacyfence_4.0.0rc3_amd64.deb"),
-                {"id": "sbom", "kind": "sbom", "filename": "privacyfence-4.0.0rc3.cdx.json"},
-            ],
-        },
-        "beta": None,
-    }
-}
-
-
-# What /api/releases/history returns: every published version on every channel, newest first.
-HISTORY = {
-    "releases": [
-        RELEASES["channels"]["alpha"],
-        RELEASES["channels"]["stable"],
-        {
-            "version": "4.6.1rc1",
-            "channel": "rc",
-            "published_at": "2026-09-22T08:00:00Z",
-            "artifacts": [_installer("macos-arm64", "PrivacyFence-4.6.1rc1.dmg")],
-        },
-        {
-            "version": "4.6.0",
-            "channel": "stable",
-            "published_at": "2026-09-20T08:00:00Z",
-            "artifacts": [_installer("linux-x64", "privacyfence_4.6.0_amd64.deb")],
-        },
-        RELEASES["channels"]["rc"],
-    ]
-}
-
-
-def test_release_version_order():
-    order = ["4.10.0", "4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.1b2", "4.6.1b1", "4.6.1a9", "4.0.0rc3"]
-    assert sorted(order, key=build_site.release_version_key, reverse=True) == order
-    assert build_site.release_version_key("4.6.1.dev3+gabc") is None
-    assert build_site.release_version_key("latest") is None
-
-
-def test_published_releases_are_newest_first_installers_only():
-    releases = build_site.published_releases(RELEASES)
-    assert [m["version"] for m in releases] == ["4.7.0a2", "4.6.1", "4.0.0rc3"]
-    rc = releases[-1]
-    assert [a["id"] for a in rc["artifacts"]] == ["linux-x64"]
-
-
-def test_a_channel_without_installers_or_a_parseable_version_is_left_out():
-    data = {
-        "channels": {
-            "stable": {"version": "4.6.1", "artifacts": [{"id": "sbom", "kind": "sbom", "filename": "x.json"}]},
-            "beta": {"version": "4.7.0.dev1", "artifacts": [_installer("linux-x64", "x.deb")]},
-            "alpha": {"version": "4.7.0a1", "artifacts": [_installer("linux-x64", "x.deb")]},
-        }
-    }
-    assert [m["version"] for m in build_site.published_releases(data)] == ["4.7.0a1"]
-    assert build_site.published_releases({"channels": {}}) == []
-
-
-def test_published_releases_take_the_whole_history():
-    releases = build_site.published_releases(HISTORY)
-    assert [m["version"] for m in releases] == ["4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.0", "4.0.0rc3"]
-    assert [a["id"] for a in releases[-1]["artifacts"]] == ["linux-x64"]  # the sbom is dropped
-    # Order comes from the versions, not from the route; unknown channels and junk are left out.
-    shuffled = {
-        "releases": [
-            *reversed(HISTORY["releases"]),
-            {"version": "4.9.0", "channel": "nightly", "artifacts": [_installer("linux-x64", "x.deb")]},
-            {"version": "4.8.0.dev1", "channel": "stable", "artifacts": [_installer("linux-x64", "x.deb")]},
-            "not a manifest",
-        ]
-    }
-    assert build_site.published_releases(shuffled) == releases
-    assert build_site.published_releases({"releases": []}) == []
-
-
-def test_history_rows_mark_only_the_newest_stable_current_and_older_prereleases_superseded():
-    rows = build_site.render_release_rows(build_site.published_releases(HISTORY)).split("\n")
-    by_version = {re.search(r'data-version="([^"]+)"', row)[1]: row for row in rows}
-    assert list(by_version) == ["4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.0", "4.0.0rc3"]
-    assert [v for v, row in by_version.items() if "download-badge" in row] == ["4.6.1"]
-    assert [v for v, row in by_version.items() if "Superseded by 4.6.1" in row] == ["4.6.1rc1", "4.0.0rc3"]
-    assert 'href="https://downloads.privacyfence.eu/download/version/4.6.0/linux-x64"' in by_version["4.6.0"]
-
-
-def test_release_rows_link_the_worker_by_exact_version():
-    rows = build_site.render_release_rows(build_site.published_releases(RELEASES))
-    assert rows.count("<tr ") == 3
-    assert 'href="https://downloads.privacyfence.eu/download/version/4.6.1/macos-arm64"' in rows
-    assert 'href="https://downloads.privacyfence.eu/download/version/4.7.0a2/windows-x64"' in rows
-    assert 'href="https://github.com/privacyfence/privacyfence/releases/tag/v4.6.1">Release notes</a>' in rows
-    assert '<th scope="row">4.6.1 <span class="download-badge">Current</span></th>' in rows
-    assert '<time datetime="2026-09-25">2026-09-25</time>' in rows
-    assert '<td>Release candidate<span class="release-superseded">Superseded by 4.6.1</span></td>' in rows
-    assert "<td>Alpha</td>" in rows  # newer than stable: not superseded
-    assert ">linux-arm64</a>" in rows  # an id the display map lacks still gets a link
-    assert '<span class="release-size">100.0 MB</span>' in rows
-    assert f"<code>{'a' * 64}</code>" in rows
-    assert "sbom" not in rows and "cdx.json" not in rows
-    # A crawler following an installer link would be counted as a download.
-    downloads = re.findall(r'<a [^>]*href="https://downloads\.privacyfence\.eu/[^>]*>', rows)
-    assert downloads and all('rel="nofollow"' in a for a in downloads)
-    for href in re.findall(r'href="([^"]+)"', rows):
-        assert href.startswith(
-            (
-                "https://downloads.privacyfence.eu/download/version/",
-                "https://github.com/privacyfence/privacyfence/releases/tag/v",
-            )
-        )
-
-
-def test_releases_prerender_replaces_the_loading_row():
-    source = build_site.assemble_page((WEBSITE / "releases" / "index.html").read_text(encoding="utf-8"))
-    page = build_site.prerender_releases(source, RELEASES)
-    assert build_site.RELEASES_LOADING_ROW not in page
-    assert page.count('<tr data-channel="') == 3
-    # Nothing published: the loading row stays, and releases.js shows the fallback.
-    assert build_site.prerender_releases(source, {"channels": {"stable": None}}) == source
-    with pytest.raises(build_site.BuildError):
-        build_site.prerender_releases("<html></html>", RELEASES)
-
-
-def test_the_build_prerenders_the_history_when_given_it(tmp_path):
-    report = build_site.build(tmp_path / "_site", docs_ref=None, manifest=MANIFEST, releases=HISTORY)
-    assert report.releases == ["4.7.0a2", "4.6.1", "4.6.1rc1", "4.6.0", "4.0.0rc3"]
-    page = (tmp_path / "_site" / "releases" / "index.html").read_text(encoding="utf-8")
-    assert "download/version/4.6.0/linux-x64" in page
-
-
-def test_the_build_prerenders_releases_when_given_the_list(tmp_path):
-    report = build_site.build(tmp_path / "_site", docs_ref=None, manifest=MANIFEST, releases=RELEASES)
-    assert report.releases == ["4.7.0a2", "4.6.1", "4.0.0rc3"]
-    page = (tmp_path / "_site" / "releases" / "index.html").read_text(encoding="utf-8")
-    assert "download/version/4.7.0a2/windows-x64" in page
-
-
-def test_an_unreachable_worker_leaves_releases_to_the_browser(monkeypatch, capsys):
-    def fail(*args, **kwargs):
-        raise urllib.error.URLError("offline")
-
-    monkeypatch.setattr(build_site.urllib.request, "urlopen", fail)
-    assert build_site.fetch_all_releases() is None
-    assert "could not read the release list" in capsys.readouterr().err
-
-
-def _stub_worker(monkeypatch, responses):
-    """urlopen answering each URL from `responses`: a dict/list is the JSON body, an exception is
-    raised. Returns the URLs asked for, in order."""
-    asked = []
-
-    class Response(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    def urlopen(request, timeout):
-        asked.append(request.full_url)
-        answer = responses[request.full_url]
-        if isinstance(answer, Exception):
-            raise answer
-        return Response(json.dumps(answer).encode())
-
-    monkeypatch.setattr(build_site.urllib.request, "urlopen", urlopen)
-    return asked
-
-
-def test_the_build_reads_the_history_first(monkeypatch):
-    asked = _stub_worker(monkeypatch, {build_site.HISTORY_API: HISTORY, build_site.ALL_RELEASES_API: RELEASES})
-    assert build_site.fetch_all_releases() == HISTORY
-    assert asked == [build_site.HISTORY_API]
-
-
-@pytest.mark.parametrize(
-    "history",
-    [
-        urllib.error.HTTPError(build_site.HISTORY_API, 404, "Not Found", {}, None),
-        urllib.error.URLError("reset"),
-        {"error": "no such API route"},
-    ],
-    ids=["route-missing", "unreachable", "unexpected-body"],
-)
-def test_a_worker_without_the_history_falls_back_to_the_newest_per_channel(monkeypatch, capsys, history):
-    asked = _stub_worker(monkeypatch, {build_site.HISTORY_API: history, build_site.ALL_RELEASES_API: RELEASES})
-    assert build_site.fetch_all_releases() == RELEASES
-    assert asked == [build_site.HISTORY_API, build_site.ALL_RELEASES_API]
-    assert "falls back to the newest release per channel" in capsys.readouterr().err
-
-
-def test_releases_js_mirrors_the_build():
-    script = (WEBSITE / "releases" / "releases.js").read_text(encoding="utf-8")
-    platforms = dict(
-        (match[1], (match[2], match[3]))
-        for match in re.finditer(r"'([\w-]+)': \{ name: '([^']*)', detail: '([^']*)'", script)
-    )
-    assert platforms == build_site.PLATFORMS
-    channels = re.search(r"const CHANNEL_NAMES = \{([^}]*)\}", script)[1]
-    assert dict(re.findall(r"(\w+): '([^']*)'", channels)) == build_site.CHANNEL_NAMES
+        software = next(n for n in nodes if n["@type"] == "SoftwareApplication")
+        assert "downloadUrl" not in software and "operatingSystem" not in software and "softwareVersion" not in software
+        assert "https://pypi.org/project/privacyfence/" not in software["sameAs"]
 
 
 # ---- Docs export ---------------------------------------------------------------------------------
@@ -620,7 +343,7 @@ def test_llms_txt_starts_with_the_canonical_description():
 
 def test_main_writes_a_report(tmp_path, capsys):
     report_file = tmp_path / "report.json"
-    code = build_site.main(["--out", str(tmp_path / "_site"), "--no-docs", "--offline", "--report", str(report_file)])
+    code = build_site.main(["--out", str(tmp_path / "_site"), "--no-docs", "--report", str(report_file)])
     assert code == 0
     report = json.loads(report_file.read_text(encoding="utf-8"))
     assert report["docs"] == "skipped: --no-docs"
@@ -629,7 +352,7 @@ def test_main_writes_a_report(tmp_path, capsys):
 
 
 def test_main_reports_a_build_error(tmp_path, capsys):
-    code = build_site.main(["--out", str(tmp_path / "_site"), "--docs-ref", "no-such-ref", "--offline"])
+    code = build_site.main(["--out", str(tmp_path / "_site"), "--docs-ref", "no-such-ref"])
     assert code == 1
     assert "'no-such-ref' is not a commit" in capsys.readouterr().err
 

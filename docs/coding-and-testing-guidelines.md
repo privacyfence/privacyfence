@@ -3,10 +3,9 @@
 These are the repository's standing expectations for implementation and test changes. It is
 descriptive before it is prescriptive: every rule below reflects a pattern already established in
 `src/privacyfence/` and `tests/` — the Python daemon — not a generic style guide imported wholesale.
-`mcpb/shim/` (the Node/TypeScript stdio-to-`/mcp` transport proxy Claude Desktop's `.mcpb` installs)
-follows its own, separate conventions; this document covers it only where the shim's checks are
-part of the definition of done or a change on its side of a contract needs a matching Python-side
-check.
+`n8n/` (the Node/TypeScript n8n community node) and `sync/` (the `privacyfence-sync` client)
+follow their own, separate conventions; this document covers them only where their checks are
+part of the definition of done.
 
 See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for process (PRs, issues, license) and
 [`security-and-compliance.md`](security-and-compliance.md) for the security model this code
@@ -22,7 +21,7 @@ exercised independently.
 
 ### 1.1 Language baseline
 
-- Python 3.11+. Every module starts with `from __future__ import annotations` (right after the
+- Python 3.11.5+. Every module starts with `from __future__ import annotations` (right after the
   module docstring, before other imports).
 - Prefer the standard library over new dependencies (stated in `CONTRIBUTING.md`).
 - Use modern union syntax, `X | None`, not `Optional[X]`. `src/privacyfence/` has no
@@ -139,8 +138,8 @@ This is the one area where "looks like a style rule" is actually a security inva
   existing audit/data model explicitly requires a safe representation — log identifiers, subjects,
   counts instead.
 - `print()` is reserved for the handful of argparse CLI flags in `daemon_main.py`
-  (`--gmail-oauth`, `--telegram-setup`, `--print-mcp-token`, ...) that a human invokes directly at a
-  terminal and that need to print a human-facing confirmation. It does not belong inside a `*_client.py` method — those are
+  (`--print-env-from-bundle`, `--relay-dns-records`, `--rotate-upstream-claim-key`, ...) that a human
+  invokes directly at a terminal and that need to print a human-facing confirmation. It does not belong inside a `*_client.py` method — those are
   library code, called from multiple contexts, and should only log; the CLI entry point that calls
   them is responsible for any terminal-facing `print`.
 
@@ -167,27 +166,16 @@ merge.
 conflict with every open branch. Match the surrounding code's style instead
 (`CONTRIBUTING.md`, "Code Style"). See [ADR 0150](adr/0150-ruff-format-is-not-enforced.md).
 
-For Node/TypeScript changes under `mcpb/shim/`, run:
+For Node/TypeScript changes under `n8n/`, run:
 
 ```bash
-cd mcpb/shim
-npm test
+cd n8n
+npm ci
+npm run lint
 npm run typecheck
 npm run build
-```
-
-For changes under `cloudflare/downloads/` (the downloads.privacyfence.eu Worker,
-[`downloads-and-release-kpi.md`](downloads-and-release-kpi.md)), run:
-
-```bash
-cd cloudflare/downloads
 npm test
-npm run typecheck
-npm run dry-run
 ```
-
-`npm test` runs entirely against local Miniflare/workerd -- no Cloudflare credentials or network
-access to the real R2/D1 resources involved.
 
 ### 1.10 Design system
 
@@ -234,22 +222,19 @@ layout rules — see [`testing-policy.md`](testing-policy.md#the-shared-design-s
 
   | Source module | Tested in |
   |---|---|
-  | `connector_host.py` | its consumers' tests: `test_settings_controller.py`, `test_daemon_main.py`, `web/test_routes_settings.py`, `web/test_server.py` |
-  | `std_streams.py` | `test_daemon_std_streams.py` |
-  | `windows_service.py` | `test_daemon_main.py`, `test_privilege_separation.py` |
+  | `connector_host.py` | its consumers' tests: `test_daemon_main.py`, `web/test_routes_settings.py`, `web/test_server.py` |
   | `agent_overrides.py` | `web/test_agent_attestation.py` |
   | `web/step_up_decide.py` | `web/test_approval_step_up.py` |
   | `web/routes_org_stepup.py` | `web/test_routes_org_approvals.py` |
 
   A new source module gets its own test module unless it belongs in this table for the same reason.
-- `tests/integration/`, `tests/system/`, and `tests/platform/` hold cross-boundary, full-scenario,
-  and OS-level tests respectively — see [`testing-policy.md`](testing-policy.md) for the full layer
+- `tests/integration/` and `tests/system/` hold cross-boundary and full-scenario tests respectively — see [`testing-policy.md`](testing-policy.md) for the full layer
   taxonomy and what runs where.
-- New tests carry the marker that matches their layer: `unit`, `integration`, `system`, `platform`,
+- New tests carry the marker that matches their layer: `unit`, `integration`, `system`,
   `browser`, `packaged`, or `live` (declared in `pyproject.toml`'s `markers`).
 - Run the smallest relevant test set while developing, then the affected unit/integration suite
-  before opening/updating a PR. CI runs the full suite on Linux, Windows, and macOS runners (see
-  `testing-policy.md`); a 100% pass rate is required to merge on all of them.
+  before opening/updating a PR. CI runs the full suite on Linux runners only (see
+  `testing-policy.md` and [ADR 0307](adr/0307-linux-is-the-only-ci-platform.md)); a 100% pass rate is required to merge.
 - Keep ordinary unit/integration tests offline and deterministic. Do not add real connector
   credentials or unmocked provider calls to GitHub-hosted CI.
 
@@ -358,8 +343,6 @@ checklist for the PR description.
       `[tool.ruff.lint]`/`[tool.mypy]`/`[tool.bandit]` in `pyproject.toml`). A new Bandit finding
       that's a genuine false positive gets a `# nosec BXXX  # <reason>` comment at its call site,
       not a suppression in `pyproject.toml`.
-- [ ] In `mcpb/shim/`: `npm test` and `npm run typecheck` pass (CI's `test` job runs both, and
-      blocks on them, on every PR — whether or not the PR touches the shim).
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading (not under
       a concrete version heading — see `docs/releasing.md`, "Release notes come from
       CHANGELOG.md"). Internal-only changes don't need one.
@@ -389,10 +372,8 @@ checklist for the PR description.
       confirm `test_mcp_daemon_contract.py` still passes — it drives a real, socket-bound daemon
       with the official `mcp` client, catching what the in-process `test_routes_mcp.py` transport
       can't.
-- [ ] `web/mcp_auth.py`, `web/server.py`'s `mcp_url` discovery-file writing, or anything under
-      `mcpb/shim/src/`: run `pytest tests/integration -v` locally (needs Node on `PATH`) and confirm
-      `test_shim_mcp_contract.py` still passes — a change on one side of the shim<->`/mcp` contract
-      without the other only fails there, not in either side's own unit tests.
+- [ ] `web/mcp_auth.py` or `web/server.py`'s `mcp_url` discovery-file writing: run
+      `pytest tests/integration -v` locally and confirm `test_mcp_daemon_contract.py` still passes.
 - [ ] A dependency in `pyproject.toml` (a version bound, a new package, an extra): run
       `scripts/update_dependency_locks.sh` (needs `uv` on `PATH`, see the script's own comments for
       why) and commit the resulting `requirements/*.lock.txt` — `dependency-audit.yml`'s
@@ -402,8 +383,9 @@ checklist for the PR description.
       `bandit -r sync/src` pass (CI's `sync` job, a required check, runs the same three). If
       `sync/README.md` changed, copy it to
       `plugins/privacyfence-sync/skills/privacyfence-sync-recipes/references/README.md`.
-- [ ] `cloudflare/downloads/`: `npm test`, `npm run typecheck` and `npm run dry-run` there pass
-      ([§1.9](#19-formatting-and-static-analysis)).
+- [ ] `n8n/**`: in `n8n/`, `npm ci`, `npm run lint`, `npm run typecheck`, `npm run build` and `npm test`
+      pass (CI's `n8n-node` job, a required check, runs the same), then
+      `pytest tests/integration/test_n8n_node_contract.py -v` passes.
 
 ### 2.8 Test design
 
@@ -476,9 +458,8 @@ per-test code, as long as:
 - any subprocess log is named `daemon.log`, `install*.log` or `uninstall*.log`, or is a `*.jsonl`
   audit log.
 
-A test that instead drives a real system-wide install (`dpkg -i`, not a `tmp_path`-scoped one)
-needs its own small capture call into `tests.diagnostics.failure_dir()`/`suite_name_for()` — see
-`test_deb_packaged_lifecycle.py`'s `_capture_installed_file_manifest` for the pattern.
+A test that instead drives something outside its `tmp_path` (a container, say) needs its own small
+capture call into `tests.diagnostics.failure_dir()`/`suite_name_for()`.
 
 ## 3. Adding a connector
 
@@ -510,15 +491,14 @@ runtime or in review, so work through them deliberately.
 | Rule scopes an "Always allow" can offer for the new operations | `policy/scopes.py` (`SCOPE_SELECTORS`/`NEW_SCOPE_SELECTORS`), `policy/catalogue.py` (`EXTRA_SCOPES`), `policy/propose.py` (`PROPOSABLE_SCOPES`), `policy/resource_registry.py` for grants | **enforced** once added: `tests/unit/policy/test_scopes.py` (each selector has a fixture), `test_catalogue.py`, `test_propose.py` |
 | Regenerate the always-allow reference | `python3 scripts/generate_always_allow_reference.py` rewrites `docs/always-allow-rules-reference.md` | **enforced**: `tests/unit/test_generate_always_allow_reference.py` |
 
-**Daemon, settings and packaging**
+**Daemon and settings**
 
 | What | Where | Enforced by |
 |---|---|---|
 | Import, credential path, build block honouring `connectors.<name>.enabled` | `daemon_main.py`: `TOKEN_FILES`, `build_connectors()` | review |
 | Interactive auth: a `run_<name>_oauth()` and `--<name>-oauth` flag | `daemon_main.py` | review |
-| Settings page: connector list, label, org-bundle section, client class | `settings_controller.py`: `ALL_CONNECTORS`, `_CONNECTOR_LABEL_OVERRIDES`, `ORG_CONFIG_SERVICE`, and for Google `GOOGLE_CONNECTORS`/`_GOOGLE_CLIENTS` | review |
+| Settings page: connector list, label, org-bundle section, client class | `settings_state.py`: `ALL_CONNECTORS`, `_CONNECTOR_LABEL_OVERRIDES`, `ORG_CONFIG_SERVICE`, and for Google `GOOGLE_CONNECTORS`/`_GOOGLE_CLIENTS` | review |
 | Org-mode per-user connect page: scopes, label, row | `web/routes_connect.py` | review |
-| Explicit PyInstaller hidden import | `scripts/pyinstaller_common.py`'s `privacyfence.connectors.*` list | **enforced**: `tests/unit/test_pyinstaller_hidden_imports.py` (the list equals the modules in `connectors/`) |
 | Approval-card icon (real brand asset only) | `src/privacyfence/resources/connector_icons/<name>.png` | optional; no icon renders cleanly |
 
 **QA and docs**
@@ -548,19 +528,7 @@ the rows above land in two changes, in this order:
 A release cut between the two never shows a half-built service. `PRIVACYFENCE_PREVIEW_SERVICES`
 (a comma-separated list, or `*`) shows preview services on one server; the QA server sets `*`.
 
-## 4. Packaging changes
-
-When changing PyInstaller specs, installers, Debian metadata, startup registration, MCPB contents,
-or release workflows, run the corresponding package/build checks and update
-[`platform-support.md`](platform-support.md) if user-visible behavior changes. The packaged-artifact
-smoke tests (`pytest.mark.packaged`) run only inside `build.yml`, `tests.yml`'s `org-docker-image` and the three graphical-session
-workflows (`linux-`, `windows-` and `macos-graphical-session.yml`); dispatch them against the branch
-to exercise them before merging.
-
-Do not use a source checkout as proof that a packaged artifact works — see
-[`dev-vs-live-setup.md`](dev-vs-live-setup.md).
-
-## 5. Documentation
+## 4. Documentation
 
 Update standing documentation in the same PR as behavior changes. Standing docs describe current
 behavior, not implementation history: no phase narratives, issue numbers, version qualifiers or

@@ -14,29 +14,19 @@ permissions:
 
 jobs:
   test:
-    # A prior refactor deleted the last
-    # AppKit-tainted code in this repo -- the native menu bar/approval
-    # dialogs/settings window -- so nothing here depends on real AppKit/
-    # PyObjC behavior any more, and the whole suite is platform-independent.
-    # rumps/pyobjc-framework-* aren't installed here or anywhere else --
-    # the macos-native extra that used to declare them was removed outright
-    # (the exact package set is preserved in docs/adr/0001-remove-macos-native-extra.md).
-    # Runs on ubuntu-latest for the same reason any other
-    # platform-independent Python project would: it's the cheaper, faster
-    # runner, and there's no longer a platform split to test across two
-    # jobs. Building/signing the actual macOS .app/.dmg is still
-    # macOS-only, and still covered separately by build.yml on a real
-    # macos-latest runner.
+    # PrivacyFence is organization mode and the Docker image only (ADR 0306), so nothing here
+    # depends on a desktop platform and the whole suite is platform-independent. It runs on
+    # ubuntu-latest, the cheaper and faster runner; the org image itself is built and tested
+    # per architecture by build.yml's `build-org-image` job.
     #
-    # This is the full suite (Python tests + the Node shim's own tests,
-    # typecheck and build) and runs on 3.13 only -- the version
+    # This is the full suite and runs on 3.13 only -- the version
     # pyproject.toml's [project.optional-dependencies].dev/build tooling
     # and the packaging workflows (build.yml) target. The other
     # supported versions (3.11, the `requires-python` floor, 3.12, and 3.14,
     # the default interpreter on current Ubuntu releases) are covered via
     # the `test-python-compat` job below with a reduced, Node-free suite --
-    # running the Node/shim steps again per Python version would be pure
-    # cost with no signal, since the shim is a separate Node runtime not
+    # running the Node steps again per Python version would be pure
+    # cost with no signal, since the n8n node is a separate Node runtime not
     # affected by which CPython version the daemon runs under.
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -53,12 +43,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-          # Cache ~/.npm keyed on mcpb/shim/package-lock.json -- without
+          # Cache ~/.npm keyed on the lockfiles below -- without
           # this, `npm ci` below is a fully cold install from the registry
           # on every run (no lockfile changes needed to trigger it).
           cache: npm
           cache-dependency-path: |
-            mcpb/shim/package-lock.json
+            n8n/package-lock.json
             tests/integration/ai_clients/package-lock.json
 
       - name: Install dependencies
@@ -73,29 +63,13 @@ jobs:
       - name: Install Playwright browsers
         run: playwright install --with-deps chromium
 
-      - name: Install shim dependencies
+      # tests/integration/test_n8n_node_contract.py drives the n8n node's own
+      # sources against a real /mcp endpoint, so n8n/'s dependencies must be
+      # installed before pytest runs (the test's fixture would otherwise run
+      # `npm ci` itself, inside the timed test step).
+      - name: Install n8n node dependencies
         run: npm ci
-        working-directory: mcpb/shim
-
-      # mcpb/shim/'s own suite (daemon discovery/launch, the stdio<->
-      # Streamable HTTP proxy) runs against mcpb/shim/src/*.ts directly via tsx. It's the
-      # only Node suite in this repo.
-      - name: Run shim test suite
-        run: npm test
-        working-directory: mcpb/shim
-
-      - name: Type-check shim
-        run: npm run typecheck
-        working-directory: mcpb/shim
-
-      # tests/integration/test_shim_mcp_contract.py spawns the real built
-      # shim.js against a real /mcp endpoint, so it needs to be built before
-      # pytest runs (the test builds it lazily on a cache miss too, but
-      # building here keeps that cost out of the timed test step and fails
-      # fast on a build error instead of a confusing test skip).
-      - name: Build shim
-        run: npm run build
-        working-directory: mcpb/shim
+        working-directory: n8n
 
       # The exact-pinned AI-client CLIs the T3 contract tests run
       # (tests/integration/test_claude_code_contract.py), integrity-checked
@@ -117,7 +91,6 @@ jobs:
         env:
           CLAUDE_CODE_BIN: ${{ github.workspace }}/tests/integration/ai_clients/node_modules/.bin/claude
           PRIVACYFENCE_REQUIRE_BROWSER: "1"
-          PRIVACYFENCE_REQUIRE_NODE: "1"
         run: |
           pytest -v --cov=src/privacyfence --cov-branch \
             --cov-report=term-missing \
@@ -151,11 +124,7 @@ jobs:
       # under test-results/browser-smoke/) plus the generic CI-diagnostics
       # capture (tests/diagnostics.py, wired in via tests/conftest.py's
       # pytest_runtest_makereport) for any failing `packaged`/`system`-marked
-      # test this job's own full-suite run reaches (tests/system/
-      # test_local_mode_system.py, and any packaged-artifact test whose own
-      # skipif finds a built artifact -- none normally do here, since this
-      # job doesn't build one, but a stray leftover dist/ would still get
-      # exercised and diagnosed the same way). Only ever written locally to
+      # test this job's own full-suite run reaches. Only ever written locally to
       # the runner's own disk otherwise -- upload it so a CI failure is
       # diagnosable from the Actions run itself, not just the traceback.
       # `failure()`, not `always()`: a passing (or never-reached) run leaves
@@ -187,20 +156,18 @@ jobs:
 
   # Prove the
   # package actually works on every Python version pyproject.toml's
-  # `requires-python = ">=3.11"` claims to support -- both below and above
+  # `requires-python = ">=3.11.5"` claims to support -- both below and above
   # the 3.13 the `test` job above happens to pin. Deliberately independent of `test`
   # (no `needs:`) so this runs in parallel and a failure here doesn't hide
   # behind/wait on the full job.
   #
   # This is a reduced core suite for when CI cost
-  # matters: the Python test suite only, no Node/npm setup and no shim
-  # build. tests/integration/test_shim_mcp_contract.py is explicitly
-  # excluded below rather than left to run -- its built_shim_entry fixture
-  # would otherwise build the shim from scratch on every matrix leg (GitHub's
-  # ubuntu-latest runners ship npm preinstalled, so it wouldn't skip itself
-  # the way it does in an environment with no npm at all), which is exactly
-  # the redundant Node-toolchain cost this job exists to avoid -- that
-  # coverage already comes from the `test` job's 3.13 run.
+  # matters: the Python test suite only, no Node/npm setup.
+  # tests/integration/test_n8n_node_contract.py is explicitly excluded
+  # below rather than left to run -- the n8n node's contract test needs
+  # n8n/'s dependencies installed, which is exactly the redundant
+  # Node-toolchain cost this job exists to avoid -- that coverage already
+  # comes from the `test` job's 3.13 run.
   test-python-compat:
     name: Test (Python ${{ matrix.python-version }}, core suite)
     runs-on: ubuntu-latest
@@ -211,11 +178,9 @@ jobs:
       matrix:
         # 3.13 is deliberately absent: that's the `test` job's own version,
         # so a leg here would be a second, reduced run of a suite that job
-        # already runs in full. 3.14 is here because it is the default
-        # `python3` on current Ubuntu releases -- the interpreter a
-        # `pip install privacyfence` on a fresh box actually resolves
-        # against, which `requires-python = ">=3.11"` already claims to
-        # support and nothing proved until now.
+        # already runs in full. The matrix guards the interpreters contributors
+        # use (3.11, 3.12) and the image's interpreter (3.14), all inside the
+        # `requires-python = ">=3.11.5"` range.
         python-version: ['3.11', '3.12', '3.14']
 
     steps:
@@ -235,7 +200,9 @@ jobs:
       # the coverage-floor ratchet's, to own -- duplicating it per Python
       # version here would just be redundant CI time).
       - name: Run test suite (100% pass rate required)
-        run: pytest -v --ignore=tests/integration/test_shim_mcp_contract.py
+        run: >-
+          pytest -v
+          --ignore=tests/integration/test_n8n_node_contract.py
 
       # Same failure-diagnostics capture as the `test` job's identically-named step --
       # the matrix leg's own Python version is folded into the artifact name
@@ -250,118 +217,17 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # A real-Windows run on every PR: catches the path-separator and
-  # Path-handling breaks the `test` job above, on Linux, can't.
-  #
-  # Deliberately the full core suite, not just the tests/platform/ subset:
-  # this job's first real run found four genuine cross-platform bugs in
-  # ordinary modules with no platform marker (settings_controller.py,
-  # drive.py, a shim-contract test, an audit-log test), none of which a
-  # subset chosen ahead of time would have included.
-  #
-  # It gates coverage of the Windows-only code the Linux run cannot execute: the
-  # `Windows coverage floors` step holds windows_service.py, windows_acl.py and
-  # web/control_channel.py at WINDOWS_MODULE_FLOORS in scripts/check_coverage_floor.py
-  # (the overall floor and MODULE_FLOORS stay the `test` job's). coverage.json is
-  # uploaded as `platform-windows-coverage`.
-  platform-windows:
-    runs-on: windows-latest
-    timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.13'
-
-      - name: Install dependencies
-        run: pip install -e ".[test]"
-
-      # Core Python suite only -- no Node/shim steps here, same "reduced
-      # suite" reasoning test-python-compat gives, since this job exists to
-      # catch Windows-specific breakage in the Python core, not to
-      # re-prove the (already cross-platform, Node-runtime) shim.
-      - name: Run test suite (100% pass rate required)
-        run: pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json
-
-      - name: Windows coverage floors
-        run: python scripts/check_coverage_floor.py --platform windows coverage.json
-
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: platform-windows-coverage
-          path: coverage.json
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # Same failure-diagnostics capture as the `test` job's identically-named step.
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: platform-windows-failure-diagnostics
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 30
-
-  # The macOS leg of the
-  # same "does the runtime work on every desktop OS" question the
-  # platform-windows job already answers for Windows -- runs the identical
-  # core suite (same reasoning: catch macOS-specific breakage in the Python
-  # core, not re-prove the Node-runtime shim, which build.yml's real DMG
-  # build already exercises on macos-latest separately). Deliberately not
-  # scoped to `scripts/build_dmg.sh`/signing/notarization -- that stays
-  # build.yml's job, tag-triggered only; this job runs from source, on
-  # every PR, the same way platform-windows does. Full core suite, not narrowed
-  # to tests/platform/, for the same reason platform-windows above gives.
-  platform-macos:
-    runs-on: macos-latest
-    timeout-minutes: 90
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.13'
-
-      - name: Install dependencies
-        run: pip install -e ".[test]"
-
-      # Core Python suite only -- same reduced-suite reasoning as
-      # platform-windows above.
-      - name: Run test suite (100% pass rate required)
-        run: pytest -v --cov=src/privacyfence --cov-report=term-missing
-
-      # Same failure-diagnostics capture as the `test` job's identically-named step.
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: platform-macos-failure-diagnostics
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 30
-
   # tests/integration/
   # test_org_ubuntu_release_smoke.py gates its whole module behind
   # PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS -- unset everywhere else in this
   # file, so the `test` job's own full-suite run above always skips it
   # instantly. Otherwise the only thing that sets that variable is
-  # build.yml's tag-triggered build-deb job, so an org-mode break would
+  # build.yml's tag-triggered build-org-image job, so an org-mode break would
   # first surface on a release tag. This job runs it as its own per-PR
   # leg instead: the module's own
-  # "Why a --target install, not the .deb" section is what keeps this
+  # "Why a --target install" section is what keeps this
   # cheap enough to run on every PR (a `pip install --target` of this
-  # package, seconds, not build.yml's real PyInstaller/.deb pipeline,
-  # minutes) without waiting for a release tag to find out org mode broke.
+  # package, seconds, not build.yml's image build, minutes) without waiting for a release tag to find out org mode broke.
   org-mode-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -378,14 +244,13 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[test]"
 
-      # Without nginx and systemd-analyze the guide config test skips its parser checks; here
-      # they must run, so a missing binary fails the step instead.
+      # Without nginx the guide config test skips its parser check; here it must run, so a
+      # missing binary fails the step instead.
       - name: Install nginx for the org guide config check
         run: sudo apt-get update && sudo apt-get install -y nginx
 
-      - name: Check the org guide's systemd unit and nginx configs
+      - name: Check the org guide's nginx configs
         run: |
-          command -v systemd-analyze
           command -v nginx
           pytest -v -rs tests/integration/test_org_guide_configs.py
 
@@ -504,6 +369,56 @@ jobs:
 
   # privacyfence-sync (sync/) installs and tests alone, with none of the daemon's dependencies.
   # No `paths:` filter, so it runs on every PR and both legs can be required checks.
+  # The n8n community node (n8n/, docs/n8n-node.md): its own lint, typecheck,
+  # build and unit tests, then the tarball `npm publish` would upload, kept as
+  # an artifact so a reviewer can inspect exactly what ships. The contract
+  # test against a real /mcp endpoint runs in the `test` job.
+  n8n-node:
+    name: n8n-node
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: n8n/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: n8n
+
+      - name: Lint
+        run: npm run lint
+        working-directory: n8n
+
+      - name: Type-check
+        run: npm run typecheck
+        working-directory: n8n
+
+      - name: Build
+        run: npm run build
+        working-directory: n8n
+
+      - name: Run tests
+        run: npm test
+        working-directory: n8n
+
+      - name: Pack
+        run: npm pack
+        working-directory: n8n
+
+      - name: Upload package tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: n8n-nodes-privacyfence-tgz
+          path: n8n/*.tgz
+          if-no-files-found: error
+          retention-days: 30
+
   sync:
     name: Sync client (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

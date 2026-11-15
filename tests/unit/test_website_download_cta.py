@@ -1,11 +1,10 @@
 """Guards that the homepage's primary Install CTAs point at the install page, and that
-page exists (docs/downloads-and-release-kpi.md).
+page exists (ADR 0277, ADR 0305).
 
-Deliberately a static test rather than a browser one. tests/integration/test_download_page.py
-covers what the page *does*, but it needs Chromium and skips without it -- and the failure this
-module exists to catch is the one where the CTAs survive a revert of the page (or vice versa),
-leaving every "Install" button on the homepage pointing at nothing. That is worth an assertion
-that runs on every machine, in every suite, with no browser.
+Deliberately a static test rather than a browser one: the failure this module exists to catch is
+the one where the CTAs survive a revert of the page (or vice versa), leaving every "Install"
+button on the homepage pointing at nothing. That is worth an assertion that runs on every machine,
+in every suite, with no browser.
 
 It also holds guardrail 7: every file under website/ is either published by the build manifest in
 scripts/build_site.py or explicitly kept back from the public site.
@@ -43,16 +42,22 @@ def test_homepage_install_ctas_point_at_the_install_page():
 
 
 def test_homepage_install_ctas_do_not_point_at_github():
-    # The specific regression: a CTA left on GitHub Releases although the download page
+    # The specific regression: a CTA left on GitHub Releases although the install page
     # is the primary path. GitHub stays linked for source and docs -- just not as the
-    # download button.
+    # install button.
     for href, label in _ctas():
         assert "github.com" not in href, f"{label.strip()!r} still points at GitHub: {href}"
 
 
+def test_the_header_cta_is_install_on_every_page():
+    # The shared header's call to action is Install everywhere, the /download/ stub included.
+    for path in build_site.PAGES:
+        assert '<a class="nav-cta" href="/install/">Install</a>' in read_page(path), path
+
+
 def test_github_remains_linked_for_source_and_docs():
-    # The cutover repoints the download buttons; it must not quietly delist the project's own
-    # source, which the plan keeps as a documented secondary source.
+    # The install buttons point at the install page; that must not quietly delist the project's own
+    # source, which stays a documented secondary source.
     assert "https://github.com/privacyfence/privacyfence" in read_page("/")
 
 
@@ -64,14 +69,10 @@ def test_every_website_file_is_actually_deployed():
     """Guardrail 7: every file under website/ is published by scripts/build_site.py's manifest,
     or is explicitly one of the build's inputs or repository-only.
 
-    This is the test that was missing when the download page shipped: the page existed in the
-    repo, the homepage CTAs pointed at it, every other test passed -- and `/download/` was a 404
-    in production, because the deploy step copied a hand-written list of files rather than the
-    directory. The build still publishes a named list rather than the directory, so nothing
-    lands on the public site by accident; this is what keeps that list complete.
-
-    Deliberately checks the whole tree rather than the two download files, so the next file
-    added under website/ is caught the same way instead of repeating this exact outage.
+    The build publishes a named list rather than the directory, so nothing lands on the public
+    site by accident; this is what keeps that list complete. It checks the whole tree, so a file
+    added under website/ and left out of the manifest is caught here instead of 404ing in
+    production.
     """
     accounted = (
         set(build_site.PAGES.values())

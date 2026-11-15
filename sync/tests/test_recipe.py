@@ -285,20 +285,13 @@ def test_export_needs_file_name(write_recipe: Any, tool: str) -> None:
 
 
 @pytest.mark.parametrize("tool", sorted(EXPORT_TOOLS))
-def test_export_rejects_destination_dir_and_save_result(write_recipe: Any, tool: str) -> None:
-    args = {"file_name": "a.csv", "destination_dir": "/x"}
-    bad(write_recipe, [{"id": "s", "tool": tool, "args": args}], "step s: do not give destination_dir")
+def test_export_rejects_save_result(write_recipe: Any, tool: str) -> None:
     ok = {"file_name": "a.csv"}
     bad(write_recipe, [{"id": "s", "tool": tool, "args": ok, "save_result": "r.json"}], "save_result is not allowed")
 
 
 def test_download_rules(write_recipe: Any) -> None:
     bad(write_recipe, [{"id": "s", "tool": "drive_download_file"}], "step s: drive_download_file needs save_as")
-    bad(
-        write_recipe,
-        [{"id": "s", "tool": "drive_download_file", "save_as": "a", "args": {"destination_dir": "/x"}}],
-        "do not give destination_dir",
-    )
     bad(
         write_recipe,
         [{"id": "s", "tool": "drive_download_file", "save_as": "a", "save_result": "r.json"}],

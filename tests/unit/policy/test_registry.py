@@ -312,3 +312,22 @@ _VERB_MATRIX: dict[str, Verb] = {
 def test_tool_to_verb_matches_the_verb_matrix():
     assert len(_VERB_MATRIX) == 112
     assert TOOL_TO_VERB == _VERB_MATRIX
+
+
+def test_rebuild_registry_keeps_the_same_object_and_picks_up_new_tools(monkeypatch):
+    from privacyfence.policy import registry as registry_module
+
+    same = registry_module.TOOL_REGISTRY
+    before = dict(same)
+    registry_module.rebuild_registry()
+    assert registry_module.TOOL_REGISTRY is same
+    assert dict(same) == before
+
+    monkeypatch.setitem(TOOL_TO_GATE, "zz_probe", "review")
+    monkeypatch.setitem(TOOL_TO_OPERATION, "zz_probe", "zz.probe")
+    monkeypatch.setitem(registry_module.TOOL_TO_VERB, "zz_probe", Verb.READ)
+    registry_module.rebuild_registry()
+    assert same["zz_probe"].operation == "zz.probe"
+    monkeypatch.undo()
+    registry_module.rebuild_registry()
+    assert "zz_probe" not in same

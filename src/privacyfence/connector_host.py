@@ -9,8 +9,8 @@ kind that can mark itself unattended.
 
 This class is just the live ``{name: Connector}``
 map -- built once by ``daemon_main.build_connectors()`` and swapped
-wholesale by ``SettingsController.refresh_connectors()`` whenever a service
-is authenticated, re-authenticated, or toggled on/off. Three consumers
+wholesale whenever a service
+is authenticated, re-authenticated, or toggled on/off. Two consumers
 share exactly one instance, built by ``daemon_main.run_app()``:
 
 - ``web/mcp_dispatch.py``'s ``McpDispatcher`` polls ``.connectors`` on every
@@ -19,12 +19,8 @@ share exactly one instance, built by ``daemon_main.run_app()``:
   it with nothing else needing a second push -- direct successor of
   ``IPCServer.connectors``'s own docstring, which said the same thing about
   the bridge.
-- ``settings_controller.SettingsController`` holds it to push a freshly
-  rebuilt connector set live (``refresh_connectors``).
-- ``menu_bar.py`` holds a reference only to satisfy
-  ``SettingsController``'s fallback constructor (native-only callers/tests)
-  -- it never reads it directly, same as it never read ``ipc_server``
-  directly.
+- The code that rebuilds the connector set after a service is
+  authenticated or toggled holds it to push the new set live.
 """
 from __future__ import annotations
 

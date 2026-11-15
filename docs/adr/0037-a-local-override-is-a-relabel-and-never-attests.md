@@ -8,6 +8,8 @@ Amends [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) o
 Amended by [ADR 0088](0088-local-mode-shows-every-requester-as-undetected.md): a local install shows every requester as "Undetected", so a relabel is no longer displayed.
 Amended by [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md).
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) option D gives local mode

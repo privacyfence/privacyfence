@@ -87,14 +87,13 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 # every pull request with no `paths:` filter. The job sets `name: website-build` so the context is
 # unique -- its id is `build`, which build.yml and publish-pypi.yml also use.
 #
-# Deliberately NOT included: the packaged-artifact jobs and the graphical-session jobs
-# (docs/testing-policy.md's layer 6) -- both live in build.yml / their own scheduled workflows and never run on
+# Deliberately NOT included: build.yml's `build-org-image` and `sbom` jobs -- they never run on
 # `pull_request`, so they can't be a per-PR required check at all.
 #
 # Also deliberately NOT included, for a different reason: `lockfile-freshness`, `pip-audit` and
-# `npm-audit` (dependency-audit.yml), and `verify` (deploy-download-worker.yml). All four are
-# meant to block and do run on `pull_request`, but only when the PR touches one of their
-# workflow's own `paths:` filters (a dependency manifest; `cloudflare/downloads/**`) -- not
+# `npm-audit` (dependency-audit.yml). All three are meant to block and do run on
+# `pull_request`, but only when the PR touches one of their
+# workflow's own `paths:` filters (a dependency manifest) -- not
 # unconditionally on every PR. Requiring a `paths:`-filtered job by name would wedge any PR that
 # doesn't touch those paths: GitHub never sees that context reported at all for such a PR, and a
 # required check that never reports blocks the merge indefinitely. Making one of these genuinely
@@ -103,8 +102,6 @@ _READ_ONLY_RULESET_FIELDS = frozenset(
 # drops its `paths:` filter.
 REQUIRED_STATUS_CHECKS = [
     "test",
-    "platform-windows",
-    "platform-macos",
     "Test (Python 3.11, core suite)",
     "Test (Python 3.12, core suite)",
     "Test (Python 3.14, core suite)",
@@ -113,6 +110,7 @@ REQUIRED_STATUS_CHECKS = [
     "Sync client (Python 3.11)",
     "Sync client (Python 3.13)",
     "website-build",
+    "n8n-node",
 ]
 
 

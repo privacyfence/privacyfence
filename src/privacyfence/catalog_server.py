@@ -23,14 +23,14 @@ CATALOG_INSTRUCTIONS = (
     "This server only lists PrivacyFence's tools, for MCP directories. It holds no credentials, "
     "connects to no service, and every tool call returns an error saying so. PrivacyFence itself "
     "runs on the user's own computer or on a server their organization runs: "
-    "https://privacyfence.eu/download/"
+    "https://privacyfence.eu/install/"
 )
 
 CATALOG_CALL_MESSAGE = (
     "This is PrivacyFence's tool catalog, published so MCP directories can list its tools. It is "
     "not a working PrivacyFence install and cannot reach any service. PrivacyFence runs on your "
     "own computer, or on a server your organization runs: install it from "
-    "https://privacyfence.eu/download/ and connect your AI client to that install."
+    "https://privacyfence.eu/install/ and connect your AI client to that install."
 )
 
 

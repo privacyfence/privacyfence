@@ -1,4 +1,4 @@
-"""Tests for org_mode.py: the mode toggle and org mode's server config."""
+"""Tests for org_mode.py: the mode validation and org mode's server config."""
 from __future__ import annotations
 
 import base64
@@ -9,23 +9,16 @@ import pytest
 from privacyfence import org_mode
 
 
-class TestLocalModeDeprecation:
-    def test_names_the_release_that_removes_desktop_mode(self):
-        assert "PrivacyFence 8" in org_mode.LOCAL_MODE_DEPRECATION
+class TestValidateMode:
+    def test_absent_key_defaults_to_org(self):
+        assert org_mode.validate_mode({}) is None
 
-    def test_points_at_the_migration_guide(self):
-        assert org_mode.LOCAL_MODE_DEPRECATION.endswith("https://privacyfence.eu/docs/moving-to-organization-mode/")
-
-
-class TestResolveMode:
-    def test_absent_key_defaults_to_local(self):
-        assert org_mode.resolve_mode({}) == "local"
-
-    def test_explicit_local(self):
-        assert org_mode.resolve_mode({"mode": "local"}) == "local"
+    def test_explicit_local_is_refused(self):
+        with pytest.raises(org_mode.ConfigurationError, match="desktop mode is not part of PrivacyFence 8"):
+            org_mode.validate_mode({"mode": "local"})
 
     def test_explicit_org(self):
-        assert org_mode.resolve_mode({"mode": "org"}) == "org"
+        assert org_mode.validate_mode({"mode": "org"}) is None
 
     def test_invalid_value_raises(self):
         # A malformed org config is refused at startup: ConfigurationError,
@@ -33,46 +26,87 @@ class TestResolveMode:
         # (daemon_main.py's main()) can't mistake this for some other
         # ValueError-raising failure further down the same startup path.
         with pytest.raises(org_mode.ConfigurationError):
-            org_mode.resolve_mode({"mode": "something-else"})
+            org_mode.validate_mode({"mode": "something-else"})
 
 
-class TestResolveModeEnvironment:
-    def test_resolve_mode_bundle_only(self):
-        assert org_mode.resolve_mode({"mode": "org"}) == "org"
+class TestValidateModeEnvironment:
+    def test_validate_mode_bundle_only(self):
+        assert org_mode.validate_mode({"mode": "org"}) is None
 
-    def test_resolve_mode_env_only(self, monkeypatch):
+    def test_validate_mode_env_only(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
-        assert org_mode.resolve_mode({}) == "org"
+        assert org_mode.validate_mode({}) is None
 
-    def test_resolve_mode_neither_is_local(self):
-        assert org_mode.resolve_mode({}) == "local"
+    def test_validate_mode_neither_is_org(self, monkeypatch):
+        monkeypatch.delenv("PRIVACYFENCE_MODE", raising=False)
+        assert org_mode.validate_mode({}) is None
 
-    def test_resolve_mode_empty_env_counts_as_unset(self, monkeypatch):
+    def test_validate_mode_empty_env_counts_as_unset(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_MODE", "  ")
-        assert org_mode.resolve_mode({}) == "local"
+        assert org_mode.validate_mode({}) is None
 
-    def test_resolve_mode_bundle_and_env_equal(self, monkeypatch):
+    def test_validate_mode_bundle_and_env_equal(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
-        assert org_mode.resolve_mode({"mode": "org"}) == "org"
+        assert org_mode.validate_mode({"mode": "org"}) is None
 
-    def test_resolve_mode_bundle_and_env_differ(self, monkeypatch):
+    def test_validate_mode_bundle_and_env_differ(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
-        with pytest.raises(org_mode.ConfigurationError) as excinfo:
-            org_mode.resolve_mode({"mode": "local"})
-        assert str(excinfo.value) == (
-            'org_bundle.json says "mode": "local" but PRIVACYFENCE_MODE says "org"; remove one of them'
-        )
+        with pytest.raises(org_mode.ConfigurationError, match="org_bundle.json's \"mode\" says \"local\""):
+            org_mode.validate_mode({"mode": "local"})
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "local")
+        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_MODE says \"local\""):
+            org_mode.validate_mode({"mode": "org"})
 
-    def test_resolve_mode_invalid_env_value(self, monkeypatch):
+    def test_validate_mode_invalid_env_value(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_MODE", "cloud")
         with pytest.raises(org_mode.ConfigurationError) as excinfo:
-            org_mode.resolve_mode({})
-        assert str(excinfo.value) == 'PRIVACYFENCE_MODE must be "local" or "org", got cloud'
+            org_mode.validate_mode({})
+        assert str(excinfo.value) == 'PRIVACYFENCE_MODE must be "org".'
 
-    def test_resolve_mode_invalid_env_value_is_refused_even_with_a_bundle_mode(self, monkeypatch):
+    def test_validate_mode_invalid_env_value_is_refused_even_with_a_bundle_mode(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_MODE", "cloud")
         with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_MODE"):
-            org_mode.resolve_mode({"mode": "org"})
+            org_mode.validate_mode({"mode": "org"})
+
+
+class TestRefuseLocalMode:
+    LOCAL_TEXT = (
+        '{source} says "local": desktop mode is not part of PrivacyFence 8. Remove it (organization mode is '
+        "the only mode), or keep using PrivacyFence 7 for a desktop install: "
+        "https://privacyfence.eu/docs/moving-to-organization-mode/"
+    )
+    BUNDLE = 'org_bundle.json\'s "mode"'
+
+    def test_org_is_accepted(self):
+        assert org_mode.refuse_local_mode("PRIVACYFENCE_MODE", "org") is None
+
+    @pytest.mark.parametrize("source", ["PRIVACYFENCE_MODE", BUNDLE])
+    def test_local_is_refused_with_the_migration_text(self, source):
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.refuse_local_mode(source, "local")
+        assert str(excinfo.value) == self.LOCAL_TEXT.format(source=source)
+
+    @pytest.mark.parametrize("source", ["PRIVACYFENCE_MODE", BUNDLE])
+    @pytest.mark.parametrize("value", ["cloud", "", "ORG"])
+    def test_any_other_value_is_refused(self, source, value):
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.refuse_local_mode(source, value)
+        assert str(excinfo.value) == f'{source} must be "org".'
+
+    def test_validate_mode_refuses_local_from_the_variable(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_MODE", "local")
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.validate_mode({})
+        assert str(excinfo.value) == self.LOCAL_TEXT.format(source="PRIVACYFENCE_MODE")
+
+    def test_validate_mode_refuses_local_from_the_bundle(self):
+        with pytest.raises(org_mode.ConfigurationError) as excinfo:
+            org_mode.validate_mode({"mode": "local"})
+        assert str(excinfo.value) == self.LOCAL_TEXT.format(source=self.BUNDLE)
+
+    def test_validate_mode_refuses_a_non_string_bundle_mode(self):
+        with pytest.raises(org_mode.ConfigurationError, match='must be "org"'):
+            org_mode.validate_mode({"mode": 3})
 
 
 class TestIsSingleUser:
@@ -83,9 +117,6 @@ class TestIsSingleUser:
 
     def test_is_single_user_org_with_idp(self):
         assert org_mode.is_single_user({"mode": "org", "idp": self.IDP}) is False
-
-    def test_is_single_user_local_is_never(self):
-        assert org_mode.is_single_user({}) is False
 
     def test_is_single_user_follows_the_mode_from_the_env(self, monkeypatch):
         monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
@@ -164,13 +195,15 @@ class TestServerConfigEnvironment:
 
 
 class TestServerConfigFromOrgConfig:
+    IDP = {"issuer": "https://idp.example.com", "client_id": "c", "client_secret": "s"}
+
     def test_requires_issuer_url(self):
         with pytest.raises(org_mode.ConfigurationError):
-            org_mode.ServerConfig.from_org_config({"server": {}})
+            org_mode.ServerConfig.from_org_config({"idp": self.IDP, "server": {}})
 
     def test_requires_a_server_section_at_all(self):
         with pytest.raises(org_mode.ConfigurationError):
-            org_mode.ServerConfig.from_org_config({})
+            org_mode.ServerConfig.from_org_config({"idp": self.IDP})
 
     @pytest.mark.parametrize("issuer_url", [
         "pf.example.com",           # no scheme at all
@@ -376,7 +409,6 @@ class TestDownloadDeliveryConfigLinkResult:
 
     def test_the_note_says_no_path_was_written(self):
         assert "Nothing was saved to a file" in org_mode.LINK_RESULT_NOTE
-        assert "destination_dir is ignored" in org_mode.LINK_RESULT_NOTE
 
 
 class TestDownloadDeliveryConfigStagedLinkPath:
@@ -613,13 +645,6 @@ class TestPeekProvisioningConfigFromOrgConfig:
             f"got {value!r}"
         )
 
-    def test_enabled_in_local_mode_raises(self):
-        cfg = self._cfg(enabled=True)
-        cfg["mode"] = "local"
-        with pytest.raises(org_mode.ConfigurationError) as exc:
-            org_mode.PeekProvisioningConfig.from_org_config(cfg)
-        assert str(exc.value) == "org_bundle.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\""
-
     def test_enabled_without_base_url_raises(self):
         with pytest.raises(org_mode.ConfigurationError) as exc:
             org_mode.PeekProvisioningConfig.from_org_config(
@@ -701,13 +726,6 @@ class TestGristProvisioningConfigFromOrgConfig:
             {"mode": "local", "grist": {"auto_provision": {"enabled": False, "provisioner_url": "http://x"}}}
         )
         assert config == org_mode.GristProvisioningConfig(enabled=False)
-
-    def test_enabled_in_local_mode(self):
-        org = self._org(**self._enabled())
-        org["mode"] = "local"
-        with pytest.raises(org_mode.ConfigurationError) as exc:
-            org_mode.GristProvisioningConfig.from_org_config(org)
-        assert str(exc.value) == 'org_bundle.json\'s "grist"."auto_provision" needs "mode": "org"'
 
     def test_enabled_without_server_url(self):
         org = self._org(**self._enabled())

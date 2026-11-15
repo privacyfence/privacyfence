@@ -39,707 +39,19 @@ jobs:
             gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY"
           fi
 
-  build:
-    needs: dedupe
-    if: needs.dedupe.outputs.duplicate != 'true'
-    runs-on: macos-latest   # arm64 Apple Silicon runner
-    permissions:
-      contents: read
-    env:
-      # Name of the notarytool keychain profile created fresh on each runner
-      # by the "Import notarization credentials" step below — not a secret,
-      # just needs to match between that step and the build step.
-      NOTARIZE_PROFILE: privacyfence-ci-notary
-      # Job-level alias so the "if:" conditions below can read it -- same reasoning as
-      # build-windows's own ESIGNER_CREDENTIAL_ID alias (the secrets context isn't a recognized
-      # named-value inside a step's own "if:" expression). Signing scripts/build_pkg.sh's .pkg
-      # needs a "Developer ID Installer" identity -- a different certificate *type* than
-      # SIGN_IDENTITY/MACOS_CERTIFICATE above sign the .app/.dmg with, so it's a separate,
-      # optional secret: unset entirely (e.g. before a maintainer has provisioned one) just means
-      # the "Import pkg signing certificate" step below is skipped and the .pkg ships unsigned,
-      # same as scripts/build_pkg.sh's own --sign staying optional for a local dev build.
-      SIGN_IDENTITY_INSTALLER: ${{ secrets.SIGN_IDENTITY_INSTALLER }}
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-
-      - name: Install system dependencies
-        run: brew install create-dmg
-
-      - name: Install pinned runtime dependencies
-        # This is what actually ends up in the DMG -- PyInstaller freezes whatever's importable
-        # once this job's install steps finish, and it's the SBOM (below, "Generate Python SBOM")
-        # that's supposed to describe exactly that. Installing from the hash-verified lockfile
-        # first, before the hash-locked dev install below, is what makes both of those true: a
-        # compromised or substituted package on the index fails this install instead of landing in
-        # the shipped app silently (requirements/README.md), and pip-audit --strict
-        # (dependency-audit.yml) is auditing the dependency set that's actually bundled, not just
-        # one that happens to satisfy the same version ranges.
-        run: pip install --require-hashes -r requirements/runtime.lock.txt
-
-      - name: Install Python dependencies
-        # `test` extra (not just `dev`) so the packaged smoke test below --
-        # tests/integration/test_macos_packaged_smoke.py -- has
-        # pytest/pytest-timeout/playwright available; `mcp` (the client it
-        # and the shim fixture need) is already a runtime dependency.
-        #
-        # The runtime dependencies themselves were already installed, pinned and hash-verified, by
-        # the step above; pip only installs a requirement it doesn't already have a satisfying
-        # version of, so this step adds the dev/test tooling from requirements/dev.lock.txt (hash-
-        # verified, compiled against the runtime lock so shared packages carry the same pin) on top
-        # without re-resolving or loosening anything the previous step pinned. The package itself
-        # goes in with --no-deps --no-build-isolation: the lock carries the build backend.
-        run: |
-          pip install --require-hashes -r requirements/dev.lock.txt
-          pip install --no-deps --no-build-isolation -e .
-
-      # tests/integration/test_macos_packaged_smoke.py drives a real headless
-      # Chromium page against the packaged app's own approval UI -- same
-      # browser test_browser_smoke.py already needs in tests.yml,
-      # just installed here too since this workflow doesn't share that job.
-      - name: Install Playwright browsers
-        run: playwright install chromium
-
-      # Drives both the release-channel gating below (only a "stable" tag gets a public GitHub
-      # Release asset -- see docs/releasing.md and scripts/r2_release.py's module
-      # docstring for why alpha/beta/rc stop at the private R2 archive) and the R2 upload's key
-      # prefix (releases/<channel>/<version>/...).
-      # A workflow_dispatch run off an untagged commit never reaches any of the tag-gated steps
-      # below, so the version/channel lookup is skipped for those runs rather than failing them --
-      # r2_release.py's channel command deliberately rejects a between-tags dev version (see its
-      # own docstring), which every untagged commit's __version__ is.
-      #
-      # On a tag push the resolved version is checked against the tag that triggered the run before
-      # anything is built. setuptools_scm reads `git describe`, which reports one of the tags on
-      # this commit rather than specifically the pushed one, so retagging a commit for a second
-      # pre-release silently builds the *other* tag's version -- which then fails at the R2 upload,
-      # minutes and one signed artifact set later, against the immutability guard
-      # (https://github.com/privacyfence/privacyfence/actions/runs/35388772087
-      # is the run this happened on). Every job that resolves a version runs the same check, so
-      # none of them can get as far as building the wrong one.
-      - name: Determine version and release channel
-        id: release
-        run: |
-          VERSION="$(python -c 'from privacyfence import __version__; print(__version__)')"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
-            CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
-          else
-            CHANNEL="n/a (not a tag push)"
-          fi
-          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          echo "Resolved version=$VERSION channel=$CHANNEL"
-
-      # ── Import Developer ID certificate for signing ────────────────────────
-      # Requires these GitHub secrets (Settings → Secrets and variables →
-      # Actions):
-      #   MACOS_CERTIFICATE      — base64-encoded "Developer ID Application"
-      #                            .p12 (cert + private key)  (base64 -i cert.p12 | pbcopy)
-      #   MACOS_CERTIFICATE_PWD  — the .p12 export password
-      #   SIGN_IDENTITY          — e.g. "Developer ID Application: Your Name (TEAMID)"
-      - name: Import signing certificate
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
-        run: |
-          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
-          security create-keychain -p "" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          # Disable the keychain's idle-lock timeout (default 5 minutes).
-          # Without this, the keychain locks itself partway through the
-          # PyInstaller + mcpb build (which takes well over 5 minutes),
-          # and the later `xcrun notarytool submit` step -- which reads the
-          # stored notarization credentials from this keychain -- fails
-          # with "keychainLocked". `set-keychain-settings` with no -t/-l
-          # flags means "no timeout, don't lock on sleep".
-          security set-keychain-settings build.keychain
-          security import certificate.p12 -k build.keychain \
-            -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s \
-            -k "" build.keychain
-          rm certificate.p12
-
-      # ── Import pkg signing certificate (optional) ───────────────────────────
-      # A "Developer ID Installer" certificate, distinct from the "Developer ID
-      # Application" one imported above -- see this job's own SIGN_IDENTITY_INSTALLER
-      # comment. Same build.keychain as above (security import can hold both cert
-      # types at once); skipped entirely when the secret isn't set, so a repo that
-      # hasn't provisioned one yet still builds a valid (unsigned) .pkg rather than
-      # failing here. Requires these GitHub secrets once provisioned:
-      #   MACOS_INSTALLER_CERTIFICATE      — base64-encoded "Developer ID Installer"
-      #                                      .p12 (cert + private key)
-      #   MACOS_INSTALLER_CERTIFICATE_PWD  — the .p12 export password
-      #   SIGN_IDENTITY_INSTALLER          — e.g. "Developer ID Installer: Your Name (TEAMID)"
-      - name: Import pkg signing certificate
-        if: env.SIGN_IDENTITY_INSTALLER != ''
-        env:
-          MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
-          MACOS_INSTALLER_CERTIFICATE_PWD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PWD }}
-        run: |
-          echo "$MACOS_INSTALLER_CERTIFICATE" | base64 --decode > installer_certificate.p12
-          security import installer_certificate.p12 -k build.keychain \
-            -P "$MACOS_INSTALLER_CERTIFICATE_PWD" -T /usr/bin/productsign
-          security set-key-partition-list -S apple-tool:,apple: -s \
-            -k "" build.keychain
-          rm installer_certificate.p12
-
-      # ── Import notarization credentials ─────────────────────────────────────
-      # Runners are ephemeral, so the notarytool profile is (re-)registered
-      # fresh every run rather than assumed to already exist. Requires an
-      # App Store Connect API key with the "Developer" role (Users and Access
-      # → Integrations → App Store Connect API) and these GitHub secrets:
-      #   APPLE_API_KEY_P8      — base64-encoded AuthKey_<KEYID>.p8  (base64 -i AuthKey_*.p8 | pbcopy)
-      #   APPLE_API_KEY_ID      — the Key ID shown next to the key
-      #   APPLE_API_ISSUER_ID   — the Issuer ID (same for all keys on the team)
-      - name: Import notarization credentials
-        env:
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-        run: |
-          echo "$APPLE_API_KEY_P8" | base64 --decode > apple_api_key.p8
-          xcrun notarytool store-credentials "$NOTARIZE_PROFILE" \
-            --key apple_api_key.p8 \
-            --key-id "$APPLE_API_KEY_ID" \
-            --issuer "$APPLE_API_ISSUER_ID"
-          rm apple_api_key.p8
-
-      # Defensive re-unlock immediately before the long build step (PyInstaller
-      # + mcpb, ~10 minutes) that ends with `xcrun notarytool submit` reading
-      # credentials from this keychain. `set-keychain-settings` above should
-      # already prevent an idle-timeout lock, but re-unlocking here is cheap
-      # insurance against other lock triggers (e.g. a runner sleep/wake event).
-      - name: Unlock keychain before build
-        run: security unlock-keychain -p "" build.keychain
-
-      # Builds the .app, the .mcpb, *and* the .pkg (scripts/build_dmg.sh calls
-      # scripts/build_pkg.sh itself now), then packs the .pkg and the .mcpb into the DMG --
-      # which is the only macOS artifact that ships. The .pkg used to be built by a step of
-      # its own here and uploaded/released beside the DMG; it can't be, now that the DMG has
-      # to contain it. SIGN_IDENTITY_INSTALLER isn't set here because it's a job-level env
-      # var already (see this job's own `env:` block) -- scripts/build_pkg.sh reads it from
-      # the environment, deliberately *not* the SIGN_IDENTITY below, which is the other
-      # certificate type and would fail productsign.
-      - name: Build .app, .pkg, .mcpb and DMG
-        env:
-          SIGN_IDENTITY: ${{ secrets.SIGN_IDENTITY }}
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-        run: bash scripts/build_dmg.sh
-
-      # The one place the actual packaged artifact -- not a source checkout, not a dev
-      # install -- gets exercised at all. Mounts the DMG just built above, unpacks the app
-      # bundle out of the .pkg it carries (the only form the app ships in now -- see
-      # scripts/build_dmg.sh), runs that real frozen daemon binary, connects the real .mcpb
-      # shim, and drives one real Allow/Deny round trip through a real
-      # headless browser against the real served approval UI. A failure here
-      # fails this job before the DMG reaches R2/GitHub Releases below.
-      - name: Run packaged smoke test
-        env:
-          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
-        run: pytest tests/integration/test_macos_packaged_smoke.py -v
-
-      # tests/diagnostics.py's own capture (environment info, an installed-file manifest, and any
-      # daemon.log/*.jsonl audit logs found under the failing test's own
-      # tmp_path -- see test_macos_packaged_smoke.py's own `running_packaged_
-      # daemon` fixture) -- `if: failure()` since the step above is what
-      # actually stops the job here; nothing is written on a passing run.
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: macos-packaged-smoke-failure-diagnostics
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 30
-
-      # The .pkg's own structural smoke test -- see that module's own docstring for why this
-      # stays the fast, no-install half (mirroring test_macos_packaged_smoke.py above) while the
-      # real `sudo installer -pkg ...` + launchd verification (test_macos_pkg_install.py) lives in
-      # the separate, weekly-scheduled macos-graphical-session.yml instead.
-      - name: Run pkg smoke test
-        env:
-          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
-        run: pytest tests/integration/test_macos_pkg_smoke.py -v
-
-      - name: Upload pkg smoke failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: macos-pkg-smoke-failure-diagnostics
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 30
-
-      # The DMG is the macOS release artifact -- the .pkg and the .mcpb ride inside it (see
-      # scripts/build_dmg.sh's own header for why); the .pkg is never uploaded on its own, and the
-      # .mcpb only to the stable GitHub Release, for the MCP registry (next steps, ADR 0112). Uploaded
-      # after *both* smoke tests above, so a broken .pkg stops this job before its carrier
-      # reaches `finalize-release`.
-      - name: Upload DMG as artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: PrivacyFence-dmg
-          path: dist/PrivacyFence-*.dmg
-          retention-days: 30
-
-      # The one exception to "the .mcpb rides inside the DMG": a stable release's GitHub Release
-      # also carries it on its own, as PrivacyFence.mcpb, because the official MCP registry only
-      # accepts an MCPB package hosted as a GitHub (or GitLab) release asset --
-      # publish-mcp-registry.yml lists that URL (ADR 0112). The same file the DMG carries, under
-      # the same unversioned name it has there; the release URL's tag carries the version. Not
-      # uploaded to R2: the download site keeps offering the DMG, which has the app the shim needs.
-      - name: Stage .mcpb for the GitHub Release
-        run: |
-          mkdir -p dist/release-mcpb
-          cp -p "dist/PrivacyFence-${{ steps.release.outputs.version }}.mcpb" dist/release-mcpb/PrivacyFence.mcpb
-
-      - name: Upload .mcpb as artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: PrivacyFence-mcpb
-          path: dist/release-mcpb/PrivacyFence.mcpb
-          if-no-files-found: error
-          retention-days: 30
-
-      # Every channel's DMG + the two org config build scripts land in the private R2
-      # release archive (releases/<channel>/<version>/...) -- see scripts/r2_release.py's module
-      # docstring. This runs for stable *and* pre-release tags alike: R2 is the one archive that
-      # has everything, regardless of what's also public elsewhere.
-      #
-      # Alongside the DMG, also upload the org config build scripts (scripts/
-      # build_org_bundle.py and scripts/sync_room_directory.py) and the connector config signing
-      # tools (scripts/sign_connector_config.py and the browser page). They're stdlib-only / a checked-
-      # out copy is not what IT admins are expected to go find -- unlike the rest of scripts/,
-      # these two are themselves a release output, run by org admins (not contributors) to
-      # produce/update the org_config.json bundle distributed to end users -- see their own
-      # docstrings and docs/google-cloud-setup.md, docs/slack-setup.md, docs/salesforce-setup.md,
-      # docs/atlassian-setup.md.
-      #
-      # Requires these GitHub secrets/vars (Settings → Secrets and variables → Actions), named for
-      # what they're for -- the release archive's R2 credentials, as opposed to the download
-      # Worker's own CF_DOWNLOADS_WORKER_* deploy credentials (deploy-download-worker.yml):
-      #   CF_RELEASES_R2_ACCESS_KEY_ID / CF_RELEASES_R2_SECRET_ACCESS_KEY  — R2 API token (secrets)
-      #   CF_RELEASES_R2_ENDPOINT                                         — R2 endpoint URL (var)
-      - name: Publish release artifacts to Cloudflare R2
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
-          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
-          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
-          R2_BUCKET: privacyfence-releases
-        run: |
-          python3 -m pip install --quiet --user --require-hashes -r requirements/release.lock.txt
-          # The browser tool for signing connector configs, named as a release asset: the archive
-          # keeps the file under its basename, and the offline copy is pinned to this release.
-          cp website/tools/connector-config/index.html dist/privacyfence-connector-config-tool.html
-          python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
-            dist/PrivacyFence-*.dmg \
-            scripts/build_org_bundle.py \
-            scripts/sync_room_directory.py \
-            scripts/sign_connector_config.py \
-            dist/privacyfence-connector-config-tool.html
-
-  # The Windows analogue of the `build` job above. Runs in
-  # parallel with it (and with `build-deb`/`sbom`) rather than depending on
-  # it -- same "independent, tagged-source-tree-only" reasoning the `sbom`
-  # job's own comment gives. Each of `build`/`build-windows`/`build-deb`/`sbom` only uploads its
-  # own workflow artifact; `finalize-release` below is the one place that downloads all four and
-  # attaches them to the tag's GitHub Release, so the release either gets everything or nothing --
-  # see that job's own comment for why.
-  build-windows:
-    needs: dedupe
-    if: needs.dedupe.outputs.duplicate != 'true'
-    runs-on: windows-latest
-    permissions:
-      contents: read
-    env:
-      # Job-level alias so the "if:" conditions below can read it -- the secrets context isn't
-      # a recognized named-value inside a step's own "if:" expression (GitHub's workflow parser
-      # rejects `secrets.X != ''` there directly), only env is.
-      ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: mcpb/shim/package-lock.json
-
-      # Provides iscc.exe (installer/privacyfence.iss, run by
-      # scripts/build_installer.ps1) -- not preinstalled on windows-latest.
-      - name: Install Inno Setup
-        run: choco install innosetup --no-progress -y
-
-      - name: Install pinned runtime dependencies
-        # Same reasoning as the `build` (macOS) job's identically-named step above: this is what
-        # actually ends up in the Windows installer, so it needs to come from the hash-verified
-        # lockfile rather than a fresh resolve.
-        run: pip install --require-hashes -r requirements/runtime.lock.txt
-
-      - name: Install Python dependencies
-        # `test` extra (not just `dev`) so the packaged smoke test below --
-        # tests/integration/test_windows_packaged_smoke.py -- has
-        # pytest/pytest-timeout available; `mcp` (the client it needs) is
-        # already a runtime dependency.
-        #
-        # The runtime dependencies were already installed, pinned and hash-verified, by the step
-        # above; this only layers the hash-locked dev/test tooling on top -- see that step's comment.
-        #
-        # `python -m pip`, not `pip`: the dev lock pins pip itself, and on Windows a running
-        # pip.exe cannot replace itself ("To modify pip, please run python -m pip ..."). The bare
-        # form aborts after setuptools was already swapped, which then fails the editable install
-        # with "Cannot import 'setuptools.build_meta'".
-        run: |
-          python -m pip install --require-hashes -r requirements/dev.lock.txt
-          python -m pip install --no-deps --no-build-isolation -e .
-
-      # Same version/channel resolution as the `build` job's identically-
-      # named step -- see its comments for why the channel lookup is
-      # skipped (rather than failing the run) off a tag, and why a
-      # workflow_dispatch run off an untagged commit only skips the
-      # tag-gated steps below rather than failing outright.
-      - name: Determine version and release channel
-        id: release
-        shell: bash
-        run: |
-          VERSION="$(python -c 'from privacyfence import __version__; print(__version__)')"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
-            CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
-          else
-            CHANNEL="n/a (not a tag push)"
-          fi
-          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          echo "Resolved version=$VERSION channel=$CHANNEL"
-
-      # ── eSigner CodeSignTool (Windows Authenticode signing) ──────────────
-      # Requires these GitHub secrets (Settings → Secrets and variables →
-      # Actions) -- unset entirely (e.g. on a fork's workflow_dispatch run)
-      # means build_installer.ps1 just produces an unsigned build (see its
-      # own Invoke-Signing helper):
-      #   ESIGNER_USERNAME       — SSL.com account username
-      #   ESIGNER_PASSWORD       — SSL.com account password
-      #   ESIGNER_CREDENTIAL_ID  — eSigner credential ID for the enrolled cert
-      #   ESIGNER_TOTP_SECRET    — eSigner TOTP secret (base32), for headless OTP generation
-      # Supersedes the earlier default of a portable Authenticode .pfx
-      # (WINDOWS_CERTIFICATE/WINDOWS_CERTIFICATE_PWD): CA/B Forum's June 2023 key-storage
-      # rules mean SSL.com no longer issues code-signing certs as exportable .pfx files at
-      # all -- the private key lives only on a FIPS token or in SSL.com's eSigner cloud
-      # HSM, so this goes through SSL.com's CodeSignTool CLI (a Java tool) instead of
-      # signtool.exe against a locally imported .pfx. See docs/releasing.md.
-      # CodeSignTool's Windows release zip bundles its own JDK (CodeSignTool.bat shells out to
-      # .\jdk-11.0.2\bin\java, never a system `java`), so there's no separate JDK/setup-java step
-      # needed here at all.
-      #
-      # Pinned to one release and its SHA-256, not "latest" -- this is the code that holds our
-      # signing credentials and signs the installer, so a new version is a reviewed diff, not
-      # whatever SSLcom/CodeSignTool published last. Pinning also removes the api.github.com
-      # releases/latest lookup this step used to make, unauthenticated, which failed on the
-      # hosted runner's shared 60-requests/hour anonymous limit in 5 of ~25 dispatches on
-      # 2026-09-24. See ADR 0046.
-      #
-      # To update CodeSignTool: change CODESIGNTOOL_VERSION and CODESIGNTOOL_SHA256 below, and
-      # nothing else. Keep the hash quoted -- unquoted, YAML reads an all-digit value as a number.
-      # Take it from the release page's asset list (GitHub shows each asset's sha256 for assets
-      # uploaded since mid-2025), or hash the zip yourself -- not from a CI run: on a mismatch
-      # this step prints the hash it downloaded and GitHub's recorded digest side by side, to
-      # diagnose, never to copy in unchecked. v1.3.2's asset predates GitHub's digests; see ADR
-      # 0046 for how its pin was established.
-      - name: Install eSigner CodeSignTool
-        if: env.ESIGNER_CREDENTIAL_ID != ''
-        shell: pwsh
-        env:
-          CODESIGNTOOL_VERSION: v1.3.2
-          CODESIGNTOOL_SHA256: "4afc32e8b7f79bbe1de7e4e7049aaad4e0f754357613b9bbec0e3052f06fd36b"
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ($env:CODESIGNTOOL_SHA256 -notmatch '^[0-9a-fA-F]{64}$') {
-            throw "CODESIGNTOOL_SHA256 is not a 64-hex-digit SHA-256 (got '$env:CODESIGNTOOL_SHA256')"
-          }
-          # Bounded retry with exponential backoff (5s, 10s, 20s) for a transient 5xx/429/403 or a
-          # dropped connection; the fourth failure fails the step.
-          function Invoke-WithRetry([scriptblock]$Action, [string]$What) {
-            for ($Attempt = 1; ; $Attempt++) {
-              try { return & $Action }
-              catch {
-                if ($Attempt -ge 4) { throw "$What failed after $Attempt attempts: $_" }
-                $Delay = 5 * [math]::Pow(2, $Attempt - 1)
-                Write-Host "::warning::$What failed (attempt $Attempt): $_ -- retrying in ${Delay}s"
-                Start-Sleep -Seconds $Delay
-              }
-            }
-          }
-          $Asset = "CodeSignTool-$env:CODESIGNTOOL_VERSION-windows.zip"
-          $Zip = "$env:RUNNER_TEMP\CodeSignTool.zip"
-          # A plain release-asset download from github.com, not an api.github.com call, so it
-          # draws on no API rate limit.
-          $Url = "https://github.com/SSLcom/CodeSignTool/releases/download/$env:CODESIGNTOOL_VERSION/$Asset"
-          Invoke-WithRetry { Invoke-WebRequest -Uri $Url -OutFile $Zip } "Downloading $Url"
-          $Actual = (Get-FileHash -Algorithm SHA256 -Path $Zip).Hash.ToLowerInvariant()
-          if ($Actual -ne $env:CODESIGNTOOL_SHA256.ToLowerInvariant()) {
-            # Diagnostics only: look up the digest GitHub recorded for this asset at upload time,
-            # authenticated so it can't hit the anonymous rate limit this step used to.
-            $Recorded = 'unavailable'
-            try {
-              $Release = Invoke-WithRetry {
-                Invoke-RestMethod -Uri "https://api.github.com/repos/SSLcom/CodeSignTool/releases/tags/$env:CODESIGNTOOL_VERSION" `
-                  -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'privacyfence-ci' }
-              } "Looking up $env:CODESIGNTOOL_VERSION's recorded digest"
-              $Recorded = ($Release.assets | Where-Object { $_.name -eq $Asset }).digest
-              if (-not $Recorded) { $Recorded = 'none (asset predates GitHub release-asset digests)' }
-            } catch { Write-Host "::warning::$_" }
-            Write-Host "::error::$Asset SHA-256 mismatch -- refusing to sign with it."
-            Write-Host "::error::pinned:          $env:CODESIGNTOOL_SHA256"
-            Write-Host "::error::downloaded:      $Actual"
-            Write-Host "::error::GitHub recorded: $Recorded"
-            exit 1
-          }
-          Write-Host "$Asset verified: sha256 $Actual"
-          # The zip extracts flat -- CodeSignTool.bat, jar/, jdk-11.0.2/ etc. all sit directly at
-          # its root, no wrapping folder -- so the destination itself is $env:CODESIGNTOOL_DIR.
-          Expand-Archive -Path $Zip -DestinationPath "$env:RUNNER_TEMP\CodeSignTool"
-          echo "CODESIGNTOOL_DIR=$env:RUNNER_TEMP\CodeSignTool" >> $env:GITHUB_ENV
-
-      - name: Build installer
-        env:
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          ES_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
-          ES_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
-          ES_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
-          ES_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
-        shell: pwsh
-        run: ./scripts/build_installer.ps1
-
-      # docs/testing-policy.md's layer 6 (packaged artifact): the one place the actual packaged
-      # artifact -- not a source checkout, not a dev install -- gets exercised at all on Windows.
-      # A real silent install (schtasks-registered autostart task included), the real installed
-      # daemon started and driven through a daemon/MCP/approval/audit round trip, then a real
-      # silent uninstall with both package removal and untouched-user-state checked. Since ADR
-      # 0003 decision 4 it also asserts what that silent install now does to itself: a separated
-      # install -- service, ACLs, group membership, companion task -- with no `enable` call from
-      # the test, and a failed separation failing Setup rather than shipping quietly. A failure
-      # here fails this job before the installer reaches R2/GitHub Releases below.
-      - name: Run packaged installer smoke test
-        env:
-          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
-        run: pytest tests/integration/test_windows_packaged_smoke.py -v
-
-      # Same tests/diagnostics.py capture as the `build` job's identically-named step --
-      # this module's own install_dir/home already live under each test's
-      # own tmp_path, so the generic per-tmp_path manifest already covers
-      # the installed files here, no per-module capture code needed (unlike
-      # test_deb_packaged_lifecycle.py's real system install).
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: windows-packaged-smoke-failure-diagnostics
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Upload installer as artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: PrivacyFence-windows-installer
-          path: dist/PrivacyFence-*-setup.exe
-          retention-days: 30
-
-      # Same private-by-default R2 archive as the `build` job's DMG upload --
-      # every channel's installer lands in releases/<channel>/<version>/,
-      # alongside whatever else that release shipped. See scripts/
-      # r2_release.py's module docstring and docs/releasing.md's
-      # "Cloudflare R2 release archive" section.
-      - name: Publish release artifacts to Cloudflare R2
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
-          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
-          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
-          R2_BUCKET: privacyfence-releases
-        shell: bash
-        run: |
-          python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
-          python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
-            dist/PrivacyFence-*-setup.exe
-
-  # Linux `.deb` leg -- the Linux equivalent of the
-  # `build` job above. Independent of it (doesn't need the macOS runner, code signing, or
-  # notarization -- `.deb`s aren't gated on a trusted-publisher story the way Gatekeeper/
-  # SmartScreen gate the DMG/Windows installer), so it runs in parallel
-  # rather than blocking on (or being blocked by) the DMG build. Together with the `build` and
-  # `build-windows` jobs, a tag push ends up with one GitHub Release carrying the DMG (which
-  # itself carries the macOS `.pkg` and the `.mcpb`), the Windows installer, and the `.deb` --
-  # all attached together by `finalize-release`.
-  build-deb:
-    needs: dedupe
-    if: needs.dedupe.outputs.duplicate != 'true'
-    runs-on: ubuntu-24.04    # amd64 -- the only architecture debian/control declares (ADR 0044).
-                              # arm64 needs its own leg here (PyInstaller doesn't cross-compile)
-                              # plus the matching debian/control and support-matrix change.
-                              # Pinned, not `ubuntu-latest`: the bundle links the build host's glibc,
-                              # which is the .deb's floor (ADR 0203).
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see docs/releasing.md)
-
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-
-      # desktop-file-utils (desktop-file-validate): the packaged-lifecycle test
-      # (below, after the build) validates the installed application-menu entry and the rendered
-      # companion autostart entry with it. patchelf: scripts/build_deb.sh strips the
-      # build host's own RUNPATH out of the bundled CPython extension modules with it -- on this
-      # runner those point back into setup-python's hosted toolcache, which lintian rejects at
-      # error severity (see that script's staging step).
-      - name: Install system dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq dpkg-dev lintian desktop-file-utils patchelf
-
-      - name: Install pinned runtime dependencies
-        # Same reasoning as the `build` (macOS) job's identically-named step above: this is what
-        # actually ends up in the .deb, so it needs to come from the hash-verified lockfile rather
-        # than a fresh resolve.
-        run: pip install --require-hashes -r requirements/runtime.lock.txt
-
-      - name: Install Python dependencies
-        # [test] alongside [dev]: needed for the org-mode Ubuntu release smoke test below (pytest,
-        # pytest-timeout, mcp's test-side client helpers) and for the packaged .deb lifecycle test
-        # after the build -- not otherwise required by this job's own .deb build.
-        #
-        # The runtime dependencies were already installed, pinned and hash-verified, by the step
-        # above; this only layers the hash-locked dev/test tooling (pyinstaller included, which is
-        # what turns this job's own output into the .deb) on top -- see that step's comment.
-        run: |
-          pip install --require-hashes -r requirements/dev.lock.txt
-          pip install --no-deps --no-build-isolation -e .
-
-      # The release-workflow smoke test for the Ubuntu org-mode service --
-      # strict startup, reverse-proxy/Host handling, route mounting,
-      # per-principal session creation, MCP OAuth
-      # discovery, clean shutdown/restart, against a synthetic org config
-      # and a mocked IdP boundary (see that test module's own docstring).
-      # Placed right after dependencies are installed and ahead of the .deb
-      # build itself -- it exercises the installable `privacyfence` package
-      # directly (see that module's "Why a --target install, not the .deb"
-      # docstring section for why it doesn't need the .deb specifically),
-      # so it doesn't need to wait on PyInstaller.
-      - name: Run org-mode Ubuntu release smoke test
-        env:
-          PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS: "1"
-          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
-        run: pytest tests/integration/test_org_ubuntu_release_smoke.py -v
-
-      # Same version/channel resolution as the `build` job above, independently -- see that job's
-      # identically-named step for why the channel lookup is skipped (rather than failing the run)
-      # off a tag.
-      - name: Determine version and release channel
-        id: release
-        run: |
-          VERSION="$(python -c 'from privacyfence import __version__; print(__version__)')"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
-            CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
-          else
-            CHANNEL="n/a (not a tag push)"
-          fi
-          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
-          echo "Resolved version=$VERSION channel=$CHANNEL"
-
-      - name: Build .deb
-        env:
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-        run: bash scripts/build_deb.sh
-
-      # The one place the actual packaged artifact -- not a source checkout,
-      # not the --target install the org-mode smoke test above uses -- gets exercised at all.
-      # Real `dpkg -i`, `desktop-file-validate` on the installed .desktop entries, the real
-      # installed daemon started and driven through a daemon/MCP/approval/audit round trip, real
-      # `dpkg -r` (data kept, reinstall picks it up) and `dpkg -P` (nothing left), and a real version-upgrade
-      # install-over-install. Needs root for dpkg -- `ubuntu-24.04`'s default `runner` user has
-      # passwordless sudo (see that test module's own `_can_install_packages` skip condition). A
-      # failure here fails this job before the .deb reaches R2/GitHub Releases below.
-      - name: Run packaged .deb lifecycle test
-        env:
-          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
-        run: pytest tests/integration/test_deb_packaged_lifecycle.py -v
-
-      # Same tests/diagnostics.py capture as the `build`/`build-windows` jobs' own
-      # steps -- placed after both pytest steps above (not just the .deb
-      # lifecycle one) since `if: failure()` fires for either one; the
-      # org-mode smoke test's own `--target install` tmp_path and the .deb
-      # lifecycle test's own real-`dpkg`-install manifest
-      # (test_deb_packaged_lifecycle.py's own `_capture_installed_file_
-      # manifest`) both land under the same test-results/ tree either way.
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: build-deb-failure-diagnostics
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Upload .deb as artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: PrivacyFence-deb
-          path: dist/privacyfence_*.deb
-          retention-days: 30
-
-      # Same private-by-default R2 archive as the DMG (see the `build` job's "Publish release
-      # artifacts to Cloudflare R2" step) -- every channel's `.deb` lands in
-      # releases/<channel>/<version>/, alongside whatever else that release shipped.
-      - name: Publish release artifacts to Cloudflare R2
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
-          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
-          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
-          R2_BUCKET: privacyfence-releases
-        run: |
-          python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
-          python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
-            dist/privacyfence_*.deb
-
   # Organization-mode Docker image (docs/org-mode-docker.md, ADRs 0209 and 0211). A matrix of two
   # legs on native runners -- `ubuntu-24.04` for linux/amd64, `ubuntu-24.04-arm` for linux/arm64 --
   # rather than QEMU emulation: each leg builds and tests the image on the architecture it ships
   # for, and the wheel plus the hash-pinned runtime lock install on both without per-arch packaging
-  # work. Independent of the other jobs, so it runs in parallel with them.
+  # work. Independent of the `sbom` job, so it runs in parallel with it.
   #
   # The image is tested here and saved as a workflow artifact, never pushed: a registry outage
-  # inside this workflow would hold PyPI back (publish-pypi.yml waits for the whole run), so the
+  # inside this workflow would hold back the `privacyfence-sync` publish (publish-pypi.yml waits for the whole run), so the
   # push, the tag combination and the attestation live in publish-org-image.yml, which downloads
   # exactly the bytes tested below. `finalize-release` does need this job, though, so a tag whose
   # image fails its test gets no GitHub Release either. The artifact names (`org-image-<arch>`)
   # deliberately do not match `finalize-release`'s `PrivacyFence-*` download pattern: the image is
-  # not a GitHub Release asset.
+  # not a GitHub Release asset (ADR 0306).
   build-org-image:
     needs: dedupe
     if: needs.dedupe.outputs.duplicate != 'true'
@@ -766,20 +78,33 @@ jobs:
           python-version: '3.12'
 
       - name: Install pinned runtime dependencies
-        # Same reasoning as the `build` (macOS) job's identically-named step: the wheel is built
-        # against, and the image test runs with, the hash-verified lockfile rather than a fresh resolve.
+        # The wheel is built against, and the image test runs with, the hash-verified lockfile
+        # rather than a fresh resolve.
         run: pip install --require-hashes -r requirements/runtime.lock.txt
 
       - name: Install Python dependencies
-        # [test] tooling comes with the dev lock: the image test needs pytest, pytest-timeout and the
-        # org bundle signing helpers. The runtime dependencies were installed by the step above.
+        # [test] tooling comes with the dev lock: the image test and the org-mode Ubuntu release
+        # smoke test need pytest, pytest-timeout and the org bundle signing helpers. The runtime
+        # dependencies were installed by the step above.
         run: |
           pip install --require-hashes -r requirements/dev.lock.txt
           pip install --no-deps --no-build-isolation -e .
 
-      # Same version/channel resolution as the `build-deb` job above, independently -- see the
-      # `build` job's identically-named step for why the channel lookup is skipped (rather than
-      # failing the run) off a tag.
+      # The release-workflow smoke test for the Ubuntu org-mode service --
+      # strict startup, reverse-proxy/Host handling, route mounting,
+      # per-principal session creation, MCP OAuth
+      # discovery, clean shutdown/restart, against a synthetic org config
+      # and a mocked IdP boundary (see that test module's own docstring).
+      # It exercises the installable `privacyfence` package directly, so it runs right after the
+      # dependencies are installed.
+      - name: Run org-mode Ubuntu release smoke test
+        env:
+          PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS: "1"
+          PRIVACYFENCE_REQUIRE_PACKAGED: "1"
+        run: pytest tests/integration/test_org_ubuntu_release_smoke.py -v
+
+      # The channel lookup is skipped (rather than failing the run) off a tag, so a manual run
+      # from the Actions tab still builds.
       - name: Determine version and release channel
         id: release
         run: |
@@ -801,8 +126,8 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: python3 scripts/telegram_credentials.py write
 
-      # The org image carries the built-in OAuth apps its servers sign in with (ADR 0255). The
-      # desktop jobs get none: desktop mode has no built-in apps. Secrets reach only this step.
+      # The org image carries the built-in OAuth apps its servers sign in with (ADR 0255).
+      # Secrets reach only this step.
       - name: Write built-in app credentials
         env:
           PF_APP_GOOGLE_WEB_CLIENT_ID: ${{ secrets.PF_APP_GOOGLE_WEB_CLIENT_ID }}
@@ -823,7 +148,7 @@ jobs:
       - name: Build wheel
         run: python -m build --wheel --no-isolation
 
-      # Same check as publish-pypi.yml's: a stable tag fails here, any other build only warns.
+      # The only place this check runs for a release: a stable tag fails here, any other build only warns.
       - name: Check Telegram app credentials are packaged
         run: |
           REQUIRE=()
@@ -874,11 +199,8 @@ jobs:
           path: org-image/
           retention-days: 30
 
-  # One CycloneDX SBOM per ecosystem this repo ships code from. Independent of the `build`,
-  # `build-windows`, and `build-deb` jobs above -- doesn't need the macOS
-  # runner, code signing, or notarization, just the same tagged source tree
-  # -- so it runs in parallel rather than gating on (or blocking) any of
-  # them.
+  # The CycloneDX SBOM of the Python runtime dependencies. Independent of `build-org-image`:
+  # it needs only the tagged source tree, so it runs in parallel with it.
   sbom:
     needs: dedupe
     if: needs.dedupe.outputs.duplicate != 'true'
@@ -894,18 +216,10 @@ jobs:
         with:
           python-version: '3.13'
 
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: mcpb/shim/package-lock.json
-
-      # Same version/channel resolution as the `build` job above, independently -- this job
-      # doesn't install the package itself (see the "Generate Python SBOM" step's own
+      # This job doesn't install the package itself (see the "Generate Python SBOM" step's own
       # comment for why it deliberately doesn't), so it reads the tag-derived version straight
-      # from setuptools_scm instead of from an installed __version__.
-      # See the `build` job's identically-named step for why the channel lookup is skipped
-      # (rather than failing the run) off a tag.
+      # from setuptools_scm instead of from an installed __version__. The channel lookup is
+      # skipped (rather than failing the run) off a tag.
       - name: Determine version and release channel
         id: release
         run: |
@@ -922,7 +236,7 @@ jobs:
           echo "Resolved version=$VERSION channel=$CHANNEL"
 
       # From requirements/runtime.lock.txt, not a fresh resolve -- the SBOM
-      # should describe exactly what a plain PyPI install of privacyfence gets
+      # should describe exactly what the organization image installs
       # (and what pip-audit's blocking job in dependency-audit.yml already
       # vetted), not whatever the resolver would pick today.
       - name: Generate Python SBOM
@@ -932,30 +246,16 @@ jobs:
             --pyproject pyproject.toml \
             --of JSON -o sbom-python.cdx.json
 
-      # --omit dev: the shim's devDependencies (esbuild, tsx, typescript,
-      # @types/node) never ship inside the built .mcpb -- see
-      # mcpb/shim/build.mjs -- so they don't belong in an SBOM describing
-      # what's actually distributed, same reasoning as
-      # dependency-audit.yml's `npm audit --omit=dev`.
-      - name: Generate Node shim SBOM
-        run: |
-          npm ci
-          npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --omit dev \
-            --output-file ../../sbom-shim-npm.cdx.json
-        working-directory: mcpb/shim
-
       - name: Upload SBOMs as workflow artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PrivacyFence-sbom
           path: |
             sbom-python.cdx.json
-            sbom-shim-npm.cdx.json
           retention-days: 30
 
-      # Same private-by-default R2 archive as the DMG (see the `build` job's "Publish release
-      # artifacts to Cloudflare R2" step) -- every channel's SBOMs land in
-      # releases/<channel>/<version>/, alongside whatever else that release shipped.
+      # The private R2 release archive (scripts/r2_release.py's module docstring): every channel's
+      # SBOM lands in releases/<channel>/<version>/, alongside whatever else that release shipped.
       - name: Publish SBOMs to Cloudflare R2
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -966,62 +266,24 @@ jobs:
         run: |
           python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
-            sbom-python.cdx.json \
-            sbom-shim-npm.cdx.json
+            sbom-python.cdx.json
 
-  # docs/downloads-and-release-kpi.md. Every job above uploads its own artifacts to
-  # releases/<channel>/<version>/ (R2) and as its own workflow artifact (for the GitHub Release
-  # attachment below) independently; this job is what turns that pile of objects into a
-  # *published* release, on both surfaces, only once every job has actually succeeded.
-  #
-  # R2 publication is transactional from a downloader's point of view: scripts/r2_release.py's
-  # `finalize` writes manifest.json, verifies every artifact it references really is in R2 with
-  # the recorded size and SHA-256, and only then rewrites latest.json. A release missing any
-  # mandatory installer fails here with latest.json untouched, so an incomplete release can sit in
-  # the bucket without ever becoming the one the Worker serves.
-  #
-  # The GitHub Release used to have no equivalent guarantee: `build`/`build-windows`/`build-deb`/
-  # `sbom` each used to attach their own asset directly, in parallel, as an ordinary step inside
-  # themselves -- so a job that failed *after* a sibling had already attached its own asset (e.g.
-  # `build-windows` failing on notarization after `build` had already published the DMG) left a
-  # public GitHub Release carrying only some of a stable release's files, even though `needs`
-  # below already meant R2 correctly refused to promote that same release to "latest". This job
-  # closes that asymmetry: every artifact-producing job only
-  # uploads a *workflow* artifact (`actions/upload-artifact`, not `action-gh-release`) now, and
-  # this job downloads all of them and does the one `action-gh-release` call itself, after
-  # `needs:` has already proven all four jobs succeeded -- so the GitHub Release is as atomic as
-  # the R2 promotion: either it gets the complete file set, or (this job failing, or one of its
-  # `needs` failing) it doesn't get touched at all.
-  #
-  # `needs` covers all four artifact-producing jobs. The three installer jobs are obvious -- their
-  # output is what both the release manifest and the GitHub Release list. `sbom` is included even
-  # though SBOMs deliberately never enter the R2 manifest (installers only, so the download KPI
-  # counts installers by construction): a tag whose SBOM generation failed has not fully shipped,
-  # and should not become "latest" (nor get a GitHub Release) either. A failure in any of them
-  # leaves the previous release as latest and the previous GitHub Release as the newest one, which
-  # is the safe outcome on both surfaces.
-  #
-  # Not included, and deliberately: publish-pypi.yml's sdist/wheel. They live in a separate
-  # workflow that `needs:` cannot reach across, and they are not installers, so they are not in
-  # the manifest or attached to the GitHub Release -- which means this job has no reason to wait
-  # for them.
-  #
-  # `build-org-image` (the Docker image's two native-arch legs) is in `needs` too: it produces no
-  # GitHub Release asset, but a tag whose org image failed its test has not fully shipped, so it
-  # gets no release either -- the same all-or-nothing rule as the artifacts above. Only the
-  # registry *push* is kept out of this workflow (publish-org-image.yml; ADR 0209).
+  # The published release (ADR 0306). `sbom` and `build-org-image` each upload their own workflow
+  # artifact and R2 objects independently; this job turns them into a GitHub Release only once
+  # both have succeeded, so the release either gets the complete file set or (this job failing,
+  # or one of its `needs` failing) is not touched at all. `build-org-image` produces no GitHub
+  # Release asset, but a tag whose org image failed its test has not fully shipped, so it gets no
+  # release either; only the registry *push* is kept out of this workflow (publish-org-image.yml;
+  # ADR 0209). This job also uploads the org admin tools (scripts/sync_room_directory.py,
+  # scripts/sign_connector_config.py and the connector config signing page) to the R2 archive.
   finalize-release:
-    needs: [build, build-windows, build-deb, sbom, build-org-image]
+    needs: [sbom, build-org-image]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     # Needs `contents: write` because it's the one place that calls action-gh-release, to attach
     # the complete artifact set (or, on a pre-release tag, to create the asset-less release entry).
-    # `actions: read` is for the graphical-session coverage-check step below -- it
-    # only reads the three graphical-session workflows' own run history, never writes anything via
-    # the Actions API.
     permissions:
       contents: write
-      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1046,33 +308,10 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Finalizing version=$VERSION channel=$CHANNEL"
 
-      # Reports a coverage gap on every channel and gates only stable tags on it:
-      # linux-graphical-session.yml, windows-graphical-session.yml and
-      # macos-graphical-session.yml -- the only automated coverage for the daemon starting itself
-      # at login -- run on packaging-related `main` pushes, weekly, and on demand, never on a tag
-      # push and never as a `needs:` of this job, since this tier's own runtime cost must not sit
-      # on a release's critical path (docs/testing-policy.md's Layer 6 row) -- this step never
-      # waits for a fresh run, it only asks whether a reachable one already succeeded. That still
-      # leaves a gap where a tag can ship with autostart broken as long as the last
-      # packaging-touching push to `main` (or the current `releases/*` branch) was green and
-      # nothing since then re-ran any of the three workflows. This step closes the "nobody looked"
-      # half of that gap on every channel (a warning), and closes it for real on a stable tag
-      # specifically (`--channel`, below, makes a gap fail this step rather than just annotate it)
-      # -- see scripts/check_graphical_session_coverage.py's own module docstring for exactly what
-      # counts as a gap and why pre-release tags stay ungated on purpose (ADR 0057).
-      - name: Check graphical-session/autostart coverage (gates stable tags only)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 scripts/check_graphical_session_coverage.py \
-            --repo "${{ github.repository }}" --commit "${{ github.sha }}" \
-            --channel "${{ steps.release.outputs.channel }}"
-
-      # Pulls together the workflow artifacts `build`/`build-windows`/`build-deb`/`sbom`
-      # uploaded above (`PrivacyFence-dmg`, `PrivacyFence-mcpb`, `PrivacyFence-windows-installer`,
-      # `PrivacyFence-deb`, `PrivacyFence-sbom`) into one flat directory -- `merge-multiple: true` so files land
-      # directly under `release-assets/` rather than one subdirectory per artifact name, matching
-      # the flat file list the "Attach release assets" step below references.
+      # Pulls the `sbom` job's workflow artifact (`PrivacyFence-sbom`) into one flat directory --
+      # `merge-multiple: true` so files land directly under `release-assets/` rather than one
+      # subdirectory per artifact name, matching the flat file list the "Attach release assets"
+      # step below references.
       - name: Download build artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -1110,39 +349,43 @@ jobs:
         run: |
           cp website/tools/connector-config/index.html release-assets/privacyfence-connector-config-tool.html
 
-      # Only a stable tag also gets a public GitHub Release with attached binaries -- alpha/beta/rc
-      # stop at the private R2 upload each build job already did (see scripts/r2_release.py's
-      # module docstring for why). One call, the complete file set -- see this job's own top
-      # comment for why that's the point of doing it here rather than in each build job.
+      # Only a stable tag also gets a public GitHub Release with attached files -- alpha/beta/rc
+      # stop at the private R2 upload (scripts/r2_release.py's module docstring).
+      # One call, the complete file set -- see this job's own top comment.
       - name: Attach release assets (stable only)
         if: steps.release.outputs.channel == 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: |
-            release-assets/PrivacyFence-*.dmg
-            release-assets/PrivacyFence.mcpb
-            scripts/build_org_bundle.py
             scripts/sync_room_directory.py
             scripts/sign_connector_config.py
             release-assets/privacyfence-connector-config-tool.html
-            release-assets/PrivacyFence-*-setup.exe
-            release-assets/privacyfence_*.deb
             release-assets/sbom-python.cdx.json
-            release-assets/sbom-shim-npm.cdx.json
             release-assets/privacyfence-sync-plugin.zip
           body_path: release-notes.md
           prerelease: false
 
       # The release entry itself (tag + notes, no files) still gets created for every channel,
-      # marked prerelease, so update_checker.py's beta update channel -- which reads exactly that
-      # flag off the releases list -- keeps working without any underlying binary being public.
+      # marked prerelease, so a pre-release is distinguishable from a stable one on the releases list
+      # without any underlying file being public.
       - name: Create GitHub Release notes (pre-release, no public assets)
         if: steps.release.outputs.channel != 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           prerelease: true
 
-      - name: Publish release manifest and promote to latest
+      # The org admin tools go to the private R2 release archive for every channel, stable and
+      # pre-release alike: scripts/sync_room_directory.py and scripts/sign_connector_config.py are
+      # themselves a release output, run by org admins (not contributors) -- see their own
+      # docstrings and docs/google-cloud-setup.md, docs/slack-setup.md, docs/salesforce-setup.md,
+      # docs/atlassian-setup.md. The browser tool for signing connector configs is named as a
+      # release asset: the archive keeps the file under its basename, and the offline copy is
+      # pinned to this release.
+      #
+      # Requires these GitHub secrets/vars (Settings → Secrets and variables → Actions):
+      #   CF_RELEASES_R2_ACCESS_KEY_ID / CF_RELEASES_R2_SECRET_ACCESS_KEY  — R2 API token (secrets)
+      #   CF_RELEASES_R2_ENDPOINT                                         — R2 endpoint URL (var)
+      - name: Publish org admin tools to Cloudflare R2
         env:
           CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
           CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
@@ -1150,31 +393,16 @@ jobs:
           R2_BUCKET: privacyfence-releases
         run: |
           python3 -m pip install --quiet --require-hashes -r requirements/release.lock.txt
-          python3 scripts/r2_release.py finalize --version "${{ steps.release.outputs.version }}"
-
-      # HEAD, never GET: a release-CI check must never inflate the download KPI it is verifying
-      # (docs/downloads-and-release-kpi.md's KPI section). This confirms the Worker can
-      # actually resolve what finalize just published, which is the end-to-end assertion neither
-      # the unit tests nor the R2 upload can make on their own.
-      - name: Smoke-test the published download routes (HEAD only)
-        run: |
-          CHANNEL="${{ steps.release.outputs.channel }}"
-          failed=0
-          for artifact in macos-arm64 windows-x64 linux-x64; do
-            url="https://downloads.privacyfence.eu/download/$CHANNEL/$artifact"
-            status="$(curl -s -o /dev/null -w '%{http_code}' --head --location "$url")"
-            if [ "$status" != "200" ]; then
-              echo "::error::HEAD $url returned $status, expected 200"
-              failed=1
-            else
-              echo "ok: $artifact"
-            fi
-          done
-          exit $failed
+          mkdir -p dist
+          cp website/tools/connector-config/index.html dist/privacyfence-connector-config-tool.html
+          python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
+            scripts/sync_room_directory.py \
+            scripts/sign_connector_config.py \
+            dist/privacyfence-connector-config-tool.html
 
       # The `stable` branch is what the Claude Cowork / Claude Code plugin marketplace follows to
       # get the latest stable release instead of `main` (ADR 0169). Last on purpose: a failure
-      # here must never hold back the release manifest or the download routes above. A plain
+      # here must never hold back the release above. A plain
       # fast-forward push: a release that does not descend from the previous one fails loudly
       # instead of silently rewriting `stable`.
       - name: Point the `stable` branch at this release (stable only)

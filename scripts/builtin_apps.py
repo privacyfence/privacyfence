@@ -6,8 +6,8 @@ the Google sign-in client) that organization servers use through the OAuth relay
 and secrets identify the PrivacyFence *application* to each provider, as Telegram's api_id/api_hash
 do (scripts/telegram_credentials.py, ADR 0040), and are public in effect (ADR 0255). This repo is
 public, so they are never committed: CI supplies them as the PF_APP_* secrets, and the builds that
-ship a server -- the org image's wheel in .github/workflows/build.yml and
-.github/workflows/publish-pypi.yml -- write them into the git-ignored
+ship a server -- the org image's wheel, built by `build-org-image` in
+.github/workflows/build.yml -- write them into the git-ignored
 ``src/privacyfence/_builtin_apps.py`` right before packaging. The desktop installers do not call
 this script: desktop mode has no built-in apps.
 

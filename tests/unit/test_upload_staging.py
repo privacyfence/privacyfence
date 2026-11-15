@@ -366,6 +366,28 @@ async def _achunks(data: bytes):
         yield chunk
 
 
+class TestAfill:
+    """The async, principal-checked fill: the same semantics as ``fill()``."""
+
+    async def test_round_trip_for_the_slots_principal(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/report.pdf", max_bytes=1000)
+        assert await store.afill(token, ALICE.id, _achunks(b"hello world")) == len(b"hello world")
+        assert store.claim(token, ALICE.id) == b"hello world"
+
+    async def test_another_principal_finds_no_slot(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/report.pdf", max_bytes=1000)
+        with pytest.raises(LookupError):
+            await store.afill(token, BOB.id, _achunks(b"data"))
+
+    async def test_oversized_stream_is_refused(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/report.pdf", max_bytes=4)
+        with pytest.raises(UploadTooLargeError):
+            await store.afill(token, ALICE.id, _achunks(b"way too many bytes"))
+
+
 class TestAfillCapability:
     """The unauthenticated capability fill (ADR 0007's "Clients without the
     bridge" section, ADR 0028) -- same semantics as fill()/afill() minus the

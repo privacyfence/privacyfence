@@ -258,9 +258,6 @@ def _parse_json_object(value: str) -> dict[str, Any] | None:
 
 MAX_EXTRA_FIELDS = 20
 
-_DESTINATION_DIR = (
-    "Folder on the user's computer to write the file to, absolute or starting with ~/."
-)
 
 _EXPORT_COLUMNS = [
     "key", "summary", "status", "issue_type", "priority", "assignee", "reporter",
@@ -314,12 +311,17 @@ def _field_cell(value: Any) -> str:
     return str(value)
 
 
+_DELIVERY_SENTENCE = (
+    "The file is delivered as a one-time download_url in the result (or inline when small): fetch "
+    "that address directly, no auth header needed."
+)
+
+
 class JiraConnector(Connector):
     def __init__(self, client: JiraClient) -> None:
         self._jira = client
         self.my_email: str = ""
         self.my_account_id: str = ""
-        self.download_mode: str = "local"
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
 
@@ -332,7 +334,7 @@ class JiraConnector(Connector):
         return "jira"
 
     def tool_specs(self) -> list[ToolSpec]:
-        return export_files.visible_specs(self._all_tool_specs(), self.download_mode, self.download_config)
+        return export_files.visible_specs(self._all_tool_specs(), self.download_config)
 
     def _all_tool_specs(self) -> list[ToolSpec]:
         return [
@@ -402,12 +404,12 @@ class JiraConnector(Connector):
             ToolSpec(
                 name="jira_export_issues",
                 description=(
-                    "Write every issue a JQL query matches, up to 10,000, to a CSV or JSON file on the "
-                    "user's computer, in one approval. Columns: key, summary, status, issue_type, "
+                    "Export every issue a JQL query matches, up to 10,000, as a CSV or JSON file, in "
+                    "one approval. Columns: key, summary, status, issue_type, "
                     "priority, assignee, reporter, labels, created, updated, url, then the requested "
-                    "extra fields. Returns {rows, columns, sha256, path, name, size_bytes, delivery}, "
+                    "extra fields. Returns {rows, columns, sha256, name, size_bytes, delivery, download_url}, "
                     "never the issues. A query matching no issue writes no file and returns rows 0. "
-                    + export_files.ORG_DELIVERY_SENTENCE + " Requires user approval."
+                    + _DELIVERY_SENTENCE + " Requires user approval."
                 ),
                 params=[
                     ToolParam("jql", "str", description="JQL query selecting the issues to export."),
@@ -415,7 +417,6 @@ class JiraConnector(Connector):
                               description="Optional JSON array of up to 20 extra fields by name, id or "
                                           'cf[N], such as ["Story Points", "duedate"]; each becomes a '
                                           "column after the standard ones."),
-                    ToolParam("destination_dir", "str", description=_DESTINATION_DIR),
                     ToolParam("file_name", "str", required=False, default="",
                               description="File name ending in .csv or .json, which picks the format. "
                                           "Empty means jira-issues.csv."),
@@ -618,7 +619,7 @@ class JiraConnector(Connector):
         ]
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
-        export_files.refuse_if_exports_off(tool, self.download_mode, self.download_config)
+        export_files.refuse_if_exports_off(tool, self.download_config)
         if tool == "jira_list_projects":
             return await self._list_projects(**args)
         if tool == "jira_search_issues":
@@ -735,14 +736,13 @@ class JiraConnector(Connector):
         )
 
     async def _export_issues(
-        self, jql: str, destination_dir: str, fields: str = "", file_name: str = "",
+        self, jql: str, fields: str = "", file_name: str = "",
     ) -> Any:
         t0 = time.time()
         refs = _parse_field_refs(fields, "jira_export_issues", required=False)
-        destination_dir = export_files.check_destination(destination_dir)
         file_name, fmt = export_files.export_file_name(file_name, "jira-issues")
         export_files.refuse_org_without_staging(
-            "jira_export_issues", self.download_mode,
+            "jira_export_issues",
             (self.download_config or DownloadDeliveryConfig()).allow_disk_staging,
             "jira_search_issues_with_fields",
         )
@@ -765,7 +765,7 @@ class JiraConnector(Connector):
         data = await asyncio.to_thread(export_files.render, columns, rows, fmt, spreadsheet_safe=True)
         sha256 = hashlib.sha256(data).hexdigest()
         local_files.check_delivery_size(len(data))
-        saved_to = export_files.saved_to(destination_dir, file_name, self.download_mode)
+        saved_to = export_files.ORG_SAVED_TO
         preview = {"JQL": jql, "Fields": ", ".join(names) or "standard fields only"}
         await gated_call(
             connector=self.name,
@@ -789,19 +789,17 @@ class JiraConnector(Connector):
                 "Saved to": saved_to,
             },
             details_text=export_files.card_details(preview, len(rows), columns, saved_to, sha256),
-            delivery="staged_link" if self.download_mode == "org"
-            else "local_disk" if local_files.can_access_user_files(self.download_mode)
-            else "client_bridge",
+            delivery="staged_link",
             my_email=self.my_email,
             my_account_id=self.my_account_id,
             args={
-                "jql": jql, "fields": fields, "destination_dir": destination_dir,
+                "jql": jql, "fields": fields,
                 "file_name": file_name, "sha256": sha256,
             },
         )
         delivered = local_files.deliver_export(
-            destination_dir, file_name, data, export_files.MIME_TYPES[fmt],
-            download_mode=self.download_mode, download_config=self.download_config,
+            file_name, data, export_files.MIME_TYPES[fmt],
+            download_config=self.download_config,
             download_base_url=self.download_base_url,
         )
         return export_files.export_summary(columns, rows, sha256, delivered)

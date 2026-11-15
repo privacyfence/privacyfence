@@ -20,29 +20,29 @@ surface:
 - the organization-mode OAuth server (`web/oauth_provider.py`, `/register`, `/authorize`, `/token`,
   the `.well-known` metadata);
 - agent attribution (`agent_identity.py`, its name and redirect patterns);
-- file delivery to clients without the extension (`privacyfence_create_upload_slot`, staged
-  download links, [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md));
-- the extension (`mcpb/`), for the Claude Desktop local row.
+- file delivery (`privacyfence_create_upload_slot`, staged download links,
+  [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)).
 
 Run it for a new client before it is listed as supported, and whenever a client's own release is
 suspected of changing its behavior toward PrivacyFence.
 
 ## Test organization deployment
 
-The organization-mode rows need a PrivacyFence organization deployment reachable over public
+The runs need a PrivacyFence organization deployment reachable over public
 HTTPS: claude.ai connects from Anthropic's servers, not from your browser, so `localhost` or a
 private network does not work. Keep one deployment for QA only, separate from any production
 install. Setting it up takes one to three hours the first time.
 
 1. Get a small Linux VM, 2 vCPU and 2 GB RAM. Ubuntu 24.04 is the reference.
 2. DNS: create an **A** record `pf-test.<your-domain>` pointing at the VM's IP address.
-3. Follow [`org-mode-setup-guide.md`](org-mode-setup-guide.md) sections 2 to 9 in order. In
+3. Follow [`org-mode-docker.md`](org-mode-docker.md) and, for the parts it points to,
+   [`org-mode-setup-guide.md`](org-mode-setup-guide.md) sections 4 to 9 in order. In
    particular:
    - **Section 4, identity provider.** For Google: **APIs & Services → Credentials → + Create
      credentials → OAuth client ID → Web application**, with the three redirect URIs from section
      4's table on your `pf-test` hostname.
-   - **Section 7, reverse proxy and TLS.** Caddy, which obtains a Let's Encrypt certificate itself.
-   - **Section 8, hardened systemd unit.** `privacyfence-org.service`.
+   - **Reverse proxy and TLS.** The Compose file's Caddy, which obtains a Let's Encrypt certificate
+     itself ([Quick start](org-mode-docker.md#quick-start)).
 4. From your own machine, check the authorization server is reachable:
 
    ```bash
@@ -53,10 +53,6 @@ install. Setting it up takes one to three hours the first time.
 5. Sign in at `/login`. On `/connect`, connect **Google Calendar** (for the read and the gated
    write) and **Google Drive** (for the file steps). Enroll a passkey on `/security` if step-up is
    on.
-
-For the local-mode rows, use a packaged install of the build under test (the `build.yml`
-pre-flight's artifact, see [`release-testing.md`](release-testing.md#gates-in-order)), connected to
-the same Google Calendar and Drive accounts.
 
 ## What the client receives
 
@@ -69,11 +65,9 @@ asking. PrivacyFence's approval card appears either way; a client prompt comes o
 
 ## Per-client script
 
-Take each client through these steps, in order. Set the client up as its
-own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude Code" sections of
-[`install-macos.md`](install-macos.md), [`install-windows.md`](install-windows.md) and
-[`install-linux.md`](install-linux.md); for organization mode,
-[`org-mode-setup-guide.md`, "Add PrivacyFence to an AI client"](org-mode-setup-guide.md#add-privacyfence-to-an-ai-client).
+Take each client through these steps, in order. Set the client up as
+[`org-mode-setup-guide.md`, "Add PrivacyFence to an AI client"](org-mode-setup-guide.md#add-privacyfence-to-an-ai-client)
+says.
 
 1. **Tool list.** The client lists PrivacyFence's tools (`tools/list`): the connector tools of the
    connected services and the `privacyfence_*` tools. Note any tool the client drops, renames or
@@ -85,40 +79,32 @@ own docs say: for local mode, the "Connect Claude Desktop" and "Connect Claude C
      PrivacyFence, and what it said, and whether it offered to always allow the tool. If it did,
      always-allow it and repeat the write: the client no longer asks, and PrivacyFence's card
      still does.
-   - An approval card appears: in local mode through the companion's **Open Approvals**
-     ([ADR 0062](adr/0062-only-a-companion-attested-session-may-approve.md)), in organization mode
-     at `/approvals` after sign-in. Note its "AI system" line.
+   - An approval card appears at `/approvals` after sign-in. Note its "AI system" line.
    - Approve it. The client repeats the identical call and the write completes.
-4. **Files**, for a client without the extension (every client except Claude Desktop with
-   `PrivacyFence.mcpb`) ([ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)):
+4. **Files** ([ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)):
    - **Upload:** ask the client to upload a small local file to Drive. It calls
      `privacyfence_create_upload_slot`, `PUT`s the file to the returned URL, and passes the
-     `upload_id` to `drive_upload_file`. Approve the card; the file appears in Drive.
-   - **Download:** ask it to download a Drive file larger than the inline limit (organization mode:
-     `--downloads-inline-max-bytes`, a 100,000-byte tool result by default, so any file over about
+     `upload:` reference to `drive_upload_file`. Approve the card; the file appears in Drive.
+   - **Download:** ask it to download a Drive file larger than the inline limit (`--downloads-inline-max-bytes`, a 100,000-byte tool result by default, so any file over about
      75 KB). The tool result carries a one-time link, and the file reaches you through it. On
      claude.ai, check that the host is on its domain allowlist first
      ([who sets it](connect-claude-ai.md#files),
      [ADR 0097](adr/0097-a-download-link-needs-a-client-that-can-reach-the-server.md)); without
      it the fetch fails from claude.ai's sandbox, so the access log shows no
      `/mcp-files/fetch/` request.
-
-   For Claude Desktop with the extension, do the same upload and download through local paths
-   instead: the extension reads and writes the file as you.
 5. **Attribution.** Open the audit entry for the gated write and note `agent_id`, `agent_name`,
    `agent_version` and `agent_source`
    ([`how-it-works.md`, "Which AI system is asking"](how-it-works.md#which-ai-system-is-asking)).
-   The audit log is under the data directory: `authority/logs/audit/` for a local install's first
-   account, `users/<principal>/logs/audit/` in organization mode. An unrecognised client is
+   The audit log is under the data directory: `users/<principal>/logs/audit/`. An unrecognised client is
    recorded as `agent_id="unknown:<name>"`, which gives the exact name it sent.
-6. **Attribution tier (organization mode only).** Make a gated write and check the card
+6. **Attribution tier.** Make a gated write and check the card
    ([`org-mode-setup-guide.md` section 11](org-mode-setup-guide.md#11-ai-systems)). A web client's
    (claude.ai, ChatGPT, Gemini Enterprise) cards are verified and the audit entry records
    `agent_source=oauth_client`, without any admin step. A loopback client's (Claude Code) cards are
    Not verified.
 7. **Save a fixture.** Record what the client sent, so the replay test can repeat it on every pull
    request, in `tests/fixtures/ai_clients/<client>/`:
-   - organization mode: the client's entry in `org/oauth_clients.json` under the data directory
+   - the client's entry in `org/oauth_clients.json` under the data directory
      (`/var/lib/privacyfence-org/.privacyfence/` on the reference deployment), with
      `client_secret` replaced by `REDACTED` — its `client_name`, `redirect_uris` and
      `token_endpoint_auth_method` are what the client registered;
@@ -138,7 +124,7 @@ Post one comment per client run on the issue or pull request the run belongs to,
   wording, and whether always-allowing the tool stopped it asking.
 - **Attribution:** the approval card's "AI system" line, and the audit entry's `agent_id`,
   `agent_name`, `agent_version` and `agent_source`.
-- **Organization mode only:**
+- **Registration:**
   - the client's `org/oauth_clients.json` entry, with `client_secret` replaced by `REDACTED`;
   - that its cards are verified without any admin step.
 
@@ -146,18 +132,15 @@ Post one comment per client run on the issue or pull request the run belongs to,
 
 Add a row per run to the table below in the pull request that saves its fixture, replacing the row
 of the same client and mode. **Result** is `pass`, or `fail` with a link to the evidence.
-**Registered `client_name`** is organization mode only (`—` for local mode). **Client
+**Registered `client_name`** is the name the client registered. **Client
 confirmation?** is `yes` (what it asked, and whether always-allowing the tool stopped it) or `no`.
 **Fixture captured** links the fixture directory, or says `no` and why.
 
 | Client | Version | OS | Mode | Date | Result | Registered `client_name` | `clientInfo` name | Client confirmation? | Fixture captured |
 |---|---|---|---|---|---|---|---|---|---|
-| Claude Desktop (extension) | 2.9939.2 | macOS 27.0 | local | 2026-09-28 | [pass](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865556451) | — | `local-agent-mode-privacyfence` 1.0.0 | yes, before the write with default tool permissions; always-allow stopped it, PrivacyFence's card still shown | no: local mode has no registration |
 | Claude Desktop (custom connector) | | | org | | not run: no account available allowed custom connectors | | | | no: most likely registers like claude.ai, unverified |
-| Claude Code | 2.1.283 | macOS 27.0 | local | 2026-09-28 | [pass](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865032001) | — | `claude-code` 2.1.283 | no: Claude Code does not gate MCP tools by their annotations | no: local mode has no registration |
 | Claude Code | 2.1.283 | macOS 27.0 | org | 2026-09-28 | [pass](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865527889) | `Claude Code (privacyfence)` (the part in parentheses is the `claude mcp add` server name) | `claude-code` 2.1.283 | not recorded | [`claude-code/`](../tests/fixtures/ai_clients/claude-code/) |
 | claude.ai | web | web | org | 2026-09-28 | [fail at step 3](https://github.com/privacyfence/privacyfence/issues/46#issuecomment-5865753049): a 1.7 MB inline download was truncated by claude.ai, so step 4 did not run; steps 1–2 passed. The default inline limit has since been lowered ([ADR 0092](adr/0092-the-inline-download-limit-caps-the-tool-result-at-100000-bytes.md)) | `Claude` | not observable (the registered name decides first); version 1.0.0 | yes, before the write; always-allow stopped it, PrivacyFence's card still shown | [`claude-ai/`](../tests/fixtures/ai_clients/claude-ai/) |
 | ChatGPT (Developer Mode, personal plan) | web | web | org | 2026-09-28 | [pass](https://github.com/privacyfence/privacyfence/issues/391#issuecomment-5871022834), against 5.0.0: the download link and the upload `PUT` worked from ChatGPT's code sandbox with no allowlist; the approved upload then failed because its approval had waited, a PrivacyFence bug since fixed ([ADR 0102](adr/0102-an-upload-slot-is-consumed-after-the-gate-not-before.md)); `drive_get_file_content` not run | `ChatGPT` | not observable (the registered name decides first; not `openai-mcp`); version 1.0.0 | no before the calendar write, under the permission setting "Allow low-risk tools"; yes once, before the upload, and always-allow stopped it; PrivacyFence's card still shown | [`chatgpt/`](../tests/fixtures/ai_clients/chatgpt/) |
-| ChatGPT desktop (personal plan) | 26.924.22138 | macOS | local | 2026-09-28 | [pass](https://github.com/privacyfence/privacyfence/issues/390#issuecomment-5872180177), against 5.0.0: added as a Streamable HTTP server with an `Authorization: Bearer` header; the one-time download link on `127.0.0.1` fetched from ChatGPT's command sandbox; upload through `privacyfence_create_upload_slot` | — | `codex-mcp-client` 0.158.0-alpha.2.1 (the Codex command-line tool's name too) | yes, before tools that are not read-only, with an always-allow option | no: local mode has no registration |
 | Gemini Enterprise | web | web | org | 2026-09-29 | [pass](https://github.com/privacyfence/privacyfence/issues/393#issuecomment-5889486339), against a development build before ADR 0108's fixes, with the COOP header removed at the proxy and a `client_secret_post` client: a Gmail read and a Calendar write, each approved on PrivacyFence's card; Gemini posted the `/approvals/<id>` link and asked to be told when it was approved; a 1.7 MB download came back as a link Gemini did not fetch; the upload failed, since Gemini has no file bytes to send; pinning not possible yet (no registry entry) | `Gemini Enterprise` (set by the admin's `/register` call) | not observable (the audit showed the registered name, with an empty version) | yes, Gemini's own "Action Confirmed" step before its tool calls; PrivacyFence's card still shown | no: not captured in this run |
 | Gemini Enterprise | web | web | org | 2026-09-29 | [pass](https://github.com/privacyfence/privacyfence/issues/393#issuecomment-5890236358), against `main` with ADR 0108's fixes and the registry entry (ADR 0109), without any proxy workaround: signing in and working as before; the registration pinned on Settings → AI systems, after which its cards are verified | `Gemini Enterprise` | not observable | as in the row above | no: not captured in this run |

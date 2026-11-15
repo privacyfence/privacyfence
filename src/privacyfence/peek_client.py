@@ -37,7 +37,7 @@ _GRANT_EMAIL_MAX = 254
 
 _LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 _LOGIN_STATUSES = ("pending", "approved", "denied", "expired", "consumed")
-_REAUTH = "Use Authenticate… in PrivacyFence Settings"
+_REAUTH = "Connect Peek on the Connect page (/connect)"
 _SOURCE_DEVICE = "device"
 _SOURCE_PROVISIONED = "provisioned"
 _PROVISIONING_ID_RE = re.compile(r"[A-Za-z0-9._@-]{1,200}")
@@ -90,7 +90,7 @@ def validate_slug(slug: str) -> str:
     return slug
 
 
-def bundle_base_url(section: dict[str, Any], *, org_mode: bool) -> str:
+def bundle_base_url(section: dict[str, Any]) -> str:
     """The Peek server an organization bundle pins, or ``""`` when it pins none."""
     raw = section.get("base_url") or ""
     url = ""
@@ -99,7 +99,7 @@ def bundle_base_url(section: dict[str, Any], *, org_mode: bool) -> str:
             url = normalize_base_url(str(raw))
         except PeekClientError as exc:
             raise PeekClientError(f"Peek organization config is not usable: {exc}") from exc
-    if org_mode and not url:
+    if not url:
         raise PeekClientError("Peek organization config not installed")
     return url
 
@@ -286,7 +286,7 @@ def load_token_file(path: str) -> dict[str, str]:
         with open(path, encoding="utf-8") as handle:
             raw = handle.read()
     except FileNotFoundError as exc:
-        raise PeekClientError("Peek is not authenticated. Use Authenticate… in PrivacyFence Settings.") from exc
+        raise PeekClientError("Peek is not authenticated. Connect Peek on the Connect page (/connect).") from exc
     except OSError as exc:
         raise _unreadable() from exc
     try:

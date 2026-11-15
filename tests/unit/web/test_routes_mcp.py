@@ -27,7 +27,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.connection import Connection
 
-from privacyfence import local_files, scoped_tokens
+from privacyfence import agent_runtimes, local_files, scoped_tokens
 from privacyfence.agent_identity import UNKNOWN_AGENT
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -36,9 +36,11 @@ from privacyfence.policy import scope_rows
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.scoped_tokens import ScopedToken, ScopedTokenStore
 from privacyfence.web.mcp_dispatch import McpDispatcher
-from privacyfence.web.mcp_tools import META_TOOL_NAMES
+from privacyfence.web.mcp_tools import META_TOOL_NAMES, RUNTIME_CREDENTIAL_STATUS_TOOL
 from privacyfence.web import routes_mcp as rm
 from privacyfence.web.routes_mcp import SERVER_INSTRUCTIONS, build_mcp_asgi_app, mcp_lifespan
+
+from ...helpers import token_verifier
 
 
 class EchoConnector(Connector):
@@ -69,13 +71,15 @@ class EchoConnector(Connector):
 
 
 TOKEN = "mcp-test-token"
+# What a dispatcher without n8n delivery lists: the status tool is offered only where delivery is set up.
+_META_TOOL_NAMES_WITHOUT_DELIVERY = META_TOOL_NAMES - {RUNTIME_CREDENTIAL_STATUS_TOOL.name}
 
 
 class _OrgVerifier(TokenVerifier):
     """Stands in for web/oauth_provider.py's OrgOAuthProvider: mints a token
     carrying a real ``subject``, which is what makes
     mcp_auth.principal_from_access_token resolve a signed-in human rather
-    than LOCAL_PRINCIPAL. Local mode's PerUserTokenVerifier sets it to LOCAL_PRINCIPAL.id by default."""
+    than LOCAL_PRINCIPAL. PerUserTokenVerifier sets it to LOCAL_PRINCIPAL.id by default."""
 
     def __init__(self, principal_id: str) -> None:
         self._principal_id = principal_id
@@ -97,13 +101,13 @@ async def _connected_session(
     ClientSession against it -- the happy-path fixture every wire-level test
     below starts from.
 
-    ``verifier`` swaps local mode's PerUserTokenVerifier for an org-mode one
+    ``verifier`` swaps PerUserTokenVerifier for an org-mode one
     (see _OrgVerifier), so a test can drive this surface as a signed-in
     human rather than as LOCAL_PRINCIPAL."""
     if verifier is not None:
         app, session_manager = build_mcp_asgi_app(dispatcher, verifier=verifier)
     else:
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(token))
     transport = httpx2.ASGITransport(app=app)
 
     async with mcp_lifespan(session_manager):
@@ -120,7 +124,7 @@ async def _connected_session(
 
 
 def _raw_client(dispatcher: McpDispatcher, *, token: str = TOKEN) -> httpx.AsyncClient:
-    app, _session_manager = build_mcp_asgi_app(dispatcher, token=token)
+    app, _session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(token))
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
 
 
@@ -130,7 +134,7 @@ async def _raw_client_on_a_running_app(dispatcher: McpDispatcher, *, token: str 
     running -- needed by anything that drives a request far enough for a
     session to actually be opened for it (``_raw_client`` alone is only good
     for requests rejected before that, like the auth tests above)."""
-    app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
+    app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(token))
     async with mcp_lifespan(session_manager):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://testserver",
@@ -159,8 +163,19 @@ class ReadWriteDeleteConnector(Connector):
 
 def _dispatcher(connectors: dict[str, Connector] | None = None, **kwargs) -> McpDispatcher:
     store = dict(connectors or {})
-    kwargs.setdefault("scoped_token_policy", scoped_tokens.policy_from_org_config({}, org_mode=False))
+    kwargs.setdefault("scoped_token_policy", scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True))
     return McpDispatcher(lambda: store, **kwargs)
+
+
+def _delivery_dispatcher(connectors: dict[str, Connector] | None = None) -> McpDispatcher:
+    """An organization-mode dispatcher with token proposals and n8n delivery both on."""
+    return _dispatcher(
+        connectors or {"echo": EchoConnector()},
+        scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, True),
+        agent_runtime=agent_runtimes.N8nRuntimeConfig(
+            enabled=True, base_url="https://n8n.example.com", project_id="", mcp_url="",
+        ),
+    )
 
 
 _INIT_BODY = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
@@ -191,13 +206,6 @@ class TestAuth:
         async with _connected_session(_dispatcher()):
             pass  # ClientSession.initialize() succeeding is the assertion.
 
-    def test_build_mcp_asgi_app_requires_a_token_or_a_verifier(self):
-        # build_mcp_asgi_app takes an alternative to `token` (`verifier`,
-        # for web/oauth_provider.py's OrgOAuthProvider) -- calling it with
-        # neither is a caller bug, not a runtime condition to silently
-        # tolerate.
-        with pytest.raises(ValueError):
-            build_mcp_asgi_app(_dispatcher())
 
 
 # --------------------------------------------------------------------------- #
@@ -208,7 +216,7 @@ class TestAuth:
 class TestServerInstructions:
     async def test_initialize_result_carries_the_instructions(self):
         dispatcher = _dispatcher()
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         async with mcp_lifespan(session_manager):
             async with httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -220,6 +228,13 @@ class TestServerInstructions:
                     async with ClientSession(read, write) as session:
                         result = await session.initialize()
         assert result.instructions == SERVER_INSTRUCTIONS
+        assert "companion" not in SERVER_INSTRUCTIONS
+        assert "Connect page" in SERVER_INSTRUCTIONS
+        # "It is the one tool guaranteed to exist" must follow the sentence about
+        # privacyfence_status, so "It" names that tool rather than the Connect page.
+        status_sentence = SERVER_INSTRUCTIONS.index("what to tell the user to do about it.")
+        guaranteed = SERVER_INSTRUCTIONS.index("It is the one tool guaranteed to exist")
+        assert guaranteed == status_sentence + len("what to tell the user to do about it. ")
         # Named concretely, per the status tool's own docstring -- the
         # instructions are what tells a client the tool exists and why to
         # call it, not just that an empty tool list means "not set up".
@@ -236,7 +251,7 @@ class TestToolsListChangedCapability:
 
     async def test_initialize_result_advertises_tools_list_changed(self):
         dispatcher = _dispatcher()
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         async with mcp_lifespan(session_manager):
             async with httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -258,7 +273,7 @@ class TestToolsListChangedCapability:
         # permanent no-op.
         dispatcher = _dispatcher()
         assert dispatcher._tools_changed_broadcaster is None
-        build_mcp_asgi_app(dispatcher, token=TOKEN)
+        build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         assert dispatcher._tools_changed_broadcaster is not None
 
     def test_broadcast_with_no_running_loop_is_a_silent_no_op(self):
@@ -267,7 +282,7 @@ class TestToolsListChangedCapability:
         # _broadcast_tools_changed's own comment) -- this is a plain, non-
         # async test specifically so there is no running loop here either.
         dispatcher = _dispatcher()
-        build_mcp_asgi_app(dispatcher, token=TOKEN)
+        build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         dispatcher.notify_tools_changed()  # must not raise
 
     async def test_broadcast_calls_send_tool_list_changed_on_the_captured_session(self, monkeypatch):
@@ -287,7 +302,7 @@ class TestToolsListChangedCapability:
         monkeypatch.setattr(Connection, "send_tool_list_changed", _record)
 
         dispatcher = _dispatcher()
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         async with mcp_lifespan(session_manager):
             async with httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -321,7 +336,7 @@ class TestToolsListChangedCapability:
         monkeypatch.setattr(Connection, "send_tool_list_changed", _raise)
 
         dispatcher = _dispatcher()
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         async with mcp_lifespan(session_manager):
             async with httpx2.AsyncClient(
                 transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
@@ -349,12 +364,12 @@ class TestListTools:
             result = await session.list_tools()
         names = {t.name for t in result.tools}
         assert "echo_say" in names
-        assert META_TOOL_NAMES <= names
+        assert _META_TOOL_NAMES_WITHOUT_DELIVERY <= names
 
     async def test_reflects_a_live_connector_set_change_between_calls(self):
         store: dict[str, Connector] = {}
         dispatcher = McpDispatcher(
-            lambda: store, scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+            lambda: store, scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True),
         )
         async with _connected_session(dispatcher) as session:
             first = await session.list_tools()
@@ -387,7 +402,7 @@ class TestListTools:
         }
         dispatcher = McpDispatcher(
             lambda: per_principal.get(current_principal().id, {}),
-            scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+            scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True),
         )
 
         async with _connected_session(dispatcher, verifier=_OrgVerifier("alice")) as session:
@@ -395,7 +410,7 @@ class TestListTools:
 
         names = {t.name for t in result.tools}
         assert "echo_say" in names, "signed-in principal's connector tools must be advertised"
-        assert META_TOOL_NAMES <= names
+        assert _META_TOOL_NAMES_WITHOUT_DELIVERY <= names
 
     async def test_org_mode_does_not_advertise_the_local_principals_connectors(self):
         """The same scoping, in the other direction, and the sharper half of
@@ -409,7 +424,7 @@ class TestListTools:
         }
         dispatcher = McpDispatcher(
             lambda: per_principal.get(current_principal().id, {}),
-            scoped_token_policy=scoped_tokens.policy_from_org_config({}, org_mode=False),
+            scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True),
         )
 
         async with _connected_session(dispatcher, verifier=_OrgVerifier("bob")) as session:
@@ -417,7 +432,7 @@ class TestListTools:
 
         names = {t.name for t in result.tools}
         assert "echo_say" not in names, "must not advertise another principal's connectors"
-        assert META_TOOL_NAMES <= names
+        assert _META_TOOL_NAMES_WITHOUT_DELIVERY <= names
 
 
 # --------------------------------------------------------------------------- #
@@ -433,6 +448,23 @@ class TestCallConnectorTool:
         assert result.is_error is False
         assert result.structured_content == {"echoed": {"message": "hi"}}
         assert connector.calls == [("echo_say", {"message": "hi"})]
+
+    async def test_the_connector_sees_the_oauth_client_id_only_during_the_call(self):
+        from privacyfence.agent_identity import current_client_id
+
+        seen: list[str] = []
+
+        class _Spy(EchoConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                seen.append(current_client_id())
+                return await super().call(tool, args)
+
+        dispatcher = _dispatcher({"echo": _Spy()})
+        async with _connected_session(dispatcher, verifier=_OrgVerifier("alice@example.org")) as session:
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.is_error is False
+        assert seen == ["claude-desktop"]
+        assert current_client_id() == ""
 
     async def test_reason_is_popped_before_reaching_the_connector(self):
         connector = EchoConnector()
@@ -470,62 +502,54 @@ class TestCallConnectorTool:
         assert len(connector.calls) == 1
 
 
-class TestFileBridgeOverTheWire:
-    """ADR 0007 SS1.1's wire protocol, driven in process. The Node shim contract test
-    (tests/integration/test_shim_mcp_contract.py) covers it end to end, but it skips
-    itself when the shim cannot be built, and this module is under a 100% floor -- so
-    the Python half must not depend on it."""
+class TestFilesOverTheWire:
+    """ADR 0304: files move by upload slot, inline bytes or a one-time link -- never by a
+    handshake carried in the result's ``_meta``."""
 
-    async def test_a_connector_needing_local_files_gets_a_need_uploads_result(self):
-        class NeedsFilesConnector(EchoConnector):
+    async def test_a_path_that_is_not_an_upload_reference_reaches_the_model_as_the_upload_slot_message(self):
+        class ReadsAPathConnector(EchoConnector):
             async def call(self, tool: str, args: dict) -> object:
-                raise local_files.LocalFilesNeeded(["~/a.pdf", "~/b.pdf"], max_bytes=1000)
-
-        dispatcher = _dispatcher({"echo": NeedsFilesConnector()})
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool("echo_say", {"message": "hi"})
-        assert result.is_error is False
-        assert "~/a.pdf, ~/b.pdf" in result.content[0].text
-        bridge = result.meta[local_files.META_KEY]
-        assert bridge["v"] == 1
-        assert bridge["op"] == "need_uploads"
-        assert [f["path"] for f in bridge["files"]] == ["~/a.pdf", "~/b.pdf"]
-        assert all(f["upload_path"] == f"/mcp-files/uploads/{f['slot']}" for f in bridge["files"])
-
-    async def test_a_staged_delivery_rides_back_in_the_result_meta(self):
-        delivery = {"dest_dir": "~/Downloads", "name": "report.pdf", "download_path": "/mcp-files/downloads/x"}
-
-        class DeliversConnector(EchoConnector):
-            async def call(self, tool: str, args: dict) -> object:
-                local_files._current_state().pending_deliveries.append(delivery)
-                return {"ok": True}
-
-        dispatcher = _dispatcher({"echo": DeliversConnector()})
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool("echo_say", {"message": "hi"})
-        assert result.structured_content == {"ok": True}
-        assert result.meta[local_files.META_KEY] == {"v": 1, "op": "deliver", "files": [delivery]}
-
-    async def test_the_second_round_uploads_map_reaches_the_connector(self):
-        seen: list[dict[str, str]] = []
-
-        class ReadsUploadsConnector(EchoConnector):
-            async def call(self, tool: str, args: dict) -> object:
-                seen.append(dict(local_files._current_state().uploads))
+                local_files.require_local_files(["~/a.pdf"])
                 return {}
 
-        dispatcher = _dispatcher({"echo": ReadsUploadsConnector()})
+        dispatcher = _dispatcher({"echo": ReadsAPathConnector()})
         async with _connected_session(dispatcher) as session:
-            await session.call_tool(
-                "echo_say", {"message": "one"}, meta={local_files.META_KEY: {"uploads": {"~/a.pdf": "slot-a"}}},
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.is_error is True
+        assert result.content[0].text == local_files.NO_BRIDGE_UPLOAD_MESSAGE
+        assert result.meta is None
+
+    async def test_a_staged_link_rides_in_the_structured_result_and_never_in_the_meta(self):
+        class LinksConnector(EchoConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                local_files.mark_staged_download()
+                return {"delivery": "link", "download_url": "https://pf.example/mcp-files/fetch/x"}
+
+        dispatcher = _dispatcher({"echo": LinksConnector()})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("echo_say", {"message": "hi"})
+        assert result.structured_content["download_url"] == "https://pf.example/mcp-files/fetch/x"
+        assert result.meta is None
+
+    async def test_the_former_bridge_header_and_meta_are_ignored(self):
+        connector = EchoConnector()
+        dispatcher = _dispatcher({"echo": connector})
+        async with _connected_session(
+            dispatcher, headers={"X-PrivacyFence-File-Bridge": "1"},
+        ) as session:
+            result = await session.call_tool(
+                "echo_say", {"message": "hi"}, meta={"privacyfence.eu/file-bridge": {"uploads": {"~/a.pdf": "s"}}},
             )
-            # Malformed bridge metadata is ignored, never an error: a first-round call, or
-            # a client that does not do the handshake at all, behaves as if it were absent.
-            await session.call_tool("echo_say", {"message": "two"}, meta={local_files.META_KEY: "junk"})
-            await session.call_tool(
-                "echo_say", {"message": "three"}, meta={local_files.META_KEY: {"uploads": ["not", "a", "map"]}},
-            )
-        assert seen == [{"~/a.pdf": "slot-a"}, {}, {}]
+        assert result.is_error is False
+        assert result.meta is None
+
+    async def test_an_argument_the_tool_no_longer_declares_is_ignored(self):
+        connector = EchoConnector()
+        dispatcher = _dispatcher({"echo": connector})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("echo_say", {"message": "hi", "destination_dir": "~/Downloads"})
+        assert result.is_error is False
+        assert connector.calls == [("echo_say", {"message": "hi"})]
 
 
 # --------------------------------------------------------------------------- #
@@ -574,7 +598,7 @@ class TestMetaTools:
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("privacyfence_status", {"reason": "planning"})
         assert result.is_error is False
-        assert result.structured_content["mode"] == "local"
+        assert result.structured_content["mode"] == "org"
         assert result.structured_content["setup_complete"] is True
 
     async def test_create_upload_slot_round_trips(self, tmp_path, monkeypatch):
@@ -731,6 +755,64 @@ class TestProposeScopedTokenOverTheWire:
         assert entry["agent_id"] == "" and entry["agent_source"] == ""
 
 
+class TestRuntimeCredentialStatusTool:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+        init_audit_logger(str(tmp_path))
+        self._audit_dir = tmp_path
+        scoped_tokens.set_store(ScopedTokenStore(lambda: []))
+
+    async def _names(self, dispatcher, **kwargs) -> set[str]:
+        async with _connected_session(dispatcher, **kwargs) as session:
+            return {t.name for t in (await session.list_tools()).tools}
+
+    async def test_listed_only_with_delivery_on(self, monkeypatch):
+        verifier = _OrgVerifier("alice@example.com")
+        with_delivery = await self._names(_delivery_dispatcher(), verifier=verifier)
+        no_proposals = await self._names(
+            _dispatcher(
+                {"echo": EchoConnector()},
+                scoped_token_policy=scoped_tokens.ScopedTokenPolicy(True, 90, False),
+                agent_runtime=agent_runtimes.N8nRuntimeConfig(True, "https://n8n.example.com", "", ""),
+            ), verifier=verifier,
+        )
+        no_runtime = await self._names(_dispatcher({"echo": EchoConnector()}), verifier=verifier)
+        monkeypatch.delenv("PRIVACYFENCE_N8N_API_KEY")
+        no_key = await self._names(_delivery_dispatcher(), verifier=verifier)
+
+        assert RUNTIME_CREDENTIAL_STATUS_TOOL.name in with_delivery
+        for names in (no_proposals, no_runtime, no_key):
+            assert RUNTIME_CREDENTIAL_STATUS_TOOL.name not in names
+
+    async def test_a_call_answers_over_the_wire_and_is_audited(self):
+        async with _connected_session(_delivery_dispatcher(), verifier=_OrgVerifier("alice@example.com")) as session:
+            result = await session.call_tool(
+                "privacyfence_runtime_credential_status", {"proposal_id": "stp-none", "reason": "checking"},
+            )
+
+        assert result.is_error is False
+        assert result.structured_content == {"state": "not_delivered"}
+        entries = [
+            json.loads(line) for week_file in self._audit_dir.rglob(f"{current_week()}.jsonl")
+            for line in week_file.read_text(encoding="utf-8").splitlines()
+        ]
+        [entry] = [e for e in entries if e["decision"] == "runtime_credential_status_read"]
+        assert entry["claude_reason"] == "checking"
+        assert entry["agent_id"] != UNKNOWN_AGENT.id
+
+    async def test_a_call_without_delivery_is_refused(self):
+        async with _connected_session(_dispatcher({"echo": EchoConnector()})) as session:
+            result = await session.call_tool(
+                "privacyfence_runtime_credential_status", {"proposal_id": "stp-none", "reason": "checking"},
+            )
+        assert result.is_error is True
+        assert agent_runtimes.DELIVERY_UNAVAILABLE in result.content[0].text
+
+
 class TestScopedTokens:
     @pytest.fixture(autouse=True)
     def _audit(self, tmp_path, monkeypatch):
@@ -758,6 +840,22 @@ class TestScopedTokens:
         async with self._scoped_session(dispatcher) as (session, _store):
             result = await session.list_tools()
         assert {t.name for t in result.tools} == {"echo_say"} | rm.SCOPED_META_TOOLS
+
+    async def test_a_scoped_token_neither_sees_nor_can_call_the_status_tool(self, monkeypatch):
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+        dispatcher = _delivery_dispatcher({"echo": TwoToolConnector()})
+        assert dispatcher.runtime_delivery_enabled()
+        async with self._scoped_session(dispatcher) as (session, _store):
+            listed = await session.list_tools()
+            refused = await session.call_tool(
+                "privacyfence_runtime_credential_status", {"proposal_id": "stp-1", "reason": "check"},
+            )
+        assert RUNTIME_CREDENTIAL_STATUS_TOOL.name not in {t.name for t in listed.tools}
+        assert "privacyfence_runtime_credential_status" not in rm.SCOPED_META_TOOLS
+        assert refused.is_error is True
+        assert refused.content[0].text == (
+            "Request denied: this token may not call privacyfence_runtime_credential_status."
+        )
 
     async def test_an_out_of_scope_tool_is_refused_and_audited(self):
         connector = TwoToolConnector()
@@ -831,7 +929,7 @@ class TestScopedTokens:
 
         content = result.structured_content
         assert (content["token"]["days_left"], content["token"]["expiring_soon"]) == (5, True)
-        assert content["message"].endswith(" This token expires in 5 day(s); ask its owner for a new one.")
+        assert content["message"].endswith(" This token expires in 5 day(s); ask its owner to extend it in PrivacyFence Settings, Scoped tokens.")
 
     async def test_begin_unattended_needs_no_admin_opt_in(self):
         dispatcher = _dispatcher({})  # unattended_sessions_enabled defaults False
@@ -921,7 +1019,7 @@ class TestScopedTokens:
 class TestSessionCleanup:
     async def test_ending_the_session_clears_its_unattended_flag(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
-        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=token_verifier(TOKEN))
         transport = httpx2.ASGITransport(app=app)
 
         async with mcp_lifespan(session_manager):
@@ -989,8 +1087,7 @@ class TestSessionIdentityDegradedPaths:
 # --------------------------------------------------------------------------- #
 # A refused request must not leave the client pinned to a dead session --
 # routes_mcp.py's _SessionIdOnlyOnSuccess. See its docstring for the full
-# cascade; mcpb/shim/src/sessionFetch.ts is the same guard on the client side,
-# for a shim talking to a daemon older than this.
+# cascade.
 # --------------------------------------------------------------------------- #
 
 class TestDeadSessionIdIsNotHandedOut:
@@ -1248,13 +1345,13 @@ def _triples(tools) -> dict[str, tuple]:
 
 class TestToolAnnotationsOverTheWire:
     """ADR 0089, checked on a live ``/mcp`` ``list_tools``: every connector tool is annotated
-    truthfully in both modes, whatever the client sends, and the meta-tools keep their own."""
+    truthfully for every caller, whatever the client sends, and the meta-tools keep their own."""
 
-    @pytest.mark.parametrize("dispatcher_mode", ["local", "org"])
+    @pytest.mark.parametrize("org_verifier", [False, True])
     @pytest.mark.parametrize("header", [None, "all-read-only", "truthful", "read-only"])
-    async def test_connector_tools_are_always_truthful(self, dispatcher_mode, header):
-        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()}, mode=dispatcher_mode)
-        verifier = _OrgVerifier("alice@example.com") if dispatcher_mode == "org" else None
+    async def test_connector_tools_are_always_truthful(self, org_verifier, header):
+        dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
+        verifier = _OrgVerifier("alice@example.com") if org_verifier else None
         headers = {_REMOVED_HEADER: header} if header is not None else None
         async with _connected_session(dispatcher, verifier=verifier, headers=headers) as session:
             result = await session.list_tools()
@@ -1268,6 +1365,17 @@ class TestToolAnnotationsOverTheWire:
         dispatcher = _dispatcher({"rwd": ReadWriteDeleteConnector()})
         headers = {_REMOVED_HEADER: header} if header is not None else None
         async with _connected_session(dispatcher, headers=headers) as session:
+            result = await session.list_tools()
+        advertised = {t.name: t.annotations for t in result.tools if t.name in META_TOOL_NAMES}
+        assert advertised == {
+            t.name: t.annotations for t in META_TOOLS if t.name != RUNTIME_CREDENTIAL_STATUS_TOOL.name
+        }
+
+    async def test_the_status_tool_keeps_its_own_annotations_where_delivery_is_on(self, monkeypatch):
+        from privacyfence.web.mcp_tools import META_TOOLS
+
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+        async with _connected_session(_delivery_dispatcher(), verifier=_OrgVerifier("alice@example.com")) as session:
             result = await session.list_tools()
         advertised = {t.name: t.annotations for t in result.tools if t.name in META_TOOL_NAMES}
         assert advertised == {t.name: t.annotations for t in META_TOOLS}

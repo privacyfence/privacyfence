@@ -28,7 +28,6 @@ from pathlib import Path
 from . import approval_icons
 from .design_css import DOCUMENT_CSS
 from .html_embed import json_for_script
-from .org_mode import LOCAL_MODE_DEPRECATION
 
 # Browser-tab favicon -- the same bundled shield mark approval_icons.py
 # already hands the approval card (resources/icon_32.png, the
@@ -117,10 +116,7 @@ body {
 .pf-shell-live-dot.live { background: var(--success); }
 .pf-shell-live-dot.reconnecting { background: var(--warning); }
 .pf-shell-live-dot.down { background: var(--danger); }
-/* Who this queue belongs to -- org mode only (see wrap's principal_label);
-   local mode doesn't render one here, even on a separated install with more
-   than one OS-user principal (ADR 0008) -- each one's own page already only
-   ever shows their own queue, it just doesn't caption whose it is. */
+/* Who this queue belongs to (see wrap's principal_label). */
 .pf-shell-principal {
   font-size: 12px; color: var(--ink-soft); white-space: nowrap;
   padding-left: 10px; border-left: 1px solid var(--line);
@@ -163,12 +159,6 @@ body {
   display: flex; align-items: center; justify-content: center; gap: 10px;
 }
 .pf-shell-notice a { color: inherit; font-weight: 600; }
-.pf-shell-deprecation {
-  padding: 8px 20px; font-size: 13px; text-align: center; flex-shrink: 0;
-  background: var(--accent-soft); color: var(--accent-dark);
-  border-bottom: 1px solid var(--line);
-}
-.pf-shell-deprecation a { color: inherit; font-weight: 600; overflow-wrap: anywhere; }
 .pf-shell-notice-close {
   background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1;
   color: inherit; opacity: .6; padding: 0; flex-shrink: 0; min-width: var(--tap); min-height: var(--tap);
@@ -265,14 +255,14 @@ _STREAM_JS = """
   // page rendered without this script (org mode's) never sets it. There is no
   // equivalent __pfNotificationsDetail read anywhere else: the card's own
   // detail-level control is a real, mutable setting
-  // (SettingsController.set_notifications_detail) sourced from that page's
+  // (the notifications-detail setting) sourced from that page's
   // own `state.general.notifications_detail` on every render, not from
   // this per-page-load constant -- NOTIFICATIONS_DETAIL below stays local
   // to this closure, used only by notificationBody() to decide what an
   // actual browser notification on *this* page is allowed to say.
   window.__pfNotificationsEnabled = NOTIFICATIONS_ENABLED;
   // Org mode's web push (see this file's comment above _STREAM_JS): the
-  // server's VAPID public key, or "" when push is off (always, in local mode).
+  // server's VAPID public key, or "" when push is off.
   var PUSH_PUBLIC_KEY = %(push_public_key)s;
   var PUSH_CSRF = %(push_csrf)s;
 
@@ -510,17 +500,7 @@ _STREAM_JS = """
 })();
 """
 
-_NAV_ITEMS = (
-    ("approvals", "Approvals", "/approvals"),
-    ("settings", "Settings", "/settings"),
-    ("admin", "Admin", "/admin"),
-)
-
-# Org mode's own route set. It has no local-mode ``/settings`` dispatcher
-# (see web/server.py's module docstring for what org mode deliberately
-# doesn't mount -- ``/settings`` there is routes_settings.build_org_routes's own,
-# much smaller surface), and ``/connect``/``/security`` are surfaces local
-# mode has no equivalent of.
+# The organization server's route set.
 ORG_NAV_ITEMS = (
     ("approvals", "Approvals", "/approvals"),
     ("connections", "Connections", "/connect"),
@@ -602,7 +582,7 @@ def _nav_html(active: str, nav_items: tuple[tuple[str, str, str], ...]) -> str:
 
 
 def header_html(
-    active: str, nav_items: tuple[tuple[str, str, str], ...] = _NAV_ITEMS, *,
+    active: str, nav_items: tuple[tuple[str, str, str], ...] = ORG_NAV_ITEMS, *,
     live_html: str = "", principal_label: str = "",
 ) -> str:
     """The shell's header, in the website's markup pattern (website/_partials/header.html): the
@@ -631,25 +611,18 @@ def header_html(
     )
 
 
-def local_mode_deprecation_html() -> str:
-    """``LOCAL_MODE_DEPRECATION`` escaped, with its trailing address as a link."""
-    text, _, url = LOCAL_MODE_DEPRECATION.rpartition(" ")
-    return f'{_html_escape(text)} <a href="{_html_escape(url)}" target="_blank" rel="noopener">{_html_escape(url)}</a>'
-
-
 def wrap(
     body_html: str, *, title: str, active: str, nonce: str | None = None,
     notifications_enabled: bool = True, notifications_detail: str = "minimal",
     banner_html: str | None = None,
     dismissible_notice_html: str | None = None, dismissible_notice_key: str = "",
-    nav_items: tuple[tuple[str, str, str], ...] = _NAV_ITEMS,
+    nav_items: tuple[tuple[str, str, str], ...] = ORG_NAV_ITEMS,
     principal_label: str = "",
     live_updates: bool = True,
     stream_url: str = "/api/state/stream",
     push_public_key: str = "",
     csrf: str = "",
     whats_new_version: str = "",
-    deprecation_html: str = "",
 ) -> str:
     """Full ``<!DOCTYPE html>`` document: the design files + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
@@ -716,22 +689,15 @@ def wrap(
     signs in from many browsers and devices (ADR 0238). It needs ``csrf``, and renders whether or
     not ``live_updates`` is on.
 
-    ``deprecation_html``: an already-escaped fragment shown as its own strip above
-    ``banner_html`` when non-empty. Not dismissible: it states a fact about the whole install, so
-    every page of that install repeats it. Local mode passes ``local_mode_deprecation_html()``;
-    org pages pass nothing.
-
-    ``nav_items``/``principal_label``/``live_updates`` are what let org
-    mode share this shell rather than serve a bare document. Local
-    mode passes none of them.
+    ``nav_items``/``principal_label``/``live_updates`` shape the header and the
+    live indicator.
 
     ``nav_items`` is ``(key, label, href)`` per item, matched against
     ``active`` -- ``ORG_NAV_ITEMS`` above is org mode's set.
     ``principal_label`` renders the signed-in principal at the right of the
     header; org mode's entire authorization model is per-principal and its
     approvals page otherwise never says whose queue is being looked at.
-    Empty (the default) renders nothing, which is right for local mode,
-    where there is only ever one.
+    Empty (the default) renders nothing.
 
     ``live_updates=False`` omits both the live indicator and the
     ``EventSource`` script. The indicator is not decoration -- it tells a
@@ -745,22 +711,19 @@ def wrap(
     list page's own script, not this one.
 
     ``stream_url`` is the SSE endpoint the ``EventSource`` connects to when
-    ``live_updates`` is on. Local mode keeps the default
-    ``/api/state/stream``; org mode's approvals page passes
+    ``live_updates`` is on. The approvals page passes
     ``/api/approvals/stream`` (web/routes_approvals.py), which carries the
-    same ``approvals`` event for just the signed-in principal and no
-    ``settings`` event -- the org pages with no stream at all (connect,
-    security, settings) still pass ``live_updates=False``.
+    ``approvals`` event for just the signed-in principal -- the pages with no
+    stream at all (connect, security, settings) pass ``live_updates=False``.
 
-    Org mode (``nav_items`` is ``ORG_NAV_ITEMS``) also links the Web App
-    Manifest and its icon (web/routes_push.py), which makes the org app
-    installable, and adds the sign-out script (``_ORG_SIGN_OUT_JS``); local
-    mode serves neither route and gets neither.
+    With ``nav_items`` ``ORG_NAV_ITEMS`` (or the admin set) the page also links the Web App
+    Manifest and its icon (web/routes_push.py), which makes the app
+    installable, and adds the sign-out script (``_ORG_SIGN_OUT_JS``).
     ``push_public_key`` is org mode's VAPID public key when the org has web
     push on (ADR 0081): the pre-prompt then subscribes this browser, posting
     ``csrf`` (the page's session CSRF token) with the subscription. It needs
     ``live_updates``, since the pre-prompt lives in the stream script; empty
-    (the default, and always in local mode) leaves tiers 0-1 exactly as
+    (the default) leaves tiers 0-1 exactly as
     described above.
     """
     if dismissible_notice_html and not dismissible_notice_key:
@@ -784,9 +747,6 @@ def wrap(
         '<span class="pf-shell-live-label" id="pf-shell-live-label">connecting…</span>'
         "</div>"
     ) if live_updates else ""
-    deprecation = (
-        f'<div class="pf-shell-deprecation" role="note">{deprecation_html}</div>' if deprecation_html else ""
-    )
     banner = f'<div class="pf-shell-banner" role="alert">{banner_html}</div>' if banner_html else ""
     notice = ""
     if dismissible_notice_html:
@@ -825,7 +785,7 @@ def wrap(
 </head>
 <body>
 {header_html(active, nav_items, live_html=live_html, principal_label=principal_label)}
-{deprecation}{banner}
+{banner}
 {notice}{whats_new_strip}
 <main class="pf-shell-main">{body_html}</main>
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
@@ -838,7 +798,7 @@ def wrap(
 
 # The fallback documents: a page with no shell around it because there is nothing to navigate to
 # yet (the "not authorized" page) or because it stands in for a card document, which has no shell
-# either (the "no longer pending" and "preparing" pages, and local mode's /security). One panel in
+# either (the "no longer pending" and "preparing" pages, and /security). One panel in
 # the middle of the page, in the same tokens, components and dark mode as every other document.
 _PLAIN_CSS = """
 * { box-sizing: border-box; }

@@ -1,16 +1,10 @@
 """Principal identity and per-request scoping.
 
-An unseparated local-mode install has exactly one user, but the code from
-here on treats that user as ``Principal(id="local")`` — a principal like
-any other — rather than as an implicit absence of multi-tenancy. That is
-what makes org mode additive: nothing downstream of this module needs
-to learn a new concept when a second principal shows up, it just starts
-seeing a second id. It is also what makes ADR 0008's local-mode multi-user
-support (a privilege-separated install with more than one OS account in its
-service group) additive in exactly the same way: an ``os-<uid>``/``os-<sid>``
-principal is just another id this module already knew how to carry, once
-``web/control_channel.py`` started minting one from the kernel's own peer
-credentials.
+Every person the organization server serves is a ``Principal``, keyed by an
+opaque ``id``; the fixed ``Principal(id="local")`` is the default when no
+scope has been entered (start-up, command-line maintenance, tests). Nothing
+downstream of this module needs to learn a new concept when a second
+principal shows up, it just starts seeing a second id.
 
 This mirrors a pattern the codebase already had, twice, before this module:
 ``gate.py``'s ``reason_scope``/``unattended_scope`` are ``contextvars`` set
@@ -19,18 +13,11 @@ sites deep in the policy engine never need a "which session is this"
 parameter threaded through them. ``principal_scope`` is the same mechanism
 for "which user is this."
 
-Three entry points resolve a real ``Principal`` today, never a hardcoded
+Two entry points resolve a real ``Principal``, never a hardcoded
 ``LOCAL_PRINCIPAL`` shortcut: web/mcp_auth.py's ``principal_from_access_token``
-(the ``/mcp`` endpoint, reading whichever principal's token ``PerUserToken
-Verifier`` resolved it to); web/server.py's ``_PrincipalScopeMiddleware``
-(the browser surfaces, reading whichever principal's control-channel
-connection minted the request's own ``pf_session``); and
-web/control_channel.py's own ``_LineProtocolServer._dispatch`` (the control
-channel itself, reading the connecting peer's kernel-verified identity
-directly). Org mode's OIDC/OAuth 2.1 sign-in (ADR 0011) and local mode's kernel-
-verified OS accounts (ADR 0008) are two different ways of answering "who is
-this", but neither entry point above needed to change shape to add the
-second one — only what each resolves to.
+(the ``/mcp`` endpoint, reading the principal the OAuth 2.1 access token was
+issued to, ADR 0011) and web/server.py's ``_PrincipalScopeMiddleware`` (the
+browser surfaces, reading the signed-in session).
 """
 from __future__ import annotations
 
@@ -56,13 +43,17 @@ class Principal:
     (org_identity.py's ``principal_from_claims``) -- never recomputed
     per-request, so a change to a user's group membership takes effect on
     their next login, not mid-session. Always ``False`` for the local
-    principal and for ``ANONYMOUS_PRINCIPAL`` below; there is exactly one
-    user in local mode, so "admin" has never meant anything there."""
+    principal and for ``ANONYMOUS_PRINCIPAL`` below.
+
+    ``email_verified`` is whether PrivacyFence treats the email as verified
+    (org_identity.session_email_verified, set at sign-in); upstream domain
+    grants key on email only when it is true (ADR 0287)."""
 
     id: str
     email: str = ""
     display_name: str = ""
     is_admin: bool = False
+    email_verified: bool = False
 
 
 LOCAL_PRINCIPAL = Principal(id=LOCAL_PRINCIPAL_ID)
@@ -85,8 +76,7 @@ ANONYMOUS_PRINCIPAL = Principal(id=ANONYMOUS_PRINCIPAL_ID)
 # startup sequence, every existing test, every connector method) and must
 # keep behaving exactly as if there were exactly one user -- which is true
 # by construction if "no scope entered" and "the local principal's scope"
-# resolve to the same thing, which keeps local mode unchanged by the
-# existence of other principals.
+# resolve to the same thing.
 _principal_ctx: contextvars.ContextVar[Principal] = contextvars.ContextVar(
     "privacyfence_principal", default=LOCAL_PRINCIPAL
 )

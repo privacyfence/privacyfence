@@ -10,6 +10,8 @@ per-platform checks for the companion's `enable --for-user` in `c8caba0f`
 `service_control.run_elevated()` in `7b51a27b`
 ([#609](https://github.com/privacyfence/privacyfence/pull/609)).
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 PrivacyFence asks for administrator rights from inside the user's session in four places: the

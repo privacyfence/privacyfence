@@ -15,14 +15,12 @@ config at startup only catches malformed/unreadable files, not a
 well-formed-but-hostile one).
 
 Design -- trust-on-first-use (TOFU), the same model SSH host keys use:
-each organization generates an Ed25519 keypair once
-(``scripts/build_org_bundle.py --generate-signing-key``) and signs every
-bundle it builds with it (``--sign-key``). The *first* signed bundle an
+each organization generates an Ed25519 keypair once and signs every
+bundle with it. The *first* signed bundle an
 install ever sees has its embedded public key trusted on that basis
 alone and pinned to disk (``pinned_public_key_path()``); every bundle
 after that -- installed via PrivacyFence Settings' "Install
-configuration file..." (``settings_controller.install_org_config_
-bytes``) or dropped onto disk by hand and picked up at the next daemon
+configuration file..." (the web upload in ``routes_settings.py``) or dropped onto disk by hand and picked up at the next daemon
 start (``daemon_main.load_org_config``) -- must verify against that
 pinned key or is rejected outright. That closes the obvious downgrade
 this would otherwise still allow (an attacker replacing a signed bundle
@@ -33,18 +31,12 @@ key (``pinned_serial_path()``) and a bundle with a lower serial is refused
 as a rollback. Deleting that one file is how an administrator deliberately
 goes back to an older bundle.
 
-An install that never adopts signing (no ``--sign-key`` ever used) never
-pins a key and keeps working exactly as before -- signing is opt-in for
-local mode. It's mandatory for ``mode: org`` (see ``daemon_main.
-load_org_config``'s and ``settings_controller.install_org_config_bytes``'s
-own enforcement of that), since org mode is the surface this phase is
-hardening towards enterprise-production readiness, not every existing
-local install.
+Signing is mandatory for ``mode: org`` (see ``daemon_main.load_org_config``'s
+own enforcement of that).
 
 This module intentionally takes each caller's own ``org_dir`` as a
-parameter rather than importing ``paths.org_dir`` itself -- both
-``daemon_main.py`` and ``settings_controller.py`` already import ``org_dir``
-into their own module namespace and their tests monkeypatch it there
+parameter rather than importing ``paths.org_dir`` itself -- ``daemon_main.py`` already imports ``org_dir``
+into its own module namespace and its tests monkeypatch it there
 (see e.g. ``test_daemon_main.py``'s ``monkeypatch.setattr(daemon_main,
 "org_dir", ...)``); importing a second, independent reference to
 ``paths.org_dir`` here would silently bypass that and point the pinned-
@@ -59,13 +51,8 @@ WebAuthn verification elsewhere in this codebase -- ``cryptography`` is
 already a runtime dependency there, so this adds nothing new to what's
 installed.
 
-``scripts/build_org_bundle.py`` does NOT import this module (see its own
-module docstring: it's meant to be runnable standalone, without a
-PrivacyFence install) -- it re-implements the same canonicalization/
-signing logic against ``cryptography`` directly. The two MUST stay
-byte-for-byte identical or a bundle signed by the script will fail to
-verify here; ``_canonical_payload_bytes`` below is deliberately simple
-(sorted-key compact JSON) to make that easy to keep in sync.
+The canonicalization (``_canonical_payload_bytes`` below) is deliberately simple
+(sorted-key compact JSON), so a bundle signed anywhere with the same rule verifies here.
 """
 from __future__ import annotations
 
@@ -92,7 +79,7 @@ from .secure_files import atomic_write_bytes, atomic_write_json, atomic_write_te
 
 logger = logging.getLogger(__name__)
 
-# Bundle fields written by scripts/build_org_bundle.py --sign-key, read
+# Bundle fields written by the organization's signing step, read
 # here. Both are standard-alphabet base64 of the raw fixed-size Ed25519
 # bytes -- 32 for the public key, 64 for the signature.
 SIGNATURE_FIELD = "signature"
@@ -345,7 +332,7 @@ def would_pin_new_key(bundle: dict[str, Any], org_dir: Path) -> bool:
     True exactly when calling that function on the same arguments would
     pin a new signing key as a side effect.
 
-    settings_controller.install_org_config_bytes's web caller (routes_settings.py's
+    The web caller (routes_settings.py's
     org_config_upload) wants to ask a human for an explicit confirmation
     before that TOFU pin happens, rather than letting it happen silently
     as a side effect of an upload verify_and_maybe_pin would otherwise
@@ -357,8 +344,7 @@ def would_pin_new_key(bundle: dict[str, Any], org_dir: Path) -> bool:
     Deliberately a second copy of the condition rather than a shared
     helper verify_and_maybe_pin also calls: this module already accepts
     that kind of duplication for the sake of the two functions staying
-    independently readable (see the module docstring's own note on
-    scripts/build_org_bundle.py's canonicalization copy) -- keep this in
+    independently readable -- keep this in
     exact lockstep with verify_and_maybe_pin's pinning branch below, or a
     caller ends up asking for confirmation a pin never follows, or
     skipping it for one that happens anyway.
@@ -384,8 +370,7 @@ def verify_and_maybe_pin(bundle: dict[str, Any], org_dir: Path) -> BundleTrust:
 
     Mutates disk state (pins a new key) only in the "first signed bundle
     this install has ever seen" case below -- every other path is a pure
-    check. Callers (daemon_main.load_org_config, settings_controller.
-    install_org_config_bytes) both call this on every load/install, so
+    check. Callers (daemon_main.load_org_config, the web upload) both call this on every load/install, so
     the very first signed bundle wins the pin regardless of which of the
     two documented install methods (web upload vs. hand-editing the
     file) it arrived through.
@@ -443,9 +428,7 @@ def verify_and_maybe_pin(bundle: dict[str, Any], org_dir: Path) -> BundleTrust:
 
 # ---------------------------------------------------------------------------- #
 # Signing side -- used by tests exercising the verification path above
-# against a real signature (scripts/build_org_bundle.py has its own,
-# deliberately independent copy of this for actual bundle production --
-# see module docstring).
+# against a real signature.
 # ---------------------------------------------------------------------------- #
 
 def generate_keypair() -> tuple[Ed25519PrivateKey, Ed25519PublicKey]:

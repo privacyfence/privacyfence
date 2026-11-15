@@ -28,9 +28,18 @@ from ...helpers import (
     assert_tool_definitions_complete,
 )
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("call_scope")]
 
 DOC_ID = "8CAN8gKdxY7zAbCdEfGh12"
+
+
+@pytest.fixture
+def call_scope():
+    """One call context for the test, so an ``upload:`` reference can be claimed."""
+    from privacyfence import local_files
+
+    with local_files.call_context():
+        yield
 
 
 def make_connector():
@@ -843,11 +852,9 @@ class TestEveryToolIsAudited:
         client.add_columns.return_value = ["Count"]
         client.get_records.return_value = GristRecordPage(records=[], truncated=False)
         client.run_sql.return_value = []
-        csv = tmp_path / "a.csv"
-        csv.write_bytes(b"Name\nnew\n")
         monkeypatch.setattr(
             grist_module.local_files, "deliver_export",
-            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "local_disk"},
+            lambda *a, **k: {"path": None, "name": "x.csv", "size_bytes": 0, "delivery": "link"},
         )
 
         await assert_all_tools_leave_an_audit_trail(
@@ -856,10 +863,10 @@ class TestEveryToolIsAudited:
                 "grist_list_tables": {"doc_id": "DOC1"},
                 "grist_get_records": {"doc_id": "DOC1", "table_id": "Table1"},
                 "grist_export_records": {
-                    "doc_id": "DOC1", "table_id": "Table1", "destination_dir": str(tmp_path),
+                    "doc_id": "DOC1", "table_id": "Table1",
                 },
                 "grist_export_sql": {
-                    "doc_id": "DOC1", "sql": "SELECT 1", "destination_dir": str(tmp_path),
+                    "doc_id": "DOC1", "sql": "SELECT 1",
                 },
                 "grist_add_records": {
                     "doc_id": "DOC1", "table_id": "Table1", "records": '[{"Name": "a"}]',
@@ -875,9 +882,11 @@ class TestEveryToolIsAudited:
                     "doc_id": "DOC1", "table_id": "Table1",
                     "columns": '[{"id": "Count", "type": "Int"}]',
                 },
-                "grist_import_csv": {"doc_id": "DOC1", "table_id": "Table1", "local_path": str(csv)},
+                "grist_import_csv": {
+                    "doc_id": "DOC1", "table_id": "Table1", "upload_id": csv_upload("Name\nnew\n"),
+                },
                 "grist_update_csv": {
-                    "doc_id": "DOC1", "table_id": "Table1", "local_path": str(csv),
+                    "doc_id": "DOC1", "table_id": "Table1", "upload_id": csv_upload("Name\nnew\n"),
                     "key_column": "Name", "create_missing": True,
                 },
             },
@@ -907,15 +916,18 @@ def calendar_seconds(iso):
 def csv_connector(tmp_path, text, name="people.csv"):
     connector, client = write_connector()
     client.list_columns.return_value = CSV_COLUMNS
-    path = tmp_path / name
-    path.write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
-    return connector, client, str(path)
+    return connector, client, csv_upload(text)
 
 
 def sha_of(text):
     import hashlib
 
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def csv_upload(text):
+    """The ``upload_id`` of a filled slot holding ``text``."""
+    return new_slot(text if isinstance(text, bytes) else text.encode("utf-8"))[2]
 
 
 def new_slot(data):
@@ -933,22 +945,22 @@ class TestCsvFileHandoff:
     @pytest.mark.parametrize("tool,extra", [
         ("grist_import_csv", {}), ("grist_update_csv", {"key_column": "Name"}),
     ])
-    @pytest.mark.parametrize("paths", [{}, {"local_path": "/x.csv", "upload_id": "abc"}])
-    async def test_exactly_one_of_local_path_and_upload_id(self, tmp_path, gated_call_spy, tool, extra, paths):
+    async def test_an_empty_upload_id_is_refused(self, tmp_path, gated_call_spy, tool, extra):
         connector, client, _ = csv_connector(tmp_path, "Name\nAda\n")
-        with pytest.raises(ValueError, match="Give exactly one of local_path and upload_id"):
-            await connector.call(tool, {**CSV_ARGS, **extra, **paths})
+        with pytest.raises(ValueError, match="pass its upload_id"):
+            await connector.call(tool, {**CSV_ARGS, **extra, "upload_id": "  "})
         assert gated_call_spy == []
         client.get_document.assert_not_called()
 
     @pytest.mark.parametrize("tool,extra", [
         ("grist_import_csv", {}), ("grist_update_csv", {"key_column": "Name"}),
     ])
-    async def test_local_path_is_refused_in_org_mode(self, tmp_path, gated_call_spy, tool, extra):
-        connector, client, path = csv_connector(tmp_path, "Name\nAda\n")
-        connector.download_mode = "org"
-        with pytest.raises(ValueError, match="local_path is not available"):
-            await connector.call(tool, {**CSV_ARGS, **extra, "local_path": path})
+    async def test_an_id_that_names_no_staged_slot_is_refused(self, tmp_path, gated_call_spy, tool, extra):
+        from privacyfence import local_files
+
+        connector, client, _ = csv_connector(tmp_path, "Name\nAda\n")
+        with pytest.raises(local_files.LocalFileAccessError):
+            await connector.call(tool, {**CSV_ARGS, **extra, "upload_id": "/etc/passwd"})
         assert gated_call_spy == []
 
     async def test_the_size_cap_is_checked_before_the_file_is_read(self, tmp_path, gated_call_spy, monkeypatch):
@@ -959,21 +971,18 @@ class TestCsvFileHandoff:
         reader = MagicMock()
         monkeypatch.setattr(local_files, "read_local_file", reader)
         with pytest.raises(ValueError, match="larger than 50 MB"):
-            await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+            await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         reader.assert_not_called()
-
-    def test_the_download_mode_defaults_to_local(self):
-        assert GristConnector(MagicMock()).download_mode == "local"
 
     async def test_a_bad_id_is_refused_before_the_file_is_read(self, tmp_path, gated_call_spy):
         connector, _, path = csv_connector(tmp_path, "Name\nAda\n")
         with pytest.raises(ValueError, match="Not a Grist table id"):
             await connector.call(
-                "grist_import_csv", {"doc_id": DOC_ID, "table_id": "a/b", "local_path": path},
+                "grist_import_csv", {"doc_id": DOC_ID, "table_id": "a/b", "upload_id": path},
             )
         with pytest.raises(ValueError, match="Not a Grist column id"):
             await connector.call("grist_update_csv", {
-                **CSV_ARGS, "local_path": path, "key_column": "a b",
+                **CSV_ARGS, "upload_id": path, "key_column": "a b",
             })
 
     async def test_a_parse_error_reaches_the_model_and_never_the_gate(self, tmp_path, gated_call_spy):
@@ -981,7 +990,7 @@ class TestCsvFileHandoff:
 
         connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,SECRET\n")
         with pytest.raises(GristCsvError) as info:
-            await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+            await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         assert str(info.value) == "Line 2, column Score: not a whole number."
         assert "SECRET" not in str(info.value)
         assert gated_call_spy == []
@@ -994,7 +1003,7 @@ class TestImportCsv:
         connector, client, path = csv_connector(tmp_path, text)
         client.add_records.return_value = [7, 8]
 
-        result = await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        result = await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
 
         assert result == {
             "doc_id": DOC_ID, "table_id": "Contacts", "added": 2,
@@ -1003,14 +1012,14 @@ class TestImportCsv:
         kwargs = gated_call_spy[0]
         assert kwargs["tool"] == "grist_import_csv" and kwargs["gate"] == "popup"
         assert kwargs["tool_name"] == "Import CSV into Grist"
-        assert kwargs["summary"] == "Add 2 record(s) from people.csv to Budget / Contacts"
+        assert kwargs["summary"] == "Add 2 record(s) from uploaded via privacyfence_create_upload_slot to Budget / Contacts"
         assert kwargs["sender"] == "Budget"
         assert list(kwargs["preview"]) == [
             "Server", "Document", "Table", "File", "SHA-256", "Rows in file", "Records to add",
         ]
         assert kwargs["preview"] == {
             "Server": "docs.getgrist.com", "Document": "Budget", "Table": "Contacts",
-            "File": "people.csv", "SHA-256": sha_of(text), "Rows in file": "2",
+            "File": "uploaded via privacyfence_create_upload_slot", "SHA-256": sha_of(text), "Rows in file": "2",
             "Records to add": "2",
         }
         assert kwargs["preview_tables"] == [{
@@ -1027,7 +1036,7 @@ class TestImportCsv:
     async def test_raw_data_holds_no_row_values(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Name\nSECRET-NAME\n")
         client.add_records.return_value = [1]
-        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         raw = gated_call_spy[0]["raw_data"]
         assert raw == {
             "doc_id": DOC_ID, "table_id": "Contacts", "sha256": sha_of("Name\nSECRET-NAME\n"),
@@ -1040,7 +1049,7 @@ class TestImportCsv:
         text = "Name\n" + "".join(f"row{i}\n" for i in range(30))
         connector, client, path = csv_connector(tmp_path, text)
         client.add_records.return_value = list(range(30))
-        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         kwargs = gated_call_spy[0]
         assert len(kwargs["preview_tables"][0]["rows"]) == 20
         assert kwargs["preview_tables"][0]["footer"] == "Showing 20 of 30 rows."
@@ -1049,13 +1058,13 @@ class TestImportCsv:
     async def test_dates_before_1970_render_too(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Born\n1815-12-10\n")
         client.add_records.return_value = [1]
-        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         assert gated_call_spy[0]["preview_tables"][0]["rows"] == [["1815-12-10"]]
 
     async def test_dates_render_as_in_the_file(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Born\n2024-02-29\n")
         client.add_records.return_value = [1]
-        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         assert gated_call_spy[0]["preview_tables"][0]["rows"] == [["2024-02-29"]]
         client.add_records.assert_called_once_with(DOC_ID, "Contacts", [{"Born": 1709164800}])
 
@@ -1064,13 +1073,12 @@ class TestImportCsv:
 
         connector, client, path = csv_connector(tmp_path, "Name\nAda\n")
         client.add_records.return_value = [1]
-        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
-        (tmp_path / "people.csv").write_bytes(b"Name\nGrace\n")
-        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
+        await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": csv_upload("Name\nGrace\n")})
 
         first, second = gated_call_spy[0]["args"], gated_call_spy[1]["args"]
         assert first["sha256"] == sha_of("Name\nAda\n") and second["sha256"] == sha_of("Name\nGrace\n")
-        assert set(first) == {"doc_id", "table_id", "local_path", "upload_id", "sha256"}
+        assert set(first) == {"doc_id", "table_id", "upload_id", "sha256"}
         assert canonical_key("grist", "grist_import_csv", first) != canonical_key(
             "grist", "grist_import_csv", second,
         )
@@ -1080,7 +1088,7 @@ class TestImportCsv:
         connector, client, path = csv_connector(tmp_path, text)
         client.add_records.side_effect = lambda doc, table, rows: list(range(len(rows)))
 
-        result = await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        result = await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
 
         assert [len(c.args[2]) for c in client.add_records.call_args_list] == [500, 500, 1]
         assert result["added"] == 1001
@@ -1093,7 +1101,7 @@ class TestImportCsv:
         connector, client, path = csv_connector(tmp_path, text)
         client.add_records.side_effect = lambda doc, table, rows: [1] * len(rows)
 
-        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
 
         sizes = [len(c.args[2]) for c in client.add_records.call_args_list]
         assert sum(sizes) == 6 and len(sizes) > 1
@@ -1104,7 +1112,7 @@ class TestImportCsv:
         monkeypatch.setattr(grist_module, "_CSV_CHUNK_JSON_CHARS", 5)
         connector, client, path = csv_connector(tmp_path, "Name\na-very-long-name\nb\n")
         client.add_records.side_effect = lambda doc, table, rows: [1] * len(rows)
-        await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         assert [len(c.args[2]) for c in client.add_records.call_args_list] == [1, 1]
 
     async def test_a_failure_on_the_second_chunk_says_how_far_it_got(self, tmp_path, gated_call_spy):
@@ -1115,7 +1123,7 @@ class TestImportCsv:
         client.add_records.side_effect = [list(range(500)), GristClientError("SECRET grist text")]
 
         with pytest.raises(grist_module.GristCsvWriteError) as info:
-            await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+            await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
 
         message = str(info.value)
         assert message == (
@@ -1132,7 +1140,7 @@ class TestImportCsv:
         connector, client, path = csv_connector(tmp_path, "Name\nAda\n")
         client.add_records.side_effect = GristClientError("boom")
         with pytest.raises(grist_module.GristCsvWriteError) as info:
-            await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+            await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         assert str(info.value) == (
             "Grist refused the first write; no rows were written. See the PrivacyFence log for "
             "Grist's reason."
@@ -1142,13 +1150,13 @@ class TestImportCsv:
     async def test_nothing_is_written_when_the_gate_denies(self, tmp_path, raising_gated_call):
         connector, client, path = csv_connector(tmp_path, "Name\nAda\n")
         with pytest.raises(RuntimeError, match="denied"):
-            await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+            await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         client.add_records.assert_not_called()
 
     async def test_a_client_without_ids_still_succeeds(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Name\nAda\n")
         client.add_records.return_value = []
-        result = await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+        result = await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
         assert result["first_added_id"] is None and result["last_added_id"] is None
 
     async def test_upload_id_claims_the_staged_bytes_and_consumes_the_slot(self, gated_call_spy):
@@ -1159,7 +1167,7 @@ class TestImportCsv:
         client.add_records.return_value = [3]
         store, token, upload_id, principal = new_slot(b"Name\nAda\n")
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": upload_id})
 
         assert result["added"] == 1
@@ -1180,18 +1188,17 @@ class TestImportCsv:
 
         monkeypatch.setattr(grist_module, "gated_call", fake_gated_call)
         connector, client = write_connector()
-        connector.download_mode = "org"
         client.list_columns.return_value = CSV_COLUMNS
         client.add_records.return_value = [3]
         store, token, upload_id, principal = new_slot(b"Name\nAda\n")
         args = {**CSV_ARGS, "upload_id": upload_id}
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(ApprovalPending):
+        with local_files.call_context(), pytest.raises(ApprovalPending):
             await connector.call("grist_import_csv", args)
         client.add_records.assert_not_called()
         assert store.peek(token, principal.id) is not None
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call("grist_import_csv", args)
 
         assert result["added"] == 1
@@ -1208,9 +1215,9 @@ class TestImportCsv:
         _, _, upload_id, _ = new_slot(b"Name\nAda\n")
         args = {**CSV_ARGS, "upload_id": upload_id}
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             await connector.call("grist_import_csv", args)
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             LocalFileAccessError, match="expired or was already used",
         ):
             await connector.call("grist_import_csv", args)
@@ -1242,7 +1249,7 @@ class TestUpdateCsv:
             3: {"Name": "Lin", "Score": 2},
         })
 
-        result = await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        result = await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
 
         assert result == {
             "doc_id": DOC_ID, "table_id": "Contacts", "updated": 2, "added": 0,
@@ -1259,15 +1266,15 @@ class TestUpdateCsv:
         connector, client, path = csv_connector(tmp_path, text)
         table_server(client, {1: {"Name": "Ada", "Score": 36}, 2: {"Name": "Grace", "Score": 50}})
 
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
 
         kwargs = gated_call_spy[0]
         assert kwargs["tool"] == "grist_update_csv" and kwargs["gate"] == "popup"
         assert kwargs["tool_name"] == "Update Grist from CSV"
-        assert kwargs["summary"] == "Update 1 and add 0 record(s) from people.csv in Budget / Contacts"
+        assert kwargs["summary"] == "Update 1 and add 0 record(s) from uploaded via privacyfence_create_upload_slot in Budget / Contacts"
         assert kwargs["preview"] == {
             "Server": "docs.getgrist.com", "Document": "Budget", "Table": "Contacts",
-            "File": "people.csv", "SHA-256": sha_of(text), "Rows in file": "3",
+            "File": "uploaded via privacyfence_create_upload_slot", "SHA-256": sha_of(text), "Rows in file": "3",
             "Key column": "Name", "Records to update": "1", "Cells to change": "1",
             "Unchanged rows": "1", "Rows with no match": "1 (skipped)",
         }
@@ -1292,7 +1299,7 @@ class TestUpdateCsv:
         }
         assert kwargs["write_content_scan_text"] == text
         assert kwargs["args"] == {
-            "doc_id": DOC_ID, "table_id": "Contacts", "local_path": path, "upload_id": "",
+            "doc_id": DOC_ID, "table_id": "Contacts", "upload_id": path,
             "sha256": sha_of(text), "key_column": "Name", "create_missing": False,
             "clear_empty": False,
         }
@@ -1302,7 +1309,7 @@ class TestUpdateCsv:
         table_server(client, {1: {"Name": "Ada", "Score": 36}})
 
         result = await connector.call(
-            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+            "grist_update_csv", {**self.ARGS, "upload_id": path, "clear_empty": True},
         )
 
         assert result["updated"] == 1 and result["unchanged"] == 0
@@ -1318,7 +1325,7 @@ class TestUpdateCsv:
         table_server(client, {1: {"Name": "Ada", "Score": None, "Born": ""}})
 
         result = await connector.call(
-            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+            "grist_update_csv", {**self.ARGS, "upload_id": path, "clear_empty": True},
         )
 
         assert result["updated"] == 0 and result["unchanged"] == 1
@@ -1328,7 +1335,7 @@ class TestUpdateCsv:
         connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,\n")
         table_server(client, {1: {"Name": "Ada", "Score": 36}})
 
-        result = await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        result = await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
 
         assert result["updated"] == 0 and result["unchanged"] == 1
         client.update_records.assert_not_called()
@@ -1341,7 +1348,7 @@ class TestUpdateCsv:
 
         await connector.call(
             "grist_update_csv",
-            {**self.ARGS, "local_path": path, "create_missing": True, "clear_empty": True},
+            {**self.ARGS, "upload_id": path, "create_missing": True, "clear_empty": True},
         )
 
         client.add_records.assert_called_once_with(DOC_ID, "Contacts", [{"Name": "New"}])
@@ -1351,7 +1358,7 @@ class TestUpdateCsv:
         table_server(client, {1: {"Name": "Ada", "Score": 36}})
 
         await connector.call(
-            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+            "grist_update_csv", {**self.ARGS, "upload_id": path, "clear_empty": True},
         )
 
         assert gated_call_spy[0]["args"]["clear_empty"] is True
@@ -1364,7 +1371,7 @@ class TestUpdateCsv:
         })
 
         await connector.call(
-            "grist_update_csv", {**self.ARGS, "local_path": path, "clear_empty": True},
+            "grist_update_csv", {**self.ARGS, "upload_id": path, "clear_empty": True},
         )
 
         preview = gated_call_spy[0]["preview"]
@@ -1375,7 +1382,7 @@ class TestUpdateCsv:
     async def test_dates_render_as_in_the_file_in_both_columns(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Name,Born\nAda,2024-02-29\n")
         table_server(client, {1: {"Name": "Ada", "Born": calendar_seconds("2024-01-31")}})
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         assert gated_call_spy[0]["preview_tables"][0]["rows"] == [
             ["#1", "Ada", "Born", "2024-01-31", "2024-02-29"],
         ]
@@ -1384,7 +1391,7 @@ class TestUpdateCsv:
         text = "Name,Score\n" + "".join(f"n{i},2\n" for i in range(30))
         connector, client, path = csv_connector(tmp_path, text)
         table_server(client, {i: {"Name": f"n{i}", "Score": 1} for i in range(30)})
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         table = gated_call_spy[0]["preview_tables"][0]
         assert len(table["rows"]) == 20 and table["footer"] == "Showing 20 of 30 changed cells."
 
@@ -1392,7 +1399,7 @@ class TestUpdateCsv:
         text = "Name\n" + "".join(f"n{i}\n" for i in range(25))
         connector, client, path = csv_connector(tmp_path, text)
         table_server(client, {})
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         table = gated_call_spy[0]["preview_tables"][1]
         assert len(table["rows"]) == 20 and table["footer"] == "Showing 20 of 25 rows."
 
@@ -1405,7 +1412,7 @@ class TestUpdateCsv:
         client.add_records.side_effect = lambda *a: order.append("add") or [5]
 
         result = await connector.call(
-            "grist_update_csv", {**self.ARGS, "local_path": path, "create_missing": True},
+            "grist_update_csv", {**self.ARGS, "upload_id": path, "create_missing": True},
         )
 
         assert order == ["update", "add"]
@@ -1423,21 +1430,21 @@ class TestUpdateCsv:
         connector, client, path = csv_connector(tmp_path, "Name\nAda\n")
         table_server(client, {1: {"Name": "Ada"}, 2: {"Name": "Ada"}})
         with pytest.raises(ValueError, match="matches more than one record in Contacts"):
-            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+            await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         assert gated_call_spy == []
 
     async def test_a_repeated_key_inside_the_page_is_refused(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Name\nAda\nGrace\n")
         table_server(client, {1: {"Name": "Ada"}, 2: {"Name": "Ada"}, 3: {"Name": "Grace"}})
         with pytest.raises(ValueError, match="matches more than one record in Contacts"):
-            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+            await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
 
     async def test_a_duplicate_hidden_by_the_page_limit_is_still_refused(self, tmp_path, gated_call_spy):
         # ids order a, b, a: the page cut at two records shows no repeated key, only truncated
         connector, client, path = csv_connector(tmp_path, "Name\nAda\nGrace\n")
         table_server(client, {1: {"Name": "Ada"}, 2: {"Name": "Grace"}, 3: {"Name": "Ada"}})
         with pytest.raises(ValueError, match="matches more than one record in Contacts"):
-            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+            await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         assert gated_call_spy == []
 
     async def test_integral_numeric_keys_match_whatever_their_form(self, tmp_path, gated_call_spy):
@@ -1445,11 +1452,10 @@ class TestUpdateCsv:
         client.list_columns.return_value = [
             GristColumn("Score", "Score", "Numeric", False), GristColumn("Name", "Name", "Text", False),
         ]
-        path = tmp_path / "k.csv"
-        path.write_bytes(b"Score,Name\n3,Ada\n")
+        path = csv_upload("Score,Name\n3,Ada\n")
         table_server(client, {1: {"Score": 3.0, "Name": "old"}})
         await connector.call(
-            "grist_update_csv", {**CSV_ARGS, "key_column": "Score", "local_path": str(path)},
+            "grist_update_csv", {**CSV_ARGS, "key_column": "Score", "upload_id": path},
         )
         client.update_records.assert_called_once_with(DOC_ID, "Contacts", [(1, {"Name": "Ada"})])
 
@@ -1457,7 +1463,7 @@ class TestUpdateCsv:
         connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,36\n")
         table_server(client, {1: {"Name": "Ada", "Score": 36}})
 
-        result = await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        result = await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
 
         assert len(gated_call_spy) == 1
         assert gated_call_spy[0]["summary"].startswith("Update 0 and add 0 record(s)")
@@ -1473,10 +1479,9 @@ class TestUpdateCsv:
         connector, client, path = csv_connector(tmp_path, "Name\nAda\n")
         table_server(client, {})
         client.add_records.return_value = [1]
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path, "create_missing": True})
-        (tmp_path / "people.csv").write_bytes(b"Name\nGrace\n")
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path, "create_missing": True})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": csv_upload("Name\nGrace\n")})
 
         keys = [canonical_key("grist", "grist_update_csv", c["args"]) for c in gated_call_spy]
         assert len(set(keys)) == 3
@@ -1491,7 +1496,7 @@ class TestUpdateCsv:
         client.get_records.side_effect = get_records
 
         result = await connector.call(
-            "grist_update_csv", {**CSV_ARGS, "key_column": "id", "local_path": path},
+            "grist_update_csv", {**CSV_ARGS, "key_column": "id", "upload_id": path},
         )
 
         assert result == {
@@ -1509,43 +1514,43 @@ class TestUpdateCsv:
         with pytest.raises(ValueError, match="create_missing cannot be used with key_column id"):
             await connector.call(
                 "grist_update_csv",
-                {**CSV_ARGS, "key_column": "id", "local_path": path, "create_missing": True},
+                {**CSV_ARGS, "key_column": "id", "upload_id": path, "create_missing": True},
             )
         assert gated_call_spy == []
 
     async def test_import_csv_still_refuses_an_id_column(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "id,Score\n1,37\n")
         with pytest.raises(ValueError, match="Unknown column"):
-            await connector.call("grist_import_csv", {**CSV_ARGS, "local_path": path})
+            await connector.call("grist_import_csv", {**CSV_ARGS, "upload_id": path})
 
     async def test_the_record_id_is_only_a_column_when_it_is_the_key(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "id,Name\n1,Ada\n")
         with pytest.raises(ValueError, match="Unknown column"):
-            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+            await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
 
     async def test_the_key_column_must_be_in_the_file(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Score\n1\n")
         with pytest.raises(ValueError, match="key_column Name is not a column of the CSV file"):
-            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+            await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
 
     async def test_the_key_column_needs_a_key_type(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Born\n2024-01-01\n")
         with pytest.raises(ValueError, match="key_column Born has type Date; use a Text, Choice"):
             await connector.call(
-                "grist_update_csv", {**CSV_ARGS, "key_column": "Born", "local_path": path},
+                "grist_update_csv", {**CSV_ARGS, "key_column": "Born", "upload_id": path},
             )
 
     async def test_a_duplicate_key_in_the_file_is_refused(self, tmp_path, gated_call_spy):
         connector, client, path = csv_connector(tmp_path, "Name\nAda\nAda\n")
         with pytest.raises(ValueError, match="Lines 2, 3 have the same key"):
-            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+            await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         client.get_records.assert_not_called()
 
     async def test_lookups_are_chunked_by_count(self, tmp_path, gated_call_spy, monkeypatch):
         monkeypatch.setattr(grist_module, "_CSV_LOOKUP_KEYS", 3)
         connector, client, path = csv_connector(tmp_path, "Name\n" + "".join(f"n{i}\n" for i in range(7)))
         table_server(client, {})
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         calls = client.get_records.call_args_list
         assert [c.kwargs["filters"]["Name"] for c in calls] == [
             ["n0", "n1", "n2"], ["n3", "n4", "n5"], ["n6"],
@@ -1556,7 +1561,7 @@ class TestUpdateCsv:
         monkeypatch.setattr(grist_module, "_CSV_LOOKUP_JSON_CHARS", 40)
         connector, client, path = csv_connector(tmp_path, "Name\n" + "".join(f"name-{i}\n" for i in range(8)))
         table_server(client, {})
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         calls = client.get_records.call_args_list
         assert len(calls) > 1
         assert sum(len(c.kwargs["filters"]["Name"]) for c in calls) == 8
@@ -1569,7 +1574,7 @@ class TestUpdateCsv:
             tmp_path, "Name,Score\n" + "".join(f"n{i},2\n" for i in range(5)),
         )
         table_server(client, {i: {"Name": f"n{i - 1}", "Score": 1} for i in range(1, 6)})
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         assert [len(c.args[2]) for c in client.update_records.call_args_list] == [2, 2, 1]
 
     async def test_updates_are_grouped_by_the_columns_they_change(self, tmp_path, gated_call_spy):
@@ -1582,7 +1587,7 @@ class TestUpdateCsv:
             3: {"Name": "c", "Score": 1},
             4: {"Name": "d", "Score": 1, "Born": 5},
         })
-        await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+        await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         batches = [c.args[2] for c in client.update_records.call_args_list]
         assert len(batches) == 3
         for batch in batches:
@@ -1596,7 +1601,7 @@ class TestUpdateCsv:
         table_server(client, {1: {"Name": "Ada", "Score": 1}})
         client.update_records.side_effect = GristClientError("boom")
         with pytest.raises(grist_module.GristCsvWriteError) as info:
-            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+            await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         assert "finishes the rest" not in str(info.value)
         assert "Nothing was written" in str(info.value)
 
@@ -1611,7 +1616,7 @@ class TestUpdateCsv:
 
         with pytest.raises(grist_module.GristCsvWriteError) as info:
             await connector.call(
-                "grist_update_csv", {**self.ARGS, "local_path": path, "create_missing": True},
+                "grist_update_csv", {**self.ARGS, "upload_id": path, "create_missing": True},
             )
 
         assert str(info.value) == (
@@ -1628,14 +1633,14 @@ class TestUpdateCsv:
         client.add_records.side_effect = GristClientError("boom")
         with pytest.raises(grist_module.GristCsvWriteError, match="1 of 1 update.*0 of 1 add"):
             await connector.call(
-                "grist_update_csv", {**self.ARGS, "local_path": path, "create_missing": True},
+                "grist_update_csv", {**self.ARGS, "upload_id": path, "create_missing": True},
             )
 
     async def test_nothing_is_written_when_the_gate_denies(self, tmp_path, raising_gated_call):
         connector, client, path = csv_connector(tmp_path, "Name,Score\nAda,2\n")
         table_server(client, {1: {"Name": "Ada", "Score": 1}})
         with pytest.raises(RuntimeError, match="denied"):
-            await connector.call("grist_update_csv", {**self.ARGS, "local_path": path})
+            await connector.call("grist_update_csv", {**self.ARGS, "upload_id": path})
         client.update_records.assert_not_called()
 
     async def test_upload_id_survives_a_pending_approval(self, monkeypatch):
@@ -1656,12 +1661,12 @@ class TestUpdateCsv:
         store, token, upload_id, principal = new_slot(b"Name,Score\nAda,2\n")
         args = {**self.ARGS, "upload_id": upload_id}
 
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(ApprovalPending):
+        with local_files.call_context(), pytest.raises(ApprovalPending):
             await connector.call("grist_update_csv", args)
         client.update_records.assert_not_called()
         assert store.peek(token, principal.id) is not None
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             result = await connector.call("grist_update_csv", args)
 
         assert result["updated"] == 1
@@ -1678,10 +1683,10 @@ class TestUpdateCsv:
         store, token, upload_id, principal = new_slot(b"Name,Score\nAda,2\n")
         args = {**self.ARGS, "upload_id": upload_id}
 
-        with local_files.call_context(bridge_available=False, uploads={}):
+        with local_files.call_context():
             await connector.call("grist_update_csv", args)
         assert store.peek(token, principal.id) is None
-        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+        with local_files.call_context(), pytest.raises(
             LocalFileAccessError, match="expired or was already used",
         ):
             await connector.call("grist_update_csv", args)
@@ -1697,7 +1702,7 @@ EXPORT_COLUMNS = [
     GristColumn("Seen", "Seen", "DateTime:UTC", False),
     GristColumn("Tags", "Tags", "ChoiceList", False),
 ]
-EXPORT_ARGS = {"doc_id": DOC_ID, "table_id": "Contacts", "destination_dir": "~/out"}
+EXPORT_ARGS = {"doc_id": DOC_ID, "table_id": "Contacts"}
 
 
 def export_records_page(truncated=False):
@@ -1718,16 +1723,15 @@ def delivered(monkeypatch):
     calls = []
 
     def fake_deliver(
-        dest_dir, name, data, mime_type, *, download_mode, download_config=None,
+        name, data, mime_type, *, download_config=None,
         download_base_url="",
     ):
         calls.append({
-            "dest_dir": dest_dir, "name": name, "data": data, "mime_type": mime_type,
-            "download_mode": download_mode, "download_config": download_config,
+            "name": name, "data": data, "mime_type": mime_type,
+            "download_config": download_config,
             "download_base_url": download_base_url,
         })
-        return {"path": f"{dest_dir}/{name}", "name": name, "size_bytes": len(data),
-                "delivery": "local_disk"}
+        return {"name": name, "size_bytes": len(data), "delivery": "link", "download_url": "u"}
 
     monkeypatch.setattr(grist_module.local_files, "deliver_export", fake_deliver)
     return calls
@@ -1749,7 +1753,6 @@ class TestExportRecords:
         await connector.call("grist_export_records", EXPORT_ARGS)
 
         assert delivered[0]["name"] == "Contacts.csv"
-        assert delivered[0]["dest_dir"] == "~/out"
         assert delivered[0]["mime_type"] == "text/csv"
         lines = delivered[0]["data"].decode("utf-8").splitlines()
         assert lines[0] == "id,Name,Born,Seen,Tags"
@@ -1795,7 +1798,7 @@ class TestExportRecords:
         assert call["preview_tables"][0]["rows"][0][1] == "Ada"
         assert list(call["raw_data"]) == ["doc_id", "table_id", "rows", "columns", "sha256"]
         assert "Ada" not in json.dumps(call["raw_data"])
-        assert call["new_info"]["Saved to"] == "~/out/Contacts.csv"
+        assert call["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
         assert call["new_info"]["Rows"] == "2"
 
     async def test_details_text_has_no_agent_placeholder(self, gated_call_spy, delivered):
@@ -1804,14 +1807,14 @@ class TestExportRecords:
         await connector.call("grist_export_records", EXPORT_ARGS)
 
         assert "{agent}" not in gated_call_spy[0]["details_text"]
-        assert "Saved to: ~/out/Contacts.csv" in gated_call_spy[0]["details_text"]
+        assert f"Saved to: {export_files.ORG_SAVED_TO}" in gated_call_spy[0]["details_text"]
 
     async def test_audit_delivery_is_passed(self, gated_call_spy, delivered):
         connector, _client = export_connector()
 
         await connector.call("grist_export_records", EXPORT_ARGS)
 
-        assert gated_call_spy[0]["delivery"] == "local_disk"
+        assert gated_call_spy[0]["delivery"] == "staged_link"
 
     async def test_approval_args_carry_sha256_and_options(self, gated_call_spy, delivered):
         import hashlib
@@ -1822,7 +1825,7 @@ class TestExportRecords:
 
         assert gated_call_spy[0]["args"] == {
             "doc_id": DOC_ID, "table_id": "Contacts", "filter": '{"Name": ["Ada"]}',
-            "destination_dir": "~/out", "file_name": "Contacts.csv",
+            "file_name": "Contacts.csv",
             "sha256": hashlib.sha256(delivered[0]["data"]).hexdigest(),
         }
 
@@ -1862,13 +1865,11 @@ class TestExportRecords:
     async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
         connector, _client = export_connector()
         cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
-        connector.download_mode = "org"
         connector.download_config = cfg
         connector.download_base_url = "https://pf.example"
 
         await connector.call("grist_export_records", EXPORT_ARGS)
 
-        assert delivered[0]["download_mode"] == "org"
         assert delivered[0]["download_config"] is cfg
         assert delivered[0]["download_base_url"] == "https://pf.example"
         assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
@@ -1876,7 +1877,6 @@ class TestExportRecords:
 
     async def test_org_mode_without_staging_is_refused_before_any_request(self, gated_call_spy, delivered):
         connector, client = export_connector()
-        connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
 
         with pytest.raises(ValueError, match="allow_disk_staging"):
@@ -1915,13 +1915,13 @@ class TestExportRecords:
 
         result = await connector.call("grist_export_records", EXPORT_ARGS)
 
-        assert set(result) == {"rows", "columns", "sha256", "path", "name", "size_bytes", "delivery"}
+        assert set(result) == {"rows", "columns", "sha256", "name", "size_bytes", "delivery", "download_url"}
         assert result["rows"] == 2
         assert result["columns"] == ["id", "Name", "Born", "Seen", "Tags"]
         assert "Ada" not in json.dumps(result)
 
 
-SQL_ARGS = {"doc_id": DOC_ID, "sql": "SELECT id, Name FROM Contacts", "destination_dir": "~/out"}
+SQL_ARGS = {"doc_id": DOC_ID, "sql": "SELECT id, Name FROM Contacts"}
 
 
 def sql_connector(records=None):
@@ -2046,7 +2046,7 @@ class TestExportSql:
         assert call["filtered_data"] is None
         assert call["preview"]["Query"] == "SELECT id, Name FROM Contacts"
         assert call["preview"]["Arguments"] == "2"
-        assert call["new_info"]["Saved to"] == "~/out/query.csv"
+        assert call["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
         assert call["details_text"].endswith(
             "Query:\nSELECT id, Name FROM Contacts\n\nArguments: [\"x\", 2]"
         )
@@ -2056,18 +2056,16 @@ class TestExportSql:
         assert call["args"]["sql"] == "SELECT id, Name FROM Contacts"
         assert call["args"]["args"] == '["x", 2]'
         assert call["args"]["file_name"] == "query.csv"
-        assert call["delivery"] == "local_disk"
+        assert call["delivery"] == "staged_link"
 
     async def test_org_mode_delivers_a_one_time_link(self, gated_call_spy, delivered):
         connector, _client = sql_connector()
         cfg = DownloadDeliveryConfig(link_ttl_seconds=60)
-        connector.download_mode = "org"
         connector.download_config = cfg
         connector.download_base_url = "https://pf.example"
 
         await connector.call("grist_export_sql", SQL_ARGS)
 
-        assert delivered[0]["download_mode"] == "org"
         assert delivered[0]["download_config"] is cfg
         assert delivered[0]["download_base_url"] == "https://pf.example"
         assert gated_call_spy[0]["new_info"]["Saved to"] == export_files.ORG_SAVED_TO
@@ -2075,7 +2073,6 @@ class TestExportSql:
 
     async def test_org_mode_without_staging_is_refused_before_any_request(self, gated_call_spy, delivered):
         connector, client = sql_connector()
-        connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(allow_disk_staging=False)
 
         with pytest.raises(ValueError, match="allow_disk_staging"):
@@ -2103,7 +2100,19 @@ class TestExportSql:
 
         result = await connector.call("grist_export_sql", SQL_ARGS)
 
-        assert set(result) == {"rows", "columns", "sha256", "path", "name", "size_bytes", "delivery"}
+        assert set(result) == {"rows", "columns", "sha256", "name", "size_bytes", "delivery", "download_url"}
         assert result["rows"] == 2
         assert result["columns"] == ["id", "Name"]
         assert "Ada" not in json.dumps(result)
+
+
+def test_grist_tools_take_no_destination_or_local_path():
+    specs = make_connector()[0].tool_specs()
+    for spec in specs:
+        names = {p.name for p in spec.params}
+        assert not names & {"destination_dir", "local_path", "download_mode"}, spec.name
+        assert "destination_dir" not in spec.description and "local_path" not in spec.description
+    csv_tools = {s.name: s for s in specs if s.name in {"grist_import_csv", "grist_update_csv"}}
+    assert all(
+        next(p for p in s.params if p.name == "upload_id").required for s in csv_tools.values()
+    )

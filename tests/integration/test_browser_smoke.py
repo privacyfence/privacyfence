@@ -66,8 +66,7 @@ from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence.connector_registry import ConnectorRegistry  # noqa: E402
 from privacyfence.deny_feedback import DenialFeedback, denial_message  # noqa: E402
-from privacyfence.principal import Principal, principal_scope  # noqa: E402
-from privacyfence.settings_controller import SettingsController  # noqa: E402
+from privacyfence.principal import LOCAL_PRINCIPAL, Principal, principal_scope  # noqa: E402
 from privacyfence.web import org_session  # noqa: E402
 from privacyfence.web.oauth_provider import OrgOAuthProvider  # noqa: E402
 from privacyfence.web.org_session import OrgSessionStore  # noqa: E402
@@ -77,9 +76,7 @@ from privacyfence.web.routes_approvals import (  # noqa: E402
     _DENIED_WITH_NOTE_MESSAGE,
 )
 from privacyfence.web.server import OrgAuth, WebServer  # noqa: E402
-from privacyfence.web.session_auth import PROVENANCE_HUMAN  # noqa: E402
-from privacyfence.web.session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE  # noqa: E402
-from privacyfence.web.state_stream import call_soon_threadsafe  # noqa: E402
+from tests.integration.org_server_harness import single_user_org_server  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode  # noqa: E402
 
@@ -253,16 +250,9 @@ def pf_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def local_server(pf_home):
-    web_ui = WebApprovalUI()
-    port = _free_port()
-    server = WebServer(web_ui, host="localhost", port=port)
-    server.start()
-    try:
-        _wait_until_connectable("localhost", port)
-        yield server, web_ui
-    finally:
-        server.stop()
+def local_server(pf_home, tmp_path):
+    with single_user_org_server(tmp_path) as server:
+        yield server, server.web_ui
 
 
 @pytest.fixture
@@ -449,53 +439,11 @@ def _register_confirm(web_ui: WebApprovalUI, categories: list[str]) -> tuple[thr
 
 
 class TestBootstrapLogin:
-    def test_bootstrap_link_signs_in_and_leaves_no_credential_in_the_url(self, page, local_server):
-        """The single-use ``?bootstrap=<code>`` link (web/server.py's
-        ``_BootstrapMiddleware``) actually signs a real browser in, *and*
-        the resulting page URL -- what a real browser bar, history entry,
-        and Referer header would carry -- contains neither the bootstrap
-        code nor any other credential, which is the point of exchanging the
-        code for a cookie (see web/session_auth.py's module docstring). ASGI
-        TestClient assertions already cover the redirect response's own
-        Location header (test_server.py) -- this proves a real browser
-        actually lands there with nothing left in its own address bar, not
-        just that the server sent the right header."""
-        server, _web_ui = local_server
-        url = _sign_in_url(server, "/approvals")
-        assert "bootstrap=" in url  # sanity: the link under test does carry one
-
-        page.goto(url)
-        page.wait_for_load_state("load")
-
-        assert page.url == f"{server.base_url}/approvals"
-        assert "bootstrap=" not in page.url
-        assert "token=" not in page.url
-        assert page.get_by_text("Nothing is waiting.").is_visible()
-
-    def test_bootstrap_code_is_single_use(self, page, context, local_server):
-        server, _web_ui = local_server
-        url = _sign_in_url(server, "/approvals")
-        page.goto(url)
-        page.wait_for_load_state("load")
-
-        # Same code again, fresh browser context (no session cookie this
-        # time) -- BootstrapStore.consume() already deletes on first use
-        # (unit-tested in test_session_auth.py); this proves a real browser
-        # actually gets turned away, not just the store's own bookkeeping.
-        other = context.browser.new_context()
-        try:
-            fresh_page = other.new_page()
-            fresh_page.goto(url)
-            fresh_page.wait_for_load_state("load")
-            assert fresh_page.get_by_text("Not authorized").is_visible()
-        finally:
-            other.close()
-
     def test_unauthenticated_visitor_sees_the_sign_in_message(self, page, local_server):
         server, _web_ui = local_server
         page.goto(f"{server.base_url}/approvals")
         page.wait_for_load_state("load")
-        assert page.get_by_text("Not authorized").is_visible()
+        assert page.url.startswith(f"{server.base_url}/login")
 
 
 # --------------------------------------------------------------------- #
@@ -503,21 +451,13 @@ class TestBootstrapLogin:
 # --------------------------------------------------------------------- #
 
 
-def _sign_in_url(server, path: str = "/approvals", *, provenance: str = PROVENANCE_HUMAN) -> str:
-    """A one-time sign-in link for a real browser to follow.
-
-    Minting is the control channel's business, and *attested* minting requires a
-    companion process to call back to -- which an in-process browser test has
-    no reason to stand up, so it reaches into the store the same way the
-    daemon's own middleware does. ``provenance`` defaults to ``human`` because
-    what these tests drive is a human at a browser; the one that checks what
-    an unattested session cannot do passes the other value.
-    """
-    return f"{server.base_url}{path}?bootstrap={server.bootstrap.mint(provenance=provenance)}"
-
-
 def _sign_in_local(page, server) -> None:
-    page.goto(_sign_in_url(server))
+    session_id = server.session_cookie(LOCAL_PRINCIPAL)
+    page.context.add_cookies([{
+        "name": org_session.SESSION_COOKIE, "value": session_id, "url": server.base_url,
+        "httpOnly": True, "secure": True, "sameSite": "Strict",
+    }])
+    page.goto(f"{server.base_url}/approvals")
     page.wait_for_load_state("load")
 
 
@@ -927,7 +867,7 @@ class TestApprovalListBehavior:
         server, web_ui = local_server
         _sign_in_local(page, server)
         thread, card = _register_card(web_ui)
-        csrf = next(c["value"] for c in context.cookies() if c["name"] == _LOCAL_SESSION_COOKIE)
+        csrf = next(c["value"] for c in context.cookies() if c["name"] == org_session.SESSION_COOKIE)
         decide_url = f"{server.base_url}/api/approvals/{card.id}/decide"
         try:
             statuses = page.evaluate(
@@ -1915,17 +1855,13 @@ class TestCardContainers:
         assert page.evaluate("document.querySelector('[data-pf-action=\"accept\"]').getAttribute('aria-disabled')") is None
 
 
-    @pytest.mark.parametrize("shape", ["confirm", "choice"])
     @pytest.mark.parametrize("width", [320, 393])
-    def test_the_dialogs_are_touch_sized_on_a_phone(self, browser, shape, width):
-        from privacyfence.dialog_window_html import build_choice_html, build_confirmation_html
+    def test_the_dialog_is_touch_sized_on_a_phone(self, browser, width):
+        from privacyfence.dialog_window_html import build_confirmation_html
 
-        html = (
-            build_confirmation_html(title="PrivacyFence — Possible PII Detected", message_lines=["An email address."],
-                                    cancel_label="Cancel", confirm_label="Allow")
-            if shape == "confirm" else
-            build_choice_html(title="PrivacyFence — Choose Auto-Accept Rule", prompt="Pick one",
-                              options=["i_am_owner", "approved_folder: Finance"])
+        html = build_confirmation_html(
+            title="PrivacyFence — Possible PII Detected", message_lines=["An email address."],
+            cancel_label="Cancel", confirm_label="Allow",
         )
         ctx = browser.new_context(**{**_MOBILE_EMULATION, "viewport": {"width": width, "height": 800}})
         try:
@@ -2115,7 +2051,7 @@ def _submit_and_wait(page, button, violations: list[str], until) -> None:
 
 class TestNativeFormsSubmitUnderCsp:
     """Org /connect's native ``<form method="post">``s -- Sign out and each Telegram step -- are
-    the app's only native forms (local mode has none). TestClient posts to their routes without
+    the app's only native forms. TestClient posts to their routes without
     enforcing CSP, which is how ``form-action 'none'`` once blocked every one of them in a real
     browser unnoticed. Each test here clicks the real button under the real policy and checks
     that the POST reached the server and the flow finished on the page it should, with no
@@ -2291,13 +2227,6 @@ class TestInstallableOrgApp:
         assert manifest["errors"] == []
         assert json.loads(manifest["data"])["display"] == "standalone"
         assert not [v for v in violations if "manifest" in v or "/icons/" in v], violations
-
-    def test_local_mode_links_no_manifest(self, page, local_server):
-        server, _web_ui = local_server
-        _sign_in_local(page, server)
-        page.goto(f"{server.base_url}/approvals")
-        assert page.locator('link[rel="manifest"]').count() == 0
-        assert page.request.get(f"{server.base_url}/manifest.webmanifest").status == 404
 
 
 class TestWebPushSubscription:
@@ -2496,31 +2425,6 @@ class TestOrgModeWebAuthnUi:
         assert page.locator(f'[data-approval-id="{theirs.id}"]').count() == 0
 
 
-@pytest.fixture
-def local_server_with_settings(pf_home, monkeypatch):
-    """``local_server`` above never passes ``controller=``, so ``/settings``
-    (web/server.py's own ``WebServer.__init__`` docstring: ``controller=
-    None`` mounts nothing there) 404s for every existing test in this file
-    -- none of them needs the settings surface. ``TestSettingsPageRendering``
-    below is the one that does, so it gets its own server with a real
-    ``SettingsController``, rather than changing what every other test's
-    own server mounts."""
-    web_ui = WebApprovalUI()
-    config_path = pf_home / ".privacyfence" / "settings.yaml"
-    config_path.write_text("{}\n", encoding="utf-8")
-    controller = SettingsController(str(config_path), connectors=[], connector_host=None)
-    # Connectors are listed only when the org config enables them (ADR 0196).
-    monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"slack": {"client_id": "s"}})
-    port = _free_port()
-    server = WebServer(web_ui, host="localhost", port=port, controller=controller)
-    server.start()
-    try:
-        _wait_until_connectable("localhost", port)
-        yield server, web_ui
-    finally:
-        server.stop()
-
-
 class TestHostileContentStaysText:
     """The two pages that rebuild their DOM from a pushed state (``/approvals`` and
     ``/settings``) write it with ``innerHTML`` through a JS ``esc()``. Nothing else
@@ -2554,37 +2458,8 @@ class TestHostileContentStaysText:
                     web_ui.resolve(card.id, "deny")
                     thread.join(timeout=5)
 
-    def test_settings_rerender_escapes_state(self, page, local_server_with_settings):
-        server, _web_ui = local_server_with_settings
-        controller = server.controller
-        _sign_in_local(page, server)
-        page.goto(f"{server.base_url}/settings")
-        page.wait_for_selector(".pf-navitem")
-        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
-        page.evaluate(
-            "() => { var render = window.__pfRender; window.__pfRenders = 0;"
-            " window.__pfRender = function (s) { window.__pfRenders++; return render(s); }; }"
-        )
-        real_snapshot = controller.snapshot
-
-        def hostile_snapshot():
-            state = real_snapshot()
-            state["general"]["update_available"] = True
-            state["general"]["update_latest_version"] = "<b id=pfxss3>x</b>"
-            return state
-
-        controller.snapshot = hostile_snapshot
-        try:
-            call_soon_threadsafe(controller._push_snapshot)
-            page.wait_for_function("() => window.__pfRenders > 0")
-            assert page.locator("#pfxss3").count() == 0
-            assert "PrivacyFence <b id=pfxss3>x</b> is available" in page.locator("#app").inner_text()
-        finally:
-            controller.snapshot = real_snapshot
-
-
 class TestSettingsPageRendering:
-    """Local mode's settings page and org mode's (admin and non-admin) all
+    """The settings page for an admin and a non-admin both
     render through the same settings_window_html.build_html() (ADR 0033) --
     this drives all three in a real headless browser and saves a full-page
     screenshot of each, as evidence a reviewer can look at."""
@@ -2594,35 +2469,6 @@ class TestSettingsPageRendering:
     def _screenshot(self, page, name: str) -> None:
         self._SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(self._SCREENSHOT_DIR / f"{name}.png"), full_page=True)
-
-    def test_local_settings_page_renders(self, page, local_server_with_settings):
-        server, _web_ui = local_server_with_settings
-        _sign_in_local(page, server)
-        page.goto(f"{server.base_url}/settings")
-        page.wait_for_load_state("load")
-        page.wait_for_selector(".pf-navitem")
-        nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        assert nav_labels == ["General", "Connectors", "Auto-accept", "Privacy Filter", "Audit Log", "About"]
-        assert page.get_by_text("PII Detection Gate").is_visible()
-        self._screenshot(page, "local-settings")
-
-    def test_connector_icons_survive_a_live_update(self, page, local_server_with_settings):
-        """The first render and every /api/state/stream event carry the same settings state, so
-        the Connectors page's icons are still there after the page re-renders from a pushed
-        change (routes_settings.settings_page_state)."""
-        server, _web_ui = local_server_with_settings
-        _sign_in_local(page, server)
-        page.goto(f"{server.base_url}/settings/connectors")
-        page.wait_for_selector(".pf-connector-icon img")
-        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
-        icons = page.locator(".pf-connector-icon img").count()
-        page.evaluate(
-            "() => { var render = window.__pfRender; window.__pfRenders = 0;"
-            " window.__pfRender = function (s) { window.__pfRenders++; return render(s); }; }"
-        )
-        call_soon_threadsafe(server.controller._push_snapshot)
-        page.wait_for_function("() => window.__pfRenders > 0")
-        assert page.locator(".pf-connector-icon img").count() == icons
 
     def test_org_settings_page_renders_for_non_admin(self, page, context, org_server):
         server, sessions = org_server
@@ -2863,7 +2709,6 @@ _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
 _ORG_ADMIN_PAGE_SECTIONS = (
     "services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats",
 )
-_LOCAL_ADMIN_PAGE_SECTIONS = ("services", "features", "org_config")
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 
 def _phone_cases(case_ids):
@@ -2986,16 +2831,12 @@ class TestPhoneLayout:
     @pytest.mark.parametrize(
         ("case", "width"),
         _phone_cases([f"admin-org-{s}" for s in _ORG_ADMIN_PAGE_SECTIONS]
-                     + [f"admin-local-{s}" for s in _LOCAL_ADMIN_PAGE_SECTIONS]),
+),
     )
-    def test_admin(self, phone_page, org_server, local_server_with_settings, case, width):
-        mode, section = case.removeprefix("admin-").split("-", 1)
-        if mode == "org":
-            server, sessions = org_server
-            _sign_in_org(phone_page.context, server, sessions, principal=_ADMIN)
-        else:
-            server, _web_ui = local_server_with_settings
-            _sign_in_local(phone_page, server)
+    def test_admin(self, phone_page, org_server, case, width):
+        section = case.removeprefix("admin-org-")
+        server, sessions = org_server
+        _sign_in_org(phone_page.context, server, sessions, principal=_ADMIN)
         response = phone_page.goto(f"{server.base_url}/admin")
         assert response.status == 200, f"/admin answered {response.status}"
         phone_page.wait_for_selector(".pf-navitem")

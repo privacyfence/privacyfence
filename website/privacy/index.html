@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Privacy policy — PrivacyFence</title>
-  <meta name="description" content="How privacyfence.eu handles your data: hosting, cookie-free download counts, and Google Analytics only with your consent.">
+  <meta name="description" content="How privacyfence.eu handles your data: hosting, no download counter, and Google Analytics only with your consent.">
   <meta name="pf-content-group" content="marketing">
   <meta name="theme-color" content="#f6f8fb">
   <link rel="canonical" href="https://privacyfence.eu/privacy/">
@@ -23,8 +23,7 @@
       <h1>Privacy policy</h1>
       <p class="updated">Last updated: 30 October 2026</p>
       <p>
-        This policy covers the website <strong>privacyfence.eu</strong> and the download service at
-        <strong>downloads.privacyfence.eu</strong> and the sign-in relay at
+        This policy covers the website <strong>privacyfence.eu</strong> and the sign-in relay at
         <strong>oauth.privacyfence.eu</strong>, and nothing else.
       </p>
 
@@ -36,8 +35,8 @@
         and no data protection officer.
       </p>
       <p>
-        That responsibility covers only what this website and the download service do with data
-        about their visitors, as described below: hosting, download counts, analytics (only with
+        That responsibility covers only what this website does with data
+        about its visitors, as described below: hosting, analytics (only with
         your consent) and email you send us.
       </p>
 
@@ -69,7 +68,7 @@
       <ul>
         <li>The site works without cookies. Nothing is stored on your device until you make a choice in the cookie banner, and only your choice itself is stored.</li>
         <li>Google Analytics runs only if you click <strong>Accept</strong>. If you decline, or ignore the banner, no request goes to Google.</li>
-        <li>Downloads are counted by version, platform and day only: no IP address, cookie or browser details.</li>
+        <li>The website has no download counter and no download service: it counts nothing about downloads and stores no download records.</li>
         <li>The site is hosted on GitHub Pages behind Cloudflare. Both process your IP address to deliver the pages.</li>
       </ul>
 
@@ -91,32 +90,11 @@
         and the <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare privacy policy</a>.
       </p>
 
-      <h2 id="downloads">Downloads and download counts</h2>
+      <h2 id="downloads">Downloads</h2>
       <p>
-        Installers are served by <strong>downloads.privacyfence.eu</strong>, a small service run
-        on Cloudflare (Workers, R2 storage and a D1 database). The download and release history pages also ask it for the
-        list of current releases, and the homepage and download page for the total number of
-        downloads. When you
-        download an installer, it adds one to a counter, and that counter is all it stores:
-      </p>
-      <div class="table-scroll">
-        <table>
-          <thead><tr><th scope="col">Stored per download</th><th scope="col">Example</th></tr></thead>
-          <tbody>
-            <tr><td>Day</td><td><code>2026-09-25</code></td></tr>
-            <tr><td>Release channel</td><td><code>stable</code></td></tr>
-            <tr><td>Version</td><td><code>4.5.0</code></td></tr>
-            <tr><td>Platform and architecture</td><td><code>windows</code>, <code>x64</code></td></tr>
-            <tr><td>Kind of file</td><td><code>installer</code></td></tr>
-            <tr><td>Count</td><td><code>+1</code></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p>
-        No IP address, user agent, cookie, fingerprint or any other identifier is stored with the
-        count, so the counts cannot be linked to you. Cloudflare processes the request itself as
-        described under hosting. Legal basis: legitimate interest in knowing how often the software
-        is downloaded (Art. 6(1)(f) GDPR).
+        This website has no download counter and no download service, and it stores nothing about
+        downloads. The Docker image is pulled from its registry, and earlier installers remain on
+        GitHub Releases; GitHub handles those requests under its own privacy statement.
       </p>
 
       <h2 id="relay">Sign-in relay (oauth.privacyfence.eu)</h2>
@@ -128,8 +106,7 @@
         that started the sign-in, and only to a server that proved in advance that it controls its
         own host name; a single-user install on its own computer, which uses a local address, needs no
         registration. It is used only by organization servers and single-user installs that use
-        the built-in apps. An organization's own apps never touch it, and desktop (local) installs
-        do not use it. How the maintainers run the relay is described in the
+        the built-in apps. An organization's own apps never touch it, and installs that do not use the built-in apps do not use it. How the maintainers run the relay is described in the
         <a href="/docs/oauth-relay/">relay documentation</a>.
       </p>
       <ul>
@@ -142,7 +119,7 @@
       </ul>
       <p>
         Legal basis: legitimate interest in operating and securing the service (Art. 6(1)(f) GDPR).
-        Cloudflare is the processor, as for the download service. The terms for the relay are at
+        Cloudflare is the processor, as for hosting. The terms for the relay are at
         <a href="/relay-terms/">Relay terms</a>.
       </p>
 
@@ -190,7 +167,7 @@
         <li>the pages you view, the page that referred you, and the time of your visit;</li>
         <li>your browser, operating system, device type, screen size and language;</li>
         <li>your approximate location (country and city), which Google derives from your IP address. Google Analytics 4 does not store IP addresses;</li>
-        <li>interactions on the page: scrolling, clicks on links to other sites, file downloads, and which platform's download button you click;</li>
+        <li>interactions on the page: scrolling, clicks on links to other sites and file downloads;</li>
         <li>the section of the site a page belongs to (for example, download or documentation).</li>
       </ul>
       <p>It sets two cookies on privacyfence.eu:</p>

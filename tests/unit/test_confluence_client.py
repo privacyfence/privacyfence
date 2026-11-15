@@ -25,7 +25,6 @@ from privacyfence.confluence_client import (
     ConfluencePage,
     ConfluenceSearchResult,
     ConfluenceSpace,
-    resolve_attachment_destination,
 )
 
 AUTHOR = "acc-author-0001"
@@ -1174,37 +1173,7 @@ class TestListAttachments:
 
 
 # ---------------------------------------------------------------------------- #
-# resolve_attachment_destination: path-traversal sanitization -- same shape
-# as gmail_client's test of the same name for its own copy of this helper.
-# ---------------------------------------------------------------------------- #
-
-class TestResolveAttachmentDestination:
-    def test_joins_basename_with_destination_dir(self, tmp_path):
-        result = resolve_attachment_destination("report.pdf", str(tmp_path))
-        assert result == str(tmp_path / "report.pdf")
-
-    def test_strips_directory_traversal_from_filename(self, tmp_path):
-        result = resolve_attachment_destination("../../.ssh/authorized_keys", str(tmp_path))
-        assert result == str(tmp_path / "authorized_keys")
-
-    def test_strips_absolute_path_prefix_from_filename(self, tmp_path):
-        result = resolve_attachment_destination("/etc/passwd", str(tmp_path))
-        assert result == str(tmp_path / "passwd")
-
-    def test_empty_filename_falls_back_to_generic_name(self, tmp_path):
-        assert resolve_attachment_destination("", str(tmp_path)) == str(tmp_path / "attachment")
-
-    def test_empty_destination_dir_raises(self):
-        with pytest.raises(ConfluenceClientError, match="destination_dir"):
-            resolve_attachment_destination("report.pdf", "")
-
-    def test_whitespace_only_destination_dir_raises(self):
-        with pytest.raises(ConfluenceClientError, match="destination_dir"):
-            resolve_attachment_destination("report.pdf", "   ")
-
-
-# ---------------------------------------------------------------------------- #
-# fetch_attachment_bytes / save_attachment_bytes / download_attachment
+# fetch_attachment_bytes
 # ---------------------------------------------------------------------------- #
 
 class TestFetchAttachmentBytes:
@@ -1266,79 +1235,6 @@ class TestFetchAttachmentBytes:
         client._session.get.return_value = MagicMock(content=b"x")
         client.fetch_attachment_bytes("1", "123456")
         assert client._session.get.call_args.args[0].endswith("/content/1/child/attachment/123456/download")
-
-
-class TestSaveAttachmentBytes:
-    def test_sanitizes_filename_before_writing(self, tmp_path):
-        client = make_client()
-
-        result = client.save_attachment_bytes(b"data", "../../evil.txt", str(tmp_path))
-
-        assert result == {"path": str(tmp_path / "evil.txt"), "name": "evil.txt", "size_bytes": 4}
-        assert (tmp_path / "evil.txt").read_bytes() == b"data"
-
-    def test_creates_destination_directory_if_missing(self, tmp_path):
-        nested = tmp_path / "nested" / "dir"
-        client = make_client()
-
-        client.save_attachment_bytes(b"data", "f.txt", str(nested))
-
-        assert (nested / "f.txt").read_bytes() == b"data"
-
-    def test_unwritable_destination_becomes_confluence_client_error(self, tmp_path, monkeypatch):
-        # A disk-level failure (permission denied, a read-only/synthetic
-        # mount point that rejects mkdir, etc.) must surface as
-        # ConfluenceClientError like every other failure in this method --
-        # not a bare OSError, which coding-and-testing-guidelines.md §1.4
-        # requires every *_client.py public method to never leak.
-        client = make_client()
-        monkeypatch.setattr(
-            confluence_client_module.os, "makedirs",
-            MagicMock(side_effect=OSError(45, "Operation not supported")),
-        )
-
-        with pytest.raises(ConfluenceClientError, match="could not write"):
-            client.save_attachment_bytes(b"data", "f.txt", str(tmp_path))
-
-
-class TestDownloadAttachment:
-    def test_downloads_and_saves_content(self, tmp_path):
-        client = make_client()
-        response = MagicMock(content=b"file contents")
-        client._session = MagicMock()
-        client._session.get.return_value = response
-
-        result = client.download_attachment("1", "att1", "report.pdf", str(tmp_path))
-
-        dest = tmp_path / "report.pdf"
-        assert dest.read_bytes() == b"file contents"
-        assert result == {"path": str(dest), "name": "report.pdf", "size_bytes": len(b"file contents")}
-        client._session.get.assert_called_once_with(
-            "https://api.atlassian.com/ex/confluence/cloud-1/wiki"
-            "/rest/api/content/1/child/attachment/att1/download"
-        )
-
-    def test_sanitizes_filename_before_writing(self, tmp_path):
-        client = make_client()
-        response = MagicMock(content=b"data")
-        client._session = MagicMock()
-        client._session.get.return_value = response
-
-        result = client.download_attachment("1", "att1", "../../evil.txt", str(tmp_path))
-
-        assert result == {"path": str(tmp_path / "evil.txt"), "name": "evil.txt", "size_bytes": 4}
-
-    def test_http_error_becomes_confluence_client_error(self, tmp_path):
-        client = make_client()
-        response = MagicMock()
-        response.raise_for_status.side_effect = RuntimeError("boom")
-        client._session = MagicMock()
-        client._session.get.return_value = response
-
-        # download_attachment delegates the actual fetch to
-        # fetch_attachment_bytes -- the error originates there.
-        with pytest.raises(ConfluenceClientError, match="fetch_attachment_bytes"):
-            client.download_attachment("1", "att1", "f.pdf", str(tmp_path))
 
 
 class TestLiveFixtureParsing:

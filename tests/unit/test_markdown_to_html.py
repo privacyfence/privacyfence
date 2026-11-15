@@ -39,6 +39,10 @@ class TestParagraphsAndLineBreaks:
         result = markdown_to_html("First paragraph.\n\nSecond paragraph.")
         assert result == "<p>First paragraph.</p><p>Second paragraph.</p>"
 
+    def test_leading_repeated_and_trailing_blank_lines_add_no_empty_paragraph(self):
+        result = markdown_to_html("\n\nFirst paragraph.\n\n\n\nSecond paragraph.\n\n")
+        assert result == "<p>First paragraph.</p><p>Second paragraph.</p>"
+
     def test_single_newline_within_a_block_becomes_br(self):
         result = markdown_to_html("Line one\nLine two")
         assert result == "<p>Line one<br>Line two</p>"
@@ -100,6 +104,10 @@ class TestTables:
         md = "| Name |\n| --- |\n| **Alice** |"
         result = markdown_to_html(md)
         assert "<td><strong>Alice</strong></td>" in result
+
+    def test_a_body_row_without_outer_pipes_still_splits_into_cells(self):
+        result = markdown_to_html("| a | b |\n| --- | --- |\n1 | 2\n| 3 | 4")
+        assert "<tr><td>1</td><td>2</td></tr><tr><td>3</td><td>4</td></tr>" in result
 
     def test_two_line_block_without_separator_row_is_not_a_table(self):
         # Two pipe-shaped lines with no "---" separator row don't qualify --

@@ -412,8 +412,8 @@ PostFunction = Callable[..., Any]
 
 class PushNotifier:
     """Sends one minimal push to each of a principal's subscriptions when an approval is created
-    for them. Registered with ``PendingApprovalRegistry.add_created_listener`` by org mode's boot
-    path (daemon_main.py), never by local mode's.
+    for them. Registered with ``PendingApprovalRegistry.add_created_listener`` by the server's boot
+    path (daemon_main.py).
 
     ``on_new_approval`` runs on the thread that registered the approval (a gated tool call), so it
     only applies the rate limit and hands delivery to a single background worker. ``deliver`` does

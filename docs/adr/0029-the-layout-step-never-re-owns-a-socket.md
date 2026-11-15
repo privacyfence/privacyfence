@@ -4,6 +4,8 @@
 
 Accepted — 2026-09-23. Amends [ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md).
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 `apply_layout()` in `scripts/macos_privilege_separation.sh` and `scripts/linux_privilege_separation.sh`

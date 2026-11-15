@@ -4,7 +4,7 @@
 can state a rule's *width* instead of leaving the user to infer it from an operation key. The
 assertions here are mostly about that width: `covered_tools` on a one-verb rule and on the full
 sandbox-folder rule set are the two numbers that matter most, and the popup's confirmation dialog
-(`confirmation_text`) and the Auto-accept Settings page (`settings_controller.py`) both take them
+(`confirmation_text`) and the Auto-accept Settings page (`web/routes_settings.py`) both take them
 from this one function, so the two surfaces state the same width for the same rule.
 """
 from __future__ import annotations

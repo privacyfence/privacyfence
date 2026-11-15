@@ -1,32 +1,21 @@
-"""Passkey enrollment, for org mode and local mode alike:
+"""Passkey enrollment:
 ``GET /security`` lets a signed-in principal see and manage their own
 enrolled WebAuthn credentials, and the ``/api/security/webauthn/*`` routes
 drive the two ceremonies webauthn_stepup.py implements. web/routes_
 approvals.py's decide endpoint is the other, later consumer of an enrolled
-credential (the actual step-up check on a write approval), in both modes --
+credential (the actual step-up check on a write approval), --
 this module only ever registers or removes a credential.
 
 Same posture as web/routes_connect.py (not a port of routes_settings.py's
 whole surface, a session-cookie CSRF model) -- see that module's own
-docstring for the reasoning, which applies here unchanged. Mode-agnostic:
-``build_routes`` takes a principal/session resolver
-rather than an ``OrgSessionStore`` directly, so org mode passes ``org_
-session``'s functions and local mode passes web/session_auth.py's -- the
-two modules already have matching shapes (``authenticated``/``check_csrf``/
-``check_origin``) for exactly this reason (session_auth.py's own module
-docstring: "mirroring web/org_session.py's own real-session model").
+docstring for the reasoning, which applies here unchanged. ``build_routes``
+takes a principal/session resolver rather than an ``OrgSessionStore``
+directly.
 
-``nav_items`` (optional, default ``None``) is one of the two places this
-module's two callers genuinely differ (``confirm_first_enrollment``, below, is
-the other): org mode's (web/server.py's
-``_build_org_app``) passes ``web_shell.ORG_NAV_ITEMS`` so this page carries
-the same persistent header/nav as ``/approvals``/``/connect``/``/settings``,
-replacing the plain ``back_link`` footer paragraph those three pages also
-used to be the only way back from. Local mode passes nothing -- it has no
-web_shell-wrapped page of its own to be consistent with (settings_window_
-html.py's Connectors tab is that mode's own equivalent, see ``back_link``
-below), so ``/security`` stays the small, unwrapped document it always was
-there, with its footer ``back_link`` intact.
+``nav_items`` (optional, default ``None``) is the organization shell's
+persistent header/nav (web/server.py's ``_build_org_app`` passes
+``web_shell.ORG_NAV_ITEMS``). Without it the page stays a small, unwrapped
+document with a footer ``back_link``.
 
 ``PF_WEBAUTHN_JS`` (the base64url <-> ArrayBuffer conversions and the two
 ``navigator.credentials`` wrapper calls) is defined here and imported by
@@ -69,18 +58,11 @@ two ways the credential store's own state allows:
   one of them, over a challenge bound to ``enroll-credential|<principal>``
   (``_enroll_fingerprint`` below), through the same 428-then-retry protocol
   ``delete_credential`` and web/routes_approvals.py's ``decide`` already
-  share. Identical in both modes: an org-mode IdP session gets no more
-  latitude here than a local ``pf_session``.
+  share. An IdP session gets no more
+  latitude here than any other session.
 - **Nothing is enrolled yet** -- there is nothing to assert with, so the
-  gate is ``confirm_first_enrollment`` (``build_routes``' own parameter):
-  local mode passes web/server.py's companion confirmation, which asks
-  whoever is at the login session (web/control_channel.py's
-  ``CONFIRM ENROLL``). That is not authentication of the companion and
-  cannot be -- companion and agent share a uid -- so be careful what it is
-  claimed to buy; docs/security-and-compliance.md states the limit exactly.
-  Org mode passes nothing, and its first enrollment rests on the IdP session
-  that reached ``/security``, stated as such in that same document rather
-  than papered over.
+  first enrollment rests on the IdP session that reached ``/security``,
+  stated as such in docs/security-and-compliance.md rather than papered over.
 
 ``register_verify`` does not re-run either gate (that would mean a second
 prompt for one enrollment); it requires that the registration challenge it
@@ -94,25 +76,18 @@ enrollment nobody asked for distinguishable from one a human made -- the
 **Tamper-evidence and recovery**: every enroll and remove
 here writes an audit entry (see ``_audit`` below), and ``register_verify``
 issues a one-time recovery code whenever this principal doesn't currently
-have an unused one on file. Who shows it is ``deliver_recovery_code``'s
-answer (see ``build_routes``' own docstring and ADR 0003's *Out of scope*
-amendment): the browser,
-once, in that same response -- or, on a packaged local-mode install, the
-companion app on the human's own desktop, with nothing about it in the
-response at all. ``recover_credential`` is the code's only consumer:
+have an unused one on file; it is returned once, in that same response.
+``recover_credential`` is the code's only consumer:
 trading it in removes every credential this principal has enrolled, for
 the case webauthn_stepup.py's own module docstring describes (the only
-authenticator lost to a new machine or a wiped TPM, with no IdP in local
-mode to fall back on). See that module's own docstring for the storage
+authenticator lost to a new machine or a wiped TPM). See that module's own docstring for the storage
 side of both. Because that trade-in wipes the credential store, the route
-asks the same human-session question approving a decision does (where the
-caller supplies one), spends a per-session and global attempt budget
+spends a per-session and global attempt budget
 (``RecoveryAttemptLimiter``), and audits every refusal as well as every
 success -- see ``recover_credential``'s own docstring.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -136,7 +111,6 @@ from ..step_up_config import StepUpConfig, effective_scope
 from ..webauthn_stepup import RegistrationChallengeStore, StepUpChallengeStore, WebAuthnError
 from . import routes_org_identity
 from .csp import nonce_for as _csp_nonce_for
-from .session_auth import human_session_required_json
 
 logger = logging.getLogger(__name__)
 
@@ -340,93 +314,23 @@ def build_routes(
     step_up: StepUpConfig,
     issuer_url: str,
     back_link: tuple[str, str] = ("/connect", "Back to connections"),
-    dev_unseparated_notice: str | None = None,
     nav_items: tuple[tuple[str, str, str], ...] | None = None,
-    confirm_first_enrollment: Callable[[], tuple[bool, str]] | None = None,
-    deliver_recovery_code: Callable[[str], tuple[bool, str]] | None = None,
-    is_human_session: Callable[[Request], bool] | None = None,
     recovery_limiter: RecoveryAttemptLimiter | None = None,
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
-    mode-specific half of this module -- org mode's caller
-    (web/server.py's ``_build_org_app``) passes ``org_session``'s three
-    functions bound to its own ``OrgSessionStore``; local mode's caller
-    passes web/session_auth.py's, bound to its own ``LocalSessionStore``.
-    ``unauthenticated_response`` covers the one place the two modes
-    genuinely differ in *behavior*, not just which store backs the check:
-    org mode redirects an unauthenticated page view to ``/login``, which
-    local mode has no equivalent of -- it shows session_auth.py's own
-    ``unauthorized_html`` recovery page instead. ``session_cookie_name`` is
-    only for embedding the right cookie's value as this page's own CSRF
-    token (the double-submit scheme's session-id-doubles-as-token design,
-    see either session module's own ``check_csrf`` docstring) -- reading it
-    directly here rather than through another callable, since it's a bare
-    string either way. ``back_link`` is an ``(href, label)`` pair for the
-    page's own footer link, rendered only when ``nav_items`` is ``None``
-    (see module docstring) -- it defaults to org mode's ``/connect`` (routes_
-    connect.py);
-    local mode's caller overrides it to ``/settings/connectors``, since it
-    has no ``/connect`` route to link to (settings_window_html.py's
-    Connectors tab is that mode's own equivalent). ``nav_items`` is ``None``
-    unless the caller wants ``/security`` wrapped in web_shell.wrap()'s
-    persistent header/nav instead (module docstring) -- when given, it takes
-    over entirely from ``back_link``, which is then never rendered.
-    ``confirm_first_enrollment`` (see the module docstring's own enrollment-gate
-    section) is the
-    gate on an enrollment that has no already-enrolled credential to assert
-    against, and is the second place the two modes genuinely differ. Local
-    mode passes web/server.py's ``confirm_first_passkey_enrollment``, which
-    asks the companion; it returns ``(confirmed, reason)``, where ``reason``
-    is shown to whoever is trying to enroll so a refusal is actionable
-    rather than mysterious. Org mode passes ``None``, which means a first
-    enrollment proceeds on the strength of the IdP session alone -- that
-    mode has no companion, and an IdP session is at least an external
-    authentication, which a local-mode bootstrap cookie is not. Called off
-    the event loop (``asyncio.to_thread``), since what it does is put a
-    dialog in front of a human and wait.
-
-    ``deliver_recovery_code`` is the third and last place
-    the two modes differ, and it is packaging-dependent rather than
-    mode-dependent. ``None`` -- org mode, and any local-mode install that is
-    not a packaged build -- keeps what this always did: the one-time
-    recovery code goes back in ``register_verify``'s own JSON body and
-    ``_PAGE_JS`` shows it. A packaged local-mode install passes web/
-    server.py's ``present_recovery_code``, which hands the code to the
-    companion to put on the human's own desktop instead, so a credential-
-    store reset token never travels in a response body a process holding a
-    ``pf_session`` can read (ADR 0003's amendment on the recovery trade). It
-    returns ``(delivered, reason)``, and a ``False`` is load-bearing: the
-    code is only *stored* once somebody has been shown it, so a failed
-    delivery leaves the principal with no code rather than one nobody has.
-    Called off the event loop (``asyncio.to_thread``) for the same reason
-    ``confirm_first_enrollment`` is -- what it does is put a dialog in
-    front of a human.
-
-    ``is_human_session`` gates ``recover_credential`` only: when given, a
-    request it answers ``False`` for is refused (403, web/session_auth.py's
-    ``human_session_required_json`` body) and audited, the same check web/
-    routes_approvals.py's decide and web/routes_settings.py's sensitive
-    actions make before they act -- trading in a recovery code wipes every
-    enrolled passkey, which is at least as sensitive as either. Local mode
-    passes session_auth.py's ``is_human_session`` on a privilege-separated
-    install, the same ``require_human_session`` line web/server.py draws for
-    those two routes, and ``None`` elsewhere (an unseparated install has no
-    companion that could mint a human session at all). Org mode passes
-    ``None``: every org session was established by an IdP sign-in (web/
-    routes_org_identity.py's ``/login`` is ``OrgSessionStore.create``'s only
-    caller), which is that mode's equivalent of attestation -- the same
-    reason web/routes_approvals.py keeps ``require_human_session``
-    local-only. ``recovery_limiter`` is the attempt budget for that same
-    route (``RecoveryAttemptLimiter``, above); ``None`` builds a fresh one
-    with the module's default window and limits.
-
-    ``dev_unseparated_notice`` (ADR 0003 decision 7) is local mode's own
-    ``privilege_separation.dev_unseparated_notice()`` result, shown verbatim
-    at the top of the page when not ``None``; org mode's caller leaves it
-    unset since that function is never non-``None`` there (org mode is never
-    a packaged build). The two are independent: local mode passes the notice
-    and no ``nav_items``, org mode the reverse, and the renderer places the
-    notice inside whichever of the two page shells it ends up using.
+    session half of this module -- web/server.py's ``_build_org_app`` passes
+    ``org_session``'s three functions bound to its own ``OrgSessionStore``.
+    ``unauthenticated_response`` redirects an unauthenticated page view to
+    ``/login``. ``session_cookie_name`` is only for embedding the right
+    cookie's value as this page's own CSRF token (the double-submit scheme's
+    session-id-doubles-as-token design, see ``org_session.check_csrf``).
+    ``back_link`` is an ``(href, label)`` pair for the page's own footer link,
+    rendered only when ``nav_items`` is ``None`` (see module docstring).
+    ``nav_items`` is ``None`` unless the caller wants ``/security`` wrapped in
+    web_shell.wrap()'s persistent header/nav instead -- when given, it takes
+    over entirely from ``back_link``. ``recovery_limiter`` is the attempt
+    budget for ``recover_credential`` (``RecoveryAttemptLimiter``, above);
+    ``None`` builds a fresh one with the module's default window and limits.
     """
     challenges = RegistrationChallengeStore()
     delete_challenges = StepUpChallengeStore()
@@ -496,7 +400,6 @@ def build_routes(
         html = _render_security_page(
             principal=principal, creds=creds, csrf=session_id, step_up=step_up,
             nonce=_csp_nonce_for(request), back_link=back_link, nav_items=nav_items,
-            dev_unseparated_notice=dev_unseparated_notice,
             # Where a first sign-in was headed before it stopped here to enroll a passkey (an
             # AI client's authorization, say). The page reloads itself after an enrollment, so
             # the link shows up once a passkey exists.
@@ -517,22 +420,9 @@ def build_routes(
         """
         existing = webauthn_stepup.list_credentials(principal)
         if not existing:
-            # Nothing to assert with. Whether that is gated at all is the
-            # caller's own decision -- see build_routes' docstring on
-            # confirm_first_enrollment, and docs/security-and-compliance.md
-            # on what org mode's own answer to this rests on instead.
-            if confirm_first_enrollment is None:
-                return None
-            confirmed, reason = await asyncio.to_thread(confirm_first_enrollment)
-            if confirmed:
-                return None
-            _audit(
-                principal, "webauthn_enrollment_refused",
-                f"First passkey enrollment was not confirmed: {reason}",
-            )
-            return JSONResponse(
-                {"error": "first_enrollment_not_confirmed", "detail": reason}, status_code=403,
-            )
+            # Nothing to assert with: a first enrollment rests on the IdP session alone
+            # (docs/security-and-compliance.md).
+            return None
         assertion = payload.get("webauthn_assertion") if isinstance(payload, dict) else None
         fingerprint = _enroll_fingerprint(principal.id)
         if not isinstance(assertion, dict):
@@ -646,26 +536,11 @@ def build_routes(
         response: dict[str, Any] = {"status": "ok", "credential_id": saved.credential_id, "label": saved.label}
         # Issue a recovery code the moment there stops being an unused one
         # on file -- covers both the first-ever enrollment and a store that
-        # has credentials but no code. It is shown exactly once either way;
-        # what differs (see
-        # build_routes' docstring on deliver_recovery_code) is who shows it.
+        # has credentials but no code. It is shown exactly once, in this response.
         if not webauthn_stepup.has_recovery_code(principal):
             code = webauthn_stepup.mint_recovery_code()
-            if deliver_recovery_code is None:
-                webauthn_stepup.store_recovery_code(principal, code)
-                response["recovery_code"] = code
-            else:
-                delivered, reason = await asyncio.to_thread(deliver_recovery_code, code)
-                if delivered:
-                    # Stored only now. A code that reached nobody is not
-                    # this principal's recovery code -- see
-                    # webauthn_stepup.mint_recovery_code()'s own docstring.
-                    webauthn_stepup.store_recovery_code(principal, code)
-                    response["recovery_shown_by_companion"] = True
-                else:
-                    response["recovery_shown_by_companion"] = False
-                    response["recovery_detail"] = reason
-                    logger.warning("No recovery code was issued at enrollment: %s", reason)
+            webauthn_stepup.store_recovery_code(principal, code)
+            response["recovery_code"] = code
         return JSONResponse(response)
 
     async def delete_credential(request: Request) -> Response:
@@ -732,12 +607,10 @@ def build_routes(
         every attempt that gets as far as presenting a code is recorded,
         refused or not.
 
-        Three guards run before the code is checked: the
-        session must be one ``is_human_session`` attributes to a person
-        where the caller supplies that check (``build_routes``' docstring);
-        the attempt must fit ``recovery_attempts``' budget, per session and
+        Two guards run before the code is checked: the
+        attempt must fit ``recovery_attempts``' budget, per session and
         across all sessions; and a missing code is a 400 that spends
-        nothing. Each refusal after CSRF/origin -- an unattested session, an
+        nothing. Each refusal after CSRF/origin -- an
         exhausted budget, a wrong or spent code -- is audited as
         ``webauthn_recovery_refused`` with the reason in its summary, never
         the code itself; a successful trade-in stays
@@ -754,13 +627,6 @@ def build_routes(
         rejected = _check_post(request, payload.get("csrf") if isinstance(payload, dict) else None)
         if rejected is not None:
             return rejected
-        if is_human_session is not None and not is_human_session(request):
-            _audit(
-                principal, "webauthn_recovery_refused",
-                "Recovery code refused: the session was not opened by a person (unattested)",
-            )
-            body, status = human_session_required_json("use a recovery code")
-            return JSONResponse(body, status_code=status)
         code = payload.get("code") if isinstance(payload, dict) else None
         if not isinstance(code, str) or not code.strip():
             return JSONResponse({"error": "missing recovery code"}, status_code=400)
@@ -801,16 +667,16 @@ def build_routes(
 
 
 # --------------------------------------------------------------------- #
-# Page rendering -- org mode's caller (nav_items given) wraps this in
+# Page rendering -- with nav_items given this is wrapped in
 # web_shell.wrap()'s persistent header/nav, same as routes_connect.py's own
-# _render_connect_page; local mode's (nav_items=None) stays the small,
-# self-contained document it always was -- see module docstring's own
+# _render_connect_page; without them (nav_items=None) it stays a small,
+# self-contained document -- see module docstring's own
 # ``nav_items`` paragraph and build_routes' docstring on ``back_link``.
 # --------------------------------------------------------------------- #
 
 # On the shared design system (resources/design/, ADR 0078): each passkey is a `card` with a
 # `badge`, the controls are `.button`s, and colours are tokens, so app.css's dark mode needs no rule
-# here. Inside the shell the page is a readable column; local mode's bare document puts it in
+# here. Inside the shell the page is a readable column; the bare document puts it in
 # web_shell.plain_page's panel instead, which already is one.
 _STYLE = """
 .pf-shell-main #pf-security-page{width:min(680px,100% - 2 * var(--gutter));margin-inline:auto;
@@ -821,16 +687,12 @@ _STYLE = """
 #pf-security-page .lead{color:var(--ink-soft)}
 #pf-security-page .meta{color:var(--muted);font-size:var(--step-small)}
 #pf-security-page .button{min-height:var(--tap)}
-ul.creds,ul.mints{list-style:none;--stack-gap:var(--space-xs)}
+ul.creds{list-style:none;--stack-gap:var(--space-xs)}
 ul.creds{padding:0}
-ul.mints{padding:var(--space-s)}
 li.cred{--cluster-gap:var(--space-xs) var(--space-s);justify-content:space-between}
 li.cred .name{font-weight:650;margin-right:var(--space-2xs)}
 li.cred .badge{vertical-align:middle}
 .empty{color:var(--muted)}
-li.mint{font-size:var(--step-small);overflow-wrap:anywhere}
-li.mint + li.mint{border-top:1px solid var(--line);padding-top:var(--space-xs)}
-li.mint .when{color:var(--muted);font-size:12.5px;display:block}
 """
 
 _PAGE_JS = """
@@ -849,9 +711,7 @@ document.addEventListener('DOMContentLoaded', function () {
   // assertion options -- prove possession of one you already have, then ask
   // again with the assertion attached, exactly the shape pfDeleteCredential
   // below already uses for removing your last one. With nothing enrolled the
-  // gate is the companion's own dialog (local mode), which needs no round
-  // trip here: the same call either returns options or a 403 whose `detail`
-  // says what to do about it.
+  // same call simply returns options.
   function pfRegisterOptions(assertion) {
     var body = {csrf: csrf};
     if (assertion) { body.webauthn_assertion = assertion; }
@@ -898,17 +758,6 @@ document.addEventListener('DOMContentLoaded', function () {
           'Save this recovery code somewhere safe -- it will not be shown again.\\n\\n' +
           data.recovery_code +
           '\\n\\nIf you ever lose every passkey enrolled here, this code is the only way back in.'
-        );
-      }
-      // Plan item 1.3: on a packaged install the code is never in this
-      // response at all -- the companion put it on the desktop. Only the
-      // failure is worth a word here, since the success already happened
-      // somewhere the human was looking.
-      if (data.recovery_shown_by_companion === false) {
-        window.alert(
-          'Your passkey was added, but no recovery code could be issued:\\n\\n' +
-          (data.recovery_detail || 'the companion app did not show it') +
-          '\\n\\nAsk for one from the PrivacyFence companion once that is sorted out.'
         );
       }
       window.location.reload();
@@ -1017,71 +866,10 @@ _SCOPE_NOTES = {
 }
 
 
-# How many of them the page shows. Long enough to cover "did anything mint a
-# session while I was away from this machine this morning", short enough that
-# the list stays something a human reads rather than scrolls -- the full trail
-# is the audit log's own export, which this is a glance at, not a browser for
-# (audit_log.recent_entries' own docstring draws the same line).
-_RECENT_MINTS_SHOWN = 5
-
-# How far back through recent_entries() to look for them. A busy install can
-# put a lot of ordinary approvals between two mints, and a mint that scrolled
-# off the end would be exactly the one worth seeing.
-_RECENT_MINTS_SCANNED = 200
-
-
-def _recent_mints() -> list[tuple[str, str]]:
-    """``(when, what)`` for the most recent sign-in code mints and refusals,
-    newest first -- this is what makes an unexpected mint *visible* rather
-    than merely inferable.
-
-    Every path to a session is audited (web/control_channel.py's
-    ``_audit_mint``), but an audit entry nobody reads is evidence after the
-    fact and not much else; this puts them on the one page a human already
-    visits to reason about what can approve on this install.
-
-    Returns an empty list rather than raising for any reason at all --
-    including org mode, where nothing ever mints one of these and the
-    section simply does not render. A page that fails to load because its
-    least important section could not be built would be a poor trade.
-    """
-    try:
-        from .control_channel import SIGN_IN_MINT_DECISION
-
-        entries = get_audit_logger().recent_entries(_RECENT_MINTS_SCANNED)
-    except Exception as exc:  # noqa: BLE001 -- see this function's own docstring
-        logger.warning("Could not read recent sign-in mints for /security: %s", exc)
-        return []
-    rows: list[tuple[str, str]] = []
-    for entry in entries:
-        if entry.decision != SIGN_IN_MINT_DECISION:
-            continue
-        rows.append((entry.timestamp.replace("T", " ")[:19] + " UTC", entry.summary))
-        if len(rows) == _RECENT_MINTS_SHOWN:
-            break
-    return rows
-
-
-def _recent_mints_html(rows: list[tuple[str, str]]) -> str:
-    if not rows:
-        return ""
-    items = "".join(
-        f'<li class="mint">{_esc(what)}<span class="when">{_esc(when)}</span></li>'
-        for when, what in rows
-    )
-    return (
-        "<h2>Recent sign-ins</h2>"
-        '<p class="meta">Every sign-in link this install has issued, and every one it refused. '
-        "A link that can approve is only ever issued through PrivacyFence's companion app -- if "
-        "you see one here you did not ask for, treat this install as compromised.</p>"
-        f'<ul class="mints card stack">{items}</ul>'
-    )
-
-
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
     back_link: tuple[str, str], nav_items: tuple[tuple[str, str, str], ...] | None = None,
-    dev_unseparated_notice: str | None = None, continue_path: str = "",
+    continue_path: str = "",
 ) -> str:
     who = principal.email or principal.display_name or principal.id
     who_esc = _esc(who)
@@ -1091,14 +879,6 @@ def _render_security_page(
         else '<div class="empty card">No passkeys added yet.</div>'
     )
     scope_note = _SCOPE_NOTES.get(effective_scope(step_up, principal), _SCOPE_NOTES["writes"])
-    # ADR 0003 decision 7: shown at the top of the page body, so it lands
-    # inside whichever shell is used below -- web_shell.wrap()'s nav in org
-    # mode, the bare document in local mode, which is the only one that ever
-    # passes a non-None notice.
-    dev_notice_html = (
-        f'<p class="card card-danger" role="alert">{_esc(dev_unseparated_notice)}</p>'
-        if dev_unseparated_notice else ""
-    )
     # Only rendered when there's no persistent nav to get back with (module
     # docstring's own ``nav_items`` paragraph) -- with one, this link would
     # just duplicate the nav's own "Connections"/"Settings" items.
@@ -1113,7 +893,6 @@ def _render_security_page(
     content = (
         f'<div id="pf-security-page" class="stack" data-csrf="{_esc(csrf)}">'
         "<h1>Passkeys</h1>"
-        f"{dev_notice_html}"
         f'<p class="lead">Signed in as {who_esc}. A passkey (Face ID, Touch ID, fingerprint, or Windows Hello) proves it\'s '
         f"really you before a write approval is released, even if someone else has your unlocked phone. {_esc(scope_note)}</p>"
         f"{creds_html}"
@@ -1124,7 +903,6 @@ def _render_security_page(
         '<div class="cluster"><button type="button" class="button secondary" id="pf-use-recovery-code">'
         "Use your recovery code</button>"
         '<span id="pf-recovery-status" class="meta" role="status"></span></div>'
-        f"{_recent_mints_html(_recent_mints())}"
         f"{back_link_html}"
         f'<script nonce="{nonce}">{_PAGE_JS}</script>'
         "</div>"

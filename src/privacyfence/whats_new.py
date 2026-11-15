@@ -5,7 +5,7 @@ installed wheel, ADR 0237; the repository's ``CHANGELOG.md`` in a source checkou
 person, the last version they were shown the release notes for. It has no web imports: the strip,
 the page and the routes live in ``web_shell`` and ``web/routes_whats_new``.
 
-Version ordering follows ``update_checker.parse_version`` -- a stable release outranks every
+Version ordering follows ``parse_version`` -- a stable release outranks every
 pre-release of the same ``major.minor.patch``, and a section whose heading does not parse is
 dropped. A pre-release has no section of its own (its entries sit in ``[Unreleased]`` of the tree
 it was tagged from), so for a pre-release the ``[Unreleased]`` section is shown first. A stable
@@ -29,11 +29,60 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import paths, secure_files
+from . import __version__, paths, secure_files
 from .principal import Principal
-from .update_checker import STABLE_RANK, is_newer, parse_version
 
 logger = logging.getLogger(__name__)
+
+# Pre-release stage -> sort rank. A missing suffix (stable) is STABLE_RANK, the highest rank -- a
+# stable tag always outranks every pre-release of the same major.minor.patch. Unlike the old
+# dashed/spelled-out scheme, an unrecognized suffix here isn't silently treated as stable: it means
+# the whole string fails to match _VERSION_RE (see below), so parse_version() returns None and the
+# caller ignores it -- these tags are only ever produced by setuptools_scm or a human directly
+# writing one, both of which stick to this exact scheme, so "recognized" and "well-formed" coincide.
+_STAGE_RANK: dict[str, int] = {"a": 1, "b": 2, "rc": 3}
+STABLE_RANK = 4
+
+# Matches an exact release tag ("4.0.0", "4.0.0a12", "4.1.0rc1") and a between-tags dev build
+# ("4.0.1.dev3+gabc1234", optionally with a ".dYYYYMMDD" dirty-worktree suffix setuptools_scm adds
+# after the +local part) -- see the module docstring. The trailing "(?:\+.*)?" swallows that whole
+# +local segment; it plays no part in ranking.
+_VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?(?:\.dev(\d+))?(?:\+.*)?$")
+
+
+def parse_version(raw: str) -> tuple[int, int, int, int, int, float] | None:
+    """Parse a `major.minor.patch[<stage><n>][.dev<n>][+local]` version/tag string, tolerating a
+    leading 'v'. Returns (major, minor, patch, stage_rank, stage_num, dev_num) -- directly
+    tuple-comparable for correct precedence, e.g. 2.2.0b1 < 2.2.0rc1 < 2.2.0, and
+    2.2.0rc2.dev1 (a dev build guessing at the *next* rc) sorts between 2.2.0rc1 and 2.2.0rc2.
+    dev_num is +inf for anything that isn't itself a dev build, so a finished release always outranks
+    its own dev builds. Returns None (never raises) if the string doesn't match at all."""
+    m = _VERSION_RE.match(raw.strip())
+    if not m:
+        return None
+    major, minor, patch = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    stage_name = m.group(4)
+    stage_num = int(m.group(5)) if m.group(5) else 0
+    stage_rank = _STAGE_RANK[stage_name] if stage_name else STABLE_RANK
+    dev_num = int(m.group(6)) if m.group(6) else math.inf
+    return (major, minor, patch, stage_rank, stage_num, dev_num)
+
+
+def is_newer(remote_version: str, local_version: str | None = None) -> bool:
+    """True iff remote_version's parsed tuple is strictly greater than local_version's (module's
+    own __version__ by default -- looked up at call time, not baked into the signature at import
+    time, so it stays correct as new tags get pushed and is monkeypatch-friendly in tests). A local
+    dev build (`__version__` between release tags, e.g. `4.0.1.dev3+gabc1234` -- see the module
+    docstring) ranks below the release it's guessing at, so a not-yet-tagged dev build never
+    false-positives against its own upcoming release but does correctly report "newer" once any
+    tagged release ships."""
+    if local_version is None:
+        local_version = __version__
+    remote = parse_version(remote_version)
+    local = parse_version(local_version)
+    if remote is None or local is None:
+        return False
+    return remote > local
 
 STATE_FILENAME = "whats_new.json"  # in paths.user_dir(principal); {"last_seen_version": "6.9.1"}
 UNRELEASED = "Unreleased"

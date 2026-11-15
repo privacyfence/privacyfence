@@ -32,25 +32,22 @@ python3 -m venv ~/.venvs/privacyfence-sync
 ~/.venvs/privacyfence-sync/bin/pip install privacyfence-sync
 ```
 
-It needs no PrivacyFence install of its own, so it works against an organization server from a
-computer that has none.
+It needs no PrivacyFence install of its own, so it works against a server from a computer that has
+none.
 
 ## Connect
 
-**Local mode.** Get your AI client token with `privacyfence-app --print-mcp-token` (or **Copy AI
-Client Token** in the companion app) and put it in the environment variable `PRIVACYFENCE_TOKEN` of
-the process that runs `privacyfence-sync`. A token is never accepted as a command-line argument;
-`--token-env NAME` names another variable. The server defaults to `http://127.0.0.1:8765/mcp`
-(`--server`, the recipe's `server`, or `PRIVACYFENCE_MCP_URL`).
-
-**Organization mode.** Sign in once with `privacyfence-sync login --server https://<host>/mcp`.
-Runs use the stored sign-in as long as `PRIVACYFENCE_TOKEN` is not set. A sign-in lasts 30 days;
-after that a run exits with code 4 and you sign in again.
+Sign in once with `privacyfence-sync login --server https://<host>/mcp` (for a single-user Docker
+install, the address you use for `/mcp`). Runs use the stored sign-in as long as `PRIVACYFENCE_TOKEN`
+is not set. A sign-in lasts 30 days; after that a run exits with code 4 and you sign in again. A
+scoped token goes in the environment variable `PRIVACYFENCE_TOKEN` of the process that runs
+`privacyfence-sync`; a token is never accepted as a command-line argument, and `--token-env NAME`
+names another variable. The server defaults to `http://127.0.0.1:8765/mcp` (`--server`, the recipe's
+`server`, or `PRIVACYFENCE_MCP_URL`).
 
 **Unattended sessions must be allowed.** A run signed in with the stored `login`, or with your
 own AI client token (`PRIVACYFENCE_TOKEN`), needs the **Unattended sessions** switch under
-**Admin → Features** turned on (an administrator on an organization server, the install owner on a
-desktop install; see [Connecting a service](connecting-a-service.md#the-admin-page)). Without it the
+**Admin → Features** turned on (an administrator; see [Connecting a service](connecting-a-service.md#the-admin-page)). Without it the
 run stops before its first step. A run with a scoped token does not need the switch: it needs scoped
 tokens turned on under **Admin → Scoped tokens** instead (see
 [ADR 0164](adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)).

@@ -10,9 +10,7 @@ needs registering. Because Miro sends no PKCE, a sign-in code for the built-in a
 Do not mark the built-in PrivacyFence app as trusted or pre-approved: that trust would extend to
 every PrivacyFence server and to anyone using the public app. To trust an app, register your own.
 
-Your own app is a signed connector config uploaded on **Admin → Services** on an organization
-server, and a `miro` section in the bundle on a desktop install (desktop installs have no built-in
-app; see [moving to organization mode](moving-to-organization-mode.md)).
+Your own app is a signed connector config uploaded on **Admin → Services**.
 
 With your own app, the assistant can list your boards and tags straight away, read the items and
 connector lines of a board after you review them, and add or change sticky notes, cards, texts,
@@ -31,9 +29,8 @@ on the app itself.
    them at sign-in.
 3. Under **Permissions**, allow `boards:read` and `boards:write` and nothing else. A sign-in whose
    token lacks either one is refused.
-4. Under **Redirect URI for OAuth2.0**, add `http://localhost:53686/callback` for desktop installs
-   and, for an organization server, `https://<server>/oauth/callback/miro`, with `<server>` your
-   server's public address (`PRIVACYFENCE_ISSUER_URL`). One app can carry both.
+4. Under **Redirect URI for OAuth2.0**, add `https://<server>/oauth/callback/miro`, with `<server>` your
+   server's public address (`PRIVACYFENCE_ISSUER_URL`).
 5. Copy the **Client ID** and the **Client secret**.
 6. Under **Share app**, copy the **Installation URL** for people outside the Developer team. It is
    optional: signing in from PrivacyFence also works without it.
@@ -43,17 +40,16 @@ cannot reach the boards of another team.
 
 ## Values
 
-| Item | Value | `build_org_bundle.py` option (desktop) |
-|---|---|---|
-| Client id | From the registered app | `--miro-client-id` |
-| Client secret | From the registered app | `--miro-client-secret` |
+| Item | Value |
+|---|---|
+| Client id | From the registered app |
+| Client secret | From the registered app |
 
-Give the two together: with only one, `build_org_bundle.py` stops with `--miro-client-id and
---miro-client-secret must be given together.`
+Give the two together; a connector config always carries both.
 
 ## Give PrivacyFence the app
 
-On an organization server, sign the client ID and secret as a connector config and upload it on
+Sign the client ID and secret as a connector config and upload it on
 **Admin → Services** (the Miro row, **Upload a connector config…**):
 
 ```bash
@@ -68,26 +64,11 @@ fingerprint). **Remove our own app** goes back to the built-in app. Either chang
 connected Miro sign in again. See [org-mode-setup-guide.md](org-mode-setup-guide.md) for the signing
 tools and the serial rule.
 
-On a desktop install, put them in the bundle:
-
-```bash
-python3 scripts/build_org_bundle.py \
-  --miro-client-id 3458764500000000000 \
-  --miro-client-secret abcdef0123456789 \
-  -o org_bundle.json --merge
-```
-
-`--merge` adds Miro to an existing bundle. Install it on **Admin → Organization configuration**.
-Without an app, Miro is not listed on a desktop install
-([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)); see
-[connecting-a-service.md](connecting-a-service.md) for the shared connect flow.
+See [connecting-a-service.md](connecting-a-service.md) for the shared connect flow.
 
 ## Connect
 
-- **Desktop:** open **Settings → Connectors → Miro → Authenticate…**. Your browser opens Miro's
-  page on port 53686 of your own computer.
-- **Organization server:** open the connections page and choose **Connect** on the Miro row.
-- **From a terminal:** `privacyfence-app --miro-oauth` signs in the same way.
+Open the Connect page (**/connect**) and choose **Connect** on the Miro row.
 
 Miro's page asks which team to install the app in. A connection covers that one team: connecting
 again with another team replaces the first. The sign-in is kept in a file only your account can
@@ -149,19 +130,17 @@ The three tools that list boards, get a board and list tags run without a card a
 
 ## Troubleshooting
 
-**`Miro is not authenticated. Use Authenticate… in PrivacyFence Settings.`** — nothing is signed in
-yet. Use **Authenticate…** on the Miro row.
+**`Miro is not authenticated. Connect Miro on the Connect page (/connect).`** — nothing is signed in
+yet. Use **Connect** on the Miro row.
 
-**`Miro's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect
-again.`** — the saved sign-in file is damaged. Connect again.
+**`Miro's saved sign-in could not be read. Connect Miro on the Connect page (/connect).`** — the saved sign-in file is damaged. Connect again.
 
-**`Your Miro sign-in has expired or was revoked. Use Authenticate… in PrivacyFence Settings to sign
-in again.`** — Miro refused the renewal, for instance because the app was uninstalled or the
+**`Your Miro sign-in has expired or was revoked. Connect Miro on the Connect page (/connect).`** — Miro refused the renewal, for instance because the app was uninstalled or the
 sign-in was not used for 60 days. Connect again.
 
 **`Miro returned a token that never expires. Create the PrivacyFence app in Miro with "Expire user
 authorization token" turned on; see the Miro setup guide.`** — the app was created without that
-choice, and it cannot be changed afterwards. Register a new app as above, sign a new connector config (or build a new bundle) and
+choice, and it cannot be changed afterwards. Register a new app as above, sign a new connector config and
 connect again.
 
 **`The Miro app is missing the permission(s) boards:read, boards:write. Turn on boards:read and
@@ -169,9 +148,8 @@ boards:write in the app's settings in Miro, then sign in again.`** — set the p
 app in Miro, then connect again.
 
 **`Miro organization config not installed`** or **`Miro organization config is incomplete:
-client_id and client_secret go together.`** — the installed bundle has no Miro app, or only half
-of it. Build the bundle with both options and install it again. (On an organization server a
-connector config always carries both.)
+client_id and client_secret go together.`** — the installed connector config has no Miro app, or only half
+of it. Sign a connector config with both values and upload it again.
 
 **`Miro sign-in failed: …`** and **`Miro returned an incomplete sign-in answer (no …).`** — Miro
 refused the sign-in or answered without a part PrivacyFence needs. The text after the colon is

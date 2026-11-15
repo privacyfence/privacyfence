@@ -9,8 +9,8 @@ DriveClient itself and never touch this file.
 from __future__ import annotations
 
 import base64
+import inspect
 import json
-import os
 import ssl
 import threading
 from datetime import datetime, timezone
@@ -46,7 +46,6 @@ from privacyfence.drive_client import (
     _parse_inline_runs,
     _rgb_dict_to_hex,
     _table_cell_start_indices,
-    resolve_download_destination,
     resolve_download_name,
 )
 from googleapiclient.errors import HttpError
@@ -574,24 +573,14 @@ class TestGetFileContent:
 
 
 # ---------------------------------------------------------------------------- #
-# upload_file: validation + local_path vs content_base64 branches
+# upload_file: inline base64 content
 # ---------------------------------------------------------------------------- #
 
 class TestUploadFile:
-    def test_neither_local_path_nor_content_base64_raises(self):
+    def test_missing_content_raises(self):
         client = make_client(MagicMock())
-        with pytest.raises(DriveClientError, match="exactly one"):
-            client.upload_file()
-
-    def test_both_local_path_and_content_base64_raises(self, tmp_path):
-        client = make_client(MagicMock())
-        with pytest.raises(DriveClientError, match="exactly one"):
-            client.upload_file(local_path=str(tmp_path), content_base64="abc")
-
-    def test_local_path_that_does_not_exist_raises(self):
-        client = make_client(MagicMock())
-        with pytest.raises(DriveClientError, match="no such file"):
-            client.upload_file(local_path="/no/such/file.txt")
+        with pytest.raises(DriveClientError, match="content_base64 is required"):
+            client.upload_file(name="f.txt")
 
     def test_content_base64_without_name_raises(self):
         client = make_client(MagicMock())
@@ -603,26 +592,8 @@ class TestUploadFile:
         with pytest.raises(DriveClientError, match="invalid content_base64"):
             client.upload_file(name="f.txt", content_base64="not valid base64!!!")
 
-    def test_uploads_from_local_path(self, tmp_path, monkeypatch):
-        file_path = tmp_path / "report.pdf"
-        file_path.write_bytes(b"%PDF-1.4 fake pdf")
-        fake_media = MagicMock()
-        monkeypatch.setattr("googleapiclient.http.MediaFileUpload", lambda *a, **kw: fake_media)
-
-        service = MagicMock()
-        service.files.return_value.create.return_value.execute.return_value = {
-            "id": "f1", "name": "report.pdf", "mimeType": "application/pdf",
-        }
-        client = make_client(service)
-
-        result = client.upload_file(local_path=str(file_path))
-
-        assert result["id"] == "f1"
-        assert result["name"] == "report.pdf"
-        assert result["size_bytes"] == len(b"%PDF-1.4 fake pdf")
-        create_kwargs = service.files.return_value.create.call_args.kwargs
-        assert create_kwargs["media_body"] is fake_media
-        assert create_kwargs["body"] == {"name": "report.pdf"}
+    def test_removed_local_path_argument_is_not_accepted(self):
+        assert "local_path" not in inspect.signature(DriveClient.upload_file).parameters
 
     def test_uploads_from_content_base64(self, monkeypatch):
         fake_media = MagicMock()
@@ -639,39 +610,36 @@ class TestUploadFile:
 
         assert result["id"] == "f2"
         assert result["size_bytes"] == len(b"hello")
+        assert service.files.return_value.create.call_args.kwargs["media_body"] is fake_media
 
-    def test_parent_folder_included_when_given(self, tmp_path, monkeypatch):
-        file_path = tmp_path / "f.txt"
-        file_path.write_bytes(b"data")
-        monkeypatch.setattr("googleapiclient.http.MediaFileUpload", lambda *a, **kw: MagicMock())
+    def test_parent_folder_included_when_given(self, monkeypatch):
+        monkeypatch.setattr("googleapiclient.http.MediaIoBaseUpload", lambda *a, **kw: MagicMock())
 
         service = MagicMock()
         service.files.return_value.create.return_value.execute.return_value = {"id": "f1", "name": "f.txt"}
         client = make_client(service)
 
-        client.upload_file(local_path=str(file_path), parent_folder_id="folder-1")
+        client.upload_file(
+            name="f.txt", content_base64=base64.b64encode(b"data").decode(), parent_folder_id="folder-1",
+        )
 
         create_kwargs = service.files.return_value.create.call_args.kwargs
         assert create_kwargs["body"]["parents"] == ["folder-1"]
 
-    def test_http_error_becomes_drive_client_error(self, tmp_path, monkeypatch):
-        file_path = tmp_path / "f.txt"
-        file_path.write_bytes(b"data")
-        monkeypatch.setattr("googleapiclient.http.MediaFileUpload", lambda *a, **kw: MagicMock())
+    def test_http_error_becomes_drive_client_error(self, monkeypatch):
+        monkeypatch.setattr("googleapiclient.http.MediaIoBaseUpload", lambda *a, **kw: MagicMock())
 
         service = MagicMock()
         service.files.return_value.create.return_value.execute.side_effect = http_error(400)
         client = make_client(service)
 
         with pytest.raises(DriveClientError, match="upload_file"):
-            client.upload_file(local_path=str(file_path))
+            client.upload_file(name="f.txt", content_base64=base64.b64encode(b"data").decode())
 
 
 class TestUploadFileBytes:
-    """ADR 0007: the local file bridge's own upload entry point -- the same
-    MediaIoBaseUpload path upload_file()'s content_base64 branch already
-    uses, but from bytes the daemon already holds rather than a base64
-    string it decodes itself."""
+    """The upload-slot entry point: the same MediaIoBaseUpload path upload_file() uses, from
+    bytes the daemon already holds rather than a base64 string it decodes itself."""
 
     def test_uploads_the_given_bytes(self, monkeypatch):
         fake_media = MagicMock()
@@ -2385,8 +2353,7 @@ class TestWriteDocRichContent:
 
 
 # ---------------------------------------------------------------------------- #
-# resolve_download_name / resolve_download_destination: path-traversal
-# sanitization + export-extension resolution
+# resolve_download_name: export-extension resolution
 # ---------------------------------------------------------------------------- #
 
 def make_file(**overrides) -> DriveFile:
@@ -2415,32 +2382,8 @@ class TestResolveDownloadName:
         assert resolve_download_name(make_file(name="", mime_type="application/pdf")) == "f1"
 
 
-class TestResolveDownloadDestination:
-    def test_joins_basename_with_destination_dir(self, tmp_path):
-        result = resolve_download_destination(make_file(name="report.pdf"), str(tmp_path))
-        assert result == str(tmp_path / "report.pdf")
-
-    def test_strips_directory_traversal_from_file_name(self, tmp_path):
-        # A Drive file can be renamed to anything, including path separators --
-        # this must never be able to write outside destination_dir.
-        result = resolve_download_destination(make_file(name="../../.ssh/authorized_keys"), str(tmp_path))
-        assert result == str(tmp_path / "authorized_keys")
-
-    def test_strips_absolute_path_prefix_from_file_name(self, tmp_path):
-        result = resolve_download_destination(make_file(name="/etc/passwd"), str(tmp_path))
-        assert result == str(tmp_path / "passwd")
-
-    def test_empty_destination_dir_raises(self):
-        with pytest.raises(DriveClientError, match="destination_dir"):
-            resolve_download_destination(make_file(name="report.pdf"), "")
-
-    def test_whitespace_only_destination_dir_raises(self):
-        with pytest.raises(DriveClientError, match="destination_dir"):
-            resolve_download_destination(make_file(name="report.pdf"), "   ")
-
-
 # ---------------------------------------------------------------------------- #
-# download_file: URL selection (export vs raw media) + streaming
+# download_file_bytes: URL selection (export vs raw media) + streaming
 # ---------------------------------------------------------------------------- #
 
 class _FakeStreamResponse:
@@ -2457,124 +2400,8 @@ class _FakeStreamResponse:
         return False
 
 
-class TestDownloadFile:
-    def test_empty_file_id_raises(self):
-        client = make_client(MagicMock())
-        with pytest.raises(DriveClientError, match="non-empty file_id"):
-            client.download_file("")
-
-    def test_downloads_binary_file_via_raw_media_url(self, tmp_path, monkeypatch):
-        service = MagicMock()
-        service.files.return_value.get.return_value.execute.return_value = {
-            "id": "f1", "name": "image.png", "mimeType": "image/png",
-        }
-        client = make_client(service)
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
-
-        captured_urls = []
-        fake_session = MagicMock()
-        fake_session.get.side_effect = lambda url, stream: (captured_urls.append(url), _FakeStreamResponse([b"data"]))[1]
-        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
-
-        result = client.download_file("f1", destination_dir=str(tmp_path))
-
-        assert result["name"] == "image.png"
-        assert result["size_bytes"] == 4
-        assert os.path.exists(os.path.join(str(tmp_path), "image.png"))
-        assert "alt=media" in captured_urls[0]
-
-    def test_google_doc_downloads_via_export_url_and_gets_txt_extension(self, tmp_path, monkeypatch):
-        service = MagicMock()
-        service.files.return_value.get.return_value.execute.return_value = {
-            "id": "f1", "name": "MyDoc", "mimeType": "application/vnd.google-apps.document",
-        }
-        client = make_client(service)
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
-
-        captured_urls = []
-        fake_session = MagicMock()
-        fake_session.get.side_effect = lambda url, stream: (captured_urls.append(url), _FakeStreamResponse([b"exported"]))[1]
-        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
-
-        result = client.download_file("f1", destination_dir=str(tmp_path))
-
-        assert result["name"] == "MyDoc.txt"
-        assert "export" in captured_urls[0]
-        assert os.path.exists(os.path.join(str(tmp_path), "MyDoc.txt"))
-
-    def test_raises_when_destination_dir_omitted(self, monkeypatch):
-        service = MagicMock()
-        service.files.return_value.get.return_value.execute.return_value = {
-            "id": "f1", "name": "f.bin", "mimeType": "application/octet-stream",
-        }
-        client = make_client(service)
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
-
-        with pytest.raises(DriveClientError, match="destination_dir"):
-            client.download_file("f1")
-
-    def test_streaming_failure_becomes_drive_client_error(self, tmp_path, monkeypatch):
-        service = MagicMock()
-        service.files.return_value.get.return_value.execute.return_value = {
-            "id": "f1", "name": "f.bin", "mimeType": "application/octet-stream",
-        }
-        client = make_client(service)
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
-
-        fake_session = MagicMock()
-        fake_session.get.side_effect = RuntimeError("connection reset")
-        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
-
-        with pytest.raises(DriveClientError, match="download_file"):
-            client.download_file("f1", destination_dir=str(tmp_path))
-
-    def test_sanitizes_file_name_before_writing(self, tmp_path, monkeypatch):
-        service = MagicMock()
-        service.files.return_value.get.return_value.execute.return_value = {
-            "id": "f1", "name": "../../evil.bin", "mimeType": "application/octet-stream",
-        }
-        client = make_client(service)
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
-
-        fake_session = MagicMock()
-        fake_session.get.return_value = _FakeStreamResponse([b"data"])
-        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
-
-        result = client.download_file("f1", destination_dir=str(tmp_path))
-
-        assert result["path"] == str(tmp_path / "evil.bin")
-        assert result["name"] == "evil.bin"
-        assert os.path.exists(tmp_path / "evil.bin")
-
-    def test_unwritable_destination_becomes_drive_client_error(self, tmp_path, monkeypatch):
-        # A disk-level failure writing to destination_dir (permission denied,
-        # a read-only/synthetic mount point that rejects mkdir, etc.) must
-        # surface as DriveClientError like every other failure in this
-        # method -- not a bare OSError, which
-        # coding-and-testing-guidelines.md §1.4 requires every *_client.py
-        # public method to never leak.
-        service = MagicMock()
-        service.files.return_value.get.return_value.execute.return_value = {
-            "id": "f1", "name": "f.bin", "mimeType": "application/octet-stream",
-        }
-        client = make_client(service)
-        monkeypatch.setattr(client, "_load_credentials", MagicMock)
-
-        fake_session = MagicMock()
-        fake_session.get.return_value = _FakeStreamResponse([b"data"])
-        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
-        monkeypatch.setattr(
-            drive_client_module.os, "makedirs",
-            MagicMock(side_effect=OSError(45, "Operation not supported")),
-        )
-
-        with pytest.raises(DriveClientError, match="could not write"):
-            client.download_file("f1", destination_dir=str(tmp_path))
-
-
 class TestDownloadFileBytes:
-    """org-mode inline/staged delivery's own entry point -- same fetch as
-    download_file, but returns bytes instead of writing to disk."""
+    """The inline/staged delivery entry point: the complete file's bytes, nothing written to disk."""
 
     def test_empty_file_id_raises(self):
         client = make_client(MagicMock())
@@ -2633,6 +2460,19 @@ class TestDownloadFileBytes:
 
         with pytest.raises(DriveClientError, match="download_file"):
             client.download_file_bytes("f1")
+
+    def test_file_name_is_reduced_to_its_basename(self, monkeypatch):
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.return_value = {
+            "id": "f1", "name": "../../evil.bin", "mimeType": "application/octet-stream",
+        }
+        client = make_client(service)
+        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
+        fake_session = MagicMock()
+        fake_session.get.return_value = _FakeStreamResponse([b"data"])
+        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
+
+        assert client.download_file_bytes("f1")["name"] == "evil.bin"
 
     def test_does_not_write_anything_to_disk(self, tmp_path, monkeypatch):
         service = MagicMock()

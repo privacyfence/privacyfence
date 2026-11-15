@@ -178,7 +178,7 @@ class TestRequestErrors:
         with pytest.raises(MiroClientError) as exc:
             client.get_board(BOARD)
         assert str(exc.value) == (
-            "Miro refused the sign-in (HTTP 401). Use Authenticate… in PrivacyFence Settings to sign in again."
+            "Miro refused the sign-in (HTTP 401). Connect Miro on the Connect page (/connect) to sign in again."
         )
         assert len(net.calls) == 2
         assert provider.forced == 1

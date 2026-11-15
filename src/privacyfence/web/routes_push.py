@@ -1,4 +1,4 @@
-"""Org mode's installable app and web push routes (ADR 0081). Local mode mounts none of them.
+"""The organization server's installable app and web push routes (ADR 0081).
 
 - ``GET /manifest.webmanifest`` and ``GET /icons/icon-{192,512}.png``: the Web App Manifest and
   its icons, which make the org app installable to a phone's Home Screen. iOS delivers web push

@@ -373,10 +373,9 @@ class TestIsStepUpRequired:
 
 
 class TestRecoveryCodeMintAndStore:
-    """Plan item 1.3 split ``generate_recovery_code`` in two so local mode
-    can mint a code, get it in front of a human, and only *then* make it the
-    one live code on file. What is tested is that the split is real: minting
-    alone changes nothing on disk."""
+    """``generate_recovery_code`` is two halves: a code is minted, and only
+    *then* made the one live code on file. What is tested is that the split
+    is real: minting alone changes nothing on disk."""
 
     def test_minting_stores_nothing(self):
         code = wa.mint_recovery_code()
@@ -391,7 +390,7 @@ class TestRecoveryCodeMintAndStore:
         assert wa.consume_recovery_code(ALICE, code) is True
 
     def test_storing_a_second_one_invalidates_the_first(self):
-        # What the companion's "New Recovery Code" action does, and what its
+        # What the "New Recovery Code" action does, and what its
         # confirmation dialog warns about in as many words.
         first = wa.mint_recovery_code()
         wa.store_recovery_code(ALICE, first)
@@ -404,8 +403,7 @@ class TestRecoveryCodeMintAndStore:
         assert len({wa.mint_recovery_code() for _ in range(50)}) == 50
 
     def test_generate_is_still_the_two_halves_in_one_call(self):
-        # Org mode still uses it: there is no companion there, and the
-        # browser that reached /security is IdP-authenticated.
+        # The browser that reached /security is IdP-authenticated.
         code = wa.generate_recovery_code(ALICE)
         assert wa.has_recovery_code(ALICE) is True
         assert wa.consume_recovery_code(ALICE, code) is True

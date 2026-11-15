@@ -4,9 +4,8 @@ Telegram's api_id/api_hash identify the PrivacyFence *application* to
 Telegram's API (MTProto has no concept of "organization" the way OAuth
 does) — they are the same for every user and every phone number, and are
 not a substitute for per-user auth (still phone + code + optional 2FA, see
-menu_bar.py). Because this repo is public, the real values are never
-committed: every release build -- DMG, Windows installer, ``.deb`` and the
-PyPI sdist/wheel -- bakes them in from CI secrets (see
+telegram_auth.py). Because this repo is public, the real values are never
+committed: the organization image's wheel bakes them in from CI secrets (see
 scripts/telegram_credentials.py and ADR 0040) into the git-ignored
 ``_telegram_credentials`` module generated right before packaging. Local/dev
 builds fall back to the
@@ -14,8 +13,8 @@ PRIVACYFENCE_TELEGRAM_API_ID / PRIVACYFENCE_TELEGRAM_API_HASH env vars.
 
 The built-in OAuth apps (Google, Slack, Salesforce, Atlassian, Miro and the Google sign-in client)
 work the same way: scripts/builtin_apps.py writes the git-ignored ``_builtin_apps`` module from the
-PF_APP_* CI secrets into the org image's wheel and the PyPI build, and ``builtin_app`` reads it
-(ADR 0255). Desktop installers ship none. Local/dev builds point PRIVACYFENCE_BUILTIN_APPS at a
+PF_APP_* CI secrets into the org image's wheel, and ``builtin_app`` reads it
+(ADR 0255). Local/dev builds point PRIVACYFENCE_BUILTIN_APPS at a
 JSON file of the same shape.
 """
 from __future__ import annotations

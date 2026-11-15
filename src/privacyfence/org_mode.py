@@ -1,15 +1,6 @@
-"""``mode: local`` vs. ``mode: org`` -- the one setting every other
-difference between the two operating modes follows from. Lives in
-``org_bundle.json`` (alongside the org server, TLS and IdP settings), not
-settings.yaml: it's
-an install-wide decision, not a per-user preference, and org_bundle.json is
-already the file daemon_main.py reads before it knows anything about a
-principal at all.
-
-Absent entirely, ``mode`` resolves to ``"local"`` -- an existing install's
-org_bundle.json (today only ever carrying Google/Slack/Salesforce/
-Atlassian app registrations, per daemon_main.py's own module docstring)
-keeps meaning exactly what it already means, with no migration.
+"""The ``mode`` setting of ``org_bundle.json`` and ``PRIVACYFENCE_MODE``: organization mode is the
+only mode (ADR 0303). Absent, ``mode`` means ``org``; ``org`` is accepted; ``local`` and any other
+value refuse the start (``validate_mode``).
 """
 from __future__ import annotations
 
@@ -31,9 +22,6 @@ from .peek_client import PeekClientError, normalize_base_url
 
 logger = logging.getLogger(__name__)
 
-Mode = Literal["local", "org"]
-
-DEFAULT_MODE: Mode = "local"
 DEFAULT_BIND_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
@@ -63,15 +51,6 @@ GOOGLE_ISSUER = "https://accounts.google.com"
 # setup code, which is only acceptable when nothing but this computer can reach it.
 SINGLE_USER_HOSTS = ("localhost", "127.0.0.1")
 
-# Shown in the daemon log, privacyfence_status, every desktop page and (once) the companion.
-LOCAL_MODE_DEPRECATION = (
-    "Desktop mode is deprecated and will be removed in PrivacyFence 8. PrivacyFence's built-in "
-    "sign-in for Google, Slack, Salesforce, Atlassian and Miro works only in organization mode "
-    "and the Docker image. Move to an organization server, or try the Docker image on this "
-    "computer: https://privacyfence.eu/docs/moving-to-organization-mode/"
-)
-
-
 class ConfigurationError(ValueError):
     """Raised for organization configuration that is present but broken --
     unreadable, malformed JSON, a non-object top level, an invalid
@@ -79,9 +58,8 @@ class ConfigurationError(ValueError):
     rather than genuinely absent. daemon_main.py's ``main()``
     never catches this specifically: it's a ``ValueError`` subclass, so it
     falls into the same "print and refuse to start" path every other
-    startup configuration error already takes, deliberately -- there is no
-    silent fallback to local mode for a *broken* config, only for a
-    missing one (see load_org_config's own docstring for why that
+    startup configuration error already takes, deliberately -- a *broken*
+    config is never treated like a missing one (see load_org_config's own docstring for why that
     distinction matters)."""
 
 
@@ -91,26 +69,29 @@ def _env(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
-def resolve_mode(org_config: dict[str, Any]) -> Mode:
-    """The bundle's ``mode``, else ``PRIVACYFENCE_MODE``, else ``"local"``.
+def refuse_local_mode(source_label: str, value: str) -> None:
+    """Refuse every ``mode`` value but ``org``: ``local`` with the move-to-organization text, any
+    other value with the plain "must be" text. Returns for ``org``."""
+    if value == "org":
+        return
+    if value == "local":
+        raise ConfigurationError(
+            f"{source_label} says \"local\": desktop mode is not part of PrivacyFence 8. Remove it "
+            "(organization mode is the only mode), or keep using PrivacyFence 7 for a desktop "
+            "install: https://privacyfence.eu/docs/moving-to-organization-mode/"
+        )
+    raise ConfigurationError(f"{source_label} must be \"org\".")
 
-    A bundle and the variable that disagree refuse the start rather than letting either win
-    silently: the person who set the variable would otherwise get the other mode without a word.
-    """
+
+def validate_mode(org_config: dict[str, Any]) -> None:
+    """Raise ``ConfigurationError`` when the bundle's ``mode`` or ``PRIVACYFENCE_MODE`` names
+    anything but ``org``."""
     env_mode = _env(MODE_ENV)
-    if env_mode and env_mode not in ("local", "org"):
-        raise ConfigurationError(f"{MODE_ENV} must be \"local\" or \"org\", got {env_mode}")
+    if env_mode:
+        refuse_local_mode(MODE_ENV, env_mode)
     if "mode" in org_config:
         mode = org_config["mode"]
-        if mode not in ("local", "org"):
-            raise ConfigurationError(f"org_bundle.json's \"mode\" must be \"local\" or \"org\", got {mode!r}")
-        if env_mode and env_mode != mode:
-            raise ConfigurationError(
-                f"org_bundle.json says \"mode\": \"{mode}\" but {MODE_ENV} says \"{env_mode}\"; "
-                "remove one of them"
-            )
-        return mode
-    return env_mode or DEFAULT_MODE  # type: ignore[return-value]  # validated against both literals above
+        refuse_local_mode("org_bundle.json's \"mode\"", mode if isinstance(mode, str) else repr(mode))
 
 
 def _own_idp_env_names_set() -> bool:
@@ -144,8 +125,8 @@ def builtin_signin_selected(org_config: dict[str, Any]) -> bool:
 
 
 def is_single_user(org_config: dict[str, Any]) -> bool:
-    """Organization mode with no identity provider: one administrator, on this computer only."""
-    return resolve_mode(org_config) == "org" and not _idp_present(org_config)
+    """No identity provider: one administrator, on this computer only."""
+    return not _idp_present(org_config)
 
 
 _env_ignored_warned = False
@@ -302,7 +283,7 @@ def is_loopback_issuer(issuer_url: str) -> bool:
 def reject_removed_tool_annotations(org_config: dict[str, Any]) -> None:
     """Refuses a bundle that still carries ``mcp.tool_annotations``.
 
-    Only a bundle built by 5.0.0a1's ``build_org_bundle.py --tool-annotations`` can carry it. The
+    Only a bundle written by 5.0.0a1 with its tool-annotations option can carry it. The
     key chose between truthful tool annotations and advertising every connector tool read-only;
     the second was removed and truthful annotations are the only behaviour (ADR 0089). A bundle
     naming the key -- whichever value -- is refused with ``ConfigurationError`` rather than read
@@ -322,12 +303,9 @@ class ServerConfig:
     """Org mode's listener and transport settings, made concrete per install
     (see docs/org-mode-setup-guide.md's "Reverse proxy and TLS"). Only org mode
     reads this class -- ``daemon_main.py`` calls ``from_org_config`` only
-    when ``resolve_mode`` says org, and local mode binds its own hardcoded
-    ``localhost``. The defaults (``bind_host="127.0.0.1"``, no TLS, no
-    trusted proxies) are the same loopback listener
-    ``scripts/build_org_bundle.py`` writes when ``--server-bind-host`` isn't
-    passed, so a bundle with no ``bind_host`` binds exactly what a bundle
-    built with no flags does: reachable only by a reverse proxy on the
+    for an organization server. The defaults (``bind_host="127.0.0.1"``, no TLS, no
+    trusted proxies) are a loopback listener,
+    so a bundle with no ``bind_host`` is reachable only by a reverse proxy on the
     same host, never directly from the network.
     """
 
@@ -471,9 +449,9 @@ DEFAULT_LINK_TTL_SECONDS = 300.0
 
 
 # What a staged download's tool result tells the AI client. Nothing is on
-# any disk the client or the human can see: destination_dir was ignored.
+# any disk the client or the human can see.
 LINK_RESULT_NOTE = (
-    "Nothing was saved to a file: on an organization-managed install destination_dir is ignored. "
+    "Nothing was saved to a file. "
     "The file is only at download_url, a one-time link that expires at expires_at. "
     "Fetch it yourself if you can reach this server; otherwise give the link to the user "
     "to open in their own browser. Don't refer to it as a local path."
@@ -489,14 +467,7 @@ class DownloadDeliveryConfig:
     staged behind a short-lived, single-claim link when it does not (ADR
     0092 for the limit's unit and default; see ADR 0017
     for the rationale and the inline/staging split). Lives in
-    ``org_bundle.json``'s ``download_delivery`` section, org-mode-only for
-    the same reason ``ServerConfig`` is -- local mode never reads this
-    class. That doesn't mean local mode still writes straight to
-    ``destination_dir`` unchanged: since ADR 0007, a privilege-separated
-    local-mode daemon can't write to the user's directories either, so it
-    hands the file to the ``.mcpb`` shim instead, or, with no shim in the
-    request path, returns a single-use capability link of its own (ADR
-    0028) -- a separate delivery path with its own config, not this one.
+    ``org_bundle.json``'s ``download_delivery`` section.
     """
 
     inline_max_bytes: int = DEFAULT_INLINE_MAX_BYTES
@@ -546,11 +517,9 @@ class DownloadDeliveryConfig:
         """The tool result for a download staged behind ``download_url``,
         shared by the three connectors that deliver files this way.
 
-        ``note`` says in plain words that nothing was saved to a path. The
-        tools' ``destination_dir`` is required (local mode needs it) and
-        ignored here, and a remote client that passed ``~/Downloads``
-        otherwise goes on to treat that path as the file's location
-        (Gemini Enterprise did, trying to upload the "saved" file)."""
+        ``note`` says in plain words that nothing was saved to a path, so a
+        remote client does not treat a path it made up as the file's
+        location (Gemini Enterprise once tried to upload the "saved" file)."""
         return {
             "delivery": "link",
             "name": name,
@@ -641,11 +610,8 @@ DEFAULT_SYSLOG_PORT = 6514
 @dataclass(frozen=True)
 class AuditForwardingConfig:
     """Org mode's centralized audit-log forwarding destination. Lives in
-    ``org_bundle.json``'s ``audit_forwarding`` section, org-mode-only like
-    ``ServerConfig``/``DownloadDeliveryConfig`` above -- local mode never
-    looks at this at all (there is no "centralize" to speak of for a single
-    employee's own machine); see daemon_main.py's ``run_app`` for the
-    ``resolve_mode(org_config) == "org"`` gate.
+    ``org_bundle.json``'s ``audit_forwarding`` section, like
+    ``ServerConfig``/``DownloadDeliveryConfig`` above.
 
     Forwarding is *additional* visibility, never a replacement for the
     local audit log ``audit_log.py``'s ``AuditLogger`` always writes --
@@ -775,12 +741,11 @@ class AuthzPolicyConfig:
 class WebPushConfig:
     """Whether org mode sends a web push notification when an approval is waiting (ADR 0081).
 
-    Lives in ``org_bundle.json``'s ``web_push`` section and is written by
-    ``scripts/build_org_bundle.py --no-web-push``. On by default: push is what lets a phone user
+    Lives in ``org_bundle.json``'s ``web_push`` section and is set by
+    its ``enabled`` flag. On by default: push is what lets a phone user
     learn about an approval at all, since mobile browsers suspend background tabs. Turning it off
     is the org-wide switch for an organization that does not want approval metadata, however
-    little, to pass through Apple's, Google's or Mozilla's push services. Local mode never reads
-    this class and never pushes.
+    little, to pass through Apple's, Google's or Mozilla's push services.
     """
 
     enabled: bool = True
@@ -806,13 +771,13 @@ _ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]{0,127}")
 class PeekProvisioningConfig:
     """Whether org mode creates a Peek account for each person at sign-in and connects it for them.
 
-    Lives in ``org_bundle.json``'s ``peek.auto_provision`` section and is written by
-    ``scripts/build_org_bundle.py --peek-auto-provision``. Off by default. The provisioning key
+    Lives in ``org_bundle.json``'s ``peek.auto_provision`` section and is set by
+    its ``enabled`` flag. Off by default. The provisioning key
     itself is never in the bundle: ``key_env`` names the environment variable the daemon reads it
     from, as ``AuditForwardingConfig.http_bearer_token_env`` does for the SIEM bearer token.
     ``trust_unverified_email`` provisions people whose ID token does not say ``email_verified``,
     for providers that only issue verified, organization-owned addresses. ``base_url`` is the
-    normalised ``peek.base_url`` and is set only when enabled. Local mode never provisions.
+    normalised ``peek.base_url`` and is set only when enabled.
     """
 
     enabled: bool = False
@@ -844,8 +809,6 @@ class PeekProvisioningConfig:
             return PeekProvisioningConfig(
                 key_env=key_env, trust_unverified_email=flags["trust_unverified_email"],
             )
-        if resolve_mode(org_config) != "org":
-            raise ConfigurationError("org_bundle.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\"")
         if not peek.get("base_url"):
             raise ConfigurationError("org_bundle.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\"")
         try:
@@ -863,11 +826,11 @@ class GristProvisioningConfig:
     """Whether org mode registers a Grist API key for each person at sign-in through the Grist
     provisioner, a small service next to Grist.
 
-    Lives in ``org_bundle.json``'s ``grist.auto_provision`` section and is written by
-    ``scripts/build_org_bundle.py --grist-auto-provision``. The provisioning key itself is never in
+    Lives in ``org_bundle.json``'s ``grist.auto_provision`` section and is set by
+    its ``enabled`` flag. The provisioning key itself is never in
     the bundle: the daemon reads it from the environment variable ``key_env`` names, as it does
     for ``http_bearer_token_env``. ``provisioner_url`` and ``server_url`` are normalised and set
-    only when enabled. Local mode never provisions.
+    only when enabled.
     """
 
     enabled: bool = False
@@ -897,8 +860,6 @@ class GristProvisioningConfig:
             )
         if not raw.get("enabled", False):
             return GristProvisioningConfig(enabled=False)
-        if resolve_mode(org_config) != "org":
-            raise ConfigurationError("org_bundle.json's \"grist\".\"auto_provision\" needs \"mode\": \"org\"")
         server_url = grist.get("server_url") or ""
         if not server_url:
             raise ConfigurationError(
@@ -947,7 +908,14 @@ CONNECTOR_ORG_SECTION: dict[str, str] = {
 
 
 def connector_enabled_by_org(org_config: dict[str, Any], connector: str) -> bool:
-    """True when ``org_config`` carries a non-empty section for ``connector``."""
+    """True when ``org_config`` carries a non-empty section for ``connector``.
+
+    An upstream MCP server (ADR 0285) is declared in its own operator file, not in the organization
+    config, so it is never enabled here and never an unknown name."""
+    from . import upstream_mcp_runtime  # function-local: the runtime imports connector code
+
+    if connector in upstream_mcp_runtime.upstream_ids():
+        return False
     return bool(org_config.get(CONNECTOR_ORG_SECTION[connector]))
 
 
@@ -960,13 +928,11 @@ __all__ = [
     "DEFAULT_AUDIT_FORWARDING_KIND",
     "DEFAULT_INLINE_MAX_BYTES",
     "DEFAULT_LINK_TTL_SECONDS",
-    "DEFAULT_MODE",
     "DEFAULT_GRIST_PROVISIONING_KEY_ENV",
     "DEFAULT_PEEK_PROVISIONING_KEY_ENV",
     "DEFAULT_SYSLOG_PORT",
     "DEFAULT_SYSLOG_PROTOCOL",
     "DownloadDeliveryConfig",
-    "Mode",
     "GristProvisioningConfig",
     "PeekProvisioningConfig",
     "connector_enabled_by_org",
@@ -976,5 +942,5 @@ __all__ = [
     "base64_length",
     "builtin_signin_selected",
     "inline_result_length",
-    "resolve_mode",
+    "validate_mode",
 ]

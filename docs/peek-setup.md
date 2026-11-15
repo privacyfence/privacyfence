@@ -17,17 +17,7 @@ people connect with Peek's own device sign-in, the flow `peek login` uses.
 
 ## Users connect
 
-**Local mode.** In **Settings > Connectors > Peek**, choose **Authenticate…**. Enter the address of
-your Peek server (or, when the install owner has set one on the Admin page, just confirm it), then choose
-**Continue**. A browser window opens on the machine running PrivacyFence; sign in to Peek there and
-approve the code PrivacyFence shows, then choose **Done** in PrivacyFence. The code is valid for 15
-minutes.
-
-Without the desktop window, `privacyfence-app --peek-login` does the same on the command line: it
-asks for the server address (unless one is set on the Admin page), prints the page to open and the code to
-approve, and saves the token when you approve.
-
-**Organization mode.** Open the connections page (`/connect`) and choose **Connect Peek**. Choose
+Open the connections page (`/connect`) and choose **Connect Peek**. Choose
 **Open Peek**, sign in and approve the code, then choose **Done**. **Reconnect Peek** does the same
 again. Peek appears there only when the Peek server's address is set: on the Admin page (Features) or by `PRIVACYFENCE_PEEK_BASE_URL` on the server.
 
@@ -50,9 +40,8 @@ can stay in separate network zones.
    address) and the key, as `PRIVACYFENCE_PEEK_PROVISIONING_KEY` or, better, as
    `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE` naming a file that holds it (a Docker secret). Setting
    both the plain variable and the file, or a file that cannot be read, refuses the start. The key
-   is never stored in the Admin configuration or a bundle. With systemd, add the variables to the
-   unit's `EnvironmentFile`; with Docker, to `privacyfence.env`
-   ([organization setup guide](org-mode-setup-guide.md), [Docker guide](org-mode-docker.md)).
+   is never stored in the Admin configuration or a bundle. Put the variables in `privacyfence.env`
+   ([Docker guide](org-mode-docker.md)).
 3. Open **Admin → Services**, find the Peek row and turn **Automatic accounts** on. The row says
    when the key is missing and names the variable the server reads. Or set
    `PRIVACYFENCE_PEEK_AUTO_PROVISION=true` in the server's environment, which does the same: it
@@ -130,21 +119,17 @@ a user name, password, query or fragment. A path prefix is kept.
 
 ## Where the server address is set
 
-The address is a setting of the install, not of the organization config bundle:
+The address is a setting of the install:
 
-- **Admin → Features** has a form for it, on a desktop install (for the owner) and on an organization
-  server (for administrators). Saving asks for a passkey.
+- **Admin → Features** has a form for it, for administrators. Saving asks for a passkey.
 - `PRIVACYFENCE_PEEK_BASE_URL` on the server sets it in the environment. The Admin page then shows
   the address and says it is set by that variable, and no form is offered.
 - An upgraded 6.11 server keeps the address its signed bundle had, locked in the same way.
 
 Where an address is set, people do not type it; a token saved for another server stops working and
-asks to connect again. Organization mode offers Peek only when an address is set. On a desktop
-install without one, Peek is not listed at all
-([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)). The
-bundle's old `--peek-base-url`, `--enable-peek`, `--peek-auto-provision` and related flags are
-refused by `build_org_bundle.py`, which names where each went
-([ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md)). Peek needs no
+asks to connect again. Peek is offered only when an address is set, and is not listed at all without one
+([ADR 0196](adr/0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md),
+[ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md)). Peek needs no
 other entry: there is no callback URL and no client secret.
 
 ## What the assistant can do
@@ -206,17 +191,15 @@ See the [tools reference](tools-reference.md#peek) for every parameter and retur
 
 ## Troubleshooting
 
-**`Peek is not authenticated. Use Authenticate… in PrivacyFence Settings.`** — no sign-in is saved
+**`Peek is not authenticated. Connect Peek on the Connect page (/connect).`** — no sign-in is saved
 yet. Connect as described above.
 
-**`Peek's saved sign-in could not be read. Use Authenticate… in PrivacyFence Settings to connect
-again.`** — the saved credential file is damaged. Connect again.
+**`Peek's saved sign-in could not be read. Connect Peek on the Connect page (/connect).`** — the saved credential file is damaged. Connect again.
 
-**`Peek refused the saved sign-in (HTTP 401). Use Authenticate… in PrivacyFence Settings to connect
-again.`** — the token was revoked or expired. Connect again.
+**`Peek refused the saved sign-in (HTTP 401). Connect Peek on the Connect page (/connect).`** — the token was revoked or expired. Connect again.
 
-**`Peek was connected to a different server than your organization uses. Use Authenticate… in
-PrivacyFence Settings to connect again.`** — the saved token belongs to a server other than the
+**`Peek was connected to a different server than your organization uses. Connect Peek on the Connect
+page (/connect).`** — the saved token belongs to a server other than the
 one set for the install. Connect again.
 
 **`Peek organization config not installed`** — organization mode with no Peek server address. Ask your
@@ -249,8 +232,7 @@ Peek server address.`** — the address points at something that is not a Peek s
 
 **`Peek has not recorded your approval yet. Approve the code in Peek, then choose Done again.`** —
 approve the code in the browser first. **`The sign-in was denied in Peek.`** and **`The sign-in code
-expired. Start again.`** (the command line says `Run --peek-login again.`) — start the sign-in
-again.
+expired. Start again.`** — start the sign-in again.
 
 **`Peek refused the request (HTTP 403): …`** — the account does not own the page (only its owner or
 an admin changes it, or reads its comments).
@@ -318,9 +300,6 @@ key (with a custom key variable, the message names it and its `_FILE` form). Set
 
 **`On a single-user install, PRIVACYFENCE_PEEK_AUTO_PROVISION=true needs a localhost address in
 PRIVACYFENCE_PEEK_BASE_URL.`** — a single-user install connects only a Peek on the same computer.
-
-**`PRIVACYFENCE_PEEK_AUTO_PROVISION is ignored outside organization mode.`** — a log warning: the
-server is in local mode, where the variable does nothing.
 
 **`Peek is set by PRIVACYFENCE_PEEK_AUTO_PROVISION on the server.`** — an Admin change tried to
 offer or withdraw Peek while the variable is set. Remove the variable first.

@@ -13,8 +13,7 @@ uses, so gate.py's own call sites into
 and every read/write method below takes an optional ``principal_id`` to
 filter or authorize against. ``None`` (the default everywhere) means "no
 filter" -- gate.py's own internal calls keep seeing every approval
-regardless of principal, which is also exactly correct for local mode's
-single implicit principal. web/routes_approvals.py's org-mode routes are the
+regardless of principal. web/routes_approvals.py's routes are the
 one real caller that ever passes a real ``principal_id``, and they do so on
 every method they call: every approval, card, preview or decision read is
 authorized against ``current_principal()``.
@@ -115,9 +114,7 @@ DEFAULT_MAX_PENDING = 50
 # can exhaust DEFAULT_MAX_PENDING alone, checked first in
 # register_or_coalesce() so a principal hits their own limit before ever
 # threatening the shared one. DEFAULT_MAX_PENDING stays in force
-# unchanged as the secondary, whole-registry backstop it always was --
-# local mode's single implicit principal ("local") is bounded by both caps
-# at once, which is harmless since it's the only principal there is.
+# unchanged as the secondary, whole-registry backstop it always was.
 DEFAULT_MAX_PENDING_PER_PRINCIPAL = 20
 
 # Adaptive hold, on by default. A sequential agent that issues
@@ -741,9 +738,8 @@ class PendingApprovalRegistry:
         decided_via: str = "", batch_id: str = "",
     ) -> list[dict[str, str]]:
         """The approval binder's own batch decide endpoint,
-        shared between web/routes_approvals.py's local-mode and org-mode
-        routes so neither reimplements this classify-then-
-        answer sequence. ``items`` is ``(approval_id, result)`` pairs, each
+        used by the approval routes so none reimplements this
+        classify-then-answer sequence. ``items`` is ``(approval_id, result)`` pairs, each
         ``result`` already validated by the caller to be one of
         BATCH_RESULTS.
 
@@ -941,8 +937,7 @@ class PendingApprovalRegistry:
         indistinguishable from a nonexistent one -- the authorization check
         web/routes_approvals.py's card/preview routes and
         web/mcp_dispatch.py's ``privacyfence_await_approval`` rely on.
-        ``None`` (local mode, and gate.py's own internal use) means
-        "no filter"."""
+        ``None`` (gate.py's own internal use) means "no filter"."""
         with self._lock:
             approval = self._pending.get(approval_id)
         if approval is None:
@@ -956,8 +951,7 @@ class PendingApprovalRegistry:
         newest first. Used by web/routes_approvals.py's/web/routes_org_
         approvals.py's list view. ``principal_id`` restricts the
         result to that principal's own approvals only -- ``None``
-        (local mode's own call) returns every approval regardless of
-        principal, correct for local mode's single implicit principal."""
+        returns every approval regardless of principal."""
         with self._lock:
             items = [
                 a for a in self._pending.values()

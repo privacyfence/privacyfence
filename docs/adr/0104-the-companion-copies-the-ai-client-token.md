@@ -7,6 +7,8 @@ except its ChatGPT desktop steps, which follow with ChatGPT's own setup doc.
 Amends [ADR 0008](0008-one-principal-per-os-user.md) D3, which names only the `.mcpb` shim and
 `privacyfence-app --print-mcp-token` as ways to get the MCP token.
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 An AI client that connects to `/mcp` directly in local mode (Claude Code, and any other client that

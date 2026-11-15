@@ -4,10 +4,7 @@ The bridge's ``privacyfence_propose_policy_change`` and the Auto-accept Settings
 definition rather than each deriving their own, because tables that must agree by hand are how the
 old rule model drifted.
 
-``settings_controller.py`` re-exports every name here under its old, private spelling
-(``_PolicyExtraScope``, ``_POLICY_EXTRA_SCOPES``, ``_policy_scope_catalogue``, ...) so its own
-callers and tests are unaffected; this module is the one definition both it and ``gate.py``'s
-bridge writer call.
+This module is the one definition both the Settings page and ``gate.py``'s bridge writer call.
 
 ``EXTRA_SCOPES`` covers the operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
 does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's

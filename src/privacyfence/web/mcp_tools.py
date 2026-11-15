@@ -15,14 +15,13 @@ descriptions, same input shapes) since routes_mcp.py replaces the bridge as
 the thing serving them, not what they are. One exception has no bridge-era
 counterpart: ``PRIVACYFENCE_STATUS_TOOL``, the meta-tool that
 tells a client an install is not set up yet. There is deliberately no
-meta-tool that mints a sign-in link for the agent (ADR 0013): ADR 0003 makes
-the companion mandatory on all three platforms, and a session is not
-something to hand the party it governs (web/session_auth.py's
-``PROVENANCE_*``). What stands in for one is the companion itself, and ``privacyfence-app
---print-sign-in-link`` for a human whose companion menu is out of reach.
+meta-tool that mints a sign-in link for the agent (ADR 0013): a session is
+not something to hand the party it governs. The person signs in to the
+server themselves, and connects services on its Connect page.
 """
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -75,7 +74,10 @@ def tool_input_schema(spec: ToolSpec) -> dict[str, Any]:
     tools.ts's ``buildInputShape``. An optional param with a non-null
     default carries it forward as the schema's own ``default`` (informational
     for the client; PrivacyFence still applies the connector's own default
-    when the arg is actually omitted)."""
+    when the arg is actually omitted). A spec carrying a raw ``input_schema``
+    (an upstream MCP tool) returns a copy of it verbatim instead."""
+    if spec.input_schema is not None:
+        return copy.deepcopy(spec.input_schema)
     properties: dict[str, Any] = {}
     required: list[str] = []
     for p in spec.params:
@@ -259,13 +261,11 @@ PRIVACYFENCE_STATUS_TOOL = types.Tool(
         "PrivacyFence-governed action in a conversation, or when asked why a connector (gmail_*, "
         "...) is missing. An empty or partial tool list means connectors aren't authenticated yet, "
         "NOT that PrivacyFence is irrelevant -- this tool exists even when every other is missing. "
-        "Returns {mode ('local'/'org'), setup_complete (any connector authenticated), connectors "
+        "Returns {mode, setup_complete (any connector authenticated), connectors "
         "[{name, enabled, authenticated, blocked_by: null, 'no_org_config', 'not_authenticated' or "
-        "a reason}], next_step, message, sign_in_url (always null), deprecation (local mode: a "
-        "notice to relay once)}. If setup isn't complete, relay message "
-        "as-is. next_step 'open_privacyfence_companion' (local): the human opens PrivacyFence's "
-        "companion app (menu-bar, tray or applications menu) and chooses Open Settings; "
-        "you have no link. 'contact_your_administrator' (org): sign-in is via the org's IdP. Only "
+        "a reason}], next_step, message, sign_in_url (always null)}. If setup isn't complete, relay "
+        "message as-is. next_step 'contact_your_administrator': sign-in is via the PrivacyFence "
+        "server's Connect page or the org's IdP; you have no link. Only "
         "side effect: an audit entry. reason: one sentence on why you're checking now (logged)."
     ),
     input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
@@ -289,14 +289,14 @@ END_UNATTENDED_SESSION_TOOL = types.Tool(
 CREATE_UPLOAD_SLOT_TOOL = types.Tool(
     name="privacyfence_create_upload_slot",
     description=(
-        "Get a one-time URL to upload a local file to PrivacyFence, for a client without the "
-        "PrivacyFence extension (e.g. Claude Code) -- use it when a tool's local_path/attachments "
-        "parameter says PrivacyFence can't read your files directly. Returns {upload_id, upload_url, "
-        "method: 'PUT', max_bytes, expires_at, example}: PUT the raw bytes to upload_url (e.g. the "
-        "curl -T example); no Authorization header -- the URL is the credential. Then pass upload_id "
-        "to the tool that needs the file (its upload_id parameter, e.g. drive_upload_file, or an "
-        "'upload:<upload_id>' attachments entry, e.g. gmail_*_with_attachments). Never fetch "
-        "upload_url yourself or pass it as local_path. Single-use, expires in 10 minutes, claimable "
+        "Get a one-time URL to upload a local file to PrivacyFence. PrivacyFence never reads your "
+        "files directly: a tool that takes a file (e.g. drive_upload_file, gmail_*_with_attachments) "
+        "accepts only an upload made here. Returns {upload_id, upload_url, method: 'PUT', max_bytes, "
+        "expires_at, example}: PUT the raw bytes to upload_url (e.g. the curl -T example); no "
+        "Authorization header -- the URL is the credential. Then pass upload_id to the tool that needs "
+        "the file (its upload_id parameter, e.g. drive_upload_file, or an 'upload:<upload_id>' "
+        "attachments entry, e.g. gmail_*_with_attachments). Never fetch upload_url yourself or pass "
+        "it to a tool in place of the upload_id. Single-use, expires in 10 minutes, claimable "
         "only by your next tool call in this conversation. This uploads, gates and approves nothing: "
         "that happens when the destination tool runs. reason: one sentence on why this file is needed "
         "now (logged, self-reported, unverified)."
@@ -316,16 +316,19 @@ CREATE_UPLOAD_SLOT_TOOL = types.Tool(
 PROPOSE_SCOPED_TOKEN_TOOL = types.Tool(
     name="privacyfence_propose_scoped_token",
     description=(
-        "Propose a scoped token (a named, expiring bearer credential limited to some rules and tools, "
-        "for a routine or scheduled job) for the person to review in PrivacyFence Settings. Returns at "
-        "once with review_url: give it to the person. Nothing is created until they review it, type its "
-        "name and confirm; they may narrow it. You never receive the token, nor whether it was created. "
-        "Set from_session=true to build its rules and tools from the calls approved in this session, or "
-        "pass rules (each {kind:'new', group, value, verbs} with group and verbs from "
+        "Propose a scoped token (a named, expiring bearer credential limited to rules and tools, "
+        "for a scheduled job) for the person to review in PrivacyFence Settings. Returns "
+        "review_url: give it to the person. Nothing is created until they type its "
+        "name and confirm; they may narrow it. Without deliver_to you never receive the token, nor whether "
+        "it was created. With deliver_to, PrivacyFence puts the token into n8n itself and "
+        "privacyfence_runtime_credential_status reports the credential's id; anyone who can edit "
+        "workflows in that n8n can then use the token. "
+        "from_session=true builds its rules and tools from this session's approved calls; otherwise pass "
+        "rules (each {kind:'new', group, value, verbs} with group and verbs from "
         "privacyfence_list_policy's scope_groups and value a comma-separated id list, or {kind:'copy', "
         "rule_id}) and tools. days defaults to 90. Ask for allow_personal_data or "
-        "allow_personal_data_reads only if the job needs them. Refused in an unattended session. "
-        "reason: one sentence on what the token is for (logged and shown to the person)."
+        "allow_personal_data_reads only if needed. Refused if unattended. "
+        "reason: what the token is for (logged, shown to the person)."
     ),
     input_schema={
         "type": "object",
@@ -338,10 +341,49 @@ PROPOSE_SCOPED_TOKEN_TOOL = types.Tool(
             "tools": {"type": "array", "items": {"type": "string"}},
             "allow_personal_data": {"type": "boolean"},
             "allow_personal_data_reads": {"type": "boolean"},
+            "deliver_to": {
+                "type": "object",
+                "description": (
+                    "Optional. Ask PrivacyFence to put the token into an agent runtime instead of giving it "
+                    "to the person: {\"runtime\": \"n8n\", \"workflow_id\": \"<the n8n workflow id, optional>\"}. "
+                    "Only on organization servers where the administrator set up n8n delivery. The workflow id "
+                    "is recorded for the audit log; n8n does not tie the credential to it."
+                ),
+            },
         },
         "required": ["reason", "label"],
     },
     annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+)
+
+RUNTIME_CREDENTIAL_STATUS_TOOL = types.Tool(
+    name="privacyfence_runtime_credential_status",
+    description=(
+        "Report whether a proposed token was delivered to n8n, and the n8n credential to use. Call it "
+        "with the proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to, "
+        "after the person has confirmed it. Returns state 'delivered' with credential_id, "
+        "credential_name, credential_type, mcp_url and token_expires_at, plus node (the PrivacyFence "
+        "node to put the credential on) for credential_type privacyFenceApi, or node_authentication "
+        "bearerAuth for httpBearerAuth, which goes on an MCP Client node whose endpoint is mcp_url; "
+        "'pending' while the person has not decided; 'expired' when the token ran out: its credential is "
+        "kept and the person can press Extend on the token in PrivacyFence Settings, Scoped tokens (do not "
+        "propose a new one); or 'not_delivered' for anything else. It never returns the token. A scoped "
+        "token cannot call it."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "reason": {"type": "string"},
+            "proposal_id": {
+                "type": "string",
+                "description": (
+                    "The proposal_id privacyfence_propose_scoped_token returned for a proposal with deliver_to."
+                ),
+            },
+        },
+        "required": ["proposal_id", "reason"],
+    },
+    annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
 )
 
 META_TOOLS: tuple[types.Tool, ...] = (
@@ -354,5 +396,6 @@ META_TOOLS: tuple[types.Tool, ...] = (
     PRIVACYFENCE_STATUS_TOOL,
     CREATE_UPLOAD_SLOT_TOOL,
     PROPOSE_SCOPED_TOKEN_TOOL,
+    RUNTIME_CREDENTIAL_STATUS_TOOL,
 )
 META_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in META_TOOLS)

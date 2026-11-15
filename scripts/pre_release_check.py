@@ -8,9 +8,8 @@ of the checks in `release-testing.md`'s "What stays manual".
 
     .venv/bin/python scripts/pre_release_check.py
 
-Run from the repo root (with `mcpb/shim/` node_modules already installed via
-`npm install`, and `privacyfence-sync` installed via `pip install -e "./sync[test]"`), the same
-as CI. Exits non-zero if any check fails.
+Run from the repo root (with `privacyfence-sync` installed via `pip install -e "./sync[test]"`),
+the same as CI. Exits non-zero if any check fails.
 
 `ruff check .`, `bandit`, `mypy src/privacyfence` and `scripts/mypy_strict_modules.py` are all
 included below because all four block in CI (`.github/workflows/tests.yml`'s `static-analysis` job --
@@ -57,14 +56,10 @@ def main() -> int:
     )
     # Same coverage ratchet CI enforces (.github/workflows/tests.yml) -- see
     # scripts/check_coverage_floor.py's module docstring for the floors.
-    # Runs even if pytest itself failed above, same as the shim checks
-    # below; the summary loop still reports every result either way.
+    # Runs even if pytest itself failed above, same as the checks below; the summary loop still
+    # reports every result either way.
     results["coverage floor"] = run(
         "coverage floor", ["python3", "scripts/check_coverage_floor.py", "coverage.json"], cwd=REPO_ROOT
-    )
-    results["shim npm test"] = run("shim npm test", ["npm", "test"], cwd=REPO_ROOT / "mcpb" / "shim")
-    results["shim typecheck"] = run(
-        "shim typecheck", ["npm", "run", "typecheck"], cwd=REPO_ROOT / "mcpb" / "shim"
     )
     results["ruff"] = run("ruff", ["ruff", "check", "."], cwd=REPO_ROOT)
     results["mypy (promoted modules)"] = run(

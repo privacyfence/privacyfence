@@ -7,6 +7,7 @@ which don't), TLS/trusted-proxies plumbing, and base_url/allowed_hosts.
 from __future__ import annotations
 
 import base64
+import contextlib
 import dataclasses
 import hashlib
 from urllib.parse import parse_qs, urlsplit
@@ -101,20 +102,20 @@ class TestBuildAppOrgMode:
             assert r.status_code == 200
 
     def test_settings_dispatcher_surface_is_not_mounted(self, tmp_path, monkeypatch):
-        # /settings' ~30-action local-mode dispatcher surface stays out of
+        # /settings' ~30-action dispatcher surface stays out of
         # org mode (see server.py's module docstring) -- unlike /approvals,
         # which org mode mounts as its own principal-aware route set (below).
         # Org mode mounts its own POST /api/settings/{action}
         # (routes_settings.py's own build_org_routes, restricted to
         # _ORG_ALLOWED_ACTIONS -- see that module's own docstring and
-        # ADR 0032), the same path local mode's ~30-action dispatcher
+        # ADR 0032), the same path the ~30-action dispatcher
         # answers, so this path existing at all doesn't prove local's
         # surface isn't mounted. quit_app is one of the ~24 local-only
         # actions _ORG_ALLOWED_ACTIONS never includes -- POSTing it 404s
         # (an unauthenticated request 401s before the action name is even
         # checked, so this signs in first); /settings itself is a real
         # route (see the read-only-surface test below), so this only
-        # checks the local-mode dispatcher's own unrestricted action
+        # checks the dispatcher's own unrestricted action
         # surface stays unreachable.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
@@ -127,7 +128,7 @@ class TestBuildAppOrgMode:
 
     def test_readonly_settings_surface_is_mounted(self, tmp_path, monkeypatch):
         # /settings is a real route -- a small, purpose-built surface
-        # (web/routes_settings.py's build_org_routes), not the local-mode
+        # (web/routes_settings.py's build_org_routes), not the full
         # dispatcher above. An unauthenticated request is redirected to
         # /login, same as /approvals. /settings/privacy only forwards to the
         # Admin page, where the install-wide privacy policy lives.
@@ -150,7 +151,7 @@ class TestBuildAppOrgMode:
         # /approvals exists, but it's web/routes_approvals.py's
         # build_routes() principal-aware route set, not that module's
         # create_app() shared-secret one -- an unauthenticated request is redirected to
-        # /login, never served the (local-mode-only) card content directly.
+        # /login, never served the (shared-secret) card content directly.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
         client = TestClient(app, base_url=ISSUER, follow_redirects=False)
@@ -400,8 +401,7 @@ class TestCacheControlOnSensitivePagesOrgMode:
 class TestDownloadsSurfaceOrgMode:
     """/downloads/{token} is mounted unconditionally in org mode
     (like /approvals/security --
-    needs nothing from OrgAuth.connector_registry), and not mounted at all
-    in local mode."""
+    needs nothing from OrgAuth.connector_registry), and not mounted without an org."""
 
     def test_downloads_route_is_mounted_with_no_connector_registry(self, tmp_path, monkeypatch):
         org = _org_auth(tmp_path, monkeypatch)
@@ -413,10 +413,6 @@ class TestDownloadsSurfaceOrgMode:
         assert r.status_code == 302
         assert r.headers["location"] == "/login?next=%2Fdownloads%2Fabc"
 
-    def test_downloads_route_is_absent_in_local_mode(self, tmp_path):
-        app = build_app(WebApprovalUI(), allowed_hosts=frozenset({"testserver"}))
-        client = TestClient(app, base_url="http://testserver")
-        assert client.get("/downloads/abc").status_code == 404
 
 
 _OIDC_SECRET = "s" * 40
@@ -509,21 +505,10 @@ class TestWebServerOrgMode:
         server = WebServer(WebApprovalUI(), host="0.0.0.0", port=443, org=org)
         assert server.base_url == ISSUER
 
-    def test_mcp_token_and_control_channel_are_none_in_org_mode(self, tmp_path, monkeypatch):
-        org = _org_auth(tmp_path, monkeypatch)
-        server = WebServer(WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}))
-        assert server.mcp_token is None
-        assert server.control_channel is None
-
     def test_mcp_url_still_reflects_base_url_in_org_mode(self, tmp_path, monkeypatch):
         org = _org_auth(tmp_path, monkeypatch)
         server = WebServer(WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}))
         assert server.mcp_url == f"{ISSUER}/mcp"
-
-    def test_state_stream_is_not_built_in_org_mode(self, tmp_path, monkeypatch):
-        org = _org_auth(tmp_path, monkeypatch)
-        server = WebServer(WebApprovalUI(), org=org)
-        assert server.state_stream is None
 
     def test_allowed_hosts_is_exposed_for_reporting(self, tmp_path, monkeypatch):
         # daemon_main.py's org-mode startup line logs this set, so an admin
@@ -633,8 +618,8 @@ def _single_user_org(tmp_path, monkeypatch) -> OrgAuth:
     init_audit_logger(str(tmp_path / "audit"))
     monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
     monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
-    admin = admin_config.import_from_bundle({}, mode="org", single_user=True)
-    org_config = oauth_apps.effective_org_config({}, admin, mode="org", single_user=True)
+    admin = admin_config.import_from_bundle({}, single_user=True)
+    org_config = oauth_apps.effective_org_config({}, admin, single_user=True)
     provider = OrgOAuthProvider(None, idp_callback_url="", single_user=True)
     return OrgAuth(
         provider=provider, sessions=OrgSessionStore(), idp=None, issuer_url=SINGLE_USER_ISSUER,
@@ -789,3 +774,88 @@ class TestBrowserSignInPolicy:
         assert isinstance(policy, oi.IdpAuthzPolicy)
         assert policy.builtin is True and policy.admin_emails == ("alice@acme.com",)
         assert policy.allowed_domains == ("acme.org",) and policy.issuer == "https://idp.example.com"
+
+
+class TestUpstreamMcpOrgMode:
+    """The claim key set and the tool-list fetch are mounted only when upstream servers are configured."""
+
+    @staticmethod
+    def _configure(tmp_path):
+        from privacyfence import upstream_mcp_runtime
+        from privacyfence.identity_claim import ClaimSigner
+        from privacyfence.upstream_claim_keys import KeySet
+        from privacyfence.group_membership import StaticFileResolver
+        from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
+
+        upstreams = parse_upstreams({
+            "version": 1,
+            "upstreams": [{
+                "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+                "tools": {"search": {"gate": "auto", "verb": "search"}},
+            }],
+        }, source="test")
+        keys = KeySet(tmp_path / "keys.json")
+        keys.ensure()
+        signer = ClaimSigner(issuer=ISSUER, keys=keys)
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams, signer=signer, groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            resolver=StaticFileResolver(tmp_path / "members.json"),
+        )
+        return signer
+
+    @staticmethod
+    def _app(tmp_path, monkeypatch, dispatcher):
+        return build_app(
+            WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), mcp_dispatcher=dispatcher,
+            allowed_hosts=frozenset({"pf.example.com"}),
+        )
+
+    def test_jwks_route_is_absent_when_nothing_is_configured(self, tmp_path, monkeypatch):
+        app = self._app(tmp_path, monkeypatch, McpDispatcher(lambda: {}))
+        assert TestClient(app, base_url=ISSUER).get("/upstream-mcp/jwks").status_code == 404
+
+    def test_jwks_route_serves_the_signers_keys_when_configured(self, tmp_path, monkeypatch):
+        signer = self._configure(tmp_path)
+        app = self._app(tmp_path, monkeypatch, McpDispatcher(lambda: {}))
+        response = TestClient(app, base_url=ISSUER).get("/upstream-mcp/jwks")
+        assert response.status_code == 200
+        assert response.json() == signer.jwks()
+
+    def test_the_lifespan_fetches_tool_lists_and_notifies_the_dispatcher(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        self._configure(tmp_path)
+        seen: list[bool] = []
+
+        @contextlib.asynccontextmanager
+        async def fake_lifespan(notify):
+            seen.append(notify == dispatcher.notify_tools_changed)
+            yield
+
+        dispatcher = McpDispatcher(lambda: {})
+        monkeypatch.setattr(upstream_mcp_runtime, "lifespan", fake_lifespan)
+        app = self._app(tmp_path, monkeypatch, dispatcher)
+        with TestClient(app, base_url=ISSUER):
+            pass
+        assert seen == [True]
+
+    def test_the_lifespan_is_not_entered_when_nothing_is_configured(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        entered: list[bool] = []
+
+        @contextlib.asynccontextmanager
+        async def fake_lifespan(notify):
+            entered.append(True)
+            yield
+
+        monkeypatch.setattr(upstream_mcp_runtime, "lifespan", fake_lifespan)
+        with TestClient(self._app(tmp_path, monkeypatch, McpDispatcher(lambda: {})), base_url=ISSUER):
+            pass
+        assert entered == []
+
+    def test_no_lifespan_without_a_dispatcher_but_the_keys_are_still_served(self, tmp_path, monkeypatch):
+        self._configure(tmp_path)
+        app = self._app(tmp_path, monkeypatch, None)
+        with TestClient(app, base_url=ISSUER) as client:
+            assert client.get("/upstream-mcp/jwks").status_code == 200

@@ -12,12 +12,12 @@
 #    reason, and nothing does the equivalent here. A `pip install -e .` in that state
 #    bakes the placeholder into the installed metadata, so every later
 #    importlib.metadata.version("privacyfence") read -- src/privacyfence/__init__.py's
-#    __version__, PrivacyFenceApp.spec's VERSION, build_dmg.sh, build_mcpb.sh -- returns
+#    __version__ -- returns
 #    it, and scripts/tag_release.py's sequential-version check reads a tag list that
 #    isn't there. It fails silently in both directions, which is why this runs first.
 #
 # 2. Nothing is installed: no venv, the package isn't importable, bandit isn't on PATH,
-#    and mcpb/shim/ has no node_modules. That's several minutes of setup standing between
+#    and the n8n node has no node_modules. That's several minutes of setup standing between
 #    a session and the first command on the §2.7 checklist.
 #
 # Deliberately synchronous -- no {"async": true} preamble. A session that starts before
@@ -69,16 +69,6 @@ python3 -m venv --upgrade-deps .venv
 # at /root/.local/bin, which resolve first otherwise and know nothing about this project.
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   echo "export PATH=\"$PWD/.venv/bin:\$PATH\"" >> "$CLAUDE_ENV_FILE"
-fi
-
-echo "==> Installing mcpb/shim dependencies"
-# Guarded rather than unconditional: this hook also fires on resume/clear/compact, and
-# `npm ci` deletes and reinstalls node_modules every time it runs. tests.yml uses `npm ci`
-# for lockfile fidelity and so does this, just only when there's nothing there yet.
-if [ ! -d mcpb/shim/node_modules ]; then
-  (cd mcpb/shim && npm ci --no-audit --no-fund)
-else
-  echo "    already present, skipping"
 fi
 
 # tests/integration/test_browser_smoke.py (and the website browser tests) drive Chromium

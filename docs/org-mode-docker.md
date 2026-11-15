@@ -2,21 +2,21 @@
 
 This page runs PrivacyFence from the container image: on your own computer for yourself ([Run it on
 this computer](#run-it-on-this-computer)), or as an organization server with its reverse proxy
-([Quick start](#quick-start)). The server flow replaces
-[section 3](org-mode-setup-guide.md#3-service-account-and-install) (service account and install),
-[section 7](org-mode-setup-guide.md#7-reverse-proxy-and-tls) (reverse proxy and TLS) and
-[section 8](org-mode-setup-guide.md#8-hardened-systemd-unit) (systemd unit) of the
-[organization guide](org-mode-setup-guide.md), and the Upgrade and Backup parts of its
-[section 14](org-mode-setup-guide.md#14-operations). Sections
+([Quick start](#quick-start)). Sections
+[3](org-mode-setup-guide.md#3-service-account-and-install) (install) and
+[8](org-mode-setup-guide.md#8-hardened-systemd-unit) (container settings) of the
+[organization guide](org-mode-setup-guide.md) point here, and sections
 [4](org-mode-setup-guide.md#4-identity-provider),
 [5](org-mode-setup-guide.md#5-connector-apps),
+[6](org-mode-setup-guide.md#6-server-settings-and-your-own-apps) (the environment file is
+`privacyfence.env`),
 [9](org-mode-setup-guide.md#9-first-sign-in-and-validation),
 [10](org-mode-setup-guide.md#10-install-wide-and-per-user-policy),
 [11](org-mode-setup-guide.md#11-ai-systems),
 [12](org-mode-setup-guide.md#12-approvals-and-step-up),
-[13](org-mode-setup-guide.md#13-file-delivery) apply unchanged, and
-[section 6](org-mode-setup-guide.md#6-server-settings-and-your-own-apps) applies with the environment
-file being `privacyfence.env`.
+[13](org-mode-setup-guide.md#13-file-delivery),
+[14](org-mode-setup-guide.md#14-operations) and
+[15](org-mode-setup-guide.md#15-troubleshooting) apply to the container.
 
 ## The image
 
@@ -34,11 +34,28 @@ file being `privacyfence.env`.
 | Health check | Probes the daemon's well-known endpoint from inside the container, on `PRIVACYFENCE_PORT` (8765 by default) |
 | With no identity provider | Starts in single-user mode on localhost ([below](#run-it-on-this-computer)). It does not refuse to start. |
 
+## How the image is built
+
+`scripts/build_org_image.sh --platform linux/amd64|linux/arm64 --tag NAME:TAG` builds the image. It
+requires exactly one `dist/privacyfence-*.whl`, stages it with `deploy/docker/Dockerfile`, the
+entrypoint, the health check and `requirements/runtime.lock.txt` into `build/org-image/`, and runs
+`docker buildx build` on that directory. The image installs the hash-pinned lock, then the wheel
+with `--no-deps`.
+
+- `build.yml`'s `build-org-image` job builds and tests the image on a native runner per architecture
+  (`ubuntu-24.04`, `ubuntu-24.04-arm`) and saves it as the `org-image-<arch>` workflow artifact; it
+  never pushes. `publish-org-image.yml` pushes those tested bytes on a stable tag.
+  `tests.yml`'s `org-docker-image` is the per-PR amd64 leg.
+- The stop signal is `SIGINT`: the daemon installs no SIGTERM handler, so as PID 1 it would ignore the
+  default and `docker stop` would wait out its timeout.
+- The entrypoint refuses to start (exit 78) when no organization bundle is installed, rather than
+  starting on the container's unreachable loopback.
+- The base image is pinned by digest; Dependabot's `docker` entry bumps the digest within Python 3.12.
+
 ## Run it on this computer
 
 This is PrivacyFence for one person, in a container, with its own built-in sign-in for Google, Slack,
-Salesforce, Atlassian and Miro (organization mode and this image only; desktop mode, which is
-deprecated, has none). It is the same image and the same mode as a server, with no identity
+Salesforce, Atlassian and Miro (organization mode and this image only). It is the same image and the same mode as a server, with no identity
 provider: one administrator, served only at `http://localhost`.
 
 > **Anyone who can run `docker` on this computer controls the install.** They can read the setup
@@ -145,7 +162,8 @@ A multi-user server with the environment alone, no bundle to build:
    | `compose.yaml`, `Caddyfile` | root | 0644 | No secrets. |
    | `.env` | root | 0600 | Host name and image tag, read by Compose as root. |
    | `privacyfence.env` | root | 0600 | May hold plain secrets. |
-   | `idp_client_secret`, `peek_provisioning_key`, `grist_provisioning_key` | `10001:10001` | 0400 | Read inside the container by the image's user, through Docker secrets. |
+   | `upstream_mcp.yaml` (optional) | root | 0644 | Addresses and audiences, no secrets. |
+   | `idp_client_secret`, `peek_provisioning_key`, `grist_provisioning_key`, `n8n_api_key` | `10001:10001` | 0400 | Read inside the container by the image's user, through Docker secrets. |
 
    PrivacyFence's own data does not go in this folder: it stays in the named volume `pf-data` (for a
    host directory instead, see [A bind-mounted data directory](#a-bind-mounted-data-directory)). Back
@@ -227,6 +245,16 @@ A multi-user server with the environment alone, no bundle to build:
     `PRIVACYFENCE_GRIST_AUTO_PROVISION=true` in `privacyfence.env` to offer them and turn them on from
     the server ([Peek setup](peek-setup.md#automatic-accounts),
     [Grist setup](grist-setup.md#automatic-api-keys)).
+    **Optional, n8n:** to let AI clients have a scoped token delivered into n8n, put the n8n API key in a
+    file `n8n_api_key` (made like the other secret files), name it with
+    `PRIVACYFENCE_N8N_API_KEY_FILE=/run/secrets/n8n_api_key` next to `PRIVACYFENCE_N8N_URL`, uncomment the
+    `n8n_api_key` secret in `compose.yaml`, and set `PRIVACYFENCE_N8N_DELIVERY` to `true`. That also turns
+    on scoped tokens and AI proposals, and locks them on Admin
+    ([setup guide](org-mode-setup-guide.md#delivering-tokens-to-n8n)).
+11. **Optional, upstream MCP servers:** declare other MCP servers that PrivacyFence puts its approvals
+    and audit in front of. Write the declaration in a YAML file or inline ([Upstream MCP file](#upstream-mcp-file)).
+    Who may see which audience comes from groups, set in `admin_config.json`
+    ([Upstream MCP servers](upstream-mcp.md)).
 
 Everything else (file delivery, step-up, sign-in restrictions, scoped tokens, audit forwarding) is on
 the [Admin page](org-mode-setup-guide.md#the-admin-page). Outbound HTTPS from the container must reach your identity
@@ -239,13 +267,13 @@ Google sign-in.
 - A public hostname with DNS pointing at the server (not proxied by Cloudflare), and TCP 443
   reachable; TCP 80 is recommended and UDP 443 optional ([Quick start](#quick-start), step 1). Caddy
   obtains the certificate itself.
-- Everything else in the guide's [Prerequisites](org-mode-setup-guide.md#2-prerequisites) except Python.
+- Everything else in the guide's [Prerequisites](org-mode-setup-guide.md#2-prerequisites).
 
 ## Files
 
 The deploy folder (`/opt/privacyfence-org`) holds four files from `deploy/docker/` of the release you
 run: `compose.yaml`, `Caddyfile`, `privacyfence.env` (from `privacyfence.env.example`) and `.env`
-(from `env.example`). [Quick start](#quick-start), steps 3 and 4, creates the folder and fetches them.
+(from `env.example`), and an optional fifth, `upstream_mcp.yaml`, that you write yourself. [Quick start](#quick-start), steps 3 and 4, creates the folder and fetches them.
 
 ### Compose file
 
@@ -276,20 +304,29 @@ services:
     environment:
       PRIVACYFENCE_ISSUER_URL: https://${PF_HOSTNAME:?set PF_HOSTNAME in .env}
       PRIVACYFENCE_TRUSTED_PROXIES: 172.30.87.2
+      # Or declare them right here, with no file (write $ as $$; set one of the two, not both):
+      # PRIVACYFENCE_UPSTREAM_MCP: |
+      #   version: 1
+      #   upstreams: []
     env_file:
       - path: privacyfence.env
         required: false
     # Keep the identity provider's client secret out of `docker inspect`: put it in a file, name
     # that file with PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret in
     # privacyfence.env, and uncomment this and the top-level `secrets:` block below. The Peek and
-    # Grist provisioning keys work the same way, with PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE and
-    # PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE.
+    # Grist provisioning keys and the n8n API key work the same way, with
+    # PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE, PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE and
+    # PRIVACYFENCE_N8N_API_KEY_FILE.
     # secrets:
     #   - idp_client_secret
     #   - peek_provisioning_key
     #   - grist_provisioning_key
+    #   - n8n_api_key
     volumes:
       - pf-data:/var/lib/privacyfence-org/.privacyfence
+      # Upstream MCP servers (docs/upstream-mcp.md): create upstream_mcp.yaml first, mount it read-only and name
+      # it in privacyfence.env with PRIVACYFENCE_UPSTREAM_MCP_FILE=/etc/privacyfence/upstream_mcp.yaml.
+      # - ./upstream_mcp.yaml:/etc/privacyfence/upstream_mcp.yaml:ro
     networks:
       pf:
         ipv4_address: 172.30.87.10
@@ -326,6 +363,8 @@ networks:
 #     file: ./peek_provisioning_key
 #   grist_provisioning_key:
 #     file: ./grist_provisioning_key
+#   n8n_api_key:
+#     file: ./n8n_api_key
 
 volumes:
   pf-data:
@@ -354,6 +393,41 @@ PRIVACYFENCE_IMAGE_TAG=X.Y
 certificate for it, and `compose.yaml` sets `PRIVACYFENCE_ISSUER_URL` to `https://<PF_HOSTNAME>`.
 Compose refuses to start without it. `PRIVACYFENCE_IMAGE_TAG` is the release you fetched the files
 from; a pre-release needs its exact version.
+
+### Upstream MCP file
+
+`upstream_mcp.yaml` declares the upstream MCP servers that PrivacyFence puts its approvals and audit in front of ([Upstream MCP servers](upstream-mcp.md)). Create it next to `compose.yaml`; it holds addresses and audiences, no secrets, and the container's user must be able to read it:
+
+```bash
+sudo install -m 0644 -o root -g root /dev/null upstream_mcp.yaml
+sudo nano upstream_mcp.yaml
+```
+
+```yaml
+version: 1
+upstreams:
+  - id: kh
+    label: Knowledge hub
+    url: http://knowledge-hub:8080/mcp
+    audience: https://kh.example.internal
+    tools:
+      search:
+        gate: auto
+        verb: search
+      propose_change:
+        gate: popup
+        verb: add
+        effect: Adds a change proposal to the knowledge hub.
+```
+
+Then uncomment the mount in `compose.yaml` and the `PRIVACYFENCE_UPSTREAM_MCP_FILE` line in `privacyfence.env`, run `sudo docker compose up -d`, and check `sudo docker compose logs privacyfence | grep -i upstream`.
+
+- Create the file before the first `up`: if the host file is missing, Docker creates a directory of that name.
+- JSON works in the same file. A name ending in `.yaml` or `.yml` is read as YAML, any other name as JSON.
+- YAML reads an unquoted `no` or `on` as a boolean: quote an id or tool name like that (`"no"`, `"on"`).
+- To declare the servers inline instead, put the same text under `environment:` in `compose.yaml` as `PRIVACYFENCE_UPSTREAM_MCP: |` (write every `$` as `$$`). Set one of the two variables, never both.
+- The declaration says nothing about who sees what. Audiences come from groups (`upstream_mcp.<id>.groups` in `admin_config.json`, see [Upstream MCP servers](upstream-mcp.md)). A `grants` key is refused at start.
+- A change to the declaration needs a restart.
 
 ## Start
 
@@ -387,8 +461,12 @@ starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
 | `PRIVACYFENCE_ALLOWED_DOMAINS` | none | The allowed sign-in domains, with either sign-in method; first start only, then Admin → Sign-in. |
 | `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL` | `false` | `true` on Microsoft Entra ID so allowed domains work; it trusts only addresses in `PRIVACYFENCE_ALLOWED_DOMAINS`. |
 | `PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL` | none | The Peek and Grist addresses. |
+| `PRIVACYFENCE_N8N_URL`, `PRIVACYFENCE_N8N_API_KEY_FILE` | none | The n8n address and the API key as a Docker secret file (the plain `PRIVACYFENCE_N8N_API_KEY` also works; never both), for delivering AI-proposed tokens to n8n. Switch the delivery on with the next row ([setup guide](org-mode-setup-guide.md#delivering-tokens-to-n8n)). |
+| `PRIVACYFENCE_N8N_DELIVERY`, `PRIVACYFENCE_N8N_PROJECT_ID`, `PRIVACYFENCE_N8N_MCP_URL` | none | `PRIVACYFENCE_N8N_DELIVERY=true` turns on n8n delivery, scoped tokens and AI proposals (it refuses the start without the n8n address and key); any other value refuses the start. The project id (letters and digits) and the PrivacyFence MCP address (`https://`, or `http://` on localhost) fill the matching Admin fields. A variable that is set locks its field on Admin. |
 | `PRIVACYFENCE_PEEK_AUTO_PROVISION`, `PRIVACYFENCE_GRIST_AUTO_PROVISION` | none | Unset or empty: the Admin page decides. `true`: the service is offered and Automatic accounts are on, locked on Admin → Services. Needs the address and key; ignored without the web server. |
 | `PRIVACYFENCE_PEEK_PROVISIONING_KEY_FILE`, `PRIVACYFENCE_GRIST_PROVISIONING_KEY_FILE` | none | The provisioning keys as Docker secret files. The plain `…_PROVISIONING_KEY` forms also work; never both. |
+| `PRIVACYFENCE_UPSTREAM_MCP_FILE` | none | The path inside the container of the YAML or JSON file that declares the upstream MCP servers ([Upstream MCP file](#upstream-mcp-file)). |
+| `PRIVACYFENCE_UPSTREAM_MCP` | none | The same declaration as inline text, set in `compose.yaml`; never together with the file variable ([Upstream MCP file](#upstream-mcp-file)). |
 | `PRIVACYFENCE_OIDC_CLIENTS` | none | Web apps, such as Peek and Grist, that sign people in through PrivacyFence (OpenID Connect at `<server>/oidc`). Each app also needs `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` and `…_SECRET_FILE` (or `…_SECRET`). See [Sign in to other apps with PrivacyFence](oidc-provider.md). |
 
 The [configuration reference](configuration-reference.md#environment-variables) has the full list.
@@ -444,10 +522,10 @@ docker compose pull
 docker compose up -d
 ```
 
-The advice in the guide's [Upgrade](org-mode-setup-guide.md#upgrade) applies: read the release's
-changelog entry first and back up first. Going back is safe only if the older version reads the data as
-the newer one left it ([Going back to 6.x](org-mode-setup-guide.md#going-back-to-6x)). Before moving
-to 8.x, check the Admin page says `Ready for PrivacyFence 8: yes.`
+Read the release's changelog entry first and back up first ([Backup and restore](#backup-and-restore)).
+Going back is safe only if the older version reads the data as the newer one left it
+([Going back to 6.x](org-mode-setup-guide.md#going-back-to-6x)). Then open the Admin page and check
+the version. Before moving to 8.x, check it says `Ready for PrivacyFence 8: yes.`
 ([Upgrading to 8.x](org-mode-setup-guide.md#upgrading-to-8x)). After an upgrade, each person sees a
 strip linking to What's new (`/whats-new`) the first time they open PrivacyFence, listing the
 changelog sections since the version they last used.
@@ -497,3 +575,8 @@ the daemon refuses to start:
 ```bash
 sudo install -d -o 10001 -g 10001 -m 700 /srv/privacyfence-org
 ```
+
+The daemon refuses to start in organization mode if the data directory, its `org/` directory or its
+`users/` tree grants any access to group or others, and it creates every directory there with mode
+`0700`. The data directory is `~/.privacyfence/` of the user it runs as; in the image that is
+`/var/lib/privacyfence-org/.privacyfence/`. The layout is in [Backup](org-mode-setup-guide.md#backup).

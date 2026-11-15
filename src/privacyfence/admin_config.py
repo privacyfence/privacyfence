@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from .agent_runtimes import N8nRuntimeConfig, environment_locks
 from . import app_credentials, connector_configs, grist_auth, paths, peek_client, scoped_tokens, secure_files
 from .org_mode import (
     ADMIN_EMAILS_ENV,
@@ -39,7 +40,6 @@ from .org_mode import (
     AuthzPolicyConfig,
     ConfigurationError,
     DownloadDeliveryConfig,
-    Mode,
     WebPushConfig,
     builtin_signin_selected,
     provisioning_key,
@@ -73,6 +73,7 @@ OPERATIONAL_SECTIONS = (
     "authz",
     "step_up",
     "scoped_tokens",
+    "agent_runtimes",
     "audit_forwarding",
 )
 LEGACY_BUNDLE_KEYS = (
@@ -81,6 +82,7 @@ LEGACY_BUNDLE_KEYS = (
     "authz",
     "step_up",
     "scoped_tokens",
+    "agent_runtimes",
     "audit_forwarding",
     "unattended_sessions",
     "rooms",
@@ -89,8 +91,8 @@ LEGACY_BUNDLE_KEYS = (
     "peek",
 )
 
-# Services with built-in apps, offered on a fresh org-mode single-user install (desktop mode has
-# none, and a multi-user server's first offered service is the admin's opt-in).
+# Services with built-in apps, offered on a fresh single-user install (a multi-user server's
+# first offered service is the admin's opt-in).
 _BUILTIN_SERVICES = ("google", "slack", "salesforce", "atlassian", "miro", "telegram")
 
 _DEFAULT_KEY_ENV = {
@@ -148,7 +150,12 @@ def _default_config() -> dict[str, Any]:
         "authz": {},
         "step_up": {},
         "scoped_tokens": {},
+        "agent_runtimes": {
+            "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
+        },
         "audit_forwarding": {},
+        # Group-to-audience maps for upstream MCP servers (upstream_mcp_config.GroupMapStore reads them).
+        "upstream_mcp": {},
     }
 
 
@@ -288,7 +295,7 @@ def _seed_allowed_domains(config: dict[str, Any]) -> None:
 
 
 def import_from_bundle(
-    bundle: dict[str, Any], *, mode: Mode, single_user: bool, seed_from_environment: bool = True,
+    bundle: dict[str, Any], *, single_user: bool, seed_from_environment: bool = True,
 ) -> dict[str, Any]:
     """A fresh admin config built from a bundle's operational settings.
 
@@ -300,8 +307,6 @@ def import_from_bundle(
     if any(_section(bundle, name) for name in SERVICES):
         for name in SERVICES:
             services[name]["offered"] = bool(_section(bundle, name))
-    elif mode == "local":
-        services["telegram"]["offered"] = True
     elif single_user:
         for name in _BUILTIN_SERVICES:
             services[name]["offered"] = True
@@ -328,7 +333,7 @@ def import_from_bundle(
             config[key] = copy.deepcopy(bundle[key])
     if single_user and "step_up" not in bundle:
         config["step_up"] = dict(_SINGLE_USER_STEP_UP)
-    if mode == "org" and seed_from_environment:
+    if seed_from_environment:
         _seed_allowed_domains(config)
 
     config["imported_from_bundle_sha256"] = _bundle_hash(bundle)
@@ -406,7 +411,7 @@ def _merge_reimport(current: dict[str, Any], incoming: dict[str, Any], defaults:
     return merged
 
 
-def ensure(bundle: dict[str, Any], *, mode: Mode, single_user: bool) -> tuple[dict[str, Any], bool]:
+def ensure(bundle: dict[str, Any], *, single_user: bool) -> tuple[dict[str, Any], bool]:
     """The admin config, importing the bundle's settings first when needed.
 
     Returns ``(config, imported)``. With no file the bundle is imported and saved. An existing file
@@ -416,29 +421,29 @@ def ensure(bundle: dict[str, Any], *, mode: Mode, single_user: bool) -> tuple[di
     """
     loaded = load()
     if loaded is None:
-        created = import_from_bundle(bundle, mode=mode, single_user=single_user)
+        created = import_from_bundle(bundle, single_user=single_user)
         save(created)
         return created, True
-    if mode == "org" and os.environ.get(ALLOWED_DOMAINS_ENV, "").strip():
+    if os.environ.get(ALLOWED_DOMAINS_ENV, "").strip():
         logger.info(
             "%s is ignored: it only seeds the allowed domains on the first start; change them on "
             "Admin → Sign-in.", ALLOWED_DOMAINS_ENV,
         )
     if loaded["imported_from_bundle_sha256"] == "" and legacy_keys_in(bundle):
-        incoming = import_from_bundle(bundle, mode=mode, single_user=single_user, seed_from_environment=False)
-        defaults = import_from_bundle({}, mode=mode, single_user=single_user, seed_from_environment=False)
+        incoming = import_from_bundle(bundle, single_user=single_user, seed_from_environment=False)
+        defaults = import_from_bundle({}, single_user=single_user, seed_from_environment=False)
         merged = _merge_reimport(loaded, incoming, defaults)
         save(merged)
         return merged, True
     return loaded, False
 
 
-def config_for(bundle: dict[str, Any], *, mode: Mode, single_user: bool) -> dict[str, Any]:
+def config_for(bundle: dict[str, Any], *, single_user: bool) -> dict[str, Any]:
     """Like ``ensure`` but never writes: for readers that run without the daemon."""
     loaded = load()
     if loaded is not None:
         return loaded
-    return import_from_bundle(bundle, mode=mode, single_user=single_user)
+    return import_from_bundle(bundle, single_user=single_user)
 
 
 # --------------------------------------------------------------------------- #
@@ -461,6 +466,7 @@ _ACTION_MODES: dict[str, frozenset[str]] = {
     "set_authz": _ORG_ONLY,
     "tighten_step_up": _ORG_ONLY,
     "set_scoped_tokens": _ORG_ONLY,
+    "set_agent_runtimes": _ORG_ONLY,
     "set_audit_forwarding": _ORG_ONLY,
     "remove_connector_config": _ORG_ONLY,
 }
@@ -484,7 +490,6 @@ _AUTO_PROVISION_UNAVAILABLE = {
         f"Automatic accounts need {_ADDRESS_VARIABLE['grist']} and {_PROVISIONER_VARIABLE} on the server."
     ),
 }
-_GRIST_OAUTH_REASON = "Automatic accounts work only with API keys; this server uses a Grist OAuth app."
 
 
 def _parse_error(exc: Exception) -> AdminConfigError:
@@ -536,24 +541,20 @@ def _env_auto_provision() -> frozenset[str]:
         return frozenset()
 
 
-def _locked_variable(name: str, *, mode: Mode) -> str:
+def _locked_variable(name: str) -> str:
     """The environment variable that locks ``name``'s offer and automatic accounts, or ""."""
     from . import oauth_apps
 
-    if mode == "org" and name in _env_auto_provision():
+    if name in _env_auto_provision():
         return oauth_apps.ENV_AUTO_PROVISION[name]
     return ""
 
 
 def _address_source(
-    bundle: dict[str, Any], name: str, admin_service: dict[str, Any], env: dict[str, str], *, mode: Mode,
+    name: str, admin_service: dict[str, Any], env: dict[str, str],
 ) -> str:
     """What fixes a server address. Follows the effective config: an organization server never
-    reads the bundle's Grist section (its app is a connector config), so only local mode lets it
-    lock the address."""
-    grist = bundle.get("grist")
-    if mode != "org" and name == "grist" and isinstance(grist, dict) and grist.get("client_id"):
-        return "bundle"
+    reads the bundle's Grist section (its app is a connector config)."""
     if env.get(name):
         return "environment"
     if admin_service.get("address_locked"):
@@ -571,21 +572,15 @@ def _provisioning_key_set(key_env: str) -> bool:
 
 
 def _auto_provision_state(
-    bundle: dict[str, Any],
     name: str,
     admin_service: dict[str, Any],
     env: dict[str, str],
     *,
-    mode: Mode,
     single_user: bool,
 ) -> tuple[bool, str]:
     """Whether automatic accounts can be turned on for ``name``, and why not. The conditions are
     the ones the effective config applies before it passes ``auto_provision`` on."""
-    source = _address_source(bundle, name, admin_service, env, mode=mode)
-    if source == "bundle":
-        return False, _GRIST_OAUTH_REASON
-    if mode != "org":
-        return False, "Automatic accounts are available only on an organization server."
+    source = _address_source(name, admin_service, env)
     if single_user:
         return False, "Automatic accounts need people to sign in through an identity provider."
     trusted = source in ("environment", "imported")
@@ -606,8 +601,6 @@ def _refuse_locked_address(name: str, source: str) -> None:
         raise AdminConfigError(
             f"This address came from the signed configuration file; set {variable} on the server to change it."
         )
-    if source == "bundle":
-        raise AdminConfigError("This address comes from your organization's Grist app in the configuration file.")
 
 
 def _require_public_https_host(address: str) -> None:
@@ -632,7 +625,7 @@ def _require_public_https_host(address: str) -> None:
             raise refusal
 
 
-def _normalized_address(name: str, value: str, *, mode: Mode) -> str:
+def _normalized_address(name: str, value: str) -> str:
     if not value:
         return ""
     normalize = peek_client.normalize_base_url if name == "peek" else grist_auth.normalize_server_url
@@ -640,8 +633,7 @@ def _normalized_address(name: str, value: str, *, mode: Mode) -> str:
         address = normalize(value)
     except (peek_client.PeekClientError, grist_auth.GristClientError) as exc:
         raise AdminConfigError(str(exc)) from exc
-    if mode == "org":
-        _require_public_https_host(address)
+    _require_public_https_host(address)
     return address
 
 
@@ -661,10 +653,10 @@ def _port(params: dict[str, Any]) -> int:
 
 
 def _apply_service_toggle(
-    config: dict[str, Any], action: str, params: dict[str, Any], *, mode: Mode
+    config: dict[str, Any], action: str, params: dict[str, Any]
 ) -> tuple[str, list[str]]:
     name = _service_name(params)
-    variable = _locked_variable(name, mode=mode)
+    variable = _locked_variable(name)
     if variable:
         raise AdminConfigError(f"{SERVICE_LABELS[name]} is set by {variable} on the server.")
     offered = action == "offer_service"
@@ -729,13 +721,13 @@ def _apply_salesforce_login_url(config: dict[str, Any], params: dict[str, Any]) 
 
 
 def _apply_server_address(
-    config: dict[str, Any], params: dict[str, Any], bundle: dict[str, Any], *, mode: Mode
+    config: dict[str, Any], params: dict[str, Any], bundle: dict[str, Any]
 ) -> tuple[str, list[str]]:
     name = _service_name(params, tuple(_ADDRESS_FIELD))
     value = _param(params, "value", str)
-    address = _normalized_address(name, value, mode=mode)
+    address = _normalized_address(name, value)
     service = config["services"][name]
-    _refuse_locked_address(name, _address_source(bundle, name, service, _env_addresses(), mode=mode))
+    _refuse_locked_address(name, _address_source(name, service, _env_addresses()))
     field = _ADDRESS_FIELD[name]
     if service[field] == address:
         return "", []
@@ -757,7 +749,7 @@ def _apply_locked_trust(config: dict[str, Any], params: dict[str, Any]) -> tuple
 
 
 def _apply_auto_provisioning(
-    config: dict[str, Any], params: dict[str, Any], bundle: dict[str, Any], *, mode: Mode, single_user: bool
+    config: dict[str, Any], params: dict[str, Any], *, single_user: bool
 ) -> tuple[str, list[str]]:
     name = _service_name(params, tuple(_ADDRESS_FIELD))
     enabled = _param(params, "enabled", bool)
@@ -765,7 +757,7 @@ def _apply_auto_provisioning(
     service = config["services"][name]
     if enabled:
         available, reason = _auto_provision_state(
-            bundle, name, service, _env_addresses(), mode=mode, single_user=single_user
+            name, service, _env_addresses(), single_user=single_user
         )
         if not available:
             raise AdminConfigError(reason)
@@ -850,17 +842,54 @@ def _apply_tighten_step_up(config: dict[str, Any], params: dict[str, Any]) -> tu
     return "Made step-up stricter", ["step_up"]
 
 
+def _hold_locked(
+    section: str, posted: dict[str, Any], stored: dict[str, Any]
+) -> dict[str, Any]:
+    """``posted`` with each field the environment locks held at what is stored.
+
+    A posted value that differs from the lock is refused. One that repeats it saves nothing: the
+    stored value stays (or stays absent), so the environment's value is never written.
+    """
+    try:
+        locks = environment_locks()[section]
+    except ConfigurationError as exc:
+        raise AdminConfigError(str(exc)) from exc
+    result = dict(posted)
+    for field, lock in locks.items():
+        if result.get(field) != lock.value:
+            raise AdminConfigError(f"This is set by {lock.variable} on the server.")
+        if field in stored:
+            result[field] = stored[field]
+        else:
+            result.pop(field)
+    return result
+
+
 def _apply_scoped_tokens(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
     max_days = _param(params, "max_days", int)
     if not 1 <= max_days <= scoped_tokens.LOCAL_MAX_DAYS:
         raise AdminConfigError(f"Scoped tokens can last from 1 to {scoped_tokens.LOCAL_MAX_DAYS} days.")
-    candidate = {
-        **config["scoped_tokens"],
+    posted = {
         "enabled": _param(params, "enabled", bool),
         "max_days": max_days,
         "allow_ai_proposals": _param(params, "allow_ai_proposals", bool),
     }
+    candidate = {**config["scoped_tokens"], **_hold_locked("scoped_tokens", posted, config["scoped_tokens"])}
     return _replace_section(config, "scoped_tokens", candidate, "Changed scoped tokens")
+
+
+def _apply_agent_runtimes(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    section = config["agent_runtimes"]
+    current = section.get("n8n") if isinstance(section.get("n8n"), dict) else {}
+    posted = {
+        "enabled": _param(params, "enabled", bool),
+        "project_id": _param(params, "project_id", str).strip(),
+        "mcp_url": _param(params, "mcp_url", str).strip(),
+        "credential_type": _param(params, "credential_type", str).strip(),
+    }
+    candidate = {**section, "n8n": {**current, **_hold_locked("agent_runtimes", posted, current)}}
+    _validated(N8nRuntimeConfig.from_org_config, "agent_runtimes", candidate)
+    return _replace_section(config, "agent_runtimes", candidate, "Changed agent runtimes")
 
 
 def _apply_audit_forwarding(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
@@ -907,7 +936,7 @@ def _apply_remove_connector_config(params: dict[str, Any]) -> tuple[str, list[st
 
 
 def apply_change(
-    action: str, params: dict[str, Any], *, bundle: dict[str, Any], mode: Mode, single_user: bool
+    action: str, params: dict[str, Any], *, bundle: dict[str, Any], single_user: bool
 ) -> tuple[str, list[str]]:
     """Validate and store one Admin-page change; returns ``(summary, changed_sections)``.
 
@@ -915,26 +944,23 @@ def apply_change(
     passes only the action's declared parameters. A change that alters nothing returns
     ``("", [])`` and writes nothing. The privacy actions are not handled here.
     """
-    modes = _ACTION_MODES.get(action)
-    if modes is None:
+    if action not in _ACTION_MODES:
         raise AdminConfigError("Unknown action.")
-    if mode not in modes:
-        raise AdminConfigError("This setting is available on organization servers only.")
     with _write_lock:
-        config = config_for(bundle, mode=mode, single_user=single_user)
+        config = config_for(bundle, single_user=single_user)
         before = copy.deepcopy(config)
         if action in ("offer_service", "withdraw_service"):
-            result = _apply_service_toggle(config, action, params, mode=mode)
+            result = _apply_service_toggle(config, action, params)
         elif action == "set_atlassian_assets":
             result = _apply_atlassian_assets(config, params)
         elif action == "set_salesforce_login_url":
             result = _apply_salesforce_login_url(config, params)
         elif action == "set_server_address":
-            result = _apply_server_address(config, params, bundle, mode=mode)
-        elif action == "set_auto_provisioning" and _locked_variable(_service_name(params, tuple(_ADDRESS_FIELD)), mode=mode):
+            result = _apply_server_address(config, params, bundle)
+        elif action == "set_auto_provisioning" and _locked_variable(_service_name(params, tuple(_ADDRESS_FIELD))):
             result = _apply_locked_trust(config, params)
         elif action == "set_auto_provisioning":
-            result = _apply_auto_provisioning(config, params, bundle, mode=mode, single_user=single_user)
+            result = _apply_auto_provisioning(config, params, single_user=single_user)
         elif action == "set_unattended_sessions":
             result = _apply_unattended_sessions(config, params)
         elif action == "clear_rooms":
@@ -950,6 +976,8 @@ def apply_change(
             result = _apply_tighten_step_up(config, params)
         elif action == "set_scoped_tokens":
             result = _apply_scoped_tokens(config, params)
+        elif action == "set_agent_runtimes":
+            result = _apply_agent_runtimes(config, params)
         elif action == "remove_connector_config":
             result = _apply_remove_connector_config(params)
         else:
@@ -1005,11 +1033,11 @@ def check_rooms(data: Any) -> tuple[list[Any], str]:
     return rooms, synced_at
 
 
-def replace_rooms(data: Any, *, bundle: dict[str, Any], mode: Mode, single_user: bool) -> str:
+def replace_rooms(data: Any, *, bundle: dict[str, Any], single_user: bool) -> str:
     """Replace the room directory with the file ``sync_room_directory.py`` wrote."""
     rooms, synced_at = check_rooms(data)
     with _write_lock:
-        config = config_for(bundle, mode=mode, single_user=single_user)
+        config = config_for(bundle, single_user=single_user)
         config["rooms"] = copy.deepcopy(rooms)
         config["rooms_synced_at"] = synced_at
         _write(config)
@@ -1033,7 +1061,7 @@ def _connector_options(loaded: connector_configs.LoadedConfig) -> dict[str, Any]
 
 
 def _service_row(
-    bundle: dict[str, Any], admin: dict[str, Any], name: str, env: dict[str, str], *, mode: Mode, single_user: bool,
+    bundle: dict[str, Any], admin: dict[str, Any], name: str, env: dict[str, str], *, single_user: bool,
     connectors: dict[str, connector_configs.LoadedConfig] | None = None, issuer_url: str = "",
     reupload_needed: bool = False,
 ) -> dict[str, Any]:
@@ -1041,19 +1069,16 @@ def _service_row(
 
     stored = admin.get("services", {}).get(name, {})
     stored = stored if isinstance(stored, dict) else {}
-    section = _section(bundle, name)
     app_source = "server"
     client_id = ""
     connector_options: dict[str, Any] = {}
     if name in oauth_apps.BUILTIN_KEY:
-        app_source = oauth_apps.credentials_source(bundle, name, mode=mode, connectors=connectors)
+        app_source = oauth_apps.credentials_source(bundle, name, connectors=connectors)
         if app_source == "connector":
             # The client id and where the file came from, never the secret in its fields.
             loaded = (connectors or {})[name]
             client_id = loaded.client_id
             connector_options = _connector_options(loaded)
-        elif app_source == "bundle":
-            client_id = str(section.get("consumer_key" if name == "salesforce" else "client_id") or "")
         elif app_source == "builtin":
             app = app_credentials.builtin_app(oauth_apps.BUILTIN_KEY[name])
             client_id = str(app["client_id"]) if app else ""
@@ -1065,8 +1090,7 @@ def _service_row(
     elif name == "telegram":
         app_source = "builtin" if app_credentials.telegram_app_credentials() is not None else "none"
     elif name == "grist":
-        client_id = "" if mode == "org" else str(section.get("client_id") or "")
-        if mode == "org" and "grist" in (connectors or {}):
+        if "grist" in (connectors or {}):
             app_source = "connector"
             loaded = (connectors or {})[name]
             client_id = loaded.client_id
@@ -1076,7 +1100,7 @@ def _service_row(
         connector_options["reupload_needed"] = True
 
     options: dict[str, Any] = {}
-    locked_by = _locked_variable(name, mode=mode)
+    locked_by = _locked_variable(name)
     if name == "atlassian":
         options = {
             "assets": bool(stored.get("assets", False)),
@@ -1089,14 +1113,12 @@ def _service_row(
             if app and app.get("install_url"):
                 options["install_url"] = str(app["install_url"])
     elif name in _ADDRESS_FIELD:
-        source = "connector" if app_source == "connector" else _address_source(bundle, name, stored, env, mode=mode)
+        source = "connector" if app_source == "connector" else _address_source(name, stored, env)
         if source == "connector":
             address = str((connectors or {})[name].fields.get("server_url") or "")
-        elif source == "bundle":
-            address = str(section.get("server_url") or "")
         else:
             address = env.get(name) or str(stored.get(_ADDRESS_FIELD[name], "") or "")
-        available, reason = _auto_provision_state(bundle, name, stored, env, mode=mode, single_user=single_user)
+        available, reason = _auto_provision_state(name, stored, env, single_user=single_user)
         auto = stored.get("auto_provision", {})
         key_env = str(auto.get("key_env", "") or _DEFAULT_KEY_ENV[name])
         if locked_by:
@@ -1123,7 +1145,7 @@ def _service_row(
         "offered_locked_by": locked_by,
         "app_source": app_source,
         "client_id": client_id,
-        "relay": mode == "org" and app_source == "builtin" and name != "telegram",
+        "relay": app_source == "builtin" and name != "telegram",
         "options": {**options, **connector_options},
     }
 
@@ -1139,19 +1161,17 @@ def signin_state(bundle: dict[str, Any]) -> dict[str, Any]:
 
 
 def service_rows(
-    bundle: dict[str, Any], admin: dict[str, Any], *, mode: Mode, single_user: bool = False, issuer_url: str = "",
+    bundle: dict[str, Any], admin: dict[str, Any], *, single_user: bool = False, issuer_url: str = "",
 ) -> list[dict[str, Any]]:
     """One row per service for the Admin page. A row never carries a secret: not a client
     secret, not a provisioning key, only whether the key is set."""
     from . import oauth_apps
 
     env = _env_addresses()
-    connectors, stale = (
-        connector_configs.load_with_stale(connector_configs.default_org_dir()) if mode == "org" else ({}, set())
-    )
+    connectors, stale = connector_configs.load_with_stale(connector_configs.default_org_dir())
     return [
         _service_row(
-            bundle, admin, name, env, mode=mode, single_user=single_user, connectors=connectors,
+            bundle, admin, name, env, single_user=single_user, connectors=connectors,
             issuer_url=issuer_url, reupload_needed=name in stale,
         )
         for name in SERVICES

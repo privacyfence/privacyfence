@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "claim": {"key_overlap_hours": 24},
+  "membership": {"source": "snapshot", "max_additions": 20},
+  "upstreams": [
+    {
+      "id": "knowledgehub",
+      "label": "Knowledge hub",
+      "url": "https://hub.example.internal/mcp",
+      "audience": "knowledge-hub",
+      "identity_claim": "required",
+      "claim_lifetime_seconds": 60,
+      "allowed_principal_types": ["claude_client", "n8n_workflow"],
+      "tools": {
+        "search":  {"gate": "auto", "verb": "search"},
+        "get_doc": {"gate": "auto", "verb": "read"}
+      }
+    }
+  ]
+}

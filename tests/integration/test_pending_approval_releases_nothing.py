@@ -2,7 +2,7 @@
 approved one is audited end to end under one request_id (ADR 0093).
 
 Before ADR 0093, 5.0.0a1/a2 manual QA recorded this for a gated
-``drive_download_file`` from a client *without* the ``.mcpb`` shim (so the
+``drive_download_file`` (so the
 file leaves through a one-time capability link, ADR 0028):
 
     drive_download_file  approval_pending
@@ -13,9 +13,8 @@ file leaves through a one-time capability link, ADR 0028):
 drive.py discarded gated_call's returned pending result and delivered
 anyway. The tests below pin the fixed sequence instead.
 
-Driven through the real stack: a socket-bound local-mode ``WebServer``,
-the official ``mcp`` client over ``/mcp`` with a bearer token and no
-``X-PrivacyFence-File-Bridge`` header, the real connectors (only their
+Driven through the real stack: a socket-bound single-user org ``WebServer``,
+the official ``mcp`` client over ``/mcp`` with a bearer token, the real connectors (only their
 Google clients are faked), the real ``gate.gated_call`` and the real
 ``PendingApprovalRegistry``. A short hold window stands in for a human who
 has not answered yet, exactly as ``test_deferred_approval_round_trip.py``
@@ -26,8 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import uuid
 from unittest.mock import MagicMock
+
+from urllib.parse import urljoin
 
 import httpx
 import httpx2
@@ -36,18 +36,18 @@ import pytest
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
-from privacyfence import approval_ui, local_files  # noqa: E402
-from privacyfence import paths as paths_module  # noqa: E402
+from privacyfence import approval_ui  # noqa: E402
 from privacyfence.approvals import PendingApprovalRegistry  # noqa: E402
-from privacyfence.audit_log import init_audit_logger  # noqa: E402
 from privacyfence.connectors.calendar import CalendarConnector  # noqa: E402
 from privacyfence.connectors.drive import DriveConnector  # noqa: E402
+from privacyfence.org_mode import DownloadDeliveryConfig  # noqa: E402
 from privacyfence.drive_client import DriveFile, DriveFileContent  # noqa: E402
 from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
-from privacyfence.web.server import WebServer  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 
-from .test_deferred_approval_round_trip import _decide, _free_port, _wait_until_connectable  # noqa: E402
+from tests.integration.org_server_harness import SingleUserOrgServer, single_user_org_server  # noqa: E402
+
+from .test_deferred_approval_round_trip import _decide  # noqa: E402
 
 pytestmark = [pytest.mark.timeout(30), pytest.mark.integration]
 
@@ -60,26 +60,24 @@ def _fake_drive_client() -> MagicMock:
         id="f1", name="report.txt", mime_type="text/plain", size=len(_FILE_BYTES),
         modified_time="2026-09-28T00:00:00Z", owners=["alice@example.com"],
     )
+    # The approval card's preview reads the content; the delivery after approval fetches the bytes.
     client.get_file_content.return_value = DriveFileContent(
         file=client.get_file_metadata.return_value, content_bytes=_FILE_BYTES, truncated=False,
     )
+    client.download_file_bytes.return_value = {
+        "data": _FILE_BYTES, "name": "report.txt", "mime_type": "text/plain",
+        "size_bytes": len(_FILE_BYTES),
+    }
     return client
 
 
 @pytest.fixture
-def local_server(tmp_path, monkeypatch):
-    home = tmp_path / f"pf-{uuid.uuid4().hex[:8]}" / ".privacyfence"
-    home.mkdir(parents=True)
-    monkeypatch.setattr(paths_module, "data_dir", lambda: home)
-    audit_dir = tmp_path / "audit"
-    init_audit_logger(str(audit_dir))
-    # A privilege-separated local install: the daemon cannot write into the
-    # user's destination_dir, so the download goes through the file bridge,
-    # and with no shim header on the request, through a capability link.
-    local_files.force_bridge_for_tests(True)
-
+def local_server(tmp_path):
+    # A download comes back as a one-time capability link.
     drive = DriveConnector(_fake_drive_client())
     drive.my_email = "me@example.com"
+    # Every download goes through a one-time link, never inline.
+    drive.download_config = DownloadDeliveryConfig(inline_max_bytes=0)
     calendar_client = MagicMock()
     calendar = CalendarConnector(calendar_client)
     calendar.my_email = "me@example.com"
@@ -87,23 +85,18 @@ def local_server(tmp_path, monkeypatch):
     approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
     dispatcher = McpDispatcher(lambda: {"drive": drive, "calendar": calendar}, registry=registry)
 
-    port = _free_port()
-    server = WebServer(approval_ui.get_approval_ui(), host="localhost", port=port, mcp_dispatcher=dispatcher)
-    server.start()
-    try:
-        _wait_until_connectable("localhost", port)
-        yield server, audit_dir, calendar_client
-    finally:
-        # Nobody answered: release every card's popup-executor worker so
-        # the server can shut down.
-        for approval in registry.list_pending():
-            registry.finalize(approval.id, "deny")
-        server.stop()
-        local_files.force_bridge_for_tests(False)
+    with single_user_org_server(tmp_path, web_ui=approval_ui.get_approval_ui(), dispatcher=dispatcher) as server:
+        try:
+            yield server, server.audit_dir, calendar_client
+        finally:
+            # Nobody answered: release every card's popup-executor worker so
+            # the server can shut down.
+            for approval in registry.list_pending():
+                registry.finalize(approval.id, "deny")
 
 
-async def _call(server: WebServer, tool: str, args: dict) -> dict:
-    headers = {"Authorization": f"Bearer {server.mcp_token}"}
+async def _call(server: SingleUserOrgServer, tool: str, args: dict) -> dict:
+    headers = {"Authorization": f"Bearer {server.bearer()}"}
     async with httpx2.AsyncClient(headers=headers) as http_client:
         async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
@@ -123,7 +116,7 @@ def _decisions(audit_dir) -> list[tuple[str, str]]:
     return [(r.get("tool", ""), r.get("decision", "")) for r in _rows(audit_dir)]
 
 
-_DOWNLOAD_ARGS = {"file_id": "f1", "destination_dir": "~/Downloads", "reason": "check the audit trail"}
+_DOWNLOAD_ARGS = {"file_id": "f1", "reason": "check the audit trail"}
 
 
 async def test_pending_drive_download_hands_out_no_link(local_server):
@@ -162,7 +155,7 @@ async def test_approved_download_is_audited_as_approved_under_one_request_id(loc
     released = await _call(server, "drive_download_file", _DOWNLOAD_ARGS)
     assert released["delivery"] == "link"
     async with httpx.AsyncClient() as http_client:
-        served = await http_client.get(released["download_url"])
+        served = await http_client.get(urljoin(server.mcp_url, released["download_url"]))
     assert served.status_code == 200
     assert served.content == _FILE_BYTES
 

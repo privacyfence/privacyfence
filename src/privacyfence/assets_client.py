@@ -37,9 +37,9 @@ logger = logging.getLogger(__name__)
 ASSETS_REQUIRED_SCOPE = "read:cmdb-object:jira"
 NEEDS_ASSETS_PERMISSION = (
     "Jira Assets needs an extra Atlassian permission. "
-    "Use Authenticate… on Jira Assets in PrivacyFence Settings."
+    "Connect Jira Assets on the Connect page (/connect)."
 )
-NOT_AUTHENTICATED = "Jira Assets is not authenticated. Use Authenticate… in PrivacyFence Settings."
+NOT_AUTHENTICATED = "Jira Assets is not authenticated. Connect Jira Assets on the Connect page (/connect)."
 NEEDS_WORKSPACE_ID = (
     "Jira Assets could not look up this site's Assets workspace id. Set it under Admin → "
     "Features → Jira Assets, or as connectors.assets.workspace_id in PrivacyFence settings; see "
@@ -59,6 +59,8 @@ _SCHEMA_PAGE_SIZE = 100
 _HTTP_TIMEOUT_SECONDS = 30
 _ID_RE = re.compile(r"[0-9]{1,12}")
 WORKSPACE_ID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
+_DETAIL_MAX_CHARS = 300
+_UUID_RE = re.compile(WORKSPACE_ID_RE.pattern)
 _MAX_AQL_CHARS = 4000
 _DIRECTIONS = ("outbound", "inbound", "both")
 _ATTRIBUTE_KINDS = {
@@ -209,16 +211,109 @@ def _scope_refused(exc: requests.HTTPError) -> bool:
     return status == 401 and "scope does not match" in (getattr(response, "text", "") or "")
 
 
+def _scrub(text: str) -> str:
+    """Replace every UUID (the Atlassian cloud id, the Assets workspace id) with ``<id>``."""
+    return _UUID_RE.sub("<id>", text)
+
+
+_URL_RE = re.compile(r"https?://\S+")
+_ATLASSIAN_HOST_RE = re.compile(r"[\w.-]+\.atlassian\.(?:net|com)")
+_LIST_ERROR_KEYS = ("message", "detail", "title", "errorMessage")
+_TOP_LEVEL_REASON_KEYS = ("detail", "title", "errorMessage", "error_description", "reason")
+_WORKSPACE_LOOKUP_ROUTE = "servicedeskapi/assets/workspace"
+
+
+def _clean_detail(reason: str) -> str:
+    """One short line: no URL, Atlassian host, email or UUID, at most ``_DETAIL_MAX_CHARS``."""
+    reason = " ".join(reason.split()).replace("|", "/")
+    reason = _URL_RE.sub("<url>", reason)
+    reason = _ATLASSIAN_HOST_RE.sub("<host>", reason)
+    reason = _scrub(mask_emails(reason, ""))
+    if len(reason) > _DETAIL_MAX_CHARS:
+        reason = reason[: _DETAIL_MAX_CHARS - 1] + "…"
+    return reason
+
+
+def _text_reasons(body: dict[str, Any]) -> list[str]:
+    """The readable reasons of a JSON error body, in a fixed order, without duplicates."""
+    parts: list[str] = []
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value and value not in parts:
+            parts.append(value)
+
+    messages = body.get("errorMessages")
+    if isinstance(messages, list):
+        for m in messages:
+            add(m)
+    errors = body.get("errors")
+    if isinstance(errors, dict):
+        for k, v in errors.items():
+            if isinstance(v, str) and v:
+                add(f"{k}: {v}")
+    elif isinstance(errors, list):
+        for item in errors:
+            if isinstance(item, dict):
+                item = next(
+                    (item[k] for k in _LIST_ERROR_KEYS
+                     if isinstance(item.get(k), str) and item[k]),
+                    None,
+                )
+            add(item)
+    for key in ("message", "error", *_TOP_LEVEL_REASON_KEYS):
+        add(body.get(key))
+    return parts
+
+
+def _error_detail(response: Any) -> str:
+    """Atlassian's reason from an error response, one short line with no UUID, URL, host or
+    email; else the reply text as it came; else ``no detail (HTML page)`` / ``(empty body)``."""
+    if response is None:
+        return "no detail"
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    parts = _text_reasons(body) if isinstance(body, dict) else []
+    if parts:
+        return _clean_detail("; ".join(parts))
+    text = (getattr(response, "text", "") or "").strip()
+    if text and not text.startswith("<"):
+        return _clean_detail(text)
+    return "no detail (HTML page)" if text else "no detail (empty body)"
+
+
+def _route_label(url: str) -> str:
+    """The Assets route of a request URL (no workspace id, no query), or ``""`` when unknown."""
+    if "/v1/" in url:
+        return url.split("/v1/", 1)[1].split("?", 1)[0]
+    if url.endswith(_WORKSPACE_LOOKUP_ROUTE):
+        return _WORKSPACE_LOOKUP_ROUTE
+    return ""
+
+
 def _guarded(fn: Callable[..., _T]) -> Callable[..., _T]:
-    """Re-raise anything but an ``AssetsClientError`` as ``AssetsClientError("<method> failed: …")``."""
+    """Re-raise anything but an ``AssetsClientError`` as ``AssetsClientError("<method> failed: …")``.
+
+    The message names the HTTP status and Atlassian's reason and never carries the request URL
+    or a UUID: the URL holds the site's cloud id and Assets workspace id, and the message
+    reaches public logs, the daemon log and the AI client."""
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> _T:
         try:
             return fn(*args, **kwargs)
         except AssetsClientError:
             raise
+        except requests.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            detail = _error_detail(exc.response)
+            route = getattr(exc, "route", "")
+            suffix = f" ({route})" if route else ""
+            raise AssetsClientError(
+                f"{fn.__name__} failed: HTTP {status}: {detail}{suffix}"
+            ) from exc
         except Exception as exc:
-            raise AssetsClientError(f"{fn.__name__} failed: {exc}") from exc
+            raise AssetsClientError(_scrub(f"{fn.__name__} failed: {exc}")) from exc
     return wrapper
 
 
@@ -359,7 +454,13 @@ class AssetsClient:
         response = self._session.request(
             method, url, params=params, json=json, timeout=_HTTP_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            label = _route_label(url)
+            if label:
+                exc.route = _scrub(f"{method} {label}")  # type: ignore[attr-defined]
+            raise
         return response.json()
 
     def _call(

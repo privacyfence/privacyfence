@@ -16,19 +16,15 @@ below) that runs once per failing test and:
    identifier,
 2. writes ``manifest.txt``, a flat recursive listing (relative path + size,
    never content) of everything under that test's own ``tmp_path`` -- an
-   installed-file manifest for packaged tests, without also
-   re-uploading the installed binaries themselves as CI artifacts (see
+   installed-file manifest for tests that install something, without also
+   re-uploading the installed files themselves as CI artifacts (see
    ``capture_directory_manifest``'s own docstring for why this is a listing,
-   not a copy -- a PyInstaller onedir build or an extracted ``.deb`` easily
-   runs to hundreds of MB),
+   not a copy -- an installed tree easily runs to hundreds of MB),
 3. copies out the small text logs a manifest listing alone wouldn't let
    anyone actually read -- ``daemon.log``/``install*.log``/
    ``uninstall*.log`` and any ``*.jsonl`` audit log, wherever they land
    under that ``tmp_path``. Every module this covers already names its
-   own subprocess log exactly one of these ways (e.g.
-   test_windows_packaged_smoke.py's ``_running_daemon``, test_deb_packaged_
-   lifecycle.py's identically-shaped helper, tests/system/
-   test_local_mode_system.py's ``_prepare_sandbox``) -- nothing here
+   own subprocess log exactly one of these ways -- nothing here
    invents a new naming convention, it just collects the ones that already
    exist.
 
@@ -163,13 +159,12 @@ def write_environment_info(dest: Path) -> None:
 
 def suite_name_for(file_path: str) -> str:
     """Derives a stable, filesystem-friendly suite slug from a test module's
-    own path -- e.g. ``tests/integration/test_deb_packaged_lifecycle.py`` ->
-    ``deb-packaged-lifecycle``. The one thing every consumer of
+    own path -- e.g. ``tests/integration/test_org_mode_smoke.py`` ->
+    ``org-mode-smoke``. The one thing every consumer of
     ``failure_dir``/``capture_failure_diagnostics`` must agree on, so a test
     module capturing something extra of its own (e.g.
-    test_deb_packaged_lifecycle.py's ``dpkg -L`` manifest -- real installed
-    system state ``tmp_path`` never isolates, so it needs its own capture
-    call) lands in the exact same directory as this module's own
+    a manifest of real installed system state ``tmp_path`` never isolates,
+    which needs its own capture call) lands in the exact same directory as this module's own
     ``environment.txt``/``manifest.txt``/``logs/``, not a sibling one."""
     return Path(file_path).stem.removeprefix("test_").replace("_", "-")
 

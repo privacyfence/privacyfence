@@ -127,6 +127,9 @@ class ClaimedDownload:
     mime_type: str
     request_id: str
     agent: AgentIdentity
+    # Whose file it is: a capability fetch carries no bearer, so its served row is written to
+    # this principal's audit log, next to the decision that released the file.
+    principal_id: str
 
 
 class DownloadStagingStore:
@@ -289,7 +292,9 @@ class DownloadStagingStore:
             # of this method.
             logger.warning("download_staging: AES-GCM decrypt failed for %s", lookup_id)
             return None
-        return ClaimedDownload(plaintext, staged.name, staged.mime_type, staged.request_id, staged.agent)
+        return ClaimedDownload(
+            plaintext, staged.name, staged.mime_type, staged.request_id, staged.agent, staged.principal_id,
+        )
 
     # ------------------------------------------------------------------ #
     # Expiry -- opportunistic, mirroring approvals.PendingApprovalRegistry's

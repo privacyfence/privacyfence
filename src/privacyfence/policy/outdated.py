@@ -9,7 +9,7 @@ derived from the same catalogues the "add a rule" form compiles from (``propose.
 form would add, never a guess.
 
 Nothing here writes anything. Stored rules are widened only by an explicit, confirmed update
-(``SettingsController.update_policy_rule``); no load, upgrade or startup path calls into this module.
+(an explicit rule update on the Settings page); no load, upgrade or startup path calls into this module.
 """
 from __future__ import annotations
 

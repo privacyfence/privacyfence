@@ -955,6 +955,199 @@ class TestDeidentifyAssets:
 
 
 _WORKSPACE_ID = "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+_HOSTY = "https://x.atlassian.net/a|b"
+
+
+def _http_error(status, text=""):
+    import requests
+
+    r = requests.Response()
+    r.status_code = status
+    r._content = text.encode()
+    return requests.HTTPError("x", response=r)
+
+
+class _ProbeClient:
+    """Stands in for AssetsClient for the probe: ``_send`` is scripted, the refresh path must never run."""
+
+    _jira_url = "https://api.atlassian.com/ex/jira/c"
+
+    def __init__(self, script=None, workspace_id=_WORKSPACE_ID, api_error=False):
+        self._workspace_id = workspace_id
+        self._api_error = api_error
+        self.script = script or {}
+        self.calls: list[tuple[str, str, dict | None]] = []
+
+    def _api(self):
+        if self._api_error:
+            raise RuntimeError("no workspace")
+        return f"https://api.atlassian.com/ex/jira/c/jsm/assets/workspace/{_WORKSPACE_ID}/v1"
+
+    def _send(self, method, url, params=None):
+        self.calls.append((method, url, params))
+        if url.endswith("/rest/servicedeskapi/assets/workspace"):
+            key = "lookup"
+        elif recorder._UNKNOWN_WORKSPACE in url:
+            key = "unknown"
+        elif params is None:
+            key = "none"
+        else:
+            key = str(params["maxResults"])
+        out = self.script.get(key, {})
+        if isinstance(out, BaseException):
+            raise out
+        return out
+
+    def _request(self, *a, **k):
+        raise AssertionError("refresh path used")
+
+    def _try_refresh(self, *a, **k):
+        raise AssertionError("refresh path used")
+
+
+def _assert_clean(line):
+    for bad in (_WORKSPACE_ID, recorder._UNKNOWN_WORKSPACE, "api.atlassian.com", "https", "atlassian.net", "|"):
+        assert bad not in line, bad
+
+
+def _fail(status=400):
+    return _http_error(status, "")
+
+
+_V1 = "the reads answer now; the failure was intermittent"
+_V2 = "the configured workspace id is not the site's; set assets.workspace_id to the site's"
+_V3 = "the site has no Assets workspace; check that Jira Service Management Assets is enabled"
+_V4 = "Atlassian rejects maxResults=1; raise the proof read's page size in check_connection"
+_V5 = ("the configured workspace id behaves like an unknown one; either it is not the site's or the site's "
+       "Assets changed, compare assets.workspace_id with the site's")
+_V6 = "undetermined; send these statuses to the maintainer"
+
+
+def _probe(script=None, **kw):
+    client = _ProbeClient(script, **kw)
+    line = recorder._probe_assets_connection(client)
+    _assert_clean(line)
+    return line, client
+
+
+def _lookup(wid=_WORKSPACE_ID):
+    return {"values": [{"workspaceId": wid}]}
+
+
+class TestProbeAssets:
+    def test_verdict_1_intermittent(self):
+        line, _ = _probe({"lookup": _fail(403)})
+        assert line.endswith(f"verdict: {_V1}")
+
+    def test_verdict_2_id_differs(self):
+        other = "ffffffff-4f50-6172-8394-a5b6c7d8e9f0"
+        line, _ = _probe({"lookup": _lookup(other), "none": _fail(), "25": _fail(), "1": _fail()})
+        assert "lookup=HTTP 200, id differs from configured" in line
+        assert line.endswith(f"verdict: {_V2}")
+
+    def test_verdict_3_no_workspace(self):
+        line, _ = _probe({"lookup": {}, "none": _fail(), "25": _fail(), "1": _fail()})
+        assert "lookup=HTTP 200, no workspace" in line
+        assert line.endswith(f"verdict: {_V3}")
+
+    def test_verdict_4_max_results_one_rejected(self):
+        line, _ = _probe({"lookup": _fail(403), "1": _fail()})
+        assert line.endswith(f"verdict: {_V4}")
+
+    def test_verdict_5_unknown_id_behaviour(self):
+        e = lambda: _http_error(400, "")  # noqa: E731
+        line, _ = _probe({"lookup": _fail(403), "none": e(), "25": e(), "1": e(), "unknown": e()})
+        assert line.endswith(f"verdict: {_V5}")
+
+    def test_verdict_6_undetermined(self):
+        line, _ = _probe({"lookup": _fail(403), "none": _fail(), "25": _fail(), "1": _fail(),
+                          "unknown": _fail(404)})
+        assert "unknown workspace=HTTP 404 (empty body)" in line
+        assert line.endswith(f"verdict: {_V6}")
+
+    def test_verdict_2_wins_over_4(self):
+        line, _ = _probe({"lookup": _lookup("ffffffff-0000-0000-0000-000000000000"), "1": _fail()})
+        assert line.endswith(f"verdict: {_V2}")
+
+    def test_verdict_1_wins_over_2(self):
+        line, _ = _probe({"lookup": _lookup("ffffffff-0000-0000-0000-000000000000")})
+        assert line.endswith(f"verdict: {_V1}")
+
+    def test_verdict_4_needs_page_size_25_ok(self):
+        line, _ = _probe({"lookup": _fail(403), "none": {}, "25": _fail(), "1": _fail()})
+        assert not line.endswith(f"verdict: {_V4}")
+
+    def test_id_match_is_case_insensitive(self):
+        line, _ = _probe({"lookup": _lookup(_WORKSPACE_ID.upper())})
+        assert "lookup=HTTP 200, id matches configured;" in line
+
+    def test_none_configured(self):
+        line, _ = _probe({"lookup": _lookup()}, workspace_id=None)
+        assert "lookup=HTTP 200, none configured;" in line
+
+    def test_empty_body_marker_and_plain_status(self):
+        line, _ = _probe({"lookup": _http_error(403, "forbidden " + _HOSTY),
+                          "none": _http_error(400, "  \n"), "25": _http_error(500, _HOSTY), "1": _fail()})
+        assert "lookup=HTTP 403;" in line
+        assert "list without params=HTTP 400 (empty body);" in line
+        assert "list maxResults=25=HTTP 500;" in line
+
+    def test_response_less_error_and_other_exception_classes(self):
+        import requests
+
+        line, _ = _probe({"lookup": requests.HTTPError(_HOSTY), "none": requests.ConnectionError(_HOSTY),
+                          "25": _fail(), "1": _fail()})
+        assert "lookup=error HTTPError;" in line
+        assert "list without params=error ConnectionError;" in line
+
+    def test_non_json_ok_body_is_a_json_error(self):
+        import json as _json
+
+        line, _ = _probe({"lookup": _json.JSONDecodeError(_HOSTY, "", 0)})
+        assert "lookup=error JSONDecodeError;" in line
+
+    def test_api_failure_makes_only_the_lookup_and_unknown_reads(self):
+        line, client = _probe({"lookup": _fail(403)}, api_error=True)
+        assert [c[1] for c in client.calls] == [
+            f"{_ProbeClient._jira_url}/rest/servicedeskapi/assets/workspace",
+            f"{_ProbeClient._jira_url}/jsm/assets/workspace/{recorder._UNKNOWN_WORKSPACE}/v1/objectschema/list",
+        ]
+        assert "list without params=unavailable; list maxResults=25=unavailable; list maxResults=1=unavailable;" in line
+
+    def test_probe_calls_are_the_five_gets_in_order(self):
+        _, client = _probe({"lookup": _fail(403)})
+        base = f"{_ProbeClient._jira_url}/jsm/assets/workspace/{_WORKSPACE_ID}/v1/objectschema/list"
+        assert client.calls == [
+            ("GET", f"{_ProbeClient._jira_url}/rest/servicedeskapi/assets/workspace", None),
+            ("GET", base, None),
+            ("GET", base, {"startAt": 0, "maxResults": 25}),
+            ("GET", base, {"startAt": 0, "maxResults": 1}),
+            ("GET", f"{_ProbeClient._jira_url}/jsm/assets/workspace/{recorder._UNKNOWN_WORKSPACE}/v1/objectschema/list",
+             {"startAt": 0, "maxResults": 25}),
+        ]
+
+    def test_probe_never_raises(self):
+        class Broken:
+            @property
+            def _jira_url(self):
+                raise AttributeError("x")
+
+            _workspace_id = None
+
+        line = recorder._probe_assets_connection(Broken())
+        _assert_clean(line)
+        assert line == "probes: error AttributeError"
+
+    def test_one_full_line(self):
+        e = lambda: _http_error(400, "")  # noqa: E731
+        line, _ = _probe({"lookup": _http_error(403, "denied " + _HOSTY), "none": e(), "25": e(), "1": e(), "unknown": e()})
+        assert line == (
+            "probes: lookup=HTTP 403; list without params=HTTP 400 (empty body); "
+            "list maxResults=25=HTTP 400 (empty body); list maxResults=1=HTTP 400 (empty body); "
+            "unknown workspace=HTTP 400 (empty body); verdict: the configured workspace id behaves like an "
+            "unknown one; either it is not the site's or the site's Assets changed, compare "
+            "assets.workspace_id with the site's"
+        )
 
 
 class TestCheckAssets:
@@ -1059,12 +1252,31 @@ class TestCheckAssets:
     def test_connection_failure_is_one_failed_row(self, monkeypatch):
         from privacyfence.assets_client import AssetsClientError
 
-        class NoWorkspace(_FakeAssetsClient):
+        class NoWorkspace(_FakeAssetsClient, _ProbeClient):
+            def __init__(self):
+                _FakeAssetsClient.__init__(self)
+                _ProbeClient.__init__(self)
+
+            def _request(self, fn, *args, **kwargs):
+                return fn(*args, **kwargs)
+
             def check_connection(self):
                 raise AssetsClientError("no Assets workspace")
 
         results = self._run(monkeypatch, NoWorkspace())
         assert len(results) == 1 and "no Assets workspace" in results[0].note
+        assert results[0].note.startswith("no Assets workspace -- probes: lookup=")
+        assert "verdict:" in results[0].note
+
+    def test_build_failure_has_no_probes(self, monkeypatch):
+        from privacyfence.assets_client import AssetsClientError
+
+        def raiser(workspace_id=""):
+            raise AssetsClientError("boom")
+
+        monkeypatch.setattr(recorder, "_build_assets_client", raiser)
+        results = recorder.check_assets(record=False, manifest={"assets": {}})
+        assert len(results) == 1 and results[0].note == "boom"
 
     def test_registered_with_its_three_fixtures(self):
         assert recorder.CONNECTOR_CHECKS["assets"] is recorder.check_assets

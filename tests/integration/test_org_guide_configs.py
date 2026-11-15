@@ -1,30 +1,25 @@
-"""The org guide's systemd unit and nginx server block are valid, and keep the lines the daemon needs.
+"""The org guide's nginx server block is valid, and keeps the lines the daemon needs.
 
-``docs/org-mode-setup-guide.md`` gives operators two configs to copy verbatim: the hardened
-``privacyfence-org.service`` unit and the nginx reverse-proxy block. Nothing else in the suite runs
-either one; ``test_org_ubuntu_release_smoke.py`` starts the daemon as a plain process and simulates
-the proxy's headers at the HTTP layer. Both configs are read from the guide by heading name, so the
-guide stays the only copy and a renumbered section does not break the lookup.
+``docs/org-mode-setup-guide.md`` gives operators an nginx reverse-proxy block to copy verbatim.
+Nothing else in the suite runs it; ``test_org_ubuntu_release_smoke.py`` starts the daemon as a plain
+process and simulates the proxy's headers at the HTTP layer. The block is read from the guide by
+heading name, so the guide stays the only copy and a renumbered section does not break the lookup.
 
 Two kinds of check:
 
 - Static assertions in plain Python that the lines the daemon depends on are still there: the
-  hardening settings, the one writable path, the forwarded headers the Origin check needs, and a
-  body size limit that fits an upload slot. These run everywhere.
-- The real parsers, ``systemd-analyze verify`` and ``nginx -t``, which catch an unknown directive,
-  a bad value or a syntax error. Each skips when its binary is absent. They prove the configs
-  parse, not that the daemon runs under them.
+  forwarded headers the Origin check needs, the streaming settings and a body size limit that fits
+  an upload slot. These run everywhere.
+- The real parser, ``nginx -t``, which catches an unknown directive, a bad value or a syntax error.
+  It skips when nginx is absent. It proves the config parses, not that the daemon runs behind it.
 """
 
 from __future__ import annotations
 
-import os
 import re
-import shlex
 import shutil
 import socket
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -38,11 +33,8 @@ pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GUIDE = REPO_ROOT / "docs" / "org-mode-setup-guide.md"
 
-UNIT_NAME = "privacyfence-org.service"
-GUIDE_EXEC_START = "/opt/privacyfence/venv/bin/privacyfence-app"
 GUIDE_CERT = "/etc/letsencrypt/live/pf.acme.example.com/fullchain.pem"
 GUIDE_KEY = "/etc/letsencrypt/live/pf.acme.example.com/privkey.pem"
-DATA_HOME = "/var/lib/privacyfence-org"
 
 _NGINX_SIZE = re.compile(r"^(\d+)([kKmMgG]?)$")
 _NGINX_UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
@@ -56,28 +48,8 @@ def _fenced_block(title: str, language: str) -> str:
     return fenced_block(GUIDE, title, language)
 
 
-def _unit() -> str:
-    return _fenced_block("Hardened systemd unit", "ini")
-
-
 def _nginx() -> str:
     return _fenced_block("nginx", "nginx")
-
-
-def _service_settings(unit: str) -> dict[str, list[str]]:
-    settings: dict[str, list[str]] = {}
-    section = None
-    for raw in unit.splitlines():
-        line = raw.strip()
-        if not line or line.startswith(("#", ";")):
-            continue
-        if line.startswith("["):
-            section = line
-            continue
-        if section == "[Service]":
-            key, _, value = line.partition("=")
-            settings.setdefault(key.strip(), []).append(value.strip())
-    return settings
 
 
 def _nginx_directives(config: str, name: str) -> list[str]:
@@ -89,40 +61,9 @@ def _nginx_directives(config: str, name: str) -> list[str]:
 
 
 def test_section_lookup_is_by_heading_name_and_fails_loudly() -> None:
-    assert "[Service]" in _section("Hardened systemd unit")
+    assert "server_name" in _section("nginx")
     with pytest.raises(AssertionError, match="no section headed"):
         _section("No such heading")
-
-
-@pytest.mark.parametrize(
-    ("key", "value"),
-    [
-        ("User", "privacyfence-org"),
-        ("Group", "privacyfence-org"),
-        ("ExecStart", GUIDE_EXEC_START),
-        ("UMask", "0077"),
-        ("ProtectSystem", "strict"),
-        ("ReadWritePaths", DATA_HOME),
-        ("ProtectHome", "true"),
-        ("PrivateTmp", "true"),
-        ("PrivateDevices", "true"),
-        ("NoNewPrivileges", "true"),
-        ("CapabilityBoundingSet", ""),
-        ("AmbientCapabilities", ""),
-        ("RestrictNamespaces", "true"),
-        ("SystemCallArchitectures", "native"),
-        ("RestrictAddressFamilies", "AF_UNIX AF_INET AF_INET6"),
-    ],
-)
-def test_unit_keeps_hardening_setting(key: str, value: str) -> None:
-    assert _service_settings(_unit()).get(key) == [value]
-
-
-def test_unit_writable_path_is_the_service_accounts_home() -> None:
-    # The data directory is ~/.privacyfence inside the account's home, so the one writable path and
-    # the home directory the install section creates must be the same directory.
-    install = _section("Service account and install")
-    assert f"--home-dir {DATA_HOME} " in install
 
 
 def test_nginx_body_limit_fits_an_upload_slot() -> None:
@@ -169,107 +110,6 @@ def _require(binary: str) -> str:
     if path is None:
         pytest.skip(f"{binary} is not installed")
     return path
-
-
-def test_systemd_analyze_verifies_the_unit(tmp_path: Path) -> None:
-    systemd_analyze = _require("systemd-analyze")
-    # verify refuses a unit whose ExecStart binary does not exist; a stub stands in for the venv.
-    stub = tmp_path / "privacyfence-app"
-    stub.write_text("#!/bin/sh\n", encoding="utf-8")
-    stub.chmod(0o755)
-    unit_file = tmp_path / UNIT_NAME
-    unit_file.write_text(_unit().replace(GUIDE_EXEC_START, str(stub)), encoding="utf-8")
-
-    result = subprocess.run(
-        [systemd_analyze, "verify", "--man=no", str(unit_file)],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
-
-    # An unknown key or unparseable value is only logged ("..., ignoring") with exit 0, so any line
-    # naming the unit counts as a failure; lines about other units on the host do not.
-    output = result.stdout + result.stderr
-    problems = [line for line in output.splitlines() if UNIT_NAME in line]
-    assert result.returncode == 0, output
-    assert problems == []
-
-
-# --- The shipped Linux daemon unit, rendered by the installer's own render_template ---------------
-
-LINUX_SCRIPT = REPO_ROOT / "scripts" / "linux_privilege_separation.sh"
-LINUX_UNIT_TEMPLATE = REPO_ROOT / "installer" / "linux" / "privacyfence-daemon.service.tmpl"
-
-
-def _script_function(name: str) -> str:
-    text = LINUX_SCRIPT.read_text(encoding="utf-8")
-    match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL)
-    assert match is not None, f"no {name}() in {LINUX_SCRIPT.name}"
-    return match.group(0)
-
-
-def _render_daemon_unit(tmp_path: Path, daemon_executable: Path) -> Path:
-    """Run the script's real ``render_template`` (``chown``/``chmod`` stubbed, so no root is needed)."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    for tool in ("chown", "chmod"):
-        stub = bin_dir / tool
-        stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        stub.chmod(0o755)
-    unit = tmp_path / "privacyfence-daemon.service"
-    script = "\n".join(
-        [
-            "set -euo pipefail",
-            "die() { printf 'error: %s\\n' \"$*\" >&2; exit 1; }",
-            _script_function("sed_escape"),
-            _script_function("render_template"),
-            f"DAEMON_EXECUTABLE={shlex.quote(str(daemon_executable))}",
-            "COMPANION_EXECUTABLE=/nonexistent",
-            "SERVICE_ACCOUNT=nobody SERVICE_GROUP=nogroup",
-            f"SYSTEM_ROOT={shlex.quote(str(tmp_path))}",
-            f"render_template {shlex.quote(str(LINUX_UNIT_TEMPLATE))} {shlex.quote(str(unit))}",
-        ]
-    )
-    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
-    subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30, check=True)
-    return unit
-
-
-def _stub_executable(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\n", encoding="utf-8")
-    path.chmod(0o755)
-    return path
-
-
-def test_rendered_daemon_unit_verifies(tmp_path: Path) -> None:
-    systemd_analyze = _require("systemd-analyze")
-    unit = _render_daemon_unit(tmp_path, _stub_executable(tmp_path / "privacyfence-app"))
-
-    result = subprocess.run(
-        [systemd_analyze, "verify", "--man=no", str(unit)],
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
-    )
-
-    # As above: an unknown key is only logged, with exit 0, so any line naming the unit is a failure.
-    # The one exception is systemd's note that the stand-in account is "nobody": the real service
-    # account is `privacyfence`, and the test only needs a user and group that exist on any host.
-    output = result.stdout + result.stderr
-    problems = [line for line in output.splitlines() if unit.name in line and "Special user nobody" not in line]
-    assert result.returncode == 0, output
-    assert problems == []
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="the stub path contains '|', which a Windows filename cannot")
-def test_rendered_unit_keeps_special_characters_literal(tmp_path: Path) -> None:
-    daemon = _stub_executable(tmp_path / "a&b|c" / "privacyfence-app")
-    unit = _render_daemon_unit(tmp_path, daemon)
-
-    assert f"\nExecStart={daemon}\n" in unit.read_text(encoding="utf-8")
 
 
 def test_nginx_accepts_the_server_block(tmp_path: Path) -> None:

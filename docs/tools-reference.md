@@ -12,7 +12,8 @@ own tool definitions and the gate table in
 A connector's tools appear only after its organization config is installed and you have signed in
 to that service (see [Connecting a service](connecting-a-service.md)). The `privacyfence_*`
 tools that PrivacyFence adds itself (eight always, plus `privacyfence_propose_scoped_token` where token
-proposals are on: always on a local install, by the administrator's choice in organization mode) are not connector tools and have no gate; they are described in
+proposals are on (always on a local install, by the administrator's choice in organization mode) and
+`privacyfence_runtime_credential_status` where n8n delivery is also set up) are not connector tools and have no gate; they are described in
 [How PrivacyFence works](how-it-works.md#privacyfences-own-tools).
 
 ## Gates
@@ -28,6 +29,10 @@ PII detection, the privacy filter and passkey step-up all act within these gates
 [Approvals and policy](approvals-and-policy.md). What the **Always allow** button proposes for each
 `review` and `popup` tool is listed in the
 [Always allow reference](always-allow-rules-reference.md).
+
+Tools of an upstream MCP server (declared by an operator, see [Upstream MCP servers](upstream-mcp.md)) are
+not listed here. Their gate is the one the operator declared, and an administrator can approve a
+`review` or `popup` one for a scoped token ([ADR 0300](adr/0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md)).
 
 **Direction** is what the tool itself declares: `read` tools change nothing in the connected
 service; `write` tools create, change or send something. A few `write` tools are `auto` because
@@ -105,7 +110,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Grist](#grist) | 11 | 2 | 3 | 6 |
 | [Peek](#peek) | 12 | 2 | 3 | 7 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
-| **Total** | **171** | **59** | **39** | **73** |
+| [group membership sync](#privacyfence-administration) | 1 | 1 | 0 | 0 |
+| **Total** | **172** | **60** | **39** | **73** |
 
 ## Gmail
 
@@ -248,7 +254,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
 | `salesforce_list_reports` | read | `auto` | List Salesforce reports accessible to the user. |
-| `salesforce_export_report` | read | `review` | Write every row of a Salesforce report to a CSV or JSON file on the user's computer, in one approval. |
+| `salesforce_export_report` | read | `review` | Export every row of a Salesforce report as a CSV or JSON file, in one approval. |
 | `salesforce_get_record` | read | `review` | Fetch a Salesforce record by object type and id. |
 | `salesforce_run_report` | read | `review` | Run a Salesforce report by id and return the results. |
 | `salesforce_search` | read | `review` | Search Salesforce by name or id across one or more object types — the same mechanism as the search bar at the top of the Salesforce UI. |
@@ -267,7 +273,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `jira_list_projects` | read | `auto` | List Jira projects accessible to the user (key, name, type, lead). |
 | `jira_refresh_user_cache` | read | `auto` | Re-fetch the names of every Atlassian account id PrivacyFence has cached. |
 | `jira_search_issues` | read | `auto` | Search Jira issues using JQL. |
-| `jira_export_issues` | read | `review` | Write every issue a JQL query matches, up to 10,000, to a CSV or JSON file on the user's computer, in one approval. |
+| `jira_export_issues` | read | `review` | Export every issue a JQL query matches, up to 10,000, as a CSV or JSON file, in one approval. |
 | `jira_get_issue` | read | `review` | Fetch full details of a Jira issue by key (e.g. PROJ-123), including description and comments. |
 | `jira_search_issues_with_fields` | read | `review` | Search Jira issues using JQL and add extra fields to each one: custom fields such as Story Points or Sprint, or built-in ones such as due date or fix versions. |
 | `jira_add_comment` | write | `popup` | Add a comment to an existing Jira issue. |
@@ -299,7 +305,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `assets_list_attributes` | read | `auto` | List the attribute definitions of one Jira Assets object type, including which attributes reference other object types. |
 | `assets_list_object_types` | read | `auto` | List the object types in one Jira Assets schema. |
 | `assets_list_schemas` | read | `auto` | List the Jira Assets object schemas on the connected Atlassian site. |
-| `assets_export_objects` | read | `review` | Write every Jira Assets object an AQL query matches, up to 10,000, to a CSV or JSON file on the user's computer, in one approval. |
+| `assets_export_objects` | read | `review` | Export every Jira Assets object an AQL query matches, up to 10,000, as a CSV or JSON file, in one approval. |
 | `assets_get_connected_tickets` | read | `review` | List the Jira tickets connected to one Jira Assets object. |
 | `assets_get_object` | read | `review` | Read one Jira Assets object with every attribute value and its outbound references. |
 | `assets_get_related_objects` | read | `review` | Read the Jira Assets objects linked to one object, following references outbound, inbound or both, up to three hops. |
@@ -311,8 +317,8 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 |---|---|---|---|
 | `grist_list_documents` | read | `auto` | List the Grist documents this account can open, with their workspace and team. |
 | `grist_list_tables` | read | `auto` | List the tables of one Grist document and each table's columns (id, label and type). |
-| `grist_export_records` | read | `review` | Write every record of one table of a Grist document, optionally filtered, to a CSV or JSON file on the user's computer, in one approval. |
-| `grist_export_sql` | read | `review` | Run one read-only SQL query over a Grist document and write the result to a CSV or JSON file on the user's computer, in one approval. |
+| `grist_export_records` | read | `review` | Export every record of one table of a Grist document, optionally filtered, as a CSV or JSON file, in one approval. |
+| `grist_export_sql` | read | `review` | Run one read-only SQL query over a Grist document and export the result as a CSV or JSON file, in one approval. |
 | `grist_get_records` | read | `review` | Read records from one table of a Grist document, optionally filtered and sorted. |
 | `grist_add_columns` | write | `popup` | Add new columns to an existing table of a Grist document. |
 | `grist_add_records` | write | `popup` | Add new records to one table of a Grist document. |
@@ -352,3 +358,9 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `miro_create_items` | write | `popup` | Add sticky notes, cards, texts, shapes or frames to one Miro board, up to 20 in one request. |
 | `miro_update_board` | write | `popup` | Rename a Miro board or change its description. |
 | `miro_update_items` | write | `popup` | Change existing items on one Miro board (text, color, position, size, or which frame they are in), up to 20 in one request. |
+
+## PrivacyFence administration
+
+| Tool | Direction | Gate | What it does |
+|---|---|---|---|
+| `privacyfence_update_group_membership` | write | `auto` | Send the full membership snapshot of every Workspace group PrivacyFence maps to audiences. |

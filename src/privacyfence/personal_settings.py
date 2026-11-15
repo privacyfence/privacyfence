@@ -48,11 +48,11 @@ NOT_PORTABLE: tuple[tuple[str, str], ...] = (
     ("Scoped tokens", "Create new ones on the new install if your administrator allows them."),
     (
         "Privacy filter and PII detection",
-        "Install-wide: a desktop install's own, an administrator's on an organization server.",
+        "Install-wide: set by an administrator on the organization server.",
     ),
     (
         "Connector on/off switches, notification detail, AI system names, update checks, log level",
-        "Desktop-only settings; set them again if you move back to a desktop install.",
+        "Install settings; set them again on the new install.",
     ),
     ("Audit log", "Stays on the install that wrote it."),
 )

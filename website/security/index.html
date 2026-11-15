@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Security model: approvals, audit and limits — PrivacyFence</title>
-  <meta name="description" content="PrivacyFence security model: human approval with passkeys, privilege separation, a trust boundary outside the AI, the audit log and what it does not claim.">
+  <meta name="description" content="PrivacyFence security model: human approval with passkeys, a trust boundary outside the AI, the audit log and what it does not claim.">
   <meta name="pf-content-group" content="marketing">
   <meta name="theme-color" content="#f6f8fb">
   <link rel="canonical" href="https://privacyfence.eu/security/">
@@ -17,7 +17,7 @@
   <meta property="og:site_name" content="PrivacyFence">
   <meta property="og:url" content="https://privacyfence.eu/security/">
   <meta property="og:title" content="PrivacyFence security model">
-  <meta property="og:description" content="The trust boundary, human approval and passkeys, privilege separation, the audit log, and what PrivacyFence does not claim.">
+  <meta property="og:description" content="The trust boundary, human approval and passkeys, the audit log, and what PrivacyFence does not claim.">
   <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
 </head>
 <body>
@@ -38,33 +38,28 @@
       <div class="card-grid grid-auto">
         <article class="card stack" id="deployment-modes">
           <h3>Where it runs</h3>
-          <p>On one person's own computer (single-user Docker, or the deprecated desktop mode), or on a server the organization runs, with sign-in through its own identity provider (organization mode). No data passes through a PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server. When an organization server uses PrivacyFence's built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead. Slack and Miro send no PKCE, so with the built-in app their one-time sign-in code passes through the relay without it; an organization's own app avoids this.</p>
+          <p>On one person's own computer (single-user Docker), or on a server the organization runs, with sign-in through its own identity provider (organization mode). No data passes through a PrivacyFence-operated service in either: every call goes from the machine running PrivacyFence straight to Google, Slack, Salesforce, Atlassian, Telegram, Grist or your Peek server. When an organization server uses PrivacyFence's built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead. Slack and Miro send no PKCE, so with the built-in app their one-time sign-in code passes through the relay without it; an organization's own app avoids this.</p>
           <a class="text-link" href="/docs/security-and-compliance/#deployment-modes">Deployment modes →</a>
         </article>
         <article class="card stack" id="trust-boundary">
           <h3>The trust boundary</h3>
-          <p>On a packaged install, an AI client with shell access still cannot approve its own request, add an always-allow rule, change the PII policy, enroll its own passkey, or rewrite the audit log without it showing. It can read what is waiting on the approvals page, but not release it.</p>
+          <p>On an organization server, an AI client reaches PrivacyFence only through <code>/mcp</code>, so it cannot approve its own request, add an always-allow rule, change the PII policy, enroll its own passkey, or rewrite the audit log without it showing. It can read what is waiting on the approvals page, but not release it.</p>
           <a class="text-link" href="/docs/security-and-compliance/#trust-boundary">Trust boundary →</a>
         </article>
         <article class="card stack" id="sessions">
           <h3>Only a person can approve</h3>
-          <p>A web session opened through the companion app, after it asks you, can approve. A session anything else on your account starts can only look. No MCP tool can obtain a sign-in link, and every sign-in code issued is audited.</p>
+          <p>A web session you sign in to with your passkey, or through your identity provider, can approve. A session an AI client starts can only look. No MCP tool can obtain a sign-in link, and every sign-in code issued is audited.</p>
           <a class="text-link" href="/docs/security-and-compliance/#human-and-unattested-sessions">Human and unattested sessions →</a>
         </article>
         <article class="card stack" id="step-up">
           <h3>Passkey step-up</h3>
-          <p>On a packaged install, approving a write or a read flagged as personal data takes a fresh passkey assertion: Touch ID, Windows Hello or a security key. Wherever passkeys are required, the default on a packaged install, so do sensitive settings changes such as adding an always-allow rule. On an organization server, administrators turn step-up on and make it stricter on the Admin page; in single-user mode it is on from the start.</p>
+          <p>Approving a write or a read flagged as personal data can take a fresh passkey assertion: Touch ID, Windows Hello or a security key. Wherever passkeys are required, so do sensitive settings changes such as adding an always-allow rule. On an organization server, administrators turn step-up on and make it stricter on the Admin page; in single-user Docker it is on from the start.</p>
           <a class="text-link" href="/docs/security-and-compliance/#passkey-step-up">Passkey step-up →</a>
         </article>
         <article class="card stack" id="recovery">
           <h3>Recovery code</h3>
-          <p>A one-time recovery code gets you back in when every passkey is lost. Only a salted hash is stored, attempts are rate-limited and audited, and on a packaged install only a person's session can use it.</p>
+          <p>A one-time recovery code gets you back in when every passkey is lost. Only a salted hash is stored, attempts are rate-limited and audited, and only a person's session can use it.</p>
           <a class="text-link" href="/docs/security-and-compliance/#recovery-code">Recovery code →</a>
-        </article>
-        <article class="card stack" id="privilege-separation">
-          <h3>Privilege separation</h3>
-          <p>Every packaged install runs PrivacyFence under a dedicated service account, with its policy, passkeys, audit key and connector credentials in a directory your own account cannot write or read. A packaged install that finds itself unseparated refuses to serve.</p>
-          <a class="text-link" href="/docs/security-and-compliance/#privilege-separation">Privilege separation →</a>
         </article>
         <article class="card stack" id="audit">
           <h3>A chained audit log</h3>
@@ -83,7 +78,7 @@
         </article>
         <article class="card stack" id="other-controls">
           <h3>Other controls</h3>
-          <p>Session cookies, CSRF and same-origin checks, a host allowlist and a per-response Content Security Policy on the web pages; limits on the organization's OAuth server; a validated, optionally signed organization config; the macOS installer is signed and notarized and the Windows installer Authenticode-signed for stable releases (the Linux .deb is not signed; check it by its SHA-256), and each stable release publishes CycloneDX SBOMs.</p>
+          <p>Session cookies, CSRF and same-origin checks, a host allowlist and a per-response Content Security Policy on the web pages; limits on the organization's OAuth server; a validated, optionally signed organization config; and each stable release publishes CycloneDX SBOMs.</p>
           <a class="text-link" href="/docs/security-and-compliance/#other-controls">Other controls →</a>
         </article>
       </div>
@@ -97,11 +92,11 @@
       </div>
       <div class="card limitations stack">
         <ul>
-          <li><strong>No certification, business-continuity plan or SLA.</strong> PrivacyFence is independent open-source software. The only infrastructure the maintainer operates is the download service and the sign-in relay, and neither sees your tokens, mail or files, so no outage of either affects them: installed copies keep running without the maintainer. New sign-ins with the built-in apps on a server depend on the PrivacyFence relay; existing connections and your own apps do not. Reports are handled on a best-effort basis. Treat adopting it as a risk acceptance: approve it through your exception process, pin a reviewed release, and give an internal owner the job of tracking releases.</li>
-          <li><strong>No protection against root or a local Administrator</strong>, or against local code on an install that is not packaged (a source checkout or a <code>pip</code> install).</li>
+          <li><strong>No certification, business-continuity plan or SLA.</strong> PrivacyFence is independent open-source software. The only infrastructure the maintainer operates is the sign-in relay, which does not see your tokens, mail or files, so no outage of it affects them: running copies keep running without the maintainer. New sign-ins with the built-in apps on a server depend on the PrivacyFence relay; existing connections and your own apps do not. Reports are handled on a best-effort basis. Treat adopting it as a risk acceptance: approve it through your exception process, pin a reviewed release, and give an internal owner the job of tracking releases.</li>
+          <li><strong>No protection against root or a local Administrator</strong>, or against local code on a host that runs PrivacyFence outside its Docker image.</li>
           <li><strong>Single-user mode does not protect against a local agent.</strong> Single-user mode is no protection against an AI agent that can run <code>docker</code> on that computer: whoever can run <code>docker</code> can read the setup code from the log or open the data volume. Run it under a separate account with rootless Docker or in a virtual machine, or use an organization server.</li>
           <li><strong>No confidentiality of the local review screen</strong> against a process running as you. It can read what is pending; it cannot approve it.</li>
-          <li><strong>No verified AI-system identity in local mode.</strong> Every AI client of one OS account holds the same token.</li>
+          <li><strong>No verified AI-system identity in single-user Docker.</strong> Every AI client of one person holds the same token.</li>
           <li><strong>No hard stop from the unattended-session flag.</strong> It is advisory: it changes what happens when nothing authorizes a call, never what is authorized.</li>
           <li><strong>No compliance by itself.</strong> PrivacyFence is not certified, and it does not make a deployment compliant with any regulation or contract. Whether one meets a requirement depends on its configuration, identity provider, retention and an independent assessment.</li>
         </ul>

@@ -9,6 +9,8 @@ config upload in `151d6994`, merged as [#557](https://github.com/privacyfence/pr
 Implemented. `docs/security-and-compliance.md`'s "Human and unattested sessions" section describes
 today's behavior.
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 A local-mode `pf_session` can be reached three ways, all by design: the companion's Open

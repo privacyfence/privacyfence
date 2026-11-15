@@ -24,7 +24,7 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
-from privacyfence import agent_label, agent_overrides, card_builder, gate, org_identity, paths, scoped_tokens
+from privacyfence import agent_overrides, card_builder, gate, org_identity, paths, scoped_tokens
 from privacyfence.agent_identity import UNKNOWN_AGENT, AgentSource, current_agent
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -35,6 +35,8 @@ from privacyfence.web import oauth_provider as op
 from privacyfence.web import routes_mcp as rm
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
+
+from ...helpers import token_verifier
 
 TOKEN = "mcp-test-token"
 
@@ -99,7 +101,7 @@ async def _session(
     """A live, initialized ClientSession whose handshake claims ``client_name`` (None: the SDK's
     own default clientInfo)."""
     app, session_manager = build_mcp_asgi_app(
-        dispatcher, token=None if verifier else TOKEN, verifier=verifier, client_names=client_names,
+        dispatcher, verifier=verifier or token_verifier(TOKEN), client_names=client_names,
         overrides=overrides, attested_agents=attested_agents,
     )
     info = types.Implementation(name=client_name, version="9.9") if client_name is not None else None
@@ -121,7 +123,7 @@ async def _agent_of_call(**session_kwargs) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
-# Local mode: the handshake clientInfo
+# Without an organization identity: the handshake clientInfo
 # --------------------------------------------------------------------------- #
 
 class TestLocalModeCapture:
@@ -154,7 +156,7 @@ class TestModernProtocolCapture:
     async def test_a_sessionless_request_attributes_from_its_own_envelope(self):
         # 2026-07-28: no initialize, no Mcp-Session-Id -- the client info rides the request's
         # own _meta, which the SDK surfaces through the same ctx.session.client_params.
-        app, session_manager = build_mcp_asgi_app(_dispatcher(AgentEchoConnector()), token=TOKEN)
+        app, session_manager = build_mcp_asgi_app(_dispatcher(AgentEchoConnector()), verifier=token_verifier(TOKEN))
         body = {
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {
@@ -212,8 +214,6 @@ class TestClientInfoIconsAreNeverRead:
             raise AssertionError("clientInfo.website_url was read")
 
     def test_neither_capture_nor_the_card_touches_them(self, monkeypatch):
-        # Org mode's tiers: a local install shows every requester as "Undetected" (ADR 0088).
-        monkeypatch.setattr(agent_label, "_local_mode", False)
         session = SimpleNamespace(client_params=SimpleNamespace(client_info=self._ClientInfo()))
         agent = rm._resolve_agent(SimpleNamespace(session=session), None, None)
         assert agent.id == "chatgpt"

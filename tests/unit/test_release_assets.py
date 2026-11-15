@@ -1,5 +1,6 @@
 """build.yml ships the connector config signing tools: to the R2 archive on every tag, and to the
-GitHub Release on a stable tag, next to the organization bundle builder."""
+GitHub Release on a stable tag, next to the sync tools. A release builds the organization image,
+privacyfence-sync and the SBOM only (ADR 0306), so no installer is among the assets."""
 
 from __future__ import annotations
 
@@ -34,9 +35,10 @@ def test_the_sources_exist():
 
 
 def test_the_r2_upload_carries_the_script_and_the_page_under_its_release_name(jobs):
-    run = _step(jobs["build"], "Publish release artifacts to Cloudflare R2")["run"]
+    run = _step(jobs["finalize-release"], "Publish org admin tools to Cloudflare R2")["run"]
     upload = run[run.index("r2_release.py upload"):]
-    assert "scripts/build_org_bundle.py" in upload
+    assert "scripts/sync_room_directory.py" in upload
+    assert "build_org_bundle" not in upload
     assert TOOL_SCRIPT in upload
     assert f"dist/{PAGE_ASSET}" in upload
     assert f"cp {PAGE_SOURCE} dist/{PAGE_ASSET}" in run
@@ -53,8 +55,21 @@ def test_the_stable_release_attaches_the_script_and_the_page(jobs):
     attach = _step(job, "Attach release assets")
     assert attach["if"] == "steps.release.outputs.channel == 'stable'"
     files = attach["with"]["files"].split()
-    assert "scripts/build_org_bundle.py" in files
+    assert "scripts/sync_room_directory.py" in files
     assert TOOL_SCRIPT in files
     assert f"release-assets/{PAGE_ASSET}" in files
     steps = [s.get("name", "") for s in job["steps"]]
     assert steps.index(stage["name"]) < steps.index(attach["name"])
+
+
+def test_the_release_builds_only_what_remains(jobs):
+    assert set(jobs) == {"dedupe", "build-org-image", "sbom", "finalize-release"}
+    assert jobs["finalize-release"]["needs"] == ["sbom", "build-org-image"]
+    assert "actions" not in jobs["finalize-release"]["permissions"]
+
+    attach = _step(jobs["finalize-release"], "Attach release assets")
+    files = attach["with"]["files"].split()
+    assert "release-assets/sbom-python.cdx.json" in files
+    assert "release-assets/privacyfence-sync-plugin.zip" in files
+    for removed in ("dmg", "mcpb", "setup.exe", ".deb", "sbom-shim-npm"):
+        assert not any(removed in f for f in files), removed

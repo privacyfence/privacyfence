@@ -21,19 +21,25 @@ import time
 
 import pytest
 
-from privacyfence import local_files, org_mode, scoped_tokens
+from privacyfence import agent_runtimes, auto_accept, local_files, scoped_tokens, upstream_mcp_registry
 from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
-from privacyfence.connector import Connector, ToolSpec
+from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedback
 from privacyfence import gate
 from privacyfence.gate import GateDeniedError, is_unattended
 from privacyfence.principal import Principal, principal_scope
+from privacyfence.policy import scope_rows
+from privacyfence.policy.registry import Verb
 from privacyfence.scoped_tokens import ScopedToken
+from privacyfence.upstream_mcp_config import DeclaredTool, UpstreamServer, declaration_digest
 from privacyfence.web import mcp_dispatch
 from privacyfence.web.mcp_dispatch import McpDispatcher
 
 from ...helpers import policy_rules
+
+
+_PARAMS = [ToolParam(name="x", annotation="int", required=False)]
 
 
 class FakeConnector(Connector):
@@ -53,8 +59,10 @@ class FakeConnector(Connector):
 
     def tool_specs(self) -> list[ToolSpec]:
         return [
-            ToolSpec(name=f"{self._name}_tool", description="test read tool", read_only=True),
-            ToolSpec(name=f"{self._name}_write_tool", description="test write tool", read_only=False),
+            ToolSpec(name=f"{self._name}_tool", description="test read tool", read_only=True, params=list(_PARAMS)),
+            ToolSpec(
+                name=f"{self._name}_write_tool", description="test write tool", read_only=False, params=list(_PARAMS),
+            ),
         ]
 
     async def call(self, tool: str, args: dict) -> object:
@@ -110,7 +118,7 @@ class UnattendedAwareConnector(Connector):
         return self._name
 
     def tool_specs(self) -> list[ToolSpec]:
-        return [ToolSpec(name=f"{self._name}_tool", description="t", read_only=True)]
+        return [ToolSpec(name=f"{self._name}_tool", description="t", read_only=True, params=list(_PARAMS))]
 
     async def call(self, tool: str, args: dict) -> object:
         self.observed_unattended.append(is_unattended())
@@ -173,6 +181,33 @@ class TestCall:
         await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "reason": "r"})
         assert seen == ['{"x": 1}']
         assert gate.current_request_args() is None
+
+    async def test_an_argument_the_tool_does_not_declare_is_dropped_before_the_connector(self):
+        # An agent with a cached schema may still send a parameter a later release removed; it is
+        # ignored, not passed on to blow up the connector with a TypeError.
+        connector = FakeConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "destination_dir": "~/Downloads", "local_path": "/etc/hosts"})
+        assert connector.calls == [("gmail_tool", {"x": 1})]
+
+    async def test_an_argument_the_connector_computes_itself_is_not_dropped(self):
+        connector = FakeConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "is_self_dm": True})
+        assert connector.calls == [("gmail_tool", {"x": 1, "is_self_dm": True})]
+
+    async def test_a_tool_with_a_verbatim_input_schema_keeps_every_argument(self):
+        class UpstreamConnector(FakeConnector):
+            def tool_specs(self) -> list[ToolSpec]:
+                return [ToolSpec(
+                    name="up_tool", description="upstream", read_only=True,
+                    input_schema={"type": "object", "properties": {}, "additionalProperties": True},
+                )]
+
+        connector = UpstreamConnector("up")
+        dispatcher = _dispatcher({"up": connector})
+        await dispatcher.call("s1", "up", "up_tool", {"anything": 1})
+        assert connector.calls == [("up_tool", {"anything": 1})]
 
     async def test_unknown_connector_raises(self):
         dispatcher = _dispatcher({})
@@ -422,39 +457,60 @@ class TestCall:
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert len(connector.calls) == 2
 
-    async def test_a_result_with_bridge_deliveries_is_not_reused(self, monkeypatch):
-        # A result that staged a file-bridge download carries a
-        # single-use download_staging token -- reusing it from the dedupe
-        # cache would hand a second caller a token the first claim already
-        # consumed. local_files.call_context() is entered here exactly the
-        # way routes_mcp.py's handle_call_tool enters it around dispatch.
-        monkeypatch.setattr(local_files.privilege_separation, "is_enabled", lambda: True)
-
-        class DeliveringConnector(FakeConnector):
+    async def test_a_result_that_staged_a_download_link_is_not_reused(self):
+        # A one-time download link is a single-use download_staging token: a second identical
+        # call must run again, not be handed the first call's (already consumed) link.
+        class StagingConnector(FakeConnector):
             async def call(self, tool: str, args: dict) -> object:
                 result = await super().call(tool, args)
-                local_files.deliver_file(
-                    "~/Downloads", "f.pdf", b"data", "application/pdf", download_mode="local",
-                )
+                local_files.mark_staged_download()
                 return result
 
-        connector = DeliveringConnector("gmail", result="ok")
+        connector = StagingConnector("gmail", result="ok")
         dispatcher = _dispatcher({"gmail": connector})
-        with local_files.call_context(bridge_available=True, uploads={}):
+        with local_files.call_context():
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
-        with local_files.call_context(bridge_available=True, uploads={}):
+        with local_files.call_context():
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert len(connector.calls) == 2
 
-    async def test_a_result_with_no_deliveries_is_still_deduped_as_before(self, monkeypatch):
-        # Control for the test above: entering call_context() alone must
-        # not itself defeat dedupe -- only an actual staged delivery does.
-        monkeypatch.setattr(local_files.privilege_separation, "is_enabled", lambda: True)
+    async def test_an_organization_export_link_is_minted_once_per_call_and_never_replayed(self, monkeypatch):
+        # deliver_export's organization branch stages a one-time link. The repeated call is a new
+        # call (it stages again) rather than a replay of the first call's link.
+        minted: list[bytes] = []
+
+        class FakeStore:
+            def stage(self, principal, data, name, mime_type, **kwargs):
+                token = bytes([len(minted) + 1]) * 32
+                minted.append(token)
+                return token
+
+        monkeypatch.setattr(local_files, "get_download_staging_store", lambda: FakeStore())
+
+        class ExportingConnector(FakeConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                await super().call(tool, args)
+                return local_files.deliver_export(
+                    "a.csv", b"abc", "text/csv",
+                    download_config=None, download_base_url="https://pf.example",
+                )
+
+        connector = ExportingConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        with local_files.call_context():
+            first = await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        with local_files.call_context():
+            second = await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        assert len(minted) == 2
+        assert first["download_url"] != second["download_url"]
+
+    async def test_a_result_with_no_staged_download_is_still_deduped(self):
+        # Control for the tests above: entering call_context() alone must not itself defeat dedupe.
         connector = FakeConnector("gmail", result="ok")
         dispatcher = _dispatcher({"gmail": connector})
-        with local_files.call_context(bridge_available=True, uploads={}):
+        with local_files.call_context():
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
-        with local_files.call_context(bridge_available=True, uploads={}):
+        with local_files.call_context():
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert len(connector.calls) == 1
 
@@ -479,7 +535,7 @@ class TestCall:
         dispatcher = _dispatcher({"gmail": connector}, unattended_sessions_enabled=True)
         await dispatcher.call("s1", "gmail", "gmail_tool", {})
         dispatcher.begin_unattended_session("s1", "scheduled run")
-        await dispatcher.call("s1", "gmail", "gmail_tool", {"z": 1})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert connector.observed_unattended == [False, True]
 
     async def test_a_different_sessions_unattended_flag_does_not_leak(self):
@@ -499,7 +555,7 @@ class TestCall:
         with principal_scope(Principal(id="bob")):
             await dispatcher.call("shared", "gmail", "gmail_tool", {})
         with principal_scope(Principal(id="alice")):
-            await dispatcher.call("shared", "gmail", "gmail_tool", {"z": 1})
+            await dispatcher.call("shared", "gmail", "gmail_tool", {"x": 1})
         assert connector.observed_unattended == [False, True]
 
 
@@ -911,17 +967,13 @@ class TestStatus:
     def _row(name, *, enabled=True, authenticated=False, blocked_by=None):
         return {"name": name, "enabled": enabled, "authenticated": authenticated, "blocked_by": blocked_by}
 
-    def test_defaults_to_local_mode(self):
+    def test_reports_org_mode(self):
         dispatcher = _dispatcher({})
-        assert dispatcher.status("checking")["mode"] == "local"
-
-    def test_reports_org_mode_when_constructed_that_way(self):
-        dispatcher = _dispatcher({}, mode="org")
         assert dispatcher.status("checking")["mode"] == "org"
 
     def test_no_connectors_state_provider_falls_back_to_built_connectors_only(self):
         # org mode today, or a test that never wires one -- the only thing
-        # knowable without SettingsController's own config/failure state is
+        # knowable without any config/failure state is
         # which connectors this dispatcher can actually see built.
         dispatcher = _dispatcher({"gmail": object()})
         result = dispatcher.status("checking")
@@ -935,7 +987,7 @@ class TestStatus:
         ])
         result = dispatcher.status("checking")
         assert result["setup_complete"] is False
-        assert result["next_step"] == "open_privacyfence_companion"
+        assert result["next_step"] == "contact_your_administrator"
 
     def test_setup_complete_when_at_least_one_connector_is_authenticated(self):
         dispatcher = _dispatcher({})
@@ -951,33 +1003,60 @@ class TestStatus:
         """This tool must not mint a live sign-in credential, since it is
         called because a model decided to check rather than because a human
         asked -- and nothing on this server mints one (ADR 0013), so the
-        field stays null and the message names the companion."""
+        field stays null and the message names the administrator."""
         dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
         result = dispatcher.status("checking")
         assert result["sign_in_url"] is None
-        assert result["next_step"] == "open_privacyfence_companion"
-        assert "companion" in result["message"]
-        assert "no link for you to hand them" in result["message"]
+        assert result["next_step"] == "contact_your_administrator"
+        assert "administrator" in result["message"]
+        assert "companion" not in result["message"]
 
     def test_org_mode_points_at_an_administrator_instead(self):
-        dispatcher = _dispatcher({}, mode="org")
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
         result = dispatcher.status("checking")
         assert result["sign_in_url"] is None
         assert result["next_step"] == "contact_your_administrator"
 
     @pytest.mark.parametrize("authenticated", [False, True])
-    def test_local_status_carries_the_deprecation_on_every_path(self, authenticated):
+    def test_status_carries_no_deprecation_field(self, authenticated):
         dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
-        assert dispatcher.status("checking")["deprecation"] == org_mode.LOCAL_MODE_DEPRECATION
+        assert "deprecation" not in dispatcher.status("checking")
+
+    def test_status_has_no_upstreams_key_when_none_are_configured(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=True)])
+        assert "upstreams" not in dispatcher.status("checking")
 
     @pytest.mark.parametrize("authenticated", [False, True])
-    def test_org_status_has_a_null_deprecation(self, authenticated):
-        dispatcher = _dispatcher({}, mode="org")
+    def test_status_lists_the_upstreams_when_configured(self, tmp_path, authenticated):
+        from privacyfence import upstream_mcp_runtime
+        from privacyfence.identity_claim import ClaimSigner
+        from privacyfence.upstream_claim_keys import KeySet
+        from privacyfence.group_membership import StaticFileResolver
+        from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
+
+        upstreams = parse_upstreams({
+            "version": 1,
+            "upstreams": [{
+                "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
+                "tools": {"search": {"gate": "auto", "verb": "search"}},
+            }],
+        }, source="test")
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams,
+            signer=ClaimSigner(issuer="https://pf.example", keys=KeySet(tmp_path / "keys.json")),
+            groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
+            resolver=StaticFileResolver(tmp_path / "members.json"),
+        )
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
-        assert dispatcher.status("checking")["deprecation"] is None
+        assert dispatcher.status("checking")["upstreams"] == [{
+            "id": "kh", "label": "Knowledge hub", "tools_exposed": 0, "state": "waiting_for_tool_list",
+            "missing_tools": [],
+        }]
 
     def test_audits_status_checked_when_un_onboarded(self):
         dispatcher = _dispatcher({})
@@ -995,7 +1074,7 @@ class TestStatus:
         assert entries[0]["decision"] == "status_checked"
 
     def test_audits_status_checked_in_org_mode(self):
-        dispatcher = _dispatcher({}, mode="org")
+        dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
         dispatcher.status("just checking")
         entries = self._read_entries()
@@ -1076,7 +1155,7 @@ class TestUnattendedSessions:
 # --------------------------------------------------------------------------- #
 # notify_tools_changed -- the actual notification send is
 # web/routes_mcp.py's own concern (its live ServerSession registry); this
-# dispatcher is just the wired seam SettingsController.refresh_connectors()
+# dispatcher is just the wired seam a connector rebuild
 # calls into, same shape as every other set_*_provider/listener above.
 # --------------------------------------------------------------------------- #
 
@@ -1298,7 +1377,7 @@ class TestAwaitApprovalDenialFeedback:
 # privacyfence_propose_scoped_token + the session ledger (ADR 0251)
 # --------------------------------------------------------------------------- #
 
-_LOCAL_POLICY = scoped_tokens.policy_from_org_config({}, org_mode=False)
+_LOCAL_POLICY = scoped_tokens.ScopedTokenPolicy(True, scoped_tokens.LOCAL_MAX_DAYS, True)
 _RULE = {"kind": "new", "group": "gmail.label", "value": "Receipts", "verbs": ["update"]}
 _SUGGESTION = {
     "group": "gmail.label", "label": "Gmail -- label", "value": ["Receipts"], "value_known": True,
@@ -1389,10 +1468,6 @@ class TestProposeScopedToken:
             with pytest.raises(ValueError, match="Token proposals are not enabled"):
                 await self._propose(dispatcher)
         assert self._pending() == []
-
-    async def test_refused_for_a_local_non_owner(self):
-        with principal_scope(Principal(id="alice")), pytest.raises(ValueError, match="this computer's owner"):
-            await self._propose(self._dispatcher())
 
     async def test_refused_in_an_unattended_session_and_audited(self):
         dispatcher = self._dispatcher(unattended_sessions_enabled=True)
@@ -1522,3 +1597,252 @@ class TestProposeScopedToken:
             await dispatcher.call("s1", "auto", "gmail_list_messages", {"query": "x"})
 
         assert dispatcher._session_calls == {}
+
+
+# --------------------------------------------------------------------------- #
+# deliver_to on privacyfence_propose_scoped_token and privacyfence_runtime_credential_status
+# (ADR 0278, ADR 0282)
+# --------------------------------------------------------------------------- #
+
+_N8N_CONFIG = agent_runtimes.N8nRuntimeConfig(
+    enabled=True, base_url="https://n8n.example.com", project_id="", mcp_url="",
+)
+_ORG_POLICY = scoped_tokens.ScopedTokenPolicy(True, 90, True)
+
+
+class _DeliveryBase:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept, paths, runtime_credentials, scoped_token_proposals
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
+        monkeypatch.setattr(mcp_dispatch, "get_policy_rows", lambda: [])
+        monkeypatch.setenv("PRIVACYFENCE_N8N_API_KEY", "key")
+        init_audit_logger(str(tmp_path / "audit"))
+        self._audit_dir = tmp_path / "audit"
+        self.store = scoped_tokens.ScopedTokenStore(lambda: [Principal(id="local")])
+        scoped_tokens.set_store(self.store)
+        runtime_credentials.set_store(runtime_credentials.RuntimeCredentialStore(tmp_path / "records.json"))
+        self.registry = scoped_token_proposals.ProposalRegistry()
+        monkeypatch.setattr(scoped_token_proposals, "_registry", self.registry)
+        yield
+        runtime_credentials.set_store(None)
+
+    def _entries(self):
+        week_file = self._audit_dir / f"{current_week()}.jsonl"
+        if not week_file.exists():
+            return []
+        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+
+    @staticmethod
+    def _dispatcher(*, policy=_ORG_POLICY, runtime=_N8N_CONFIG):
+        return _dispatcher(
+            {"gmail": FakeConnector("gmail")}, scoped_token_policy=policy, agent_runtime=runtime,
+        )
+
+    @staticmethod
+    def _params(**overrides):
+        params = {
+            "reason": "nightly job", "label": "nightly", "rules": [dict(_RULE)], "tools": ["gmail_get_message"],
+            "deliver_to": {"runtime": "n8n", "workflow_id": "wf1"},
+        }
+        params.update(overrides)
+        return params
+
+    async def _propose(self, dispatcher, params=None):
+        return await dispatcher.propose_scoped_token("s1", params or self._params(), "https://pf.example.com/")
+
+
+class TestProposeWithDelivery(_DeliveryBase):
+    async def test_accepted_in_org_mode_with_delivery_available(self):
+        dispatcher = self._dispatcher()
+        assert dispatcher.runtime_delivery_enabled() is True
+
+        result = await self._propose(dispatcher)
+
+        assert result["delivery"] == {
+            "runtime": "n8n", "workflow_id": "wf1", "status_tool": "privacyfence_runtime_credential_status",
+        }
+        assert result["message"] == agent_runtimes.DELIVERY_MESSAGE
+
+    async def test_the_message_follows_the_configured_type(self):
+        runtime = dataclasses.replace(
+            _N8N_CONFIG, mcp_url="https://public.example.com/mcp", credential_type="privacyFenceApi",
+        )
+        result = await self._propose(self._dispatcher(runtime=runtime))
+        assert result["message"] == agent_runtimes.DELIVERY_MESSAGE_PRIVACYFENCE_NODE
+        assert result["message"] == agent_runtimes.delivery_message("privacyFenceApi")
+        assert result["message"] != agent_runtimes.DELIVERY_MESSAGE
+
+    async def test_the_proposal_carries_the_delivery_and_the_mcp_url(self):
+        result = await self._propose(self._dispatcher())
+
+        proposal = self.registry.get("local", result["proposal_id"])
+        assert proposal.delivery == agent_runtimes.DeliveryTarget("n8n", "wf1")
+        assert proposal.mcp_url == "https://pf.example.com/mcp"
+
+    async def test_a_configured_mcp_url_wins(self):
+        runtime = dataclasses.replace(_N8N_CONFIG, mcp_url="https://public.example.com/mcp")
+        result = await self._propose(self._dispatcher(runtime=runtime))
+        assert self.registry.get("local", result["proposal_id"]).mcp_url == "https://public.example.com/mcp"
+
+    async def test_the_workflow_id_is_optional(self):
+        result = await self._propose(self._dispatcher(), self._params(deliver_to={"runtime": "n8n"}))
+        assert result["delivery"]["workflow_id"] == ""
+
+    async def test_the_audit_summary_says_delivery(self):
+        await self._propose(self._dispatcher())
+        [entry] = [e for e in self._entries() if e["decision"] == "scoped_token_proposed"]
+        assert entry["summary"].endswith(", delivery to n8n")
+
+    async def test_without_deliver_to_nothing_changes(self):
+        params = self._params()
+        del params["deliver_to"]
+        result = await self._propose(self._dispatcher(), params)
+        assert "delivery" not in result and result["message"] != agent_runtimes.DELIVERY_MESSAGE
+        assert self.registry.get("local", result["proposal_id"]).delivery is None
+        [entry] = [e for e in self._entries() if e["decision"] == "scoped_token_proposed"]
+        assert "delivery" not in entry["summary"]
+
+    async def test_refused_with_delivery_off(self, monkeypatch):
+        for runtime in (None, dataclasses.replace(_N8N_CONFIG, enabled=False)):
+            with pytest.raises(ValueError, match=agent_runtimes.DELIVERY_UNAVAILABLE):
+                await self._propose(self._dispatcher(runtime=runtime))
+        monkeypatch.delenv("PRIVACYFENCE_N8N_API_KEY")
+        with pytest.raises(ValueError, match=agent_runtimes.DELIVERY_UNAVAILABLE):
+            await self._propose(self._dispatcher())
+        assert self.registry.pending_for("local") == []
+
+    @pytest.mark.parametrize("deliver_to", [
+        {"runtime": "n8n", "key": "x"}, {"runtime": "zapier"}, {"runtime": "n8n", "workflow_id": "bad id!"},
+        "n8n", {"workflow_id": "wf1"},
+    ])
+    async def test_a_bad_deliver_to_is_refused(self, deliver_to):
+        with pytest.raises(ValueError):
+            await self._propose(self._dispatcher(), self._params(deliver_to=deliver_to))
+        assert self.registry.pending_for("local") == []
+
+
+class TestRuntimeCredentialStatus(_DeliveryBase):
+    def _status(self, dispatcher, proposal_id="stp-x", **extra):
+        return dispatcher.runtime_credential_status({"proposal_id": proposal_id, "reason": "checking", **extra})
+
+    async def test_pending_while_the_proposal_waits(self):
+        dispatcher = self._dispatcher()
+        proposed = await self._propose(dispatcher)
+
+        answer = self._status(dispatcher, proposed["proposal_id"])
+
+        assert answer["state"] == "pending" and answer["expires_at"] == proposed["expires_at"]
+
+    async def test_not_delivered_for_an_unknown_id(self):
+        assert self._status(self._dispatcher()) == {"state": "not_delivered"}
+
+    async def test_delivered_with_the_credential(self):
+        from privacyfence import runtime_credentials as rc
+
+        dispatcher = self._dispatcher()
+        proposed = await self._propose(dispatcher)
+        proposal = self.registry.take("local", proposed["proposal_id"])
+
+        class Api:
+            def create_credential(self, **kwargs):
+                pass
+
+        bound = {
+            "label": "nightly", "days": 30, "rules": proposal.request["rules"], "tools": proposal.request["tools"],
+            "allow_personal_data": False, "allow_personal_data_reads": False,
+        }
+        outcome = rc.deliver(
+            principal=Principal(id="local"), bound=bound, proposal=proposal, config=_N8N_CONFIG, api=Api(),
+            token_store=self.store, policy=_ORG_POLICY,
+        )
+        assert outcome.status == 200, outcome.error
+
+        answer = self._status(dispatcher, proposal.id)
+
+        assert answer["state"] == "delivered"
+        assert answer["credential_id"] == outcome.record.credential_id
+        assert answer["mcp_url"] == "https://pf.example.com/mcp"
+        assert outcome.token.id not in json.dumps(answer)
+
+    async def test_another_persons_proposal_is_not_delivered(self):
+        dispatcher = self._dispatcher()
+        proposed = await self._propose(dispatcher)
+        with principal_scope(Principal(id="bob")):
+            assert self._status(dispatcher, proposed["proposal_id"]) == {"state": "not_delivered"}
+
+    async def test_refused_under_a_scoped_token(self):
+        with scoped_tokens.token_scope(_SCOPE), pytest.raises(GateDeniedError, match="cannot read token deliveries"):
+            self._status(self._dispatcher())
+
+    async def test_refused_with_delivery_off(self):
+        for dispatcher in (self._dispatcher(runtime=None),):
+            assert dispatcher.runtime_delivery_enabled() is False
+            with pytest.raises(ValueError, match=agent_runtimes.DELIVERY_UNAVAILABLE):
+                self._status(dispatcher)
+
+    async def test_each_read_is_audited_with_the_reason(self):
+        self._status(self._dispatcher())
+        [entry] = [e for e in self._entries() if e["decision"] == "runtime_credential_status_read"]
+        assert entry["tool"] == "privacyfence_runtime_credential_status"
+        assert entry["claude_reason"] == "checking" and entry["sender"] == "local"
+
+    async def test_an_audit_failure_does_not_fail_the_read(self, monkeypatch):
+        def broken():
+            raise OSError("disk full")
+
+        monkeypatch.setattr(mcp_dispatch, "get_audit_logger", broken)
+        assert self._status(self._dispatcher()) == {"state": "not_delivered"}
+
+
+class TestScopedUpstreamApproval:
+    """A token call of a gated upstream tool nothing covers never reaches the connector (plan 3.5)."""
+
+    @pytest.fixture(autouse=True)
+    def _upstream(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        self.declared = DeclaredTool(
+            name="propose_change", exposed_name="kh_propose_change", operation="kh.propose_change",
+            gate="popup", verb="update", effect="Proposes a change.",
+        )
+        self.server = UpstreamServer(
+            id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
+            tools=(self.declared,),
+        )
+        upstream_mcp_registry.register([self.server])
+        auto_accept.set_policy_v2_store_rules([])
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    def _token(self, *, approved: bool) -> ScopedToken:
+        rows = ()
+        if approved:
+            rows = (scope_rows.ScopeRow(
+                id="r-approval", scope=None,
+                value=f"{self.declared.operation}@{declaration_digest(self.server, self.declared)}",
+                verbs=frozenset({Verb("update")}), operations=frozenset({self.declared.operation}),
+                predicate="upstream.approved_tool",
+            ),)
+        return dataclasses.replace(_SCOPE, tools=frozenset({"kh_propose_change"}), rules=rows)
+
+    async def test_an_uncovered_token_call_never_reaches_the_connector(self):
+        connector = ScopeAwareConnector("kh", allow_scoped=True)
+        dispatcher = _dispatcher({"kh": connector})
+        with scoped_tokens.token_scope(self._token(approved=False)), pytest.raises(GateDeniedError):
+            await dispatcher.call("s1", "kh", "kh_propose_change", {})
+        assert connector.seen_scopes == []
+
+    async def test_a_covered_token_call_reaches_the_connector(self):
+        connector = ScopeAwareConnector("kh", allow_scoped=True)
+        dispatcher = _dispatcher({"kh": connector})
+        with scoped_tokens.token_scope(self._token(approved=True)):
+            assert await dispatcher.call("s1", "kh", "kh_propose_change", {}) == "scoped result"
+        assert connector.seen_scopes == [_SCOPE.id]
+
+    async def test_an_unscoped_call_is_unaffected(self):
+        connector = ScopeAwareConnector("kh", allow_scoped=True)
+        dispatcher = _dispatcher({"kh": connector})
+        assert await dispatcher.call("s1", "kh", "kh_propose_change", {}) == "full-token result"
+        assert connector.seen_scopes == [None]

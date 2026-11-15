@@ -15,6 +15,8 @@ request path (Claude Code, org mode, other direct HTTP clients) get single-use c
 uploads and downloads, replacing the no-bridge fallback's upload error and bearer-authenticated
 download link described below. The "Non-shim clients" item under Out of scope is what 0028 does.
 
+**Superseded by [ADR 0304](0304-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md), 2026-11-15.**
+
 ## Context
 
 ADR 0003 made every shipped local-mode install privilege-separated: the daemon runs as its own OS

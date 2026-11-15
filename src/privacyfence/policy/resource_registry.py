@@ -5,8 +5,8 @@ Two live callers read it:
 
 - ``resource_names.py``'s ``ResourceNameResolver`` calls a ``GrantResourceType``'s ``resolver`` to
   turn an opaque id (a folder id, a project key) into the display name the Auto-accept Settings page
-  shows next to a rule's value (``settings_controller.SettingsController._resolved_rule_value``,
-  keyed through ``settings_controller.RULE_NAME_TO_RESOURCE_TYPE``, which is built from each
+  shows next to a rule's value (``settings_state``'s rule-value resolution,
+  keyed through the rule-name-to-resource-type map, which is built from each
   capability's target predicates).
 - ``auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS`` derives its operation list from
   ``DRIVE_SANDBOX_WRITE_TARGETS``.
@@ -349,7 +349,7 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
         connector="grist", config_key="documents",
         # Name resolution only: grist.document is governed through the policy engine's own scope,
         # not a grant capability, so the Auto-accept page maps its predicate here by hand
-        # (settings_controller.RULE_NAME_TO_RESOURCE_TYPE).
+        # (the rule-name-to-resource-type map).
         capabilities={},
         resolver=_resolve_grist_document,
     ),

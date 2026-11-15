@@ -33,8 +33,7 @@ A secret must be at least 32 characters after surrounding spaces are removed; `o
 makes a good one. Give the same secret to the app (Peek and Grist take it as their OIDC client
 secret). Restart PrivacyFence after changing any of these. The secret is never logged.
 
-The variables work only on an organization server and in single-user mode. In local mode, setting
-`PRIVACYFENCE_OIDC_CLIENTS` refuses the start. In organization mode with the web server off, the
+The variables work on an organization server and in single-user mode. With the web server off, the
 daemon ignores them and says so in its log.
 
 ## Endpoints
@@ -132,9 +131,6 @@ or fragment: <uri>`** — fix the address; only `localhost`, `127.0.0.1` and `::
 not logged, in case it quotes the secret.
 
 **`…SECRET must be at least 32 characters`** — use a longer secret.
-
-**`PRIVACYFENCE_OIDC_CLIENTS is set, but this is not an organization server.`** — remove the
-variables from a local-mode install.
 
 **`<path> is not a usable RSA signing key of at least 2048 bits; delete it to make a new one.`** —
 `oidc_signing_key.pem` is damaged or is a different kind of key. Delete it (this rotates the key).

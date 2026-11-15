@@ -7,6 +7,8 @@ Accepted — 2026-09-23; implemented in [#609](https://github.com/privacyfence/p
 (the companion's scope). #609 first recorded this as an in-place amendment inside ADR 0002; it was
 moved here, unchanged in substance, when the ADR rules in [`README.md`](README.md) were adopted.
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 ADR 0002 decision 2 scoped the companion to "Open Approvals, Open Settings, and Quit". Two

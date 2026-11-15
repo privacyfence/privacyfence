@@ -1,18 +1,9 @@
-"""Shared Telegram phone/code/2FA sign-in coroutines, used by both the
-desktop settings UI and org mode's per-user ``/connect`` page.
+"""Telegram phone/code/2FA sign-in coroutines, used by the per-user ``/connect`` page.
 
-Extracted from settings_controller.py's telegram_start_auth/telegram_
-submit_code/telegram_submit_2fa work() closures -- same telethon calls,
-same short-lived connect/disconnect-per-step pattern (no long-lived
-connection held across requests, since a browser round trip can be
-arbitrarily far apart from the next one; see settings_controller.py's own
-comment on this). Local mode calls these via ``asyncio.run()`` inside a
-background thread (``_run_async``, unchanged); org mode's web/routes_
-connect.py awaits them directly on the ASGI event loop its own route
-handlers already run on -- there is no browser-loopback/redirect-URI
-concept here at all (MTProto has no equivalent), so unlike Google/Slack/
-Salesforce/Atlassian this is the *same* flow in both modes, just driven
-from two different callers.
+A short-lived connect/disconnect per step (no long-lived connection held across requests,
+since a browser round trip can be arbitrarily far apart from the next one).
+web/routes_connect.py awaits them directly on the ASGI event loop its own route handlers
+already run on -- there is no redirect-URI concept here at all (MTProto has no equivalent).
 """
 from __future__ import annotations
 

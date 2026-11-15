@@ -31,6 +31,7 @@ class TestToolSpecRoundTrip:
             ],
             "read_only": True,
             "destructive": False,
+            "input_schema": None,
         }
 
     def test_from_dict_reconstructs_equivalent_spec(self):
@@ -69,3 +70,15 @@ class TestToolSpecRoundTrip:
         assert d["params"] == []
         rebuilt = ToolSpec.from_dict(d)
         assert rebuilt.params == []
+
+    def test_to_dict_round_trips_input_schema(self):
+        schema = {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]}
+        spec = ToolSpec(name="x", description="y", input_schema=schema)
+        d = spec.to_dict()
+        assert d["input_schema"] == schema
+        assert ToolSpec.from_dict(d).input_schema == schema
+
+        plain = ToolSpec(name="x", description="y")
+        assert plain.to_dict()["input_schema"] is None
+        assert ToolSpec.from_dict(plain.to_dict()).input_schema is None
+        assert ToolSpec.from_dict({"name": "x", "description": "y"}).input_schema is None

@@ -4,16 +4,10 @@ list_channels, and the error-description helper that surfaces Slack's
 "needed scope" hint. These call real SlackClient methods against a
 MagicMock stand-in for slack_sdk.WebClient.
 
-Also covers ``authorize_interactive`` (the browser-loopback OAuth v2 flow --
-a different shape from Salesforce's Web Server + PKCE flow, since Slack's ``oauth_v2_access``
-exchange goes through ``slack_sdk.WebClient`` rather than a raw HTTP POST).
-As with test_salesforce_client.py, ``run_browser_oauth`` (the
-``oauth_loopback`` module boundary) is mocked with a fake that invokes the
-real ``exchange`` closure it receives, so the exchange/error-wrapping logic
-in ``authorize_interactive`` runs for real, with only ``WebClient`` mocked
-underneath. Slack user tokens have no refresh flow in this client (unlike
-the Google/Salesforce clients), so there is no expired-token/refresh
-lifecycle to test here -- only the initial authorize + token-file save path.
+Also covers ``exchange_code`` and ``save_token_record`` (Slack's OAuth v2 code
+exchange goes through ``slack_sdk.WebClient`` rather than a raw HTTP POST), with only
+``WebClient`` mocked underneath. Slack user tokens have no refresh flow in this client,
+so there is no expired-token/refresh lifecycle to test here.
 """
 from __future__ import annotations
 
@@ -31,7 +25,6 @@ import pytest
 from freezegun import freeze_time
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
-from privacyfence.oauth_loopback import OAuthLoopbackError
 from privacyfence.slack_client import (
     SlackChannel,
     SlackClient,
@@ -41,8 +34,9 @@ from privacyfence.slack_client import (
     SlackFile,
     SlackGroupChat,
     SlackUser,
-    authorize_interactive,
+    exchange_code,
     load_token_file,
+    save_token_record,
     message_read_state,
 )
 from slack_sdk.errors import SlackApiError
@@ -91,19 +85,11 @@ def slack_error(error: str = "not_authed", needed: str | None = None) -> SlackAp
 
 class _FakeSlackResponse(dict):
     """Minimal stand-in for slack_sdk's SlackResponse: dict-like .get(), plus
-    the .data attribute authorize_interactive's exchange() returns."""
+    the .data attribute exchange_code() reads."""
 
     @property
     def data(self):
         return dict(self)
-
-
-def _invoke_exchange(build_authorize_url, exchange, port, path):
-    """Fake run_browser_oauth: skip the real browser/HTTP server and just
-    call the exchange closure with a fake authorization code -- this is what
-    drives exchange()'s own WebClient.oauth_v2_access + error-wrapping logic."""
-    redirect_uri = f"http://127.0.0.1:{port}{path}"
-    return exchange("auth-code-123", redirect_uri, "code-verifier-abc")
 
 
 # ---------------------------------------------------------------------------- #
@@ -145,54 +131,43 @@ class TestLoadTokenFile:
 
 
 # ---------------------------------------------------------------------------- #
-# authorize_interactive: browser-loopback OAuth v2 flow. run_browser_oauth
-# (the oauth_loopback module boundary) is mocked with a fake that invokes
-# the real exchange closure it was given, so the WebClient.oauth_v2_access
-# call and error-wrapping logic run for real, with only WebClient mocked
-# below that.
+# exchange_code + save_token_record: the OAuth v2 code exchange, with only
+# WebClient mocked underneath.
 # ---------------------------------------------------------------------------- #
 
-class TestAuthorizeInteractive:
-    def test_code_exchange_slack_api_error_becomes_slack_client_error(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("privacyfence.slack_client.run_browser_oauth", _invoke_exchange)
+def _patch_web_client(monkeypatch, mock_client):
+    monkeypatch.setattr("privacyfence.slack_client.WebClient", MagicMock(return_value=mock_client))
+
+
+class TestExchangeAndSave:
+    def test_code_exchange_slack_api_error_becomes_slack_client_error(self, monkeypatch):
         mock_client = MagicMock()
         mock_client.oauth_v2_access.side_effect = slack_error("invalid_code")
-        monkeypatch.setattr("privacyfence.slack_client.WebClient", MagicMock(return_value=mock_client))
+        _patch_web_client(monkeypatch, mock_client)
 
         with pytest.raises(SlackClientError, match="Slack OAuth exchange failed"):
-            authorize_interactive("cid", "csecret", str(tmp_path / "token.json"))
+            exchange_code("cid", "csecret", "auth-code-123", "https://pf.example.com/cb")
 
-    def test_code_exchange_not_ok_response_becomes_slack_client_error(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("privacyfence.slack_client.run_browser_oauth", _invoke_exchange)
+    def test_code_exchange_not_ok_response_becomes_slack_client_error(self, monkeypatch):
         mock_client = MagicMock()
         mock_client.oauth_v2_access.return_value = _FakeSlackResponse({"ok": False, "error": "bad_redirect_uri"})
-        monkeypatch.setattr("privacyfence.slack_client.WebClient", MagicMock(return_value=mock_client))
+        _patch_web_client(monkeypatch, mock_client)
 
         with pytest.raises(SlackClientError, match="Slack OAuth exchange failed: bad_redirect_uri"):
-            authorize_interactive("cid", "csecret", str(tmp_path / "token.json"))
+            exchange_code("cid", "csecret", "auth-code-123", "https://pf.example.com/cb")
 
-    def test_loopback_failure_becomes_slack_client_error(self, monkeypatch, tmp_path):
-        def raiser(*a, **kw):
-            raise OAuthLoopbackError("timed out waiting for sign-in")
-        monkeypatch.setattr("privacyfence.slack_client.run_browser_oauth", raiser)
-
-        with pytest.raises(SlackClientError, match="Slack sign-in failed.*timed out"):
-            authorize_interactive("cid", "csecret", str(tmp_path / "token.json"))
-
-    def test_missing_access_token_in_authed_user_raises(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("privacyfence.slack_client.run_browser_oauth", _invoke_exchange)
+    def test_missing_access_token_in_authed_user_raises(self, monkeypatch):
         mock_client = MagicMock()
         mock_client.oauth_v2_access.return_value = _FakeSlackResponse({"ok": True, "authed_user": {}})
-        monkeypatch.setattr("privacyfence.slack_client.WebClient", MagicMock(return_value=mock_client))
+        _patch_web_client(monkeypatch, mock_client)
 
         with pytest.raises(SlackClientError, match="did not return a user access token"):
-            authorize_interactive("cid", "csecret", str(tmp_path / "token.json"))
+            exchange_code("cid", "csecret", "auth-code-123", "https://pf.example.com/cb")
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
-    def test_successful_flow_saves_token_with_restricted_permissions(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("privacyfence.slack_client.run_browser_oauth", _invoke_exchange)
+    def test_successful_exchange_then_save_writes_token_with_restricted_permissions(self, monkeypatch, tmp_path):
         mock_client = MagicMock()
         mock_client.oauth_v2_access.return_value = _FakeSlackResponse({
             "ok": True,
@@ -200,10 +175,11 @@ class TestAuthorizeInteractive:
             "team": {"id": "T1", "name": "Acme"},
         })
         mock_client.users_info.return_value = {"user": {"profile": {"email": "me@acme.com"}}}
-        monkeypatch.setattr("privacyfence.slack_client.WebClient", MagicMock(return_value=mock_client))
+        _patch_web_client(monkeypatch, mock_client)
         token_file = tmp_path / "nested" / "token.json"
 
-        result = authorize_interactive("cid", "csecret", str(token_file))
+        result = exchange_code("cid", "csecret", "auth-code-123", "https://pf.example.com/cb")
+        save_token_record(str(token_file), result)
 
         assert result == {
             "access_token": "xoxp-abc", "user_id": "U1", "team_id": "T1",
@@ -213,8 +189,7 @@ class TestAuthorizeInteractive:
         assert saved == result
         assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
 
-    def test_account_email_lookup_failure_is_non_fatal(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("privacyfence.slack_client.run_browser_oauth", _invoke_exchange)
+    def test_account_email_lookup_failure_is_non_fatal(self, monkeypatch):
         mock_client = MagicMock()
         mock_client.oauth_v2_access.return_value = _FakeSlackResponse({
             "ok": True,
@@ -222,35 +197,24 @@ class TestAuthorizeInteractive:
             "team": {"id": "T1", "name": "Acme"},
         })
         mock_client.users_info.side_effect = slack_error("missing_scope")
-        monkeypatch.setattr("privacyfence.slack_client.WebClient", MagicMock(return_value=mock_client))
+        _patch_web_client(monkeypatch, mock_client)
 
-        result = authorize_interactive("cid", "csecret", str(tmp_path / "token.json"))
+        result = exchange_code("cid", "csecret", "auth-code-123", "https://pf.example.com/cb")
 
         assert result["email"] == ""
 
     def test_chmod_failure_is_non_fatal(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("privacyfence.slack_client.run_browser_oauth", _invoke_exchange)
-        mock_client = MagicMock()
-        mock_client.oauth_v2_access.return_value = _FakeSlackResponse({
-            "ok": True,
-            "authed_user": {"id": "U1", "access_token": "xoxp-abc"},
-            "team": {},
-        })
-        mock_client.users_info.return_value = {"user": {"profile": {}}}
-        monkeypatch.setattr("privacyfence.slack_client.WebClient", MagicMock(return_value=mock_client))
         monkeypatch.setattr("os.chmod", MagicMock(side_effect=OSError("read-only filesystem")))
         token_file = tmp_path / "token.json"
 
-        result = authorize_interactive("cid", "csecret", str(token_file))  # must not raise
+        save_token_record(str(token_file), {"access_token": "xoxp-abc"})  # must not raise
 
         assert token_file.exists()
-        assert result["access_token"] == "xoxp-abc"
 
 
 # ---------------------------------------------------------------------------- #
 # build_authorize_url / exchange_code / save_token_record -- called directly
-# (not through run_browser_oauth) by web/routes_connect.py's org-mode
-# server-redirect flow.
+# by web/routes_connect.py's org-mode server-redirect flow.
 # ---------------------------------------------------------------------------- #
 
 class TestHoistedFunctions:

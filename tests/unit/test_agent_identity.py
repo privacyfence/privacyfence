@@ -16,7 +16,9 @@ from privacyfence.agent_identity import (
     AgentIdentity,
     AgentSource,
     agent_scope,
+    client_id_scope,
     current_agent,
+    current_client_id,
     entry_for_redirect_uris,
     identify,
     lookup,
@@ -107,7 +109,7 @@ class TestRegistry:
             # DCR client_name, captured from Claude Code 2.1.283 (ADR 0094).
             ("Claude Code (privacyfence)", "claude-code", "Claude Code"),
             ("Claude Code (my-pf)", "claude-code", "Claude Code"),
-            # Claude Desktop 2.9939.2's handshake through the .mcpb extension (ADR 0094).
+            # Claude Desktop 2.9939.2's handshake (ADR 0094).
             ("local-agent-mode-privacyfence", "claude-desktop", "Claude Desktop"),
             ("local-agent-mode-other", "claude-desktop", "Claude Desktop"),
         ],
@@ -284,3 +286,25 @@ class TestAgentScope:
 
         await asyncio.gather(run("x", x), run("y", y))
         assert seen == {"x": x, "y": y}
+
+
+class TestClientIdScope:
+    def test_default_is_empty(self):
+        assert current_client_id() == ""
+
+    def test_scope_sets_and_restores(self):
+        with client_id_scope("claude-desktop") as scope:
+            assert isinstance(scope, client_id_scope)
+            assert current_client_id() == "claude-desktop"
+        assert current_client_id() == ""
+
+    def test_nested_scopes_restore_the_outer_value(self):
+        with client_id_scope("outer"):
+            with client_id_scope("inner"):
+                assert current_client_id() == "inner"
+            assert current_client_id() == "outer"
+        assert current_client_id() == ""
+
+    def test_exit_without_enter_is_a_no_op(self):
+        client_id_scope("x").__exit__(None, None, None)
+        assert current_client_id() == ""

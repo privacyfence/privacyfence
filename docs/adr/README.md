@@ -110,52 +110,52 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 
 | # | Decision | Status |
 |---|---|---|
-| [0001](0001-remove-macos-native-extra.md) | No macOS-native (AppKit/PyObjC) runtime extra | Accepted; superseded in part by 0002 |
-| [0002](0002-local-mode-trust-boundary-and-companion-app.md) | Local mode's trust boundary is the OS user account; a companion app replaces the agent as the sign-in channel | Accepted; superseded in part by 0003; amended by 0008, 0026, 0027, 0031 |
-| [0003](0003-separated-installs-only.md) | Every shipped local-mode install is privilege-separated | Accepted |
+| [0001](0001-remove-macos-native-extra.md) | No macOS-native (AppKit/PyObjC) runtime extra | Deprecated: ADR 0301 removed desktop mode |
+| [0002](0002-local-mode-trust-boundary-and-companion-app.md) | Local mode's trust boundary is the OS user account; a companion app replaces the agent as the sign-in channel | Superseded by 0301 |
+| [0003](0003-separated-installs-only.md) | Every shipped local-mode install is privilege-separated | Superseded by 0301 |
 | [0004](0004-retire-the-v1-auto-accept-config-model.md) | Retire the v1 auto-accept config model | Accepted; superseded in part by 0041 |
 | [0005](0005-moving-the-approval-decision-off-the-device.md) | Moving the approval decision off the device | Proposed |
 | [0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) | Attribute a request to the AI system from the connection, with ranked provenance | Accepted; implemented; amended by 0035, 0037, 0224, 0251 |
-| [0007](0007-local-file-bridge.md) | Local file access crosses the privilege-separation boundary through the `.mcpb` shim | Accepted; extended by 0028 |
-| [0008](0008-one-principal-per-os-user.md) | One principal per OS user, identified by the kernel | Accepted; implemented in part; amended by 0043, 0104 |
+| [0007](0007-local-file-bridge.md) | Local file access crosses the privilege-separation boundary through the `.mcpb` shim | Superseded by 0304 |
+| [0008](0008-one-principal-per-os-user.md) | One principal per OS user, identified by the kernel | Deprecated: ADR 0301 removed desktop mode |
 | [0009](0009-use-the-official-mcp-sdk.md) | Use the official `mcp` SDK for Streamable HTTP, not a hand-rolled transport | Accepted (retroactive) |
-| [0010](0010-local-mode-serves-plain-http-on-localhost.md) | Local mode serves plain HTTP on `localhost`, not HTTPS with a self-signed certificate | Accepted (retroactive) |
+| [0010](0010-local-mode-serves-plain-http-on-localhost.md) | Local mode serves plain HTTP on `localhost`, not HTTPS with a self-signed certificate | Deprecated: ADR 0301 removed desktop mode |
 | [0011](0011-org-mode-runs-its-own-oauth-authorization-server.md) | Org mode runs its own OAuth authorization server | Accepted (retroactive) |
-| [0012](0012-mcpb-shim-connects-claude-desktop-to-local-mode.md) | A `.mcpb` stdio shim connects Claude Desktop to local mode with zero hand-configuration | Accepted (retroactive) |
+| [0012](0012-mcpb-shim-connects-claude-desktop-to-local-mode.md) | A `.mcpb` stdio shim connects Claude Desktop to local mode with zero hand-configuration | Superseded by 0304 |
 | [0013](0013-no-mcp-tool-mints-a-sign-in-credential.md) | No MCP tool may mint a sign-in credential | Accepted (retroactive) |
 | [0014](0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md) | Every bespoke settings POST route is classified sensitive/exempt, or the app refuses to start | Accepted (retroactive) |
 | [0015](0015-unattended-session-flag-is-advisory-only.md) | The self-declared unattended-session flag is advisory and never authorizes | Accepted (retroactive) |
 | [0016](0016-org-config-bundle-hash-log-and-signing.md) | Org-config bundle integrity has two independent layers: a startup hash log and TOFU-pinned signing | Accepted (retroactive); amended by 0200 |
 | [0017](0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md) | Org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost | Accepted (retroactive); amended by 0092 |
-| [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Accepted (retroactive); amended by 0039, 0044 |
+| [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Deprecated: ADR 0301 removed desktop mode |
 | [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive); amended by 0181 |
-| [0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md) | PyPI/TestPyPI publishing uses OIDC Trusted Publisher only | Accepted (retroactive) |
+| [0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md) | PyPI/TestPyPI publishing uses OIDC Trusted Publisher only | Accepted (retroactive); amended by 0309 |
 | [0021](0021-release-tag-push-never-uses-github-token.md) | The release tag is never pushed with `GITHUB_TOKEN` | Accepted (retroactive); amended by 0185 |
 | [0022](0022-one-release-tag-per-commit.md) | One release tag per commit; a stuck release is fixed forward | Accepted (retroactive) |
 | [0023](0023-changelog-is-the-only-source-of-release-notes.md) | `CHANGELOG.md` is the only source of stable release notes, and rendering fails loudly | Accepted (retroactive) |
-| [0024](0024-pre-releases-are-publicly-downloadable.md) | Pre-releases are publicly downloadable through the download Worker | Accepted (retroactive) |
+| [0024](0024-pre-releases-are-publicly-downloadable.md) | Pre-releases are publicly downloadable through the download Worker | Superseded by 0305 |
 | [0025](0025-no-certified-security-framework.md) | No certified security framework (ISO 27001/BCP/SLA): a risk-acceptance posture | Accepted (retroactive) |
-| [0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md) | The companion manages the daemon through the platform's service manager, one elevation prompt per action | Accepted |
-| [0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md) | A service-group member cannot take over another member's companion socket | Accepted; amended by 0029, 0187 |
-| [0028](0028-clients-without-the-shim-get-capability-urls.md) | Clients without the shim move files through single-use capability URLs | Accepted |
-| [0029](0029-the-layout-step-never-re-owns-a-socket.md) | The installers' layout step never re-owns a socket | Accepted |
+| [0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md) | The companion manages the daemon through the platform's service manager, one elevation prompt per action | Deprecated: ADR 0301 removed desktop mode |
+| [0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md) | A service-group member cannot take over another member's companion socket | Deprecated: ADR 0301 removed desktop mode |
+| [0028](0028-clients-without-the-shim-get-capability-urls.md) | Clients without the shim move files through single-use capability URLs | Accepted; amended by 0304 |
+| [0029](0029-the-layout-step-never-re-owns-a-socket.md) | The installers' layout step never re-owns a socket | Deprecated: ADR 0301 removed desktop mode |
 | [0030](0030-preflight-dispatches-build-yml-before-tagging.md) | Cutting a release first dispatches `build.yml` on the untagged commit | Accepted |
-| [0031](0031-clicking-privacyfence-opens-approvals-through-the-companion.md) | Clicking PrivacyFence opens Approvals through the companion | Accepted |
+| [0031](0031-clicking-privacyfence-opens-approvals-through-the-companion.md) | Clicking PrivacyFence opens Approvals through the companion | Deprecated: ADR 0301 removed desktop mode |
 | [0032](0032-org-settings-share-locals-generic-action-dispatcher.md) | Org mode's settings writes route through local mode's generic action dispatcher | Accepted |
 | [0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md) | One route layer per surface (approvals, settings), with an auth adapter per mode, not a second module | Accepted |
 | [0034](0034-sensitive-settings-writes-require-step-up-in-both-modes.md) | Sensitive settings writes require WebAuthn step-up in both local and org mode | Accepted |
 | [0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) | Agent attribution reads the handshake on every call; org mode attests only admin-pinned OAuth clients | Accepted; amended by 0224; decision 3 superseded by 0225 |
-| [0036](0036-card-copy-names-the-caller-through-one-placeholder.md) | Card copy names the caller through one placeholder, filled from the verified name or "the AI system"; connectors never learn who is asking | Accepted (retroactive) |
-| [0037](0037-a-local-override-is-a-relabel-and-never-attests.md) | A local `agent_overrides:` match is a relabel recorded as claimed on every install; local mode has no attested source | Accepted |
+| [0036](0036-card-copy-names-the-caller-through-one-placeholder.md) | Card copy names the caller through one placeholder, filled from the verified name or "the AI system"; connectors never learn who is asking | Accepted (retroactive); amended by 0286 |
+| [0037](0037-a-local-override-is-a-relabel-and-never-attests.md) | A local `agent_overrides:` match is a relabel recorded as claimed on every install; local mode has no attested source | Deprecated: ADR 0301 removed desktop mode |
 | [0038](0038-gmail-draft-signature-is-shown-but-not-write-scanned.md) | A Gmail draft's appended signature is shown in the approval popup but not write-scanned | Accepted |
-| [0039](0039-installers-refuse-an-os-below-the-support-matrix.md) | Every installer refuses an OS below the support matrix's floor | Accepted |
-| [0040](0040-telegram-app-credentials-ship-in-every-distribution.md) | Telegram app credentials ship in every distribution, including the PyPI sdist/wheel | Accepted |
-| [0041](0041-only-the-current-install-layout-is-supported.md) | Only the current install layout is supported; there is no upgrade path from earlier layouts | Accepted; amended by 0047 |
-| [0042](0042-uninstall-replaces-disable.md) | `uninstall [--purge]` replaces `disable`; uninstalling keeps the data, purging deletes it | Accepted |
-| [0043](0043-the-recorded-owner-is-never-rewritten.md) | The marker's recorded owner is written once and never rewritten by adding another account | Accepted |
-| [0044](0044-the-deb-declares-only-the-architectures-ci-builds.md) | The `.deb` declares only the architectures CI builds and tests | Accepted |
-| [0045](0045-the-windows-installer-ends-its-own-processes-and-force-closes-the-rest.md) | The Windows installer ends its own processes, and RestartManager force-closes whatever is left | Accepted |
-| [0046](0046-release-ci-pins-codesigntool-by-version-and-sha256.md) | Release CI pins eSigner CodeSignTool to one version and its SHA-256, not "latest" | Accepted |
+| [0039](0039-installers-refuse-an-os-below-the-support-matrix.md) | Every installer refuses an OS below the support matrix's floor | Deprecated: ADR 0301 removed desktop mode |
+| [0040](0040-telegram-app-credentials-ship-in-every-distribution.md) | Telegram app credentials ship in every distribution, including the PyPI sdist/wheel | Accepted; amended by 0309 |
+| [0041](0041-only-the-current-install-layout-is-supported.md) | Only the current install layout is supported; there is no upgrade path from earlier layouts | Deprecated: ADR 0301 removed desktop mode |
+| [0042](0042-uninstall-replaces-disable.md) | `uninstall [--purge]` replaces `disable`; uninstalling keeps the data, purging deletes it | Deprecated: ADR 0301 removed desktop mode |
+| [0043](0043-the-recorded-owner-is-never-rewritten.md) | The marker's recorded owner is written once and never rewritten by adding another account | Deprecated: ADR 0301 removed desktop mode |
+| [0044](0044-the-deb-declares-only-the-architectures-ci-builds.md) | The `.deb` declares only the architectures CI builds and tests | Deprecated: ADR 0301 removed desktop mode |
+| [0045](0045-the-windows-installer-ends-its-own-processes-and-force-closes-the-rest.md) | The Windows installer ends its own processes, and RestartManager force-closes whatever is left | Deprecated: ADR 0301 removed desktop mode |
+| [0046](0046-release-ci-pins-codesigntool-by-version-and-sha256.md) | Release CI pins eSigner CodeSignTool to one version and its SHA-256, not "latest" | Deprecated: ADR 0301 removed desktop mode |
 | [0047](0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md) | v1 policy sections an earlier release already converted are removed at startup, not refused | Accepted |
 | [0048](0048-every-crawler-is-allowed-including-ai-training.md) | privacyfence.eu allows every crawler, AI search and AI training included | Accepted |
 | [0049](0049-website-css-is-plain-modern-css-without-a-framework.md) | The website's CSS is plain modern CSS, with no framework | Accepted |
@@ -163,15 +163,15 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0051](0051-privacyfence-eu-publishes-the-user-and-operator-docs-only.md) | privacyfence.eu publishes the user and operator docs only; links out of that set go to GitHub at the same tag | Accepted |
 | [0052](0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md) | The docs are built with Zensical, from the latest stable release tag | Accepted |
 | [0053](0053-the-website-is-hosted-on-github-pages-behind-cloudflare.md) | The website is hosted on GitHub Pages, behind the Cloudflare proxy | Accepted; amended by 0201 |
-| [0054](0054-the-windows-installer-refuses-anything-but-native-x64.md) | The Windows installer refuses anything but a native x64 Windows, Windows 11 on arm64 included | Accepted |
+| [0054](0054-the-windows-installer-refuses-anything-but-native-x64.md) | The Windows installer refuses anything but a native x64 Windows, Windows 11 on arm64 included | Deprecated: ADR 0301 removed desktop mode |
 | [0055](0055-step-up-passkey-enrollment-accepts-any-authenticator.md) | Step-up passkey enrollment accepts any authenticator: built in, security key or phone; user verification stays required | Accepted |
 | [0056](0056-code-carries-no-project-history.md) | Code carries no project history; a blocking test enforces it | Accepted |
-| [0057](0057-stable-tags-are-gated-on-graphical-session-coverage.md) | Stable tags are gated on graphical-session coverage; pre-release tags only report it | Accepted (retroactive) |
-| [0058](0058-nothing-runs-elevated-unless-only-an-administrator-can-rewrite-it.md) | Nothing runs elevated unless only an administrator can rewrite it | Accepted (retroactive) |
-| [0059](0059-the-windows-daemon-runs-as-its-own-virtual-service-account.md) | The Windows daemon runs as its own virtual service account | Accepted (retroactive) |
-| [0060](0060-the-system-root-override-is-ignored-on-a-real-install.md) | The system-root override is ignored on a real install | Accepted (retroactive) |
+| [0057](0057-stable-tags-are-gated-on-graphical-session-coverage.md) | Stable tags are gated on graphical-session coverage; pre-release tags only report it | Superseded by 0306 |
+| [0058](0058-nothing-runs-elevated-unless-only-an-administrator-can-rewrite-it.md) | Nothing runs elevated unless only an administrator can rewrite it | Deprecated: ADR 0301 removed desktop mode |
+| [0059](0059-the-windows-daemon-runs-as-its-own-virtual-service-account.md) | The Windows daemon runs as its own virtual service account | Deprecated: ADR 0301 removed desktop mode |
+| [0060](0060-the-system-root-override-is-ignored-on-a-real-install.md) | The system-root override is ignored on a real install | Deprecated: ADR 0301 removed desktop mode |
 | [0061](0061-the-mcp-token-and-the-browser-session-are-audience-separated.md) | The MCP token and the browser session are audience-separated | Accepted (retroactive) |
-| [0062](0062-only-a-companion-attested-session-may-approve.md) | Only a companion-attested session may approve | Accepted (retroactive) |
+| [0062](0062-only-a-companion-attested-session-may-approve.md) | Only a companion-attested session may approve | Deprecated: ADR 0301 removed desktop mode |
 | [0063](0063-the-web-ui-csp-uses-per-response-nonces-not-unsafe-inline.md) | The web UI's CSP uses nonces, not `'unsafe-inline'` | Accepted (retroactive) |
 | [0064](0064-browser-notifications-stay-on-the-machine.md) | Browser notifications stay on the machine | Accepted (retroactive); amended by 0081 |
 | [0065](0065-approving-from-the-list-is-a-batch-bound-to-one-step-up-assertion.md) | Approving from the list is a batch bound to one step-up assertion | Accepted (retroactive) |
@@ -196,8 +196,8 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0084](0084-the-audit-log-records-that-a-deny-had-feedback-never-the-text.md) | The audit log records that a deny had feedback (intent, note length), never the feedback text | Accepted |
 | [0085](0085-ci-installs-ai-client-clis-from-a-committed-lockfile.md) | CI installs AI-client CLIs from a committed lockfile; only the weekly canary runs `@latest` | Accepted |
 | [0086](0086-tool-annotations-are-truthful-by-default.md) | Tool annotations are truthful by default; an organization bundle or a local connection can ask for every tool read-only | Accepted; superseded in part by 0089 |
-| [0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md) | Two Claude Desktop extensions ship in the DMG and the Windows installer | Superseded by 0089 |
-| [0088](0088-local-mode-shows-every-requester-as-undetected.md) | Local mode shows every requester as "Undetected" | Accepted |
+| [0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md) | Two Claude Desktop extensions ship in the DMG and the Windows installer | Superseded by 0089; amended by 0306 |
+| [0088](0088-local-mode-shows-every-requester-as-undetected.md) | Local mode shows every requester as "Undetected" | Deprecated: ADR 0301 removed desktop mode |
 | [0089](0089-tool-annotations-are-always-truthful.md) | Tool annotations are always truthful; the all-read-only mode and the no-prompts extension are removed | Accepted |
 | [0090](0090-a-reused-denial-says-it-is-an-earlier-decision.md) | A reused denial says it is an earlier decision | Accepted |
 | [0091](0091-the-configured-step-up-scope-is-a-minimum-each-person-can-widen.md) | The configured step-up scope is a minimum each person can widen | Accepted |
@@ -213,7 +213,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0101](0101-the-website-shows-no-third-party-logos.md) | The website shows no third-party logos; AI agents and connectors are named in text | Accepted (retroactive) |
 | [0102](0102-an-upload-slot-is-consumed-after-the-gate-not-before.md) | An upload slot is consumed after the gate, not before it | Accepted |
 | [0103](0103-chatgpt-is-matched-by-its-registered-name.md) | ChatGPT is matched by the name it registers with, and the `openai-mcp` guess is removed | Accepted |
-| [0104](0104-the-companion-copies-the-ai-client-token.md) | The companion copies the AI client token to the clipboard, with no passkey; Settings reaches it only through the companion | Accepted |
+| [0104](0104-the-companion-copies-the-ai-client-token.md) | The companion copies the AI client token to the clipboard, with no passkey; Settings reaches it only through the companion | Deprecated: ADR 0301 removed desktop mode |
 | [0105](0105-a-google-read-is-retried-once-when-its-connection-drops.md) | A Google API read is retried once when its connection drops; PrivacyFence never retries a write | Accepted; amended by 0249 |
 | [0106](0106-google-not-found-and-not-shared-errors-reach-the-agent.md) | A Google not-found or not-shared answer reaches the AI client as a fixed message naming the connected account; every other Google error stays generic | Accepted |
 | [0107](0107-gemini-cli-and-antigravity-are-not-supported-clients.md) | Gemini CLI, Antigravity and the Gemini app are not supported AI clients; Gemini support means Gemini Enterprise | Accepted |
@@ -221,9 +221,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0109](0109-gemini-enterprise-is-matched-by-its-admin-registered-name.md) | Gemini Enterprise is matched by the name its admin registers it with | Accepted |
 | [0110](0110-gemini-enterprise-is-registered-through-the-existing-register-endpoint.md) | Gemini Enterprise is registered through the existing `/register` endpoint; no pre-registration command | Accepted |
 | [0111](0111-a-duplicate-release-run-cancels-itself.md) | A duplicate release run cancels itself | Accepted |
-| [0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md) | Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release | Accepted |
+| [0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md) | Stable releases are listed on the official MCP registry, with the `.mcpb` attached to the GitHub Release | Superseded by 0308 |
 | [0113](0113-process-docs-live-in-docs-not-in-claude-md.md) | Project process documentation lives in `docs/` and `CONTRIBUTING.md`, not in `CLAUDE.md` | Accepted |
-| [0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md) | The Glama listing runs a credential-free tool catalog, not a hosted PrivacyFence | Accepted |
+| [0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md) | The Glama listing runs a credential-free tool catalog, not a hosted PrivacyFence | Accepted; amended by 0309 |
 | [0115](0115-tool-definitions-carry-parameter-return-and-routing-guidance-in-prose.md) | Tool definitions carry their parameter, return and routing guidance in prose, and a test enforces it | Accepted |
 | [0116](0116-list-tools-page-inside-the-client-and-keep-their-return-shape.md) | List and search tools page inside the client up to `max_results` and keep their bare-list return shape | Accepted |
 | [0117](0117-atlassian-account-ids-resolve-through-a-lazy-shared-cache.md) | Atlassian account ids resolve through a lazy cache that Jira and Confluence share | Accepted; amended by 0202 |
@@ -251,12 +251,12 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0157](0157-a-rule-can-let-personal-data-through-tools-whose-result-holds-no-row.md) | A rule can let personal data through the tools whose result holds no row | Accepted; amends 0155; amended by 0173 |
 | [0158](0158-peek-rules-name-pages-and-cover-only-new-versions.md) | Peek rules name pages and cover only new versions | Accepted |
 | [0159](0159-jira-export-issues-is-covered-by-the-project-search-rule.md) | `jira_export_issues` is covered by the project search rule | Accepted |
-| [0160](0160-org-mode-exports-are-delivered-by-a-one-time-link.md) | Org-mode exports are delivered by a one-time link | Accepted; amends 0155 |
-| [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted; amended by 0207 |
+| [0160](0160-org-mode-exports-are-delivered-by-a-one-time-link.md) | Org-mode exports are delivered by a one-time link | Accepted; amends 0155; amended by 0304 |
+| [0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md) | `privacyfence-sync` is a separate plain MCP client | Accepted; amended by 0207; amended by 0309 |
 | [0162](0162-grist-update-csv-can-clear-a-value-from-an-empty-cell.md) | `grist_update_csv` can clear a value from an empty cell | Accepted; amends 0148 |
 | [0163](0163-the-recipe-skill-ships-as-a-claude-plugin-from-this-repository.md) | The recipe skill ships as a Claude plugin from this repository | Accepted |
-| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198; amended by 0236; related: 0250 |
-| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072 |
+| [0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md) | Scoped tokens are named, expiring, rule- and tool-scoped, deny-only credentials | Accepted; amends 0006, 0008, 0015, 0037; amended by 0173; amended by 0198; amended by 0236; related: 0250; amended by 0283; amended by 0287 |
+| [0165](0165-org-mode-scoped-tokens-are-an-admin-opt-in-shown-once.md) | In organization mode scoped tokens are an administrator opt-in, shown once | Accepted; amends 0072; amended by 0278; amended by 0283 |
 | [0166](0166-a-stored-rule-is-widened-to-its-verbs-current-operations-only-by-an-explicit-confirmed-update.md) | A stored rule is widened to its verbs' current operations only by an explicit, confirmed update | Accepted; amends 0148; amended by 0174, 0236 |
 | [0167](0167-a-card-number-must-have-a-length-its-first-digit-allows.md) | A card number must have a length its first digit allows | Accepted |
 | [0168](0168-earlier-drive-file-versions-are-read-under-the-file-read-rule.md) | Earlier Drive file versions are read under the file-read rule | Accepted |
@@ -273,12 +273,12 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0179](0179-an-idp-step-up-starts-only-from-the-card-by-post.md) | An IdP step-up starts only from the card, by POST | Accepted |
 | [0180](0180-jira-and-salesforce-csv-exports-neutralise-formula-cells.md) | Jira and Salesforce CSV exports neutralise formula cells | Accepted; amends 0155 |
 | [0181](0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md) | The QA runner is reachable only from `main`'s two QA workflows, and its jobs hold read-only tokens | Accepted; amends 0019 |
-| [0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md) | Every tool a release or QA-runner job installs comes from a hash-pinned lock or an exact npm pin | Accepted; extends 0085 |
-| [0183](0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md) | Under pkexec the privilege-separation script accepts only the companion's own requests | Accepted |
-| [0184](0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md) | The macOS pkg runs its own copy of the privilege-separation script, and only over a root-owned app bundle | Accepted |
+| [0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md) | Every tool a release or QA-runner job installs comes from a hash-pinned lock or an exact npm pin | Accepted; extends 0085; amended by 0309 |
+| [0183](0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md) | Under pkexec the privilege-separation script accepts only the companion's own requests | Deprecated: ADR 0301 removed desktop mode |
+| [0184](0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md) | The macOS pkg runs its own copy of the privilege-separation script, and only over a root-owned app bundle | Deprecated: ADR 0301 removed desktop mode |
 | [0185](0185-a-release-tag-is-created-only-by-release-yml.md) | A release tag is created only by `release.yml`; a tag ruleset refuses `v*` tags from other accounts | Accepted; amends 0021 |
-| [0186](0186-the-download-worker-keeps-no-request-logs.md) | The download Worker keeps no request logs | Accepted |
-| [0187](0187-the-shim-trusts-only-service-account-owned-handoff-entries.md) | The `.mcpb` shim trusts only handoff entries the service account owns; the daemon replaces a foreign control socket | Accepted; amends 0027 |
+| [0186](0186-the-download-worker-keeps-no-request-logs.md) | The download Worker keeps no request logs | Deprecated: ADR 0305 retired the download Worker |
+| [0187](0187-the-shim-trusts-only-service-account-owned-handoff-entries.md) | The `.mcpb` shim trusts only handoff entries the service account owns; the daemon replaces a foreign control socket | Deprecated: ADR 0301 removed desktop mode |
 | [0188](0188-jira-assets-is-a-separate-read-only-connector-whose-atlassian-scopes-are-requested-only-when-switched-on.md) | Jira Assets is a separate read-only connector whose Atlassian scopes are requested only when it is switched on | Accepted |
 | [0189](0189-assets-schemas-types-and-attributes-are-auto-approved-and-object-reads-are-reviewed-per-schema.md) | Assets schemas, object types and attribute definitions are auto-approved; object reads are reviewed and can be auto-accepted per schema | Accepted |
 | [0190](0190-linked-objects-are-read-in-one-bounded-reviewed-traversal.md) | Linked objects are read in one bounded, reviewed traversal | Accepted |
@@ -294,13 +294,13 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0200](0200-an-organization-bundle-carries-a-signed-serial-and-an-older-one-is-refused.md) | An organization bundle carries a signed serial, and an older one is refused | Accepted; amends 0016 |
 | [0201](0201-the-websites-security-headers-are-set-by-cloudflare-and-checked-from-the-repository.md) | The website's security headers are set by Cloudflare and checked from the repository | Accepted; amends 0053 |
 | [0202](0202-cached-atlassian-accounts-are-reported-each-cycle-and-erased-when-they-cannot-be.md) | Cached Atlassian accounts are reported each cycle, and erased when they cannot be | Accepted; amends 0117 |
-| [0203](0203-the-deb-is-built-on-a-pinned-ubuntu-runner.md) | The `.deb` is built on a pinned Ubuntu runner | Accepted; acts on 0039 |
+| [0203](0203-the-deb-is-built-on-a-pinned-ubuntu-runner.md) | The `.deb` is built on a pinned Ubuntu runner | Deprecated: ADR 0301 removed desktop mode |
 | [0204](0204-check-policy-names-the-rules-that-would-cover-an-uncovered-call.md) | `privacyfence_check_policy` names the rules that would cover an uncovered call | Accepted; amended by 0229 |
 | [0205](0205-privacyfence-sync-reports-a-runs-outcome-in-an-opt-in-result-file.md) | `privacyfence-sync` reports a run's outcome in an opt-in result file | Accepted |
 | [0206](0206-scoped-token-activity-is-kept-in-its-own-file.md) | A scoped token's last use and last denial are kept in their own file | Accepted; relates to 0164 |
 | [0207](0207-privacyfence-sync-can-start-a-claude-code-scheduled-task-and-nothing-else.md) | `privacyfence-sync` can start a Claude Code scheduled task, and nothing else | Accepted; amends 0161 |
-| [0208](0208-the-organization-image-is-published-to-ghcr-for-stable-releases-only.md) | The organization image is published to GHCR for stable releases only | Accepted |
-| [0209](0209-the-organization-image-is-tested-in-build-yml-and-pushed-by-a-workflow-of-its-own.md) | The organization image is tested in build.yml and pushed by a workflow of its own | Accepted |
+| [0208](0208-the-organization-image-is-published-to-ghcr-for-stable-releases-only.md) | The organization image is published to GHCR for stable releases only | Accepted; amended by 0309 |
+| [0209](0209-the-organization-image-is-tested-in-build-yml-and-pushed-by-a-workflow-of-its-own.md) | The organization image is tested in build.yml and pushed by a workflow of its own | Accepted; amended by 0309 |
 | [0210](0210-the-organization-image-s-floating-tags-only-move-forward.md) | The organization image's floating tags only move forward | Accepted |
 | [0211](0211-the-organization-image-is-built-for-amd64-and-arm64-on-native-runners.md) | The organization image is built for amd64 and arm64 on native runners | Accepted |
 | [0212](0212-the-organization-image-installs-the-release-wheel-from-the-hash-lock-as-an-unprivileged-user.md) | The organization image installs the release wheel from the hash lock as an unprivileged user | Accepted |
@@ -327,7 +327,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0233](0233-a-miro-write-covers-a-batch-of-up-to-twenty-under-one-card.md) | A Miro write covers a batch of up to twenty items or connector lines under one approval card | Accepted; relates to 0231 |
 | [0234](0234-slack-reads-report-the-users-own-read-state.md) | Slack message reads report the user's own read state from Slack's read markers | Accepted; relates to 0226, 0227 |
 | [0235](0235-a-separate-auto-approved-tool-checks-the-read-state-of-named-messages.md) | A separate, auto-approved tool checks the read state of named Slack messages | Accepted; relates to 0234 |
-| [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198 |
+| [0236](0236-a-scoped-token-holds-its-own-rules.md) | A scoped token holds its own rules | Accepted; amends 0164, 0166, 0172, 0173, 0220, 0228; supersedes 0198; amended by 0287 |
 | [0237](0237-the-wheel-bundles-the-changelog-through-a-setup-py-build-hook.md) | The wheel bundles `CHANGELOG.md` through a `setup.py` build hook | Accepted; relates to 0023 |
 | [0238](0238-org-mode-shows-each-person-the-changes-since-the-version-they-last-saw.md) | Org mode shows each person the changes since the version they last saw | Accepted; relates to 0014, 0023, 0237 |
 | [0239](0239-the-peek-connector-uses-peeks-visibilities-and-new-pages-are-restricted.md) | The Peek connector uses Peek's own visibilities, and new pages are restricted | Accepted; relates to 0158 |
@@ -341,19 +341,19 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0247](0247-grist-provisioning-needs-a-verified-email.md) | Grist provisioning needs a verified email | Accepted; relates to 0142, 0143 |
 | [0248](0248-a-managed-grist-key-expires-90-days-after-it-was-issued.md) | A managed Grist key expires 90 days after it was issued | Accepted; relates to 0142, 0143 |
 | [0249](0249-a-timed-out-google-request-discards-its-pooled-connection.md) | A timed-out Google request discards its pooled connection | Accepted; amends 0105 |
-| [0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) | An AI client can propose a scoped token; only a person creates it, after a narrowing-only review and a typed-name confirmation | Accepted; relates to 0013, 0034, 0104, 0164, 0165, 0195, 0220, 0236 |
+| [0250](0250-an-ai-client-can-propose-a-scoped-token-and-only-a-person-creates-it.md) | An AI client can propose a scoped token; only a person creates it, after a narrowing-only review and a typed-name confirmation | Accepted; relates to 0013, 0034, 0104, 0164, 0165, 0195, 0220, 0236; amended by 0278, 0280 |
 | [0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md) | A token proposal is attributed to the client that made it | Accepted; amends 0006 |
 | [0252](0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md) | Each MCP session keeps its approved calls in memory so a token can be proposed from them | Accepted |
-| [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165 |
+| [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165; amended by 0294 |
 | [0254](0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md) | The reads flag of a scoped token covers Drive file content | Accepted; amends 0219 |
-| [0255](0255-built-in-oauth-apps-ship-in-every-distribution.md) | Built-in OAuth apps ship in the server distributions | Accepted; relates to 0040 |
+| [0255](0255-built-in-oauth-apps-ship-in-every-distribution.md) | Built-in OAuth apps ship in the server distributions | Accepted; relates to 0040; amended by 0309 |
 | [0256](0256-org-config-holds-only-startup-settings-and-app-credentials.md) | The org config holds only startup settings and app credentials | Accepted; amends 0016, 0196 |
 | [0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md) | Operational settings live in a daemon-written admin config | Accepted; amends 0196, 0253; relates to 0016, 0034, 0068, 0070, 0200 |
 | [0258](0258-administration-is-a-separate-admin-page.md) | Administration is a separate Admin page | Accepted; amends 0217; relates to 0033 |
 | [0259](0259-org-servers-use-built-in-apps-through-a-domain-verified-relay.md) | Organization servers use the built-in apps through a domain-verified relay | Accepted; relates to 0011, 0186 |
 | [0260](0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md) | Organization mode can start from the environment and run single-user on localhost | Accepted; relates to 0011, 0177, 0213 |
-| [0261](0261-local-mode-is-deprecated-in-7-and-removed-in-8.md) | Local mode is deprecated in 7.x and removed in 8.x | Accepted; relates to 0002, 0003 |
-| [0262](0262-7x-is-the-migration-checkpoint-for-8x.md) | 7.x is the migration checkpoint for 8.x | Accepted; relates to 0041, 0047, 0171, 0172, 0228, 0236 |
+| [0261](0261-local-mode-is-deprecated-in-7-and-removed-in-8.md) | Local mode is deprecated in 7.x and removed in 8.x | Superseded by 0301 |
+| [0262](0262-7x-is-the-migration-checkpoint-for-8x.md) | 7.x is the migration checkpoint for 8.x | Accepted; relates to 0041, 0047, 0171, 0172, 0228, 0236; amended by 0302 |
 | [0263](0263-the-6-to-7-upgrade-is-reversible.md) | The 6 to 7 upgrade is reversible | Accepted; amends 0016, 0200; relates to 0262 |
 | [0264](0264-an-organization-server-can-start-from-environment-variables.md) | An organization server can start from environment variables | Accepted; amends 0011, 0016 |
 | [0265](0265-admins-can-be-named-by-verified-email.md) | Admins can be named by verified email | Accepted; relates to 0011 |
@@ -368,4 +368,36 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md) | The OIDC signing key is generated in the org directory | Accepted; relates to 0273 |
 | [0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md) | The single-user person is admin@privacyfence.localhost | Accepted; amends 0272 |
 | [0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) | Links to a docs page the next release publishes fall back to GitHub until it does | Accepted; amends 0099 |
-| [0277](0277-the-websites-primary-call-to-action-is-install.md) | The website's primary call to action is Install | Accepted |
+| [0277](0277-the-websites-primary-call-to-action-is-install.md) | The website's primary call to action is Install | Accepted; amended by 0305 |
+| [0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md) | A scoped token can be delivered into an agent runtime, n8n first, as a credential PrivacyFence writes itself | Accepted; amends 0165, 0250; amended by 0290, 0291; relates to 0164, 0220 |
+| [0279](0279-the-n8n-address-and-api-key-come-only-from-the-server-environment.md) | The n8n address and API key come only from the server environment | Accepted; relates to 0241, 0257; amended by 0294 |
+| [0280](0280-privacyfence-runtime-credential-status-reports-a-delivered-credential-to-its-proposer.md) | `privacyfence_runtime_credential_status` reports a delivered proposal's credential to the client that proposed it | Accepted; amends 0250; amended by 0284, 0290 |
+| [0281](0281-a-sweeper-deletes-the-credential-of-a-revoked-expired-or-undelivered-token.md) | A sweeper deletes the runtime credential of a revoked, expired or undelivered token | Accepted; relates to 0164, 0165; amended by 0284 |
+| [0282](0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md) | Runtime delivery is organization-mode only and starts only from an AI proposal | Accepted; relates to 0250, 0261; amended by 0294 |
+| [0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md) | Only a person can extend a scoped token, from today and capped by max_days | Accepted; amends 0164, 0165 |
+| [0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md) | An expired token's n8n credential is kept until the token is revoked | Accepted; amends 0280, 0281; relates to 0283 |
+| [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196; amended by 0288 |
+| [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274; amended by 0297 |
+| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272; amended by 0288, 0298 |
+| [0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) | The upstream MCP declaration can be YAML or inline, and seeds the grants | Accepted; amends 0285, 0287; amended by 0298 |
+| [0289](0289-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md) | The n8n node ships from this repository as an npm package and is published with provenance on stable tags | Accepted; relates to 0278 |
+| [0290](0290-the-delivered-credential-type-is-an-administrators-choice.md) | The delivered credential type is an administrator's choice, and the new type is checked against n8n before a token is minted | Accepted; amends 0278, 0280 |
+| [0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md) | The privacyFenceApi credential holds the address and the token, and has no authenticate block | Accepted; amends 0278 |
+| [0292](0292-the-n8n-node-carries-its-own-handshake-only-mcp-client.md) | The n8n node carries its own handshake-only MCP client with no dependencies | Accepted; relates to 0289 |
+| [0293](0293-the-n8n-node-never-follows-redirects-or-builds-errors-from-caught-values.md) | The n8n node never follows a redirect and never builds an error or an item from a caught error, a request or a credential value | Accepted; relates to 0291 |
+| [0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md) | n8n delivery can be switched on from the server environment | Accepted; amends 0253, 0279, 0282; relates to 0165, 0257 |
+| [0295](0295-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 | Accepted |
+| [0296](0296-the-n8n-nodes-dev-tooling-advisories-wait-for-upstream-not-overrides.md) | The n8n node's dev-tooling advisories wait for upstream, not overrides | Accepted; relates to 0289 |
+| [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286 |
+| [0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) | Audiences come from group membership, and scoped tokens only narrow them | Accepted; amends 0287; supersedes the grant seeding of 0288 |
+| [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298 |
+| [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285 |
+| [0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md) | Desktop mode and its installers are removed in 8.x | Accepted; supersedes 0002, 0003, 0261 |
+| [0302](0302-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262 |
+| [0303](0303-the-mode-setting-accepts-only-org.md) | The mode setting accepts only org | Accepted; relates to 0260 |
+| [0304](0304-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md) | Files move by upload slot, inline bytes or one-time link only | Accepted; supersedes 0007, 0012; amends 0028, 0160 |
+| [0305](0305-the-download-page-and-worker-are-retired.md) | The download page and the Worker are retired | Accepted; supersedes 0024; amends 0277 |
+| [0306](0306-releases-build-the-org-image-privacyfence-sync-and-the-sbom-only.md) | Releases build the org image, privacyfence-sync and the SBOM only | Accepted; supersedes 0057; amends 0087 |
+| [0307](0307-linux-is-the-only-ci-platform.md) | Linux is the only CI platform | Accepted; relates to 0057 |
+| [0308](0308-the-mcp-registry-listing-of-the-extension-is-no-longer-published.md) | The MCP registry listing of the extension is no longer published | Accepted; supersedes 0112 |
+| [0309](0309-the-organization-image-is-the-only-distribution.md) | The organization image is the only distribution | Accepted; amends 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255; relates to 0295 |

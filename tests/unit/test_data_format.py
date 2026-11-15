@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 import yaml
@@ -114,6 +115,188 @@ class TestMarker:
             f"This data was last used by PrivacyFence 8.0.0 (data format 8). "
             f"This release, {__version__}, cannot read it. Install 8.0.0 or newer."
         )
+
+
+def _person_data(root, name="users"):
+    """A person-data directory that holds something, as a 7.x install leaves it."""
+    (root / name).mkdir()
+    (root / name / "entry").write_text("x")
+
+
+class TestCheckUpgradeSource:
+    DESKTOP = "belongs to a PrivacyFence desktop install"
+    CHECKPOINT = "has not been prepared for PrivacyFence 8"
+
+    @staticmethod
+    def _marker(root, fmt, written_by="7.1.0"):
+        (root / "data_format.json").write_text(json.dumps({"format": fmt, "written_by": written_by}))
+
+    def test_a_fresh_directory_gets_the_marker(self, tmp_path):
+        data_format.check_upgrade_source(tmp_path)
+
+        marker = json.loads((tmp_path / "data_format.json").read_text())
+        assert marker["format"] == 7
+        assert marker["written_by"] == __version__
+        assert marker["completed_at"]
+
+    def test_a_second_call_changes_nothing(self, tmp_path):
+        data_format.check_upgrade_source(tmp_path)
+        first = (tmp_path / "data_format.json").read_text()
+
+        data_format.check_upgrade_source(tmp_path)
+
+        assert (tmp_path / "data_format.json").read_text() == first
+
+    def test_person_data_without_a_marker_is_refused_with_the_checkpoint_text(self, tmp_path):
+        _person_data(tmp_path)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            data_format.check_upgrade_source(tmp_path)
+
+        assert str(excinfo.value) == (
+            f"This data directory ({tmp_path}) has not been prepared for PrivacyFence 8. Install the latest "
+            'PrivacyFence 7, start it once, check that the Admin page says "Ready for PrivacyFence 8: yes", '
+            "then start this release again: https://privacyfence.eu/docs/moving-to-organization-mode/"
+        )
+        assert not (tmp_path / "data_format.json").exists()
+
+    @pytest.mark.parametrize("name", ["users", "org", "credentials", "authority"])
+    def test_empty_directories_the_docker_image_creates_are_a_fresh_directory(self, tmp_path, name):
+        (tmp_path / name).mkdir()
+
+        data_format.check_upgrade_source(tmp_path)
+
+        assert (tmp_path / "data_format.json").exists()
+
+    @pytest.mark.parametrize("name", ["users", "org", "credentials", "authority"])
+    def test_a_non_empty_person_data_directory_without_a_marker_is_refused(self, tmp_path, name):
+        _person_data(tmp_path, name)
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_dangling_symlink_as_person_data_is_refused(self, tmp_path):
+        (tmp_path / "users").symlink_to(tmp_path / "gone")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_file_as_person_data_is_refused(self, tmp_path):
+        (tmp_path / "credentials").write_text("x")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_an_older_marker_with_person_data_is_refused(self, tmp_path):
+        _person_data(tmp_path)
+        self._marker(tmp_path, 6)
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_the_current_marker_with_person_data_passes(self, tmp_path):
+        _person_data(tmp_path)
+        self._marker(tmp_path, 7)
+
+        data_format.check_upgrade_source(tmp_path)
+
+    @pytest.mark.parametrize("with_marker", [False, True])
+    def test_a_desktop_token_at_the_root_is_refused(self, tmp_path, with_marker):
+        (tmp_path / "mcp_token").write_text("secret")
+        if with_marker:
+            self._marker(tmp_path, 7)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            data_format.check_upgrade_source(tmp_path)
+
+        assert str(excinfo.value) == (
+            f"This data directory ({tmp_path}) belongs to a PrivacyFence desktop install. PrivacyFence 8 runs "
+            "only as an organization server or the Docker image and does not read desktop data. Keep using "
+            "PrivacyFence 7 on this computer, or move to organization mode: "
+            "https://privacyfence.eu/docs/moving-to-organization-mode/"
+        )
+
+    def test_a_trace_under_authority_is_refused(self, tmp_path):
+        (tmp_path / "authority").mkdir()
+        (tmp_path / "authority" / "web_base_url").write_text("http://127.0.0.1:1")
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_trace_on_an_organization_server_passes(self, tmp_path):
+        (tmp_path / "mcp_token").write_text("secret")
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "org_bundle.json").write_text(json.dumps({"mode": "org"}))
+        self._marker(tmp_path, 7)
+
+        data_format.check_upgrade_source(tmp_path)
+
+    @pytest.mark.parametrize("content", ["{not json", "[]", json.dumps({"mode": "local"})])
+    def test_a_bundle_that_does_not_say_org_does_not_excuse_a_trace(self, tmp_path, content):
+        (tmp_path / "mcp_token").write_text("secret")
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "org_bundle.json").write_text(content)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_an_unreadable_bundle_does_not_excuse_a_trace(self, tmp_path):
+        (tmp_path / "mcp_token").write_text("secret")
+        (tmp_path / "org" / "org_bundle.json").mkdir(parents=True)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_newer_marker_is_still_refused_first(self, tmp_path):
+        (tmp_path / "mcp_token").write_text("secret")
+        self._marker(tmp_path, 8, written_by="8.0.0")
+
+        with pytest.raises(ConfigurationError, match="This data was last used by PrivacyFence 8.0.0"):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_dangling_token_symlink_is_a_desktop_trace(self, tmp_path):
+        (tmp_path / "mcp_token").symlink_to(tmp_path / "gone")
+        self._marker(tmp_path, 7)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_dangling_symlink_under_authority_is_a_desktop_trace(self, tmp_path):
+        (tmp_path / "authority").mkdir()
+        (tmp_path / "authority" / "mcp_token").symlink_to(tmp_path / "gone")
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_directory_that_cannot_be_inspected_is_refused_with_a_sentence(self, tmp_path, monkeypatch):
+        def fail(self):
+            raise PermissionError("permission denied")
+
+        monkeypatch.setattr(Path, "is_symlink", fail)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            data_format.check_upgrade_source(tmp_path)
+
+        assert str(excinfo.value) == f"The data directory ({tmp_path}) could not be inspected: permission denied"
+        assert isinstance(excinfo.value.__cause__, PermissionError)
+
+    def test_a_fresh_directory_whose_marker_cannot_be_written_is_refused(self, tmp_path, monkeypatch):
+        def fail(*args, **kwargs):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(data_format, "atomic_write_json", fail)
+
+        with pytest.raises(ConfigurationError) as excinfo:
+            data_format.check_upgrade_source(tmp_path)
+
+        assert str(excinfo.value) == (
+            f"The data-format marker could not be written to {tmp_path / 'data_format.json'}: "
+            "read-only file system. The data directory must be writable."
+        )
+
+    def test_the_guide_the_texts_point_to_exists(self):
+        repo = Path(__file__).resolve().parents[2]
+        assert (repo / "docs" / "moving-to-organization-mode.md").is_file()
 
 
 class TestMigrateEverything:

@@ -1,11 +1,12 @@
-"""Local file bridge: an in-memory registry plus per-principal, encrypted-at-
-rest disk storage for file bytes the ``.mcpb`` shim reads off the user's own
-disk and hands to the daemon, because the daemon itself cannot (see ADR
-0007). Mirrors ``download_staging.py``'s ``DownloadStagingStore`` closely --
-same TTL-sweep pattern, same startup-orphan sweep, same "no oracle" claim
-semantics, same "plaintext never touches this server's disk unencrypted"
-property -- but runs in the opposite direction: the shim *fills* a slot the
-daemon created, and the daemon (not a browser) *claims* it exactly once, after
+"""Upload slots: an in-memory registry plus per-principal, encrypted-at-rest
+disk storage for file bytes an agent sends to the server through
+``privacyfence_create_upload_slot`` (ADR 0028, ADR 0304). Mirrors
+``download_staging.py``'s ``DownloadStagingStore`` closely -- same TTL-sweep
+pattern, same startup-orphan sweep, same "no oracle" claim semantics, same
+"plaintext never touches this server's disk unencrypted" property -- but runs
+in the opposite direction: the agent *fills* a slot the server created (an
+unauthenticated ``PUT`` to its capability URL), and the server (not a
+browser) *claims* it exactly once, after
 the gate of the tool call that uses it (ADR 0102; the call reads it with
 ``peek`` before its gate).
 
@@ -16,13 +17,9 @@ Differences from ``DownloadStagingStore`` worth being explicit about:
   (`fill` writes to disk incrementally under a ``max_bytes`` cap, and a
   second `fill` on an already-filled slot is rejected -- see `fill`'s own
   docstring for why this can't just be "overwrite").
-- ``claim()`` here is called by the daemon's own tool-dispatch code (see
+- ``claim()`` here is called by the server's own tool-dispatch code (see
   local_files.py's ``call_context``), not by an HTTP route -- there is no
-  browser download URL on this side of the bridge.
-- The slot is bound to a specific request's declared path from the moment
-  it's created (guard G1 is enforced on the shim side; this store only
-  needs to remember which path a slot was minted for, so a filled slot can
-  be looked up by path when a tool resumes after the upload handshake).
+  browser download URL on this side.
 """
 from __future__ import annotations
 
@@ -144,12 +141,10 @@ class UploadStagingStore:
         *,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
     ) -> bytes:
-        """Reserves a slot for a file the shim is about to upload for
-        ``declared_path`` (the path exactly as the agent passed it -- see
-        ADR 0007 guard G1; this store trusts its caller to have already
-        decided that this path needs a slot, it does no path validation of
-        its own). Returns the raw 256-bit token that names the slot in the
-        ``upload_path`` handed to the shim; like ``DownloadStagingStore.
+        """Reserves a slot for a file the agent is about to upload, named
+        ``declared_path`` (the file name exactly as the agent gave it; this
+        store does no validation of its own). Returns the raw 256-bit token
+        that names the slot in the upload URL handed to the agent; like ``DownloadStagingStore.
         stage()``, that return value is the only copy of the token this
         process ever holds outside the caller's own use of it.
         """
@@ -175,7 +170,7 @@ class UploadStagingStore:
         return token
 
     # ------------------------------------------------------------------ #
-    # Fill -- the shim's PUT
+    # Fill -- the agent's PUT
     # ------------------------------------------------------------------ #
 
     def fill(self, token: bytes, principal_id: str, stream: BinaryIO | Iterable[bytes]) -> int:

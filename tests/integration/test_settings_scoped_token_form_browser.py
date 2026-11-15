@@ -26,7 +26,7 @@ TOOLS = {
     "tasks": ["tasks_list_tasks"],
 }
 DATA = {
-    "delivery": "companion", "max_days": 365, "default_days": 90, "warn_days": 14,
+    "delivery": "once", "max_days": 365, "default_days": 90, "warn_days": 14,
     "tokens": [
         {"id": "st-1", "label": "Daily sync", "created_at": 0, "expires_at": 30 * DAY, "days_left": 20,
          "expiring_soon": False, "expired": False,
@@ -204,6 +204,28 @@ def test_a_token_is_renamed_from_the_modal(page):
     assert page.locator(".pf-modal").count() == 0
 
 
+def test_extend_dialog_posts_the_days(page):
+    _capture_posts(page)
+    page.click('[aria-label="Extend Daily sync 2"]')
+    page.locator('.pf-modal input[aria-label="Days from today"]').fill("30")
+    page.click('.pf-modal [aria-label="Confirm extend"]')
+    assert page.evaluate("window.__posted") == [
+        {"action": "extend_scoped_token", "token_id": "st-2", "days": 30}
+    ]
+    assert page.locator(".pf-modal").count() == 0
+
+
+def test_extend_dialog_rejects_an_out_of_range_value(page):
+    _capture_posts(page)
+    page.click('[aria-label="Extend Daily sync 2"]')
+    field = page.locator('.pf-modal input[aria-label="Days from today"]')
+    field.fill("0")
+    page.click('.pf-modal [aria-label="Confirm extend"]')
+    assert page.evaluate("window.__posted") == []
+    assert page.locator(".pf-modal").count() == 1
+    assert field.get_attribute("aria-invalid") == "true"
+
+
 def test_cancel_escape_and_an_unchanged_name_post_nothing(page):
     _capture_posts(page)
     for close in (
@@ -315,3 +337,153 @@ def test_add_is_disabled_without_a_verb(page):
     assert not _add_button_disabled(page)
     page.click('[data-st-new-verb="read"]')
     assert _add_button_disabled(page)
+
+
+UPSTREAM_DATA = {
+    **DATA,
+    "tools": DATA["tools"] + [{"connector": "kh", "tools": ["kh_search"]}],
+    "auto_tools": DATA["auto_tools"] + ["kh_search"],
+    "upstreams": [{
+        "id": "kh", "label": "Knowledge hub", "tools": ["kh_search"], "audiences": ["general", "hr"],
+        "gated_tools": [
+            {"name": "kh_propose_change", "gate": "popup", "verb": "update", "effect": "Proposes a change.",
+             "digest": "d1"},
+            {"name": "kh_read_notes", "gate": "review", "verb": "read",
+             "effect": "The result goes to the token without a person seeing it. Personal data in it still blocks the call.",
+             "digest": "d2"},
+        ],
+    }],
+}
+
+
+@pytest.fixture
+def upstream_page(browser):
+    pg = browser.new_page()
+    pg.set_content(build_html(
+        _make_state(), initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(UPSTREAM_DATA),
+    ))
+    yield pg
+    pg.close()
+
+
+def test_an_upstream_fieldset_shows_only_with_one_of_its_tools_ticked(upstream_page):
+    page = upstream_page
+    assert page.query_selector("[data-st-audiences-for]") is None
+    page.click('[data-st-tool="kh_search"]')
+    assert page.inner_text("[data-st-audiences-for] legend") == "Audiences for Knowledge hub"
+    assert page.inner_text("[data-st-audiences-for] .pf-hint") == (
+        "The token sees only the audiences you tick, and never more than you can see yourself.")
+    assert page.eval_on_selector_all(
+        "[data-st-audience]", "els => els.map(e => [e.getAttribute('data-st-audience'), e.getAttribute('aria-checked')])",
+    ) == [["general", "false"], ["hr", "false"]]
+    page.click('[data-st-tool="kh_search"]')
+    assert page.query_selector("[data-st-audiences-for]") is None
+
+
+def test_the_created_token_holds_exactly_the_ticked_domain(upstream_page, tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, scoped_tokens
+    from privacyfence.principal import Principal
+
+    page = upstream_page
+    _capture_posts(page)
+    page.fill("[data-st-label]", "kh job")
+    page.click('[data-st-tool="kh_search"]')
+    page.click('[data-st-audience="hr"]')
+    page.click("[data-st-create]")
+    [posted] = page.evaluate("window.__posted")
+    assert posted["upstream_audiences"] == {"kh": ["hr"]}
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
+    monkeypatch.setitem(auto_accept.TOOL_TO_GATE, "kh_search", "auto")
+    alice = Principal(id="alice", email="alice@example.com", email_verified=True)
+    body = scoped_tokens.normalise_create_request(posted)
+    assert body is not None
+    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
+    token, _secret = store.create(
+        alice, label=body["label"], days=body["days"], rules=body["rules"], tools=body["tools"],
+        policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
+        upstream_audiences=body["upstream_audiences"], held_audiences={"kh": frozenset({"general", "hr"})},
+        principal_email_verified=True,
+    )
+    assert token.upstream_audiences == {"kh": frozenset({"hr"})}
+
+
+def test_no_domain_ticked_sends_none(upstream_page):
+    page = upstream_page
+    _capture_posts(page)
+    page.fill("[data-st-label]", "kh job")
+    page.click('[data-st-tool="kh_search"]')
+    page.click("[data-st-create]")
+    [posted] = page.evaluate("window.__posted")
+    assert posted["upstream_audiences"] == {}
+
+
+def test_a_gated_upstream_tool_shows_its_effect_and_a_writes_data_marker(upstream_page):
+    page = upstream_page
+    assert page.inner_text("[data-st-gated-for] legend") == "Upstream tools that change data or release results unseen"
+    assert page.eval_on_selector_all(
+        "[data-st-gated-marker]", "els => els.map(e => e.textContent)",
+    ) == ["writes data", "result not reviewed by a person"]
+    assert page.eval_on_selector_all(
+        "[data-st-gated-effect]", "els => els.map(e => e.textContent)",
+    ) == [
+        "Proposes a change.",
+        "The result goes to the token without a person seeing it. Personal data in it still blocks the call.",
+    ]
+    assert page.inner_text("[data-st-gated-for] > .pf-hint") == (
+        "Ticking approves this tool for every call the token makes, with no card. "
+        "If the operator later changes how the tool is declared, the approval stops working.")
+
+
+def test_a_gated_tool_is_never_ticked_by_default(upstream_page):
+    page = upstream_page
+    assert page.eval_on_selector_all(
+        "[data-st-gated-tool]", "els => els.map(e => e.getAttribute('aria-checked'))",
+    ) == ["false", "false"]
+    assert page.query_selector("[data-st-audiences-for]") is None
+
+
+def test_ticking_a_gated_tool_posts_an_approval_with_its_digest(upstream_page):
+    page = upstream_page
+    _capture_posts(page)
+    page.fill("[data-st-label]", "kh job")
+    page.click('[data-st-gated-tool="kh_read_notes"]')
+    page.click('[data-st-gated-tool="kh_propose_change"]')
+    assert page.query_selector("[data-st-audiences-for]") is not None
+    page.click("[data-st-create]")
+    [posted] = page.evaluate("window.__posted")
+    assert posted["upstream_approvals"] == [
+        {"tool": "kh_propose_change", "digest": "d1"}, {"tool": "kh_read_notes", "digest": "d2"}]
+    assert set(posted["tools"]) == {"kh_propose_change", "kh_read_notes"}
+    page.click('[data-st-gated-tool="kh_propose_change"]')
+    assert page.eval_on_selector(
+        '[data-st-gated-tool="kh_propose_change"]', "e => e.getAttribute('aria-checked')") == "false"
+
+
+def test_a_page_without_gated_tools_shows_no_fieldset(browser):
+    data = copy.deepcopy(UPSTREAM_DATA)
+    data["upstreams"][0]["gated_tools"] = []
+    pg = browser.new_page()
+    try:
+        pg.set_content(build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=data))
+        assert pg.query_selector("[data-st-gated-for]") is None
+    finally:
+        pg.close()
+
+
+def test_duplicate_leaves_gated_tools_unticked(browser):
+    data = copy.deepcopy(UPSTREAM_DATA)
+    data["tokens"][0]["tools"] = ["gmail_get_message", "kh_propose_change"]
+    data["tokens"][0]["approved_upstream_tools"] = [
+        {"name": "kh_propose_change", "gate": "popup", "effect": "Proposes a change."}]
+    pg = browser.new_page()
+    try:
+        pg.set_content(build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=data))
+        assert "kh_propose_change (writes data)" in pg.inner_text('[data-st-approved]')
+        pg.click('[data-st-duplicate="st-1"]')
+        assert pg.eval_on_selector_all(
+            "[data-st-gated-tool]", "els => els.map(e => e.getAttribute('aria-checked'))") == ["false", "false"]
+        assert pg.query_selector("[data-st-audiences-for]") is None
+    finally:
+        pg.close()

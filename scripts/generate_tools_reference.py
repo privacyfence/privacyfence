@@ -57,6 +57,8 @@ CONNECTOR_TITLES: dict[str, str] = {
     "grist": "Grist",
     "peek": "Peek",
     "miro": "Miro",
+    "upstream_mcp": "Upstream MCP servers",
+    "privacyfence": "PrivacyFence administration",
 }
 
 # Short names for the summary table, same keys.
@@ -76,6 +78,8 @@ CONNECTOR_SHORT: dict[str, str] = {
     "grist": "Grist",
     "peek": "Peek",
     "miro": "Miro",
+    "upstream_mcp": "Upstream MCP",
+    "privacyfence": "group membership sync",
 }
 
 GATE_ORDER: tuple[str, ...] = ("auto", "review", "popup")
@@ -209,7 +213,8 @@ own tool definitions and the gate table in
 A connector's tools appear only after its organization config is installed and you have signed in
 to that service (see [Connecting a service](connecting-a-service.md)). The `privacyfence_*`
 tools that PrivacyFence adds itself (eight always, plus `privacyfence_propose_scoped_token` where token
-proposals are on: always on a local install, by the administrator's choice in organization mode) are not connector tools and have no gate; they are described in
+proposals are on (always on a local install, by the administrator's choice in organization mode) and
+`privacyfence_runtime_credential_status` where n8n delivery is also set up) are not connector tools and have no gate; they are described in
 [How PrivacyFence works](how-it-works.md#privacyfences-own-tools).
 
 ## Gates
@@ -225,6 +230,10 @@ PII detection, the privacy filter and passkey step-up all act within these gates
 [Approvals and policy](approvals-and-policy.md). What the **Always allow** button proposes for each
 `review` and `popup` tool is listed in the
 [Always allow reference](always-allow-rules-reference.md).
+
+Tools of an upstream MCP server (declared by an operator, see [Upstream MCP servers](upstream-mcp.md)) are
+not listed here. Their gate is the one the operator declared, and an administrator can approve a
+`review` or `popup` one for a scoped token ([ADR 0300](adr/0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md)).
 
 **Direction** is what the tool itself declares: `read` tools change nothing in the connected
 service; `write` tools create, change or send something. A few `write` tools are `auto` because

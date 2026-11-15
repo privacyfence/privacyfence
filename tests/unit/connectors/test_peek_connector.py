@@ -309,10 +309,10 @@ def fake_local_files(monkeypatch):
     state = SimpleNamespace(required=[], read=[], committed=0, data=b"<p>file</p>")
     lf = peek_module.local_files
 
-    def require(paths, *, max_total_bytes, download_mode):
+    def require(paths):
         state.required.append(list(paths))
 
-    def read(path, *, download_mode):
+    def read(path):
         state.read.append(path)
         return state.data
 
@@ -426,19 +426,9 @@ class TestUploadPage:
 
         await connector.call("peek_upload_page", {"html": "<p>x</p>"})
         await connector.call("peek_upload_page", {"html": "<p>x</p>", "name": "a/b/c.html"})
-        await connector.call("peek_upload_page", {"local_path": "/home/u/docs/r.html"})
+        await connector.call("peek_upload_page", {"upload_id": "abc"})
 
-        assert [c["preview"]["Name"] for c in gated_call_spy] == ["page.html", "c.html", "r.html"]
-
-    async def test_local_path_reads_bytes(self, gated_call_spy, fake_local_files):
-        connector, client = make_connector()
-        client.upload_page.return_value = _upload_result()
-
-        await connector.call("peek_upload_page", {"local_path": "~/r.html"})
-
-        assert fake_local_files.required == [["~/r.html"]]
-        assert fake_local_files.read == ["~/r.html"]
-        assert client.upload_page.call_args.args[0] == b"<p>file</p>"
+        assert [c["preview"]["Name"] for c in gated_call_spy] == ["page.html", "c.html", "page.html"]
 
     async def test_upload_id_becomes_upload_reference(self, gated_call_spy, fake_local_files):
         connector, client = make_connector()
@@ -449,10 +439,19 @@ class TestUploadPage:
         assert fake_local_files.required == [["upload:abc"]]
         assert fake_local_files.read == ["upload:abc"]
 
-    async def test_local_path_refused_in_org_mode(self, gated_call_spy, fake_local_files):
-        client = MagicMock()
-        connector = PeekConnector(client, download_mode="org")
-        with pytest.raises(ValueError, match="not available on an organization-managed"):
+    async def test_an_upload_id_that_names_no_staged_slot_is_refused(self, gated_call_spy):
+        from privacyfence import local_files
+
+        connector, client = make_connector()
+        with local_files.call_context():
+            with pytest.raises(local_files.LocalFileAccessError):
+                await connector.call("peek_upload_page", {"upload_id": "/etc/passwd"})
+        assert gated_call_spy == []
+        client.upload_page.assert_not_called()
+
+    async def test_a_removed_local_path_argument_is_not_a_page_source(self, gated_call_spy, fake_local_files):
+        connector, _ = make_connector()
+        with pytest.raises(TypeError):
             await connector.call("peek_upload_page", {"local_path": "/x/r.html"})
         assert fake_local_files.read == [] and gated_call_spy == []
 
@@ -492,7 +491,7 @@ class TestUploadPage:
         client.upload_page.assert_not_called()
 
     @pytest.mark.parametrize("args, message", [
-        ({}, "give exactly one of html, local_path and upload_id"),
+        ({}, "give exactly one of html and upload_id"),
         ({"html": "<p>x</p>", "upload_id": "a"}, "give exactly one of"),
         ({"html": "<p>x</p>", "visibility": "secret"}, "visibility must be public, signed-in or restricted."),
         ({"html": "<p>x</p>", "visibility": "password"}, "Peek no longer has page passwords"),
@@ -1195,3 +1194,11 @@ class TestEveryToolIsAudited:
                 "peek_revoke_access": {"slug": "slug1", "email": "bob@example.com"},
             },
         )
+
+
+def test_peek_upload_page_takes_no_local_path():
+    spec = next(s for s in make_connector()[0].tool_specs() if s.name == "peek_upload_page")
+    names = {p.name for p in spec.params}
+    assert "local_path" not in names and "download_mode" not in names
+    assert {"html", "upload_id"} <= names
+    assert "local_path" not in spec.description

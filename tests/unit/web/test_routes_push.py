@@ -1,6 +1,6 @@
 """Tests for web/routes_push.py and its wiring into org mode's app (ADR 0081): the manifest and
 icons (public, classified), the subscription routes (session + CSRF + Origin), the org-wide off
-switch, and local mode, which mounts none of it.
+switch, and the plain route set, which mounts none of it.
 
 web_push.py's own crypto, allowlist, store and payload are tests/unit/test_web_push.py.
 """
@@ -20,12 +20,9 @@ from privacyfence import org_identity as oi
 from privacyfence.design_css import token_value
 from privacyfence.org_mode import ConfigurationError, WebPushConfig
 from privacyfence.principal import Principal
-from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session, routes_push
-from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
 from privacyfence.web.server import OrgAuth, build_app
-from privacyfence.web.state_stream import StateStream
 from privacyfence.web_approval_ui import WebApprovalUI
 from privacyfence import web_push
 from privacyfence.web_push import PushNotifier, PushSubscriptionStore, b64url_encode
@@ -349,7 +346,7 @@ def _route_set(routes, prefix: str = "") -> set[str]:
     return out
 
 
-# Local mode's full route set as it was before web push existed, captured from this same build.
+# The plain route set as it was before web push existed, captured from this same build.
 LOCAL_ROUTES_BEFORE_PUSH = {
     "* /mcp",
     "GET /", "HEAD /",
@@ -367,37 +364,6 @@ LOCAL_ROUTES_BEFORE_PUSH = {
     "POST /security/credentials/{credential_id}/delete",
     "POST /security/recover",
 }
-
-
-class TestLocalModeHasNoPush:
-    def _local_app(self):
-        return build_app(
-            WebApprovalUI(), mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="t",
-            step_up=StepUpConfig(rp_id="localhost"), step_up_issuer_url="http://localhost:8765",
-            state_stream=StateStream(settings_snapshot=lambda: {}, list_pending=lambda: []),
-        )
-
-    def test_route_set_is_unchanged(self):
-        assert _route_set(_starlette(self._local_app()).routes) == LOCAL_ROUTES_BEFORE_PUSH
-
-    def test_none_of_the_push_paths_answer(self):
-        client = TestClient(self._local_app(), base_url="http://localhost")
-        for path in NEW_PATHS:
-            assert client.get(path).status_code == 404
-        assert client.post("/api/push/subscription", json={}).status_code == 404
-
-    def test_csp_has_no_manifest_source(self):
-        client = TestClient(self._local_app(), base_url="http://localhost")
-        csp = client.get("/sw.js").headers["content-security-policy"]
-        assert "manifest-src" not in csp
-        assert "img-src data:;" in csp
-
-    def test_local_pages_link_no_manifest_and_offer_no_push(self):
-        from privacyfence import web_shell
-
-        html = web_shell.wrap("<p>x</p>", title="t", active="approvals", nonce="n")
-        assert "manifest" not in html and "apple-touch-icon" not in html
-        assert 'var PUSH_PUBLIC_KEY = "";' in html
 
 
 def test_a_bare_route_list_serves_the_manifest(tmp_path):

@@ -26,7 +26,6 @@ import pytest
 
 from privacyfence import (
     admin_config,
-    agent_label,
     app_credentials,
     approval_ui,
     auto_accept,
@@ -35,6 +34,7 @@ from privacyfence import (
     daemon_main,
     data_format,
     download_staging,
+    group_membership,
     gate,
     grist_auth,
     grist_provisioning,
@@ -43,17 +43,18 @@ from privacyfence import (
     peek_provisioning,
     pii_detector,
     privacy_filter,
-    privilege_separation,
     relay_client,
     resource_names,
+    runtime_credential_sweeper,
+    runtime_credentials,
     scoped_token_proposals,
     scoped_tokens,
-    settings_controller,
+    settings_state,
     upload_staging,
     web_approval_ui,
     whats_new,
 )
-from privacyfence.web import control_channel, state_stream
+from privacyfence.web import state_stream
 from tests.diagnostics import capture_failure_diagnostics, suite_name_for
 
 
@@ -120,19 +121,11 @@ def _reset() -> None:
     # whats_new caches the parsed changelog for the life of the process.
     whats_new.load_changelog.cache_clear()
     local_files.configure_file_bridge()
-    local_files.force_bridge_for_tests(False)
-    settings_controller._main_dispatch = None
+    settings_state._main_dispatch = None
     daemon_main._bundle_adopted_this_start = False
     state_stream._loop = None
-    control_channel._mint_nonces.clear()
-    # privilege_separation caches the parsed marker file for
-    # the life of the process (it can't change under a running daemon), so a
-    # test that provisions a fake separated layout would otherwise leave that
-    # answer cached for every test after it -- including the ones asserting
-    # the *un*separated paths.
-    privilege_separation.reset_cache()
     # daemon_main._shutdown_event: a test that calls request_shutdown()
-    # (directly, or via SettingsController.quit_app()) must not leave it set
+    # (directly, or via the quit action) must not leave it set
     # for the next test's own _wait_for_shutdown() call to find already
     # signaled.
     daemon_main._shutdown_event.clear()
@@ -147,17 +140,17 @@ def _reset() -> None:
     # configure_popup_executor() is a no-op once the size already matches,
     # so this costs nothing on every other test.
     gate.configure_popup_executor(gate.DEFAULT_MAX_PENDING)
-    # agent_label's install mode is set once by daemon_main at startup
-    # (ADR 0088); a test that starts the daemon in org mode must not leave
-    # every later test rendering org-mode labels.
-    agent_label.set_local_mode(True)
     # The request a gated call released (ADR 0093) is scoped per tool
     # call by the dispatcher; a test that calls gate._audit directly sets
     # it outside any such scope, so it must not carry into the next test.
     audit_log.set_released_request_id("")
     # The scoped-token store is a process-wide singleton over the data dir (ADR 0164).
     scoped_tokens.set_store(None)
+    group_membership.set_store(None)
     scoped_token_proposals.set_registry(None)
+    runtime_credentials.set_store(None)
+    runtime_credential_sweeper.stop()
+    runtime_credential_sweeper._INSTANCE = None
     # The Peek provisioner (organization mode) is a process-wide singleton; its per-person locks
     # are keyed by principal id and must not carry over.
     peek_provisioning._INSTANCE = None
@@ -167,11 +160,64 @@ def _reset() -> None:
     data_format.reset_for_tests()
 
 
+@pytest.fixture
+def disk_backed_local_files(monkeypatch):
+    """For a test of logic that merely consumes a file's bytes (a CSV parse, a MIME build): the
+    file layer is replaced by a fake that reads the named path from the test's own tmp_path.
+    ``upload:`` references still go through the real upload store. The server itself never reads a
+    path from disk; this stands in for the upload slot a real call would have used."""
+    import os
+
+    from privacyfence import local_files
+
+    real_require, real_read, real_size = (
+        local_files.require_local_files, local_files.read_local_file, local_files.local_file_size,
+    )
+
+    def is_upload(path):
+        return path.startswith(local_files.UPLOAD_REF_PREFIX)
+
+    def require(paths, **kwargs):
+        uploads = [p for p in paths if is_upload(p)]
+        if uploads:
+            real_require(uploads, **kwargs)
+        for path in paths:
+            if not is_upload(path) and not os.path.isfile(os.path.expanduser(path)):
+                raise local_files.LocalFileAccessError(f"Could not read {path!r}: no such file")
+
+    def read(path, **kwargs):
+        if is_upload(path):
+            return real_read(path, **kwargs)
+        try:
+            with open(os.path.expanduser(path), "rb") as fh:
+                return fh.read()
+        except OSError as exc:
+            raise local_files.LocalFileAccessError(f"Could not read {path!r}: {exc.strerror or exc}") from exc
+
+    def size(path, **kwargs):
+        return real_size(path, **kwargs) if is_upload(path) else os.path.getsize(os.path.expanduser(path))
+
+    monkeypatch.setattr(local_files, "require_local_files", require)
+    monkeypatch.setattr(local_files, "read_local_file", read)
+    monkeypatch.setattr(local_files, "local_file_size", size)
+
+
 @pytest.fixture(autouse=True)
 def _reset_singletons():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _restore_upstream_tool_tables():
+    # upstream_mcp_registry.register writes the process-wide policy tables; a test that registers
+    # upstream tools must not leak them into the next one.
+    yield
+    from privacyfence import upstream_mcp_registry, upstream_mcp_runtime
+
+    upstream_mcp_registry.unregister_all()
+    upstream_mcp_runtime.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -184,9 +230,11 @@ def _clear_server_environment(monkeypatch):
         "PRIVACYFENCE_ISSUER_URL", "PRIVACYFENCE_TRUSTED_PROXIES", "PRIVACYFENCE_ADMIN_EMAILS",
         "PRIVACYFENCE_IDP", "PRIVACYFENCE_ALLOWED_DOMAINS", "PRIVACYFENCE_PREVIEW_SERVICES",
         "PRIVACYFENCE_PEEK_AUTO_PROVISION", "PRIVACYFENCE_GRIST_AUTO_PROVISION",
+        "PRIVACYFENCE_N8N_DELIVERY", "PRIVACYFENCE_N8N_PROJECT_ID", "PRIVACYFENCE_N8N_MCP_URL",
         *(name for name in os.environ if name.startswith(("PRIVACYFENCE_IDP_", "PRIVACYFENCE_OIDC_"))),
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PRIVACYFENCE_MODE", "org")
 
 
 @pytest.fixture(autouse=True)
@@ -220,7 +268,9 @@ def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
         admin_config, "admin_config_path", lambda: request.getfixturevalue("tmp_path") / "admin_config.json"
     )
     monkeypatch.setattr(app_credentials, "builtin_app", lambda key: None)
-    monkeypatch.setattr(data_format, "marker_path", lambda: request.getfixturevalue("tmp_path") / "data_format.json")
+    monkeypatch.setattr(
+        data_format, "marker_path", lambda root=None: request.getfixturevalue("tmp_path") / "data_format.json"
+    )
     monkeypatch.setattr(relay_client, "relay_token_path", lambda: request.getfixturevalue("tmp_path") / "relay_token.txt")
     monkeypatch.setattr(
         relay_client, "relay_status_path", lambda: request.getfixturevalue("tmp_path") / "relay_status.json"
@@ -235,10 +285,8 @@ def _isolate_admin_config_and_builtin_apps(monkeypatch, request):
 # as ``rep_<phase>`` -- the standard pytest pattern for "did the test body
 # itself fail?" from inside a fixture's teardown code. It lives in this
 # repo-wide conftest.py rather than tests/integration/conftest.py so that
-# both test_browser_smoke.py's ``_capture_failure_artifacts`` and
-# tests/system/test_local_mode_system.py (outside tests/integration/) can use
-# ``request.node.rep_call``, without a second, near-duplicate hookimpl in a
-# tests/system/conftest.py.
+# test_browser_smoke.py's ``_capture_failure_artifacts`` can use ``request.node.rep_call``
+# without a second, near-duplicate hookimpl in a tests/integration/conftest.py.
 #
 # Also where the CI-diagnostics capture (docs/testing-policy.md,
 # tests/diagnostics.py) hooks in: on a failing

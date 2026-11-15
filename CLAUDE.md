@@ -6,7 +6,7 @@ the ordinary docs, not here:
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — branch naming, pull requests, `releases/*` integration
   branches, and the plan/ADR lifecycle.
 - [`docs/releasing.md`](docs/releasing.md) — versioning, cutting a tag, release notes, gating,
-  PyPI and the R2 archive.
+  publishing `privacyfence-sync` to PyPI and the R2 archive.
 - [`docs/coding-and-testing-guidelines.md`](docs/coding-and-testing-guidelines.md) — code and test
   conventions, and the definition of done (§2.7).
 

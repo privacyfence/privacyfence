@@ -13,9 +13,9 @@ is not this suite's business), and `mailto:` is skipped for the same reason -- b
 `github.com/privacyfence/privacyfence/blob/main/<path>` or
 `raw.githubusercontent.com/privacyfence/privacyfence/main/<path>` URL names a file in the working
 tree, so it is resolved against the checkout exactly like a relative link would be. README.md is
-the reason that matters: it is also the PyPI long description, so its links and images have to be
-absolute to render there, and without this they would have dropped
-out of the check above the moment they stopped being relative.
+the reason that matters: it is shown on GitHub and in registry listings that render it away from
+the repository, so its links and images have to be absolute, and without this they would have
+dropped out of the check above the moment they stopped being relative.
 """
 from __future__ import annotations
 
@@ -62,7 +62,9 @@ def _markdown_files() -> list[Path]:
 def _is_plan_doc(path: Path) -> bool:
     """A `docs/*-plan.md` quotes drafts of files that do not exist yet, so its links are not checked."""
     rel = path.relative_to(REPO_ROOT).parts
-    return len(rel) == 2 and rel[0] == "docs" and rel[1].endswith("-plan.md")
+    if len(rel) == 2 and rel[0] == "docs" and rel[1].endswith("-plan.md"):
+        return True
+    return len(rel) == 3 and rel[0] == "docs" and rel[1].isdigit() and rel[2] == "plan.md"
 
 
 def _slug(heading: str) -> str:
@@ -174,7 +176,7 @@ def test_the_self_url_scan_actually_found_links():
 def test_absolute_self_url_resolves(path: Path, line: int, url: str):
     """A `blob/main/...` or `raw.githubusercontent.com/.../main/...` URL is a path into this
     checkout wearing a hostname. Resolve it as one -- a doc renamed without updating README.md
-    would otherwise only 404 for whoever clicked it on PyPI."""
+    would otherwise only 404 for whoever clicked it in a listing that renders README.md."""
     where = f"{path.relative_to(REPO_ROOT)}:{line}"
     prefix = next(p for p in _SELF_URL_PREFIXES if url.startswith(p))
     file_part, _, anchor = url[len(prefix) :].partition("#")
@@ -190,3 +192,6 @@ def test_only_top_level_plan_docs_are_skipped():
     assert not _is_plan_doc(REPO_ROOT / "docs" / "guide.md")
     assert not _is_plan_doc(REPO_ROOT / "docs" / "adr" / "x-plan.md")
     assert not _is_plan_doc(REPO_ROOT / "x-plan.md")
+    assert _is_plan_doc(REPO_ROOT / "docs" / "1095" / "plan.md")
+    assert not _is_plan_doc(REPO_ROOT / "docs" / "1095" / "other.md")
+    assert not _is_plan_doc(REPO_ROOT / "docs" / "adr" / "plan.md")

@@ -6,10 +6,7 @@ real-network-stack bug (uvicorn startup, real TCP binding, real HTTP
 framing) could still slip through. This module closes that gap: does a
 real ``web/server.py`` ``WebServer``, bound to a real loopback socket,
 actually speak Streamable HTTP correctly to the official ``mcp`` Python
-client -- the same client Claude Code/Desktop itself uses, and
-mcpb/shim/'s own stdio proxy sits in front of for Desktop (covered
-separately, with the shim included, by
-tests/integration/test_shim_mcp_contract.py). Needs only the `mcp`
+client -- the same client Claude Code itself uses. Needs only the `mcp`
 package (test-only, see pyproject.toml's [project.optional-dependencies]
 .test) -- no Node, no npm, no subprocess.
 """
@@ -17,11 +14,7 @@ package (test-only, see pyproject.toml's [project.optional-dependencies]
 from __future__ import annotations
 
 import asyncio
-import shutil
-import socket
 import time
-import uuid
-from pathlib import Path
 
 import httpx2
 import pytest
@@ -29,12 +22,11 @@ import pytest
 from mcp import ClientSession, types  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
-from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence.connector import Connector, ToolParam, ToolSpec  # noqa: E402
 from privacyfence.web import state_stream as state_stream_module  # noqa: E402
 from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
-from privacyfence.web.server import WebServer  # noqa: E402
-from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
+
+from tests.integration.org_server_harness import single_user_org_server  # noqa: E402
 
 pytestmark = pytest.mark.timeout(30)
 
@@ -68,53 +60,12 @@ class EchoConnector(Connector):
         return {"echoed": args}
 
 
-def _free_port() -> int:
-    """A real, currently-unused TCP port -- WebServer.start() doesn't report
-    back the OS-assigned port for ``port=0`` (see web/server.py's own
-    ``mcp_url`` property), so this test needs a real port number before
-    starting the server."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def _wait_until_connectable(host: str, port: int, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    last_exc: OSError | None = None
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
-        except OSError as exc:
-            last_exc = exc
-            time.sleep(0.05)
-    raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
-
-
 @pytest.fixture
-def mcp_home():
-    """A tmp HOME so this test's web_token/mcp_token/mcp_url land under an
-    isolated directory rather than the repo's own paths.data_dir()."""
-    directory = Path(f"/tmp/pf-mcp-ct-{uuid.uuid4().hex[:8]}")
-    (directory / ".privacyfence").mkdir(parents=True)
-    yield directory
-    shutil.rmtree(directory, ignore_errors=True)
-
-
-@pytest.fixture
-def running_mcp_server(mcp_home, monkeypatch):
-    monkeypatch.setattr(paths_module, "data_dir", lambda: mcp_home / ".privacyfence")
-
+def running_mcp_server(tmp_path):
     connector = EchoConnector()
     dispatcher = McpDispatcher(lambda: {"contract_test": connector})
-    port = _free_port()
-    server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
-    server.start()
-    try:
-        _wait_until_connectable("localhost", port)
+    with single_user_org_server(tmp_path, dispatcher=dispatcher) as server:
         yield connector, server, dispatcher
-    finally:
-        server.stop()
 
 
 async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_real_socket(
@@ -126,7 +77,7 @@ async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_rea
     tool call round-trips through both sides' Streamable HTTP framing
     unmodified."""
     connector, server, _dispatcher = running_mcp_server
-    headers = {"Authorization": f"Bearer {server.mcp_token}"}
+    headers = {"Authorization": f"Bearer {server.bearer()}"}
 
     async with httpx2.AsyncClient(headers=headers) as http_client:
         async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write):
@@ -158,20 +109,19 @@ async def test_connector_set_swap_pushes_a_real_tools_list_changed_notification(
     """End to end: a real client sees
     tools.list_changed=True at initialize (the NotificationOptions override
     without which the SDK advertises False), and a connector-set swap -- the same
-    call SettingsController.refresh_connectors() makes in production --
+    call a connector rebuild makes in production --
     actually reaches it as a real notifications/tools/list_changed message,
     not just a call that doesn't raise.
 
     ``state_stream.call_soon_threadsafe`` stands in for
-    ``settings_controller.call_on_main`` here: production reaches
-    ``dispatcher.notify_tools_changed()`` through that same marshaling seam
-    (see SettingsController.refresh_connectors's own done() callback), and
+    the main-thread marshaling seam here: production reaches
+    ``dispatcher.notify_tools_changed()`` through that same seam, and
     calling it directly from this test's own asyncio loop -- a different
     loop/thread than the one WebServer's own ASGI app actually runs on --
     would silently misbehave instead of proving anything.
     """
     connector, server, dispatcher = running_mcp_server
-    headers = {"Authorization": f"Bearer {server.mcp_token}"}
+    headers = {"Authorization": f"Bearer {server.bearer()}"}
     notifications: list[types.ServerNotification] = []
 
     async def _message_handler(message):

@@ -174,7 +174,7 @@ class TelegramPrivacyFenceClient:
             await client.disconnect()
             raise TelegramClientError(
                 "Telegram session is not authorized. "
-                f"Run 'privacyfence-app --telegram-setup' to authorize interactively. "
+                "Connect Telegram on the Connect page (/connect) to authorize it. "
                 f"Session file: {self._session_file}"
             )
 

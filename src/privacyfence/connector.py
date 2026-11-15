@@ -36,6 +36,8 @@ class ToolSpec:
     # destructive; an overwrite is not a deletion and stays False. tests/unit/test_connector_tool_
     # annotations.py pins the full set, so a new deleting tool is classified on purpose.
     destructive: bool = False
+    # A complete JSON Schema used verbatim instead of one built from params (upstream MCP tools).
+    input_schema: dict[str, Any] | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +55,7 @@ class ToolSpec:
             ],
             "read_only": self.read_only,
             "destructive": self.destructive,
+            "input_schema": self.input_schema,
         }
 
     @classmethod
@@ -72,6 +75,7 @@ class ToolSpec:
             ],
             read_only=d.get("read_only", False),
             destructive=d.get("destructive", False),
+            input_schema=d.get("input_schema"),
         )
 
 

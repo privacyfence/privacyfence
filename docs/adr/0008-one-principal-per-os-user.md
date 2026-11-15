@@ -24,6 +24,8 @@ this phase's own guarantee, and the plan's own §3.1 says as much: *"A new user 
 packaged default policy and no connectors."*
 Amended by [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md).
 
+**Deprecated: ADR 0301 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 ADR 0002 decision 1 drew the local-mode trust boundary at the OS user account and was explicit

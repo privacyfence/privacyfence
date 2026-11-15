@@ -1,123 +1,31 @@
-"""Settings on the web. One module builds the route list for *both* local
-mode's ~30-action dispatcher and org mode's own settings surface (ADR 0033).
-``build_routes()`` (below) is local mode's entry point;
-``build_org_routes()`` is org mode's.
+"""Settings on the web for an organization server (ADR 0033).
 
-In org mode, ``GET /settings`` serves settings_window_html.build_html(), the
-exact same capability-filtered renderer local mode's own settings page uses
-(``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's own
-docstring for exactly what each combination hides) -- the same page for an
-administrator as for anyone else, because the install-wide privacy policy and
-the usage stats are Admin sections now (``GET /settings/privacy`` forwards
-there) -- and org mode's four former bespoke POST routes are one generic ``POST /api/settings/{action}``,
-restricted to ``_ORG_ALLOWED_ACTIONS`` -- the same path and JSON body shape
-local mode's own dispatcher already answers, since it's the same JS bridge
-posting either way now.
+``build_org_routes()`` is the one entry point. ``GET /settings`` serves
+settings_window_html.build_html() (``is_admin=principal.is_admin``) wrapped in
+web_shell.wrap(), and ``POST /api/settings/{action}`` is a generic dispatcher restricted to
+``_ORG_ALLOWED_ACTIONS``, the actions ``web/org_settings_scope.py``'s ``ACTION_SCOPES`` declares
+a route for. The install-wide privacy policy and the usage stats are Admin sections
+(``GET /settings/privacy`` forwards there).
 
-``web/org_settings_scope.py``'s ``ACTION_SCOPES`` is the one declaration both
-modes project from: which of ``_ALLOWED_ACTIONS`` below has a real route in
-which mode, and which of those need ``principal.is_admin`` in org mode.
-``_ALLOWED_ACTIONS`` itself is now *projected* from that table (every action
-naming ``org_settings_scope.LOCAL_MODE``, which is every one there is --
-local mode's own dispatcher predates the split and was never gated by it),
-rather than being the primary list org mode's own module used to filter.
-Three pieces the two modes shared duplicated copies of before this merge are
-now module-level helpers both call: ``_needs_step_up``/
-``_settings_step_up_response`` (the "does this sensitive action need a fresh
-WebAuthn assertion, and what does asking for one look like" pair -- byte-for-
-byte identical between modes once parameterized by ``principal``) and
-``_apply_step_up_gate`` (built on the shared
-``web/approval_step_up._verify_or_challenge``, the same ceremony primitive
-``web/routes_approvals.py``'s own ``decide()`` already reduces to -- local
-mode's own inline try/except around ``step_up_decide.verify_step_up`` is
-gone, folded into this one call). ``_record_settings_audit`` (org mode's
-own, moved in unchanged) is available to both for the same reason, and both
-modes' dispatch now calls it -- see that function's own docstring.
+Helpers shared with ``web/routes_admin.py``: ``_needs_step_up``/``_settings_step_up_response``
+(does this sensitive action need a fresh WebAuthn assertion, and what does asking for one look
+like), ``_apply_step_up_gate`` (built on the shared ``web/approval_step_up._verify_or_challenge``,
+the ceremony primitive ``web/routes_approvals.py``'s ``decide()`` also reduces to),
+``_gate_upload`` (the same for a multipart upload, bound to the file's hash),
+``read_bounded_form`` and ``_record_settings_audit``.
 
-``GET /settings`` serves settings_window_html.build_html(), wrapped in
-web_shell.wrap() so it reads as the same application as ``/approvals``;
-``GET /settings/connectors`` serves the identical document with its
-Connectors section pre-selected server-side (the
-first-run destination privacyfence_status points an un-onboarded install's
-human at, since Connectors is the screen that actually unblocks one; it is
-reached through the companion's Open Settings now that the sign-in-link tool
-that used to mint a link straight to it is retired);
-``POST /api/settings/{action}`` is the mechanical two-thirds of
-SettingsController's ~30 actions, dispatched through an **explicit
-allowlist** rather than the native dispatcher's bare
-``getattr(controller, action)`` -- see _ALLOWED_ACTIONS below for why a
-frozenset here, not a decorator on the controller.
+**Standing rule this module exists to keep true:** no route here ever calls
+``subprocess.run``/``os.system``/``open``. TestNoSubprocessFromHttp in this module's test file is
+what a security review gets to point at instead of re-reading this comment.
 
-Everything that isn't "POST an action, get a fresh snapshot back" gets its
-own route instead of being force-fit into that shape: the org
-config bundle is a multipart upload, not a JSON action (there is no
-osascript "choose file" dialog to trigger from an HTTP request -- see
-settings_controller.install_org_config_bytes's own docstring); the audit
-log export is a file download, not a JSON response; ``quit_app`` gets its
-own route so it can carry its own confirmation + local-mode-only gate
-without contaminating the generic dispatcher with one action's special
-case.
-
-**Standing rule this module exists to keep true:** no route here
-ever calls ``subprocess.run``/``os.system``/``open`` -- picking an org
-config file, exporting the audit log, opening an update's page and opening
-the repository are each a route or a client-side link/window.open, never a
-shell-out reachable from this process's HTTP listener. TestNoSubprocessFromHttp in this module's test
-file is what a security review gets to point at instead of re-reading this
-comment.
-
-**Sensitive-action step-up (ADR 0034):** gating the local decide
-endpoint on ``step_up.require_passkey`` (web/routes_approvals.py) means
-nothing releasing a *write approval* can happen without a passkey -- but an
-agent that cannot forge an approval doesn't need to if it can just add an
-always-allow rule instead, and this dispatcher's ``POST /api/settings/
-{action}`` would be that open door without a gate of its own.
-``_SENSITIVE_ACTIONS`` below is the subset that can change *what
-gets gated* (rule/grant/policy/PII actions) rather than merely how the app
-looks or behaves -- update checks, log level, notification detail, and
-connector auth all stay ungated, since gating all of them would make
-routine settings use miserable for the one real cost (an agent that already
-has connector access gaining nothing new by flipping those). With
-``step_up.require_passkey`` on, a sensitive action is verified the same
-two-round-trip way web/routes_approvals.py's own decide() is: a first POST
-with no ``webauthn_assertion`` gets a ``428`` carrying fresh options (or a
-``403`` naming ``/security`` if nothing is enrolled -- the same hard fail,
-never a silent skip), and a second POST carrying the completed assertion is
-verified and, on success, actually runs the action.
-``_NON_SENSITIVE_ACTIONS`` is the deliberately explicit complement, not
-``_ALLOWED_ACTIONS - _SENSITIVE_ACTIONS`` -- see TestSensitiveActionsCoverAllAllowedActions
-in this module's test file for why a derived set would silently swallow a
-future action nobody classified either way.
-
-**Bespoke routes:** the sensitive-action net above only covers the
-generic dispatcher. The bundle upload has its own route (on the Admin page, web/routes_admin.py), and an
-uploaded bundle can rewrite the PII policy, every auto-accept rule and
-every connector's OAuth client config in one shot -- so it is gated the
-same two ways (``_needs_step_up`` and ``require_human_session``), by
-hand, inside its own route function, plus an explicit ``confirm_pin`` round trip before a first signed
-bundle's key gets pinned (``SettingsController.would_pin_new_org_signing_
-key``), rather than letting that TOFU pin happen as a side effect of an
-upload. Connector toggling is directional: the reasoning "an agent that
-already has connector access gains nothing new" only holds for
-*disabling* one, so ``enable_connector`` is sensitive and
-``disable_connector`` is not (ADR 0070). ``_BESPOKE_SENSITIVE_ROUTE_PATHS``/``_BESPOKE_EXEMPT_
-ROUTE_PATHS`` below widen ``TestSensitiveActionsCoverAllAllowedActions``'s
-own ratchet from action names to actual ``Route`` objects, so a route
-added here cannot bypass the gate just by existing (ADR 0014).
-
-**Turning step-up on:** ``enable_step_up`` is the one
-``_ALLOWED_ACTIONS`` entry that can turn ``step_up.require_passkey`` on in
-the first place; otherwise only a hand edit of ``config/settings.yaml``
-plus a daemon restart can, and turning it off has no action at all
-(ADR 0068). It's listed in ``_SENSITIVE_ACTIONS`` for the
-same reason every rule/grant/policy/PII action is, but ``_needs_step_up``
-below never gates its own *first* call: that check only fires once
-``step_up.enabled``/``require_passkey`` are already both true, which by
-definition isn't the case yet the first time this action runs. See
-SettingsController.enable_step_up's own docstring for what does gate it
-(an already-enrolled passkey) and step_up_config.py's ``LiveStepUpConfig``
-for how the change reaches this dispatcher's own ``step_up`` without a
-restart.
+**Sensitive-action step-up (ADR 0034):** an agent that cannot forge an approval does not need to
+if it can add an always-allow rule instead, so ``_SENSITIVE_ACTIONS`` (the rule and step-up-scope
+actions) are gated on a fresh WebAuthn assertion whenever ``step_up.require_passkey`` is on: a
+first POST with no ``webauthn_assertion`` gets a ``428`` carrying fresh options (or a ``403``
+naming ``/security`` if nothing is enrolled), and a second POST carrying the completed assertion
+is verified and, on success, runs the action. Importing personal settings widens what is
+auto-accepted exactly as adding a rule does, so it goes through the same gates, bound to the
+file's hash.
 """
 from __future__ import annotations
 
@@ -125,7 +33,6 @@ import asyncio
 import contextlib
 import dataclasses
 import hashlib
-import inspect
 import json
 import logging
 import threading
@@ -133,22 +40,21 @@ import typing
 import uuid
 from datetime import datetime, timezone
 from html import escape as _html_escape
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping, Sequence
+from urllib.parse import urlsplit
 
-from starlette.applications import Starlette
-from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException
 from starlette.formparsers import MultiPartException
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import (
-    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response,
+    HTMLResponse, JSONResponse, RedirectResponse, Response,
 )
 from starlette.routing import BaseRoute, Route
 
 from .. import (
-    approval_icons, auto_accept, scoped_token_proposals, settings_window_html, webauthn_stepup, web_shell, whats_new,
+    agent_runtimes, auto_accept, runtime_credential_sweeper, runtime_credentials,
+    scoped_token_proposals, settings_window_html, web_shell, whats_new,
 )
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
@@ -156,14 +62,14 @@ from ..policy import scope_rows
 from ..policy import store as policy_store
 from ..policy.value_format import RuleValueError
 from ..connector_registry import ConnectorRegistry
-from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
+from ..principal import Principal, principal_scope
 from ..resource_names import get_resolver
 from ..scoped_tokens import (
     DEFAULT_DAYS, PROPOSALS_DISABLED_MESSAGE, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore,
     get_store, normalise_create_request,
 )
-from ..settings_controller import (
-    REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rows,
+from ..settings_state import (
+    REPO_URL, _about_state_dict, _auto_accept_state_from_rows,
     _parse_value_list, _rule_usage_map,
     audit_rows, cached_row_value, rule_resource_ids,
 )
@@ -175,205 +81,29 @@ from .personal_settings_routes import STEP_UP_SUBJECT_KEY, PersonalSettingsHooks
 from .approval_step_up import _verify_or_challenge
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
-from .org_settings_scope import ACTION_SCOPES, LOCAL_MODE, ORG_MODE, is_action_permitted
+from .org_settings_scope import ORG_MODE, is_action_permitted
 from .routes_security import PF_WEBAUTHN_JS
-from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
-from .session_auth import LocalSessionStore
-from .session_auth import authenticated as _session_authenticated
-from .session_auth import check_csrf as _csrf_matches
-from .session_auth import check_origin as _origin_ok
-from .session_auth import human_session_required_json as _human_session_required_json
-from .session_auth import is_human_session as _is_human_session
-from .session_auth import unauthorized_html as _unauthorized_response
 
 logger = logging.getLogger(__name__)
 
-# Max upload size for an organization config bundle -- generous for a JSON
-# document that is, in practice, a handful of OAuth client IDs/secrets per
-# service (an org_bundle.json today runs well under 10KB), while still a real
-# bound against something absurd arriving on this endpoint.
-MAX_ORG_CONFIG_BYTES = 1_000_000
-
 # ---------------------------------------------------------------------------- #
-# The action allowlist. A frozenset here, not a @web_action decorator on
-# SettingsController -- that class's docstring is proud of having no web
-# concerns ("No unguarded AppKit/WebKit imports at module level"), and a
-# decorator naming an HTTP-shaped concept would be exactly that. This list
-# is every "mechanical" SettingsController action, plus skip_update/
-# remind_later_update (the update banner). install_org_config,
-# export_audit_log, and quit_app are deliberately absent -- each has its
-# own route below instead of going through generic dispatch (see module
-# docstring); install_org_config_bytes is never web-reachable by this name
-# at all (only the multipart upload route calls it directly, with real
-# bytes no JSON body could carry).
-# ---------------------------------------------------------------------------- #
-
-# Projected from web/org_settings_scope.py's ACTION_SCOPES -- every action
-# naming LOCAL_MODE, which is every action there is (local mode's own dispatcher predates that
-# module's mode split and was never gated by it). That module is now the primary declaration; this is the
-# view of it local mode's own dispatch below actually consults.
-_ALLOWED_ACTIONS: frozenset[str] = frozenset(
-    action for action, scope in ACTION_SCOPES.items() if LOCAL_MODE in scope.modes
-)
-
-# ---------------------------------------------------------------------------- #
-# The allowlist-within-the-allowlist (ADR 0034) -- see module docstring.
-# Every rule-row/grant/policy/PII action can change *what a future write
-# reaches decide() at all* (an always-allow rule, a granted capability, a
-# relaxed default policy), which is exactly the bypass a passkey requirement
-# on decide() alone leaves open; the remainder is either read-only, informs
-# no policy decision (update checks, log level, notification detail), or is
-# connector auth an agent with connector access already has no need to
-# forge. Both sets are explicit, not derived from each other, so
-# TestSensitiveActionsCoverAllAllowedActions below fails the moment a new
-# action lands in _ALLOWED_ACTIONS without a matching entry in either.
+# The actions of the generic dispatcher that can change *what a future write
+# reaches decide() at all* (ADR 0034): an always-allow rule or a narrower
+# step-up scope. A passkey requirement on decide() alone would leave them as
+# the bypass, so each needs a fresh WebAuthn assertion whenever step-up is
+# required. It is the subset of _ORG_ALLOWED_ACTIONS below that needs one;
+# TestOrgActionsAreSensitive keeps the two in step.
 # ---------------------------------------------------------------------------- #
 
 _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
-    "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
-    "toggle_pii_detection", "toggle_pii_category",
-    # Changes *what gets gated* the same way every other entry here
-    # does -- once step-up is already required, turning it on again (a
-    # no-op SettingsController.enable_step_up already tolerates) still
-    # demands a fresh assertion like any other sensitive action. The very
-    # first enable is never gated this way -- _needs_step_up below only
-    # fires once step_up.enabled and require_passkey are *already* both
-    # true, which by definition isn't the case yet on that first call; its
-    # own precondition (a passkey enrolled) is what SettingsController.
-    # enable_step_up itself enforces instead. See that method's own
-    # docstring.
-    "enable_step_up",
     # Narrowing one's own step-up scope back towards the configured minimum
     # makes fewer approvals ask for a passkey, so it needs one itself. The
     # widening direction goes through the same gate: one action, one rule.
     # Nothing here can go below the configured minimum either way
     # (step_up_config.set_personal_scope, ADR 0091).
     "set_step_up_scope",
-    # Re-enabling a connector a human
-    # deliberately switched off is access an agent did not already have
-    # -- unlike disable_connector below, this is not a no-op change of
-    # nothing (ADR 0070).
-    "enable_connector",
 })
-
-_NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
-    "toggle_update_check", "toggle_update_check_beta", "check_for_updates_now",
-    "skip_update", "remind_later_update",
-    # An agent that already has connector access gains nothing new by
-    # disabling one -- see ADR 0070 for the asymmetry with the sensitive
-    # direction above.
-    "disable_connector", "refresh_connectors", "authenticate_connector",
-    "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
-    "peek_start_login", "peek_finish_login", "peek_cancel_login",
-    "grist_connect", "grist_cancel_auth",
-    "set_log_level", "set_notifications_detail",
-    # Changes what a draft *contains* (the user's own signature), never
-    # whether or how it is gated -- every draft still raises its popup.
-    "toggle_gmail_signature",
-})
-
-# ---------------------------------------------------------------------------- #
-# _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS above only cover the generic
-# POST /api/settings/{action} dispatcher. A bespoke route such as
-# the scoped-token routes (module docstring's own list of why: a multipart
-# or bespoke body, not a JSON action) would, for that reason alone, pass through
-# neither _needs_step_up nor require_human_session, regardless of how much
-# policy an uploaded bundle can rewrite. Every path in _BESPOKE_SENSITIVE_ROUTE_PATHS is
-# wired through the same _needs_step_up-shaped/require_human_session-shaped
-# gates as a _SENSITIVE_ACTIONS action, by hand, inside its own route
-# function -- request shapes differ too much (multipart vs. JSON) to share
-# settings_action's own dispatch loop.
-#
-# Two things consume these sets, deliberately both: build_routes() below
-# raises on every bespoke POST route it constructs that isn't in one of
-# them -- a real, load-bearing invariant checked every time this app is
-# built, not only under pytest, and not stripped under `python -O`/
-# PYTHONOPTIMIZE the way an `assert` would be -- and TestBespokeRoutesAreClassified
-# re-asserts the same thing against the actual Route objects it gets back,
-# as a named, always-collected regression test rather than only a check a
-# test run could otherwise skip past. Either one alone would leave a future
-# bespoke POST route free to land unclassified -- the raise here catches it
-# at runtime (this call already raises on an unclassified path, before the
-# app ever serves it), the test catches it at review/CI time -- the same way
-# TestSensitiveActionsCoverAllAllowedActions already fails the moment a new
-# _ALLOWED_ACTIONS entry lands unclassified.
-# ---------------------------------------------------------------------------- #
-
-_BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
-    # Rotating cuts off every connected AI client at once -- the one token
-    # action that earns the passkey step-up (ADR 0104).
-    "/api/settings/mcp_token/rotate",
-    # A scoped token is a new credential for /mcp, and revoking one cuts a
-    # client off: both are decisions about who may use the person's rules
-    # (ADR 0164).
-    "/api/settings/scoped_tokens/create",
-    "/api/settings/scoped_tokens/revoke",
-    "/api/settings/scoped_tokens/revoke_all",
-    # A name is what the audit log shows for the token, so renaming goes
-    # through the same gates as creating and revoking.
-    "/api/settings/scoped_tokens/rename",
-    # Accepting an AI client's proposal mints a credential exactly as create does: the same gates,
-    # bound to the proposal as well as the request.
-    "/api/settings/scoped_tokens/create_from_proposal",
-    # Importing personal settings widens what is auto-accepted exactly as adding a rule does
-    # (merge-only, previewed, passkey bound to the file's hash).
-    "/api/settings/personal/import",
-})
-
-# Every other bespoke (non-generic-dispatch) route, and why it doesn't need
-# the same gates: quit_app carries its own confirmation dialog and
-# doesn't change what gets gated at all; the rest are GETs, not mutations.
-_BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
-    "/api/settings/quit_app": "its own confirmed=true gate -- doesn't change what gets gated",
-    "/api/settings/audit_log/download": "a GET -- read-only export, no mutation",
-    "/api/settings/personal/preview": "parses an uploaded file and returns a preview; changes nothing",
-    "/api/settings/personal/export": "a GET -- read-only export, no mutation",
-    "/api/settings/mcp_token/copy": (
-        "puts the owner's own MCP token on the clipboard through the companion -- a token "
-        "anything running as this user can already get over MINT MCP, and one that cannot "
-        "change what gets gated (ADR 0104, ADR 0061)"
-    ),
-    "/settings": "a GET -- renders the page",
-    "/settings/connectors": "a GET -- renders the page",
-    "/api/settings/scoped_tokens/decline_proposal": (
-        "declining only discards a proposal; it creates and widens nothing"
-    ),
-}
-
-
-@dataclasses.dataclass(frozen=True)
-class AiClientConnect:
-    """What the "Connect an AI client" section needs from web/server.py
-    (ADR 0104): the URL to show, and the two token actions, each reporting
-    ``(ok, reason)``. Neither callback returns the token: both hand it to
-    the companion (``control_channel.send_mcp_token``), which puts it on
-    the clipboard, so no response from this module ever carries it."""
-
-    mcp_url: str
-    copy_token: Callable[[], tuple[bool, str]]
-    rotate_token: Callable[[], tuple[bool, str]]
-
-
-@dataclasses.dataclass(frozen=True)
-class ScopedTokenWiring:
-    """What the "Scoped tokens" section needs from web/server.py (ADR 0164),
-    all of it run for the owner. ``store_create`` returns the new token and
-    its secret and raises ``ScopedTokenError`` with text meant for the
-    person; ``store_revoke`` returns the token it removed, or ``None``;
-    ``store_rename`` takes the token id and the new name and returns the old
-    name and the renamed token (or ``None`` for an unknown id), raising
-    ``ScopedTokenError`` like ``store_create``;
-    ``send_secret`` hands the secret to the companion, which puts it on the
-    clipboard, so no response from this module ever carries it;
-    ``page_data`` is what ``window.__pfScopedTokens`` is built from."""
-
-    store_create: Callable[[str, int, list[dict[str, Any]], list[str], bool, bool], tuple[ScopedToken, str]]
-    store_revoke: Callable[[str], ScopedToken | None]
-    store_rename: Callable[[str, str], tuple[str, ScopedToken] | None]
-    store_revoke_all: Callable[[], int]
-    send_secret: Callable[[str], tuple[bool, str]]
-    page_data: Callable[[], dict[str, Any]]
 
 
 def _scoped_revoke_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -388,10 +118,15 @@ def _scoped_rename_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] |
     return None
 
 
+def _scoped_extend_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
+    token_id, days = payload.get("token_id"), payload.get("days")
+    if isinstance(token_id, str) and isinstance(days, int) and not isinstance(days, bool):
+        return {"token_id": token_id, "days": days}
+    return None
+
+
 class _BadAction(Exception):
-    """Raised by _call_action for a wrong-typed/missing argument -- mapped
-    to a 400 at the route, never a 500: a wrong-typed argument returns 400
-    rather than raising."""
+    """A wrong-typed or missing argument; the admin dispatcher maps it to a 400."""
 
 
 def _coerce(value: Any, annotation: Any) -> Any:
@@ -413,51 +148,6 @@ def _coerce(value: Any, annotation: Any) -> Any:
     return value
 
 
-def _call_action(controller: SettingsController, action: str, payload: dict[str, Any]) -> Any:
-    """Real per-action argument validation, not a copy of the old pyobjc
-    workaround: every parameter's type comes from
-    SettingsController's own annotations (remove_policy_rule(rule_id: str),
-    etc.) rather than a single hardcoded "idx is always an int" special
-    case -- a wrong type on *any* parameter of *any* allowed action is
-    rejected the same way, not just the one the native dispatcher happened
-    to guard."""
-    method = getattr(controller, action)
-    sig = inspect.signature(method)
-    # settings_controller.py is `from __future__ import annotations`, so
-    # Signature.parameters[name].annotation is the *string* "int"/"str",
-    # not the type object -- get_type_hints() is what actually resolves
-    # those against the function's own module globals, the way this
-    # module's real per-action validation needs.
-    hints = typing.get_type_hints(method)
-    kwargs: dict[str, Any] = {}
-    for name, param in sig.parameters.items():
-        if name not in payload:
-            if param.default is inspect.Parameter.empty:
-                raise _BadAction(f"missing required argument: {name}")
-            continue
-        kwargs[name] = _coerce(payload[name], hints.get(name))
-    return method(**kwargs)
-
-
-def settings_page_state(state: dict[str, Any]) -> dict[str, Any]:
-    """``SettingsController.snapshot()`` as the settings page renders it:
-    each connector gains its icon, loaded through approval_icons.py (the
-    icon loader that also serves the approval card), so SettingsController
-    itself stays free of any icon-loading concern. Every path that hands the
-    page a state goes through this -- the first render, an action's
-    response, and web/server.py's wiring of each /api/state/stream event --
-    because the page re-renders from the whole state each time, and a state
-    without icons blanks them."""
-    for connector in state.get("connectors", []):
-        icon_path = approval_icons.connector_icon_path(connector.get("icon", ""))
-        connector["icon_data_uri"] = approval_icons.icon_data_uri(icon_path)
-    return state
-
-
-def _snapshot(controller: SettingsController) -> dict[str, Any]:
-    return settings_page_state(controller.snapshot())
-
-
 # ---------------------------------------------------------------------------- #
 # The bridge shim -- swaps settings_window_html.py's own
 # ``window.webkit.messageHandlers.pf.postMessage({action, ...payload})``
@@ -474,9 +164,7 @@ def _snapshot(controller: SettingsController) -> dict[str, Any]:
 #     <endpoint>/connector_config/upload; its 409 carries the signing key's fingerprint, which
 #     the next attempt sends back as the confirmation.
 #   - export_audit_log: a same-origin navigation to the download route.
-#   - quit_app: a client-side confirm() first, then still POSTed
-#     through as an action, but to its own /api/settings/quit_app route
-#     (see build_routes below) rather than the generic dispatcher.
+#   - quit_app: a client-side confirm() first, then POSTed as an action.
 # ---------------------------------------------------------------------------- #
 
 def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str = "/api/settings") -> str:
@@ -579,21 +267,11 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         "  if (action === 'upload_connector_config') { connectorInput.click(); return; }"
         "  if (action === 'export_audit_log') { window.location = '/api/settings/audit_log/download'; return; }"
         "  var url = ENDPOINT + '/' + encodeURIComponent(action);"
-        # The two AI client token actions (ADR 0104) have routes of their
-        # own; rotating asks first, the same way quit_app does.
-        "  var tokenAction = (action === 'copy_mcp_token' || action === 'rotate_mcp_token');"
-        "  if (action === 'copy_mcp_token') { url = '/api/settings/mcp_token/copy'; }"
-        "  if (action === 'rotate_mcp_token') {"
-        "    if (!window.confirm('Rotate the AI client token? Every AI client using the current token stops working until you give it the new one.')) { return; }"
-        "    url = '/api/settings/mcp_token/rotate'; rest.confirmed = true;"
-        "  }"
         # The scoped token actions (ADR 0164) have routes of their own and
         # answer with no page state: the page is rebuilt from the server.
-        "  var orgPage = !!(window.__pfCapabilities && window.__pfCapabilities.mode === 'org');"
-        "  var scopedRoutes = {create_scoped_token: ['create', orgPage ? 'Create this token? It is shown once "
-        "and cannot be shown again.' : 'Create this token? It is copied to your "
-        "clipboard once and cannot be shown again.'], revoke_scoped_token: ['revoke', 'Revoke this token? "
-        "Clients using it stop working at once.'], rename_scoped_token: ['rename', null], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
+        "  var scopedRoutes = {create_scoped_token: ['create', 'Create this token? It is shown once "
+        "and cannot be shown again.'], revoke_scoped_token: ['revoke', 'Revoke this token? "
+        "Clients using it stop working at once.'], rename_scoped_token: ['rename', null], extend_scoped_token: ['extend', null], revoke_all_scoped_tokens: ['revoke_all', 'Revoke all your "
         "scoped tokens?'], create_proposed_scoped_token: ['create_from_proposal', null], "
         "decline_scoped_token_proposal: ['decline_proposal', 'Decline this token proposal?']};"
         "  var scopedAction = scopedRoutes.hasOwnProperty(action);"
@@ -643,28 +321,24 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str, endpoint: str
         "    var proposalAction = (action === 'create_proposed_scoped_token' || action === 'decline_scoped_token_proposal');"
         "    var toSection = function(){ window.location.assign('/settings/scoped_tokens'); };"
         "    if (res.ok && proposalAction) {"
-        "      if (res.state && typeof res.state.secret === 'string' && window.__pfShowScopedSecret) {"
+        # A delivered token's secret went to n8n and is not in this answer (ADR 0278).
+        "      if (res.state && res.state.delivered && res.state.created) {"
+        "        window.alert('Created \\'' + res.state.created.label + '\\' and delivered it to n8n as \\''"
+        " + res.state.delivered.credential_name + '\\'.');"
+        "        toSection();"
+        "      } else if (res.state && typeof res.state.secret === 'string' && window.__pfShowScopedSecret) {"
         "        window.__pfShowScopedSecret(res.state.secret, toSection);"
         "      } else { toSection(); }"
         "    } else if (res.ok && scopedAction && res.state && typeof res.state.secret === 'string' && window.__pfShowScopedSecret) {"
         "      window.__pfShowScopedSecret(res.state.secret, function(){ window.location.reload(); }); "
         "    } else if (res.ok && scopedAction) { window.location.reload(); } "
         "else if (res.ok && window.__pfRender) { window.__pfRender(res.state); } "
-        "else if (!res.ok && (tokenAction || scopedAction) && res.state && res.state.error) { window.alert(res.state.error); } "
+        "else if (!res.ok && scopedAction && res.state && res.state.error) { window.alert(res.state.error); } "
         "else if (!res.ok && res.state && typeof res.state.error === 'string' && window.__pfShowError) { window.__pfShowError(res.state.error); } "
         "else if (!res.ok) { console.error('PrivacyFence action failed:', action, res.state); } });"
         "}};"
         "})();</script>"
     )
-
-
-def _is_confirmed(value: Any) -> bool:
-    """A multipart form field is always a string (or absent) -- there is
-    no JSON `true` to compare against the way quit_app's own `confirmed`
-    check gets to. Mirrors that check's intent: an explicit, affirmative
-    value only, never merely "present" (an empty string, e.g. a
-    same-named but unchecked form control, is not consent)."""
-    return isinstance(value, str) and value.lower() in ("true", "1", "on")
 
 
 def _parse_form_assertion(value: Any) -> dict[str, Any] | None:
@@ -700,10 +374,8 @@ def _action_fingerprint(action: str, body: dict[str, Any]) -> str:
 
 def _record_settings_audit(principal: Principal, summary: str) -> None:
     """Changing an org's privacy policy is exactly the kind of act that
-    belongs in the audit log under the principal who did it, and the same
-    holds in local mode: ``settings_action`` below calls this for every
-    successful mutation and every step-up refusal too, under
-    ``LOCAL_PRINCIPAL``, the same shape org mode's own routes use."""
+    belongs in the audit log under the principal who did it: the dispatchers
+    call this for every successful mutation and every step-up refusal too."""
     # Same free-form AuditEntry shape daemon_main.log_org_config_bundle_hash
     # uses for an install-level event that isn't a connector call -- this is
     # a settings mutation, not a gated tool call, so "connector"/"tool" stay
@@ -726,12 +398,9 @@ def _record_settings_audit(principal: Principal, summary: str) -> None:
 def _needs_step_up(
     action: str, step_up: StepUpConfig | None, *, sensitive: bool | None = None, always: bool = False,
 ) -> bool:
-    """Shared by both modes (ADR 0033) -- identical once parameterized by
-    ``step_up``: local mode's own is optional (``None`` until web/server.py
-    resolves one), org mode's is always given, but "no config yet" and "a
-    config that hasn't turned require_passkey on" both mean the same thing
-    here, so one optional-typed check covers both without either caller
-    special-casing the other's default."""
+    """Whether ``action`` needs a fresh assertion (ADR 0033). "No config" and "a
+    config that hasn't turned require_passkey on" both mean no, so one optional-typed check
+    covers every caller."""
     # A caller whose actions are not in _SENSITIVE_ACTIONS (the Admin page) says for itself
     # whether this one is sensitive. ``always`` asks for an assertion whatever the step-up
     # configuration says, so the default configuration cannot leave such an action unguarded.
@@ -745,10 +414,7 @@ def _settings_step_up_response(
     principal: Principal, action: str, fingerprint_body: dict[str, Any], *,
     step_up: StepUpConfig, challenges: StepUpChallengeStore, always: bool = False,
 ) -> JSONResponse:
-    """Shared by both modes (ADR 0033; formerly one near-identical copy each:
-    local mode's own hardcoded ``LOCAL_PRINCIPAL``, the former
-    web/routes_org_settings.py's already took ``principal`` as a parameter --
-    this is that shape, made the only one). With no enrolled
+    """The 428 (or 403) answer for a sensitive action (ADR 0033). With no enrolled
     passkey this hard-fails (``403``) rather than falling through unguarded,
     since this is only ever reached once ``step_up.require_passkey`` is
     already on (``_needs_step_up`` above) -- there is no weaker fallback
@@ -775,18 +441,14 @@ def _apply_step_up_gate(
     all, or (org mode's own former ``_guard_step_up``) once
     ``approval_step_up._verify_or_challenge`` -- the same ceremony
     primitive web/routes_approvals.py's own ``decide()`` already
-    uses -- has verified a resubmitted one. Local mode's own former inline
-    try/except around ``step_up_decide.verify_step_up`` reduced to exactly
-    this same primitive too, just never factored out until now.
+    uses -- has verified a resubmitted one.
 
     ``form_body`` is the request's own body with ``csrf`` already stripped
-    (local: the JSON payload; org: the form fields) -- ``webauthn_assertion``
+    (the JSON payload or the form fields) -- ``webauthn_assertion``
     is stripped here, once, for the fingerprint every caller binds the
     ceremony to. ``assertion`` is the resubmitted assertion itself, already
-    resolved to a ``dict | None`` by the caller: local mode's JSON body
-    carries it natively; org mode's form field is a JSON-encoded string
-    (``_parse_form_assertion``) -- a difference in request shape the two
-    modes still don't share, so left to each call site.
+    resolved to a ``dict | None`` by the caller: a JSON body carries it natively; a
+    form field is a JSON-encoded string (``_parse_form_assertion``).
     """
     if not _needs_step_up(action, step_up, sensitive=sensitive, always=always):
         return None
@@ -825,79 +487,6 @@ async def read_bounded_form(
         return refuse("Upload exactly one file.", 400)
 
 
-async def handle_org_config_upload(
-    request: Request, *,
-    controller: SettingsController,
-    sessions: LocalSessionStore,
-    step_up: StepUpConfig | None,
-    step_up_origin: str,
-    challenges: StepUpChallengeStore,
-    require_human_session: bool,
-    state_builder: Callable[[], dict[str, Any]],
-    always: bool = False,
-) -> Response:
-    """The bundle upload behind the Admin page: CSRF, human session,
-    size, the confirmation before a first signing key is pinned (409), then step-up. Only the
-    state it answers with differs, so each caller says what that is.
-
-    Unlike the JSON actions this route has no ``_SENSITIVE_ACTIONS`` entry: it is sensitive
-    whenever step-up is in force, and ``always`` (the Admin page) makes that unconditional, so a
-    passkey is asked for whatever the step-up configuration says."""
-    if not _session_authenticated(request, sessions):
-        return _unauthorized_response(request)
-    form = await read_bounded_form(
-        request, max_bytes=MAX_ORG_CONFIG_BYTES,
-        refuse=lambda message, status: JSONResponse({"error": message}, status_code=status),
-    )
-    if isinstance(form, Response):
-        return form
-    csrf = form.get("csrf")
-    if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if not _origin_ok(request):
-        return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-    if require_human_session and not _is_human_session(request, sessions):
-        # Same rationale as settings_action's own check: an organization config bundle can
-        # rewrite the PII policy, every auto-accept rule, and every connector's OAuth client
-        # config in one shot -- at least as much "what gets gated" as any _SENSITIVE_ACTIONS entry.
-        body, status = _human_session_required_json("install an organization config bundle")
-        return JSONResponse(body, status_code=status)
-    upload = form.get("file")
-    if upload is None or not hasattr(upload, "read"):
-        return JSONResponse({"error": "missing file"}, status_code=400)
-    raw = await upload.read()
-    if len(raw) > MAX_ORG_CONFIG_BYTES:
-        return JSONResponse({"error": "file too large"}, status_code=400)
-    # Pinning a signing key for the first time is a one-way trust decision (every future bundle
-    # is refused until an administrator deletes the pinned key file by hand) --
-    # controller.install_org_config_bytes still performs it unconditionally (daemon_main.
-    # load_org_config's own hand-edited-file path needs that), but this route, the only one
-    # reachable by an unsupervised local process, first asks for it explicitly rather than
-    # letting it happen as a side effect of an upload.
-    if controller.would_pin_new_org_signing_key(raw) and not _is_confirmed(form.get("confirm_pin")):
-        return JSONResponse(
-            {
-                "error": "pin_confirmation_required",
-                "detail": (
-                    "This is the first signed organization config bundle seen by this "
-                    "install. Installing it will trust and permanently pin its signing key "
-                    "for every future upload."
-                ),
-            },
-            status_code=409,
-        )
-    fingerprint_body = {"sha256": hashlib.sha256(raw).hexdigest()}
-    response = _gate_upload(
-        "org_config_upload", fingerprint_body, _parse_form_assertion(form.get("webauthn_assertion")),
-        principal=LOCAL_PRINCIPAL, step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
-        always=always,
-    )
-    if response is not None:
-        return response
-    controller.install_org_config_bytes(raw)
-    return JSONResponse(state_builder())
-
-
 def _gate_upload(
     subject: str, fingerprint_body: dict[str, Any], assertion: dict[str, Any] | None, *,
     principal: Principal, step_up: StepUpConfig | None, step_up_origin: str,
@@ -921,675 +510,11 @@ def _gate_upload(
     )
 
 
-def build_routes(
-    controller: SettingsController,
-    *,
-    sessions: LocalSessionStore,
-    allow_quit: bool = True,
-    notifications_enabled: bool = True,
-    notifications_detail: str = "minimal",
-    step_up: StepUpConfig | None = None,
-    step_up_origin: str = "",
-    require_human_session: bool = False,
-    ai_client: AiClientConnect | None = None,
-    scoped_tokens: ScopedTokenWiring | None = None,
-) -> list[BaseRoute]:
-    """The Route objects themselves, for server.py to fold into the one
-    combined app (extra_routes, same pattern web/routes_mcp.py's
-    mount_mcp() already established) -- see create_app() below for a
-    standalone Starlette app wrapping the same routes, which is what this
-    module's own tests construct against. ``sessions`` (see
-    session_auth.py's own module docstring) is the same session store
-    web/routes_approvals.py authenticates against -- one session for the
-    whole combined app, per this module's own docstring.
-
-    A successful mutation's own snapshot is returned directly in this
-    request's response, *and* reaches every other open tab via
-    web/state_stream.py's StateStream.push_settings, wired as a
-    controller.add_change_listener by web/server.py's WebServer -- see that
-    class's own docstring. Nothing here needs to know about the stream at
-    all; SettingsController's existing on_change/_push_snapshot mechanism
-    already fires for every mutating call, this request's own included.
-
-    ``step_up``/``step_up_origin`` gate ``_SENSITIVE_ACTIONS``
-    on a fresh WebAuthn assertion whenever ``step_up.require_passkey`` is on
-    -- see module docstring. Both default to "off" so every existing caller
-    of this function is unaffected; web/server.py's ``build_app`` passes the
-    same ``StepUpConfig``/origin it already resolves for web/
-    routes_approvals.py's own decide-time check and web/routes_security.py's
-    ``/security`` mount.
-
-    ``require_human_session`` refuses
-    every ``_SENSITIVE_ACTIONS`` action -- the same set ``_needs_step_up``
-    already names, i.e. everything that can change *what gets gated* -- to a
-    session web/session_auth.py cannot attribute to a person. Unlike
-    ``_needs_step_up`` it does not wait on ``step_up.require_passkey``: an
-    install with no passkey requirement still has a policy an agent should
-    not be able to rewrite on its own say-so (ADR 0062). See web/routes_approvals.py's
-    own ``require_human_session`` paragraph for why web/server.py turns this
-    on for privilege-separated installs only.
-
-    ``ai_client`` adds the "Connect an AI client" section and its two token
-    routes (ADR 0104) -- local mode with an ``/mcp`` endpoint only; ``None``
-    leaves both out. Copying is gated like any other settings mutation
-    (session, CSRF, origin) and no further: the token is one anything
-    running as this user can already get. Rotating cuts every connected
-    client off, so it takes an explicit confirmation, a human session where
-    ``require_human_session`` asks for one, and the passkey step-up whenever
-    ``step_up.require_passkey`` is on.
-
-    ``scoped_tokens`` adds the "Scoped tokens" section's four routes
-    (ADR 0164): create, revoke and revoke all. Each takes the rotate
-    route's gates -- an explicit confirmation, a human session where
-    ``require_human_session`` asks for one, and the passkey step-up bound to
-    the exact request -- and none answers with a secret or with page state:
-    a new token's secret goes to the companion, and the page reloads.
-    """
-    challenges = StepUpChallengeStore()
-
-    def _authenticated(request: Request) -> bool:
-        return _session_authenticated(request, sessions)
-
-    def _banner_html() -> str | None:
-        if step_up is None:
-            return None
-        # The persistent "requirement was turned off" notice
-        # (webauthn_stepup.step_up_disabled_notice) stands alongside the
-        # "nothing enrolled yet" one -- either, both, or neither
-        # can be true at once, so both render together when present.
-        parts = [
-            step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(LOCAL_PRINCIPAL)),
-            webauthn_stepup.step_up_disabled_notice(LOCAL_PRINCIPAL),
-        ]
-        present = [p for p in parts if p]
-        return " ".join(present) if present else None
-
-    async def _render_settings_page(
-        request: Request, *, initial_section: str | None, scoped_proposal: dict[str, Any] | None = None,
-    ) -> Response:
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        # One nonce
-        # for the whole document -- web/server.py's _SecurityHeadersMiddleware
-        # already put one in request.state for this exact response, and
-        # every <style>/<script> tag below (settings_window_html.build_html's
-        # own, this page's bridge shim, and web_shell.wrap's shell chrome)
-        # has to carry it for the matching Content-Security-Policy header
-        # to actually allow any of them.
-        nonce = _csp_nonce_for(request)
-        state = _snapshot(controller)
-        body = settings_window_html.build_html(
-            state, nonce=nonce, initial_section=initial_section,
-            ai_client={"mcp_url": ai_client.mcp_url} if ai_client is not None else None,
-            scoped_tokens=scoped_tokens.page_data() if scoped_tokens is not None else None,
-            personal_transfer=True, scoped_proposal=scoped_proposal,
-        )
-        csrf = request.cookies.get(_SESSION_COOKIE, "")
-        # PF_WEBAUTHN_JS: the same ceremony helpers web/
-        # routes_approvals.py's card page carries, needed here whenever a
-        # sensitive action's own 428/403 branch below (_settings_bridge_shim)
-        # has to run one -- always injected, same reasoning that module's
-        # own docstring gives for TestStepUpBridgeShim: whether it's ever
-        # exercised depends on config, not on whether the helpers exist.
-        body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
-        body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
-        body += personal_transfer_shim(csrf=csrf, nonce=nonce)
-        # Read off this request's own fresh snapshot, not the notifications_
-        # enabled/detail closure args above -- those are only the daemon-
-        # startup defaults (server.py's own initial config read), and the
-        # Approval Notifications card's segmented control
-        # (set_notifications_detail) needs an edit to reach the very next
-        # render of this same page without restarting the daemon.
-        general = state.get("general", {})
-        html = web_shell.wrap(
-            body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
-            notifications_enabled=general.get("notifications_enabled", notifications_enabled),
-            notifications_detail=general.get("notifications_detail", notifications_detail),
-            banner_html=_banner_html(),
-            deprecation_html=web_shell.local_mode_deprecation_html(),
-        )
-        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
-
-    async def settings_page(request: Request) -> Response:
-        return await _render_settings_page(request, initial_section=None)
-
-    async def settings_connectors_page(request: Request) -> Response:
-        # A real route (not a #fragment) so the initial
-        # section survives web/server.py's _BootstrapMiddleware, which
-        # redirects a consumed ?bootstrap= code to `request.url.path` with
-        # its query string stripped but the path itself untouched -- see
-        # that middleware's own docstring. This is the screen an
-        # un-onboarded install's human is sent to -- by privacyfence_status's
-        # own message, and by the companion's Open Settings item.
-        return await _render_settings_page(request, initial_section="connectors")
-
-    def _check_mutation(request: Request, payload: Any) -> Response | None:
-        if not isinstance(payload, dict) or not _csrf_matches(request, payload.get("csrf")):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not _origin_ok(request):
-            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        return None
-
-    async def settings_action(request: Request) -> Response:
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        action = request.path_params["action"]
-        # The allowlist check happens *before* anything resembling
-        # getattr(controller, action) runs -- an unlisted name (including
-        # dunders, _load_config, snapshot itself) is a 404, not a lookup
-        # that then gets rejected (test_routes_settings.py tests exactly
-        # this). _ALLOWED_ACTIONS is itself projected from org_settings_scope.
-        # ACTION_SCOPES -- local mode has no admin concept to gate
-        # on (that module's own docstring), so consulting the declaration
-        # here is exactly this membership check, not a separate
-        # is_action_permitted(..., mode=LOCAL_MODE) call.
-        if action not in _ALLOWED_ACTIONS:
-            return JSONResponse({"error": "unknown action"}, status_code=404)
-        try:
-            payload = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        rejected = _check_mutation(request, payload)
-        if rejected is not None:
-            return rejected
-        body = {k: v for k, v in payload.items() if k != "csrf"}
-        if require_human_session and action in _SENSITIVE_ACTIONS and not _is_human_session(request, sessions):
-            # Before the step-up ceremony for the same reason
-            # web/routes_approvals.py's own check is: a passkey prompt for
-            # an action this session cannot take either way is a worse
-            # refusal than the refusal itself.
-            body, status = _human_session_required_json("change this setting")
-            return JSONResponse(body, status_code=status)
-        step_up_response = _apply_step_up_gate(
-            LOCAL_PRINCIPAL, action, body, payload.get("webauthn_assertion"),
-            step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
-        )
-        if step_up_response is not None:
-            with principal_scope(LOCAL_PRINCIPAL):
-                _record_settings_audit(
-                    LOCAL_PRINCIPAL, f"Step-up required for {action!r}, refused (principal={LOCAL_PRINCIPAL.id})",
-                )
-            return step_up_response
-        try:
-            result = _call_action(controller, action, body)
-        except _BadAction as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        with principal_scope(LOCAL_PRINCIPAL):
-            _record_settings_audit(LOCAL_PRINCIPAL, f"Changed setting {action!r} (principal={LOCAL_PRINCIPAL.id})")
-        state = result if isinstance(result, dict) else controller.snapshot()
-        return JSONResponse(settings_page_state(state))
-
-    async def quit_action(request: Request) -> Response:
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        try:
-            payload = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        rejected = _check_mutation(request, payload)
-        if rejected is not None:
-            return rejected
-        if not allow_quit:
-            return JSONResponse({"error": "quitting PrivacyFence from the web is disabled"}, status_code=403)
-        if not isinstance(payload, dict) or payload.get("confirmed") is not True:
-            # Behind an explicit confirmation -- the page's own
-            # confirm() dialog sets this before it ever POSTs; a request
-            # without it (a stray script, a replayed form) is refused
-            # rather than treated as consent.
-            return JSONResponse({"error": "confirmation required"}, status_code=400)
-        # Shutdown runs as a background task, i.e. *after* this response's
-        # body has been written to the socket -- not inline above it.
-        # controller.quit_app() signals daemon_main's own shutdown wait, so
-        # calling it first raced the server writing these 21 bytes: the
-        # process could be torn down mid-write and the client saw
-        # "peer closed connection without sending complete message body"
-        # instead of its confirmation. Anyone clicking "Quit PrivacyFence"
-        # could hit that, and tests/system/test_local_mode_system.py's own
-        # quit step did, intermittently, in CI.
-        return JSONResponse({"status": "quitting"}, background=BackgroundTask(controller.quit_app))
-
-    def _step_up_in_force() -> bool:
-        # Unlike _needs_step_up(action) above, the bespoke sensitive routes (mcp_token_rotate -- ADR 0104)
-        # have no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check: they are listed in
-        # _BESPOKE_SENSITIVE_ROUTE_PATHS, and are unconditionally sensitive whenever step-up is
-        # actually in force -- none has a non-sensitive shape.
-        return step_up is not None and step_up.enabled and step_up.require_passkey
-
-    async def mcp_token_copy(request: Request) -> Response:
-        # Only mounted when ai_client is given -- see the routes list below.
-        assert ai_client is not None  # nosec B101  # invariant narrowing, not input validation
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        try:
-            payload = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        rejected = _check_mutation(request, payload)
-        if rejected is not None:
-            return rejected
-        # Off the event loop: the companion's notice is a dialog, and this
-        # waits for the companion's reply.
-        copied, reason = await run_in_threadpool(ai_client.copy_token)
-        with principal_scope(LOCAL_PRINCIPAL):
-            _record_settings_audit(
-                LOCAL_PRINCIPAL,
-                "Copied the AI client token to the clipboard through the companion"
-                if copied else f"Could not copy the AI client token: {reason}",
-            )
-        if not copied:
-            return JSONResponse({"error": reason or "the token could not be copied"}, status_code=503)
-        return JSONResponse(_snapshot(controller))
-
-    async def mcp_token_rotate(request: Request) -> Response:
-        assert ai_client is not None  # nosec B101  # invariant narrowing, not input validation
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        try:
-            payload = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        rejected = _check_mutation(request, payload)
-        if rejected is not None:
-            return rejected
-        if payload.get("confirmed") is not True:
-            # The page's own confirm() sets this; anything else is not consent
-            # to cutting every connected client off (quit_app's own rule).
-            return JSONResponse({"error": "confirmation required"}, status_code=400)
-        if require_human_session and not _is_human_session(request, sessions):
-            body, status = _human_session_required_json("rotate the AI client token")
-            return JSONResponse(body, status_code=status)
-        if _step_up_in_force():
-            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
-            confirmed_step_up: StepUpConfig = step_up
-            # Nothing to bind the ceremony to beyond the action itself: a
-            # rotation takes no arguments.
-            fingerprint_body: dict[str, Any] = {}
-            response = _verify_or_challenge(
-                LOCAL_PRINCIPAL, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
-                subject_key="rotate_mcp_token",
-                fingerprint=_action_fingerprint("rotate_mcp_token", fingerprint_body),
-                assertion=payload.get("webauthn_assertion"), challenges=challenges,
-                step_up_response=lambda: _settings_step_up_response(
-                    LOCAL_PRINCIPAL, "rotate_mcp_token", fingerprint_body,
-                    step_up=confirmed_step_up, challenges=challenges,
-                ),
-            )
-            if response is not None:
-                with principal_scope(LOCAL_PRINCIPAL):
-                    _record_settings_audit(
-                        LOCAL_PRINCIPAL, "Step-up required for 'rotate_mcp_token', refused "
-                        f"(principal={LOCAL_PRINCIPAL.id})",
-                    )
-                return response
-        rotated, reason = await run_in_threadpool(ai_client.rotate_token)
-        with principal_scope(LOCAL_PRINCIPAL):
-            _record_settings_audit(
-                LOCAL_PRINCIPAL,
-                "Rotated the AI client token" if rotated else f"AI client token rotation: {reason}",
-            )
-        if not rotated:
-            return JSONResponse({"error": reason or "the token could not be rotated"}, status_code=503)
-        return JSONResponse(_snapshot(controller))
-
-    async def _scoped_token_request(
-        request: Request, action: str, what: str, fingerprint_body: Callable[[dict[str, Any]], dict[str, Any] | None],
-        *, precheck: Callable[[dict[str, Any], dict[str, Any]], Response | None] | None = None,
-    ) -> tuple[dict[str, Any], dict[str, Any]] | Response:
-        """The gates the scoped token routes share, in the rotate
-        route's order. Returns the JSON body and the step-up fingerprint
-        body, or the response that refuses the request. ``precheck`` runs
-        after the fingerprint body and before step-up, so a request that
-        is refused anyway never asks for a passkey."""
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        try:
-            payload = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        rejected = _check_mutation(request, payload)
-        if rejected is not None:
-            return rejected
-        if payload.get("confirmed") is not True:
-            return JSONResponse({"error": "confirmation required"}, status_code=400)
-        if require_human_session and not _is_human_session(request, sessions):
-            body, status = _human_session_required_json(what)
-            return JSONResponse(body, status_code=status)
-        bound = fingerprint_body(payload)
-        if bound is None:
-            return JSONResponse({"error": "invalid request"}, status_code=400)
-        if precheck is not None:
-            refused = precheck(payload, bound)
-            if refused is not None:
-                return refused
-        if _step_up_in_force():
-            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
-            confirmed_step_up: StepUpConfig = step_up
-            response = _verify_or_challenge(
-                LOCAL_PRINCIPAL, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
-                subject_key=action, fingerprint=_action_fingerprint(action, bound),
-                assertion=payload.get("webauthn_assertion"), challenges=challenges,
-                step_up_response=lambda: _settings_step_up_response(
-                    LOCAL_PRINCIPAL, action, bound, step_up=confirmed_step_up, challenges=challenges,
-                ),
-            )
-            if response is not None:
-                with principal_scope(LOCAL_PRINCIPAL):
-                    _record_settings_audit(
-                        LOCAL_PRINCIPAL, f"Step-up required for '{action}', refused "
-                        f"(principal={LOCAL_PRINCIPAL.id})",
-                    )
-                return response
-        return payload, bound
-
-    async def _create_and_deliver(
-        bound: dict[str, Any], *, audit_suffix: str = "",
-    ) -> tuple[ScopedToken | None, Response]:
-        """Mint the token and hand its secret to the companion. Returns the token (``None`` when
-        nothing was created) and the response to give."""
-        assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
-        try:
-            token, secret = await run_in_threadpool(
-                scoped_tokens.store_create, bound["label"], bound["days"], bound["rules"], bound["tools"],
-                bound["allow_personal_data"], bound["allow_personal_data_reads"],
-            )
-        except ScopedTokenError as exc:
-            return None, JSONResponse({"error": str(exc)}, status_code=400)
-        delivered, reason = await run_in_threadpool(scoped_tokens.send_secret, secret)
-        if not delivered:
-            await run_in_threadpool(scoped_tokens.store_revoke, token.id)
-            with principal_scope(LOCAL_PRINCIPAL):
-                _record_settings_audit(
-                    LOCAL_PRINCIPAL, f"Could not create scoped token '{token.label}' ({token.id}): {reason}",
-                )
-            return None, JSONResponse(
-                {"error": f"The token was not created: {reason or 'the companion could not take it'}"},
-                status_code=503,
-            )
-        with principal_scope(LOCAL_PRINCIPAL):
-            _record_settings_audit(
-                LOCAL_PRINCIPAL,
-                f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
-                f"{len(token.rules)} rule(s), {len(token.tools)} tool(s){audit_suffix}",
-            )
-        return token, JSONResponse({"created": {"id": token.id, "label": token.label, "expires_at": token.expires_at}})
-
-    async def scoped_token_create(request: Request) -> Response:
-        gated = await _scoped_token_request(
-            request, "create_scoped_token", "create a scoped token", normalise_create_request,
-        )
-        if isinstance(gated, Response):
-            return gated
-        _payload, bound = gated
-        _token, response = await _create_and_deliver(bound)
-        return response
-
-    def _proposal_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
-        body = normalise_create_request(payload)
-        proposal_id = payload.get("proposal_id")
-        if body is None or not isinstance(proposal_id, str):
-            return None
-        return {**body, "proposal_id": proposal_id}
-
-    def _proposal_precheck(payload: dict[str, Any], bound: dict[str, Any]) -> Response | None:
-        if payload.get("typed_label") != bound["label"]:
-            return JSONResponse({"error": "Type the token's name exactly to confirm."}, status_code=400)
-        proposal = scoped_token_proposals.get_registry().get(LOCAL_PRINCIPAL.id, bound["proposal_id"])
-        if proposal is None:
-            return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
-        if scoped_token_proposals.narrowing_error(proposal.request, bound) is not None:
-            return JSONResponse({"error": scoped_token_proposals.WIDENED_MESSAGE}, status_code=400)
-        return None
-
-    async def scoped_token_create_from_proposal(request: Request) -> Response:
-        gated = await _scoped_token_request(
-            request, "create_proposed_scoped_token", "create a scoped token", _proposal_fingerprint_body,
-            precheck=_proposal_precheck,
-        )
-        if isinstance(gated, Response):
-            return gated
-        _payload, bound = gated
-        registry = scoped_token_proposals.get_registry()
-        proposal = registry.take(LOCAL_PRINCIPAL.id, bound["proposal_id"])
-        if proposal is None:
-            return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
-        token, response = await _create_and_deliver(bound, audit_suffix=" from a proposal")
-        if token is None:
-            registry.restore(proposal)
-            return response
-        scoped_token_proposals.record(
-            "scoped_token_proposal_accepted", proposal,
-            f"Token proposal '{proposal.request['label']}' accepted as '{token.label}' ({token.id})",
-        )
-        return response
-
-    async def scoped_token_decline_proposal(request: Request) -> Response:
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        try:
-            payload = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        rejected = _check_mutation(request, payload)
-        if rejected is not None:
-            return rejected
-        proposal_id = payload.get("proposal_id")
-        if not isinstance(proposal_id, str):
-            return JSONResponse({"error": "invalid request"}, status_code=400)
-        proposal = scoped_token_proposals.get_registry().take(LOCAL_PRINCIPAL.id, proposal_id)
-        if proposal is None:
-            return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
-        scoped_token_proposals.record(
-            "scoped_token_proposal_declined", proposal,
-            f"Token proposal '{proposal.request['label']}' declined",
-        )
-        return JSONResponse({"declined": True})
-
-    async def scoped_tokens_page(request: Request) -> Response:
-        return await _render_settings_page(request, initial_section="scoped_tokens")
-
-    async def scoped_token_proposal_page(request: Request) -> Response:
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        proposal = scoped_token_proposals.get_registry().get(LOCAL_PRINCIPAL.id, request.path_params["proposal_id"])
-        shown: dict[str, Any] = {"missing": True}
-        if proposal is not None:
-            with principal_scope(LOCAL_PRINCIPAL):
-                shown = scoped_token_proposals.review_data(proposal, auto_accept.get_policy_rows())
-        return await _render_settings_page(request, initial_section="scoped_tokens", scoped_proposal=shown)
-
-    async def scoped_token_revoke(request: Request) -> Response:
-        assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
-
-        gated = await _scoped_token_request(
-            request, "revoke_scoped_token", "revoke a scoped token", _scoped_revoke_fingerprint_body,
-        )
-        if isinstance(gated, Response):
-            return gated
-        _payload, bound = gated
-        revoked = await run_in_threadpool(scoped_tokens.store_revoke, bound["token_id"])
-        if revoked is None:
-            return JSONResponse({"error": "No such token."}, status_code=404)
-        with principal_scope(LOCAL_PRINCIPAL):
-            _record_settings_audit(LOCAL_PRINCIPAL, f"Revoked scoped token '{revoked.label}' ({revoked.id})")
-        return JSONResponse({"revoked": {"id": revoked.id}})
-
-    async def scoped_token_rename(request: Request) -> Response:
-        assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
-
-        gated = await _scoped_token_request(
-            request, "rename_scoped_token", "rename a scoped token", _scoped_rename_fingerprint_body,
-        )
-        if isinstance(gated, Response):
-            return gated
-        _payload, bound = gated
-        try:
-            result = await run_in_threadpool(scoped_tokens.store_rename, bound["token_id"], bound["label"])
-        except ScopedTokenError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        if result is None:
-            return JSONResponse({"error": "No such token."}, status_code=404)
-        old_label, renamed = result
-        if old_label != renamed.label:
-            with principal_scope(LOCAL_PRINCIPAL):
-                _record_settings_audit(
-                    LOCAL_PRINCIPAL, f"Renamed scoped token '{old_label}' to '{renamed.label}' ({renamed.id})",
-                )
-        return JSONResponse({"renamed": {"id": renamed.id, "label": renamed.label}})
-
-    async def scoped_token_revoke_all(request: Request) -> Response:
-        assert scoped_tokens is not None  # nosec B101  # invariant narrowing, not input validation
-        gated = await _scoped_token_request(
-            request, "revoke_all_scoped_tokens", "revoke all scoped tokens", lambda payload: {},
-        )
-        if isinstance(gated, Response):
-            return gated
-        count = await run_in_threadpool(scoped_tokens.store_revoke_all)
-        with principal_scope(LOCAL_PRINCIPAL):
-            _record_settings_audit(LOCAL_PRINCIPAL, f"Revoked all scoped tokens ({count})")
-        return JSONResponse({"revoked": count})
-
-    async def audit_log_download(request: Request) -> Response:
-        if not _authenticated(request):
-            return _unauthorized_response(request)
-        xlsx_path = controller.export_audit_log_path()
-        if xlsx_path is None:
-            return JSONResponse({"error": controller.error or "No audit log to export yet."}, status_code=404)
-        return FileResponse(
-            xlsx_path,
-            filename=Path(xlsx_path).name,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Cache-Control": "no-store"},
-        )
-
-    def _local_personal_hooks() -> PersonalSettingsHooks:
-        """Export/import of the person's own settings (web/personal_settings_routes.py), wired for
-        local mode: the one principal is ``LOCAL_PRINCIPAL``, rows go through the controller's own
-        writer so a hot-reload and the audit hash behave as for a rule added in Settings."""
-
-        def authenticate(request: Request) -> Principal | None:
-            return LOCAL_PRINCIPAL if _authenticated(request) else None
-
-        def check_mutation(request: Request, csrf: str | None) -> Response | None:
-            if not isinstance(csrf, str) or not _csrf_matches(request, csrf):
-                return JSONResponse({"error": "unauthorized"}, status_code=401)
-            if not _origin_ok(request):
-                return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-            if require_human_session and not _is_human_session(request, sessions):
-                body, status = _human_session_required_json("import personal settings")
-                return JSONResponse(body, status_code=status)
-            return None
-
-        def step_up_state() -> tuple[bool, str | None]:
-            if step_up is None:
-                return False, None
-            return step_up.enabled, step_up.scope
-
-        def step_up_gate(principal: Principal, fingerprint_body: dict[str, Any], assertion: object) -> Response | None:
-            if not _step_up_in_force():
-                return None
-            assert step_up is not None  # nosec B101  # _step_up_in_force() already proved this
-            confirmed_step_up: StepUpConfig = step_up
-            return _verify_or_challenge(
-                principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
-                subject_key=STEP_UP_SUBJECT_KEY,
-                fingerprint=_action_fingerprint(STEP_UP_SUBJECT_KEY, fingerprint_body), assertion=assertion,
-                challenges=challenges,
-                step_up_response=lambda: _settings_step_up_response(
-                    principal, STEP_UP_SUBJECT_KEY, fingerprint_body,
-                    step_up=confirmed_step_up, challenges=challenges,
-                ),
-            )
-
-        return PersonalSettingsHooks(
-            authenticate=authenticate,
-            check_mutation=check_mutation,
-            open_scope=principal_scope,
-            scope_error=lambda principal, exc: None,
-            read_rows=lambda: controller.policy_rows(),
-            merge_rules=lambda rules: controller.import_policy_rules(rules),
-            step_up_state=step_up_state,
-            step_up_gate=step_up_gate,
-            audit=_record_settings_audit,
-            mode="local",
-        )
-
-    routes: list[BaseRoute] = [
-        Route("/settings", settings_page),
-        Route("/settings/connectors", settings_connectors_page),
-        Route("/api/settings/quit_app", quit_action, methods=["POST"]),
-        Route("/api/settings/audit_log/download", audit_log_download),
-    ]
-    if ai_client is not None:
-        routes += [
-            Route("/api/settings/mcp_token/copy", mcp_token_copy, methods=["POST"]),
-            Route("/api/settings/mcp_token/rotate", mcp_token_rotate, methods=["POST"]),
-        ]
-    if scoped_tokens is not None:
-        routes += [
-            Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
-            Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
-            Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
-            Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
-            Route("/settings/scoped_tokens", scoped_tokens_page),
-            Route("/settings/scoped_tokens/proposals/{proposal_id}", scoped_token_proposal_page),
-            Route(
-                "/api/settings/scoped_tokens/create_from_proposal", scoped_token_create_from_proposal,
-                methods=["POST"],
-            ),
-            Route("/api/settings/scoped_tokens/decline_proposal", scoped_token_decline_proposal, methods=["POST"]),
-        ]
-    routes += build_personal_routes(_local_personal_hooks())
-    routes.append(Route("/api/settings/{action}", settings_action, methods=["POST"]))
-    for route in routes:
-        # isinstance, not getattr: every entry above is a plain Route (never
-        # a Mount/WebSocketRoute), and narrowing this way -- rather than
-        # getattr(route, "path", ...) -- is what gives mypy route.path/
-        # route.methods below as real attributes instead of BaseRoute's own,
-        # narrower interface.
-        if not isinstance(route, Route) or "POST" not in (route.methods or set()):
-            continue
-        if route.path == "/api/settings/{action}":
-            continue
-        # A real invariant, enforced with an explicit raise rather than
-        # `assert` so it still holds under `python -O`/PYTHONOPTIMIZE, which
-        # strips assert statements: a bespoke POST route this function
-        # itself just built, with no matching _BESPOKE_SENSITIVE_ROUTE_PATHS/
-        # _BESPOKE_EXEMPT_ROUTE_PATHS entry, must never reach the app it's
-        # about to be mounted into.
-        if route.path not in _BESPOKE_SENSITIVE_ROUTE_PATHS and route.path not in _BESPOKE_EXEMPT_ROUTE_PATHS:
-            raise RuntimeError(
-                f"{route.path} is a new bespoke POST route with no _BESPOKE_SENSITIVE_ROUTE_PATHS/"
-                "_BESPOKE_EXEMPT_ROUTE_PATHS classification (ADR 0014) -- "
-                "add it to one of the two above so it cannot bypass _SENSITIVE_ACTIONS-shaped gating"
-            )
-    return routes
-
-
-def create_app(
-    controller: SettingsController, *, sessions: LocalSessionStore, allow_quit: bool = True,
-    notifications_enabled: bool = True, notifications_detail: str = "minimal",
-    step_up: StepUpConfig | None = None, step_up_origin: str = "",
-    require_human_session: bool = False, ai_client: AiClientConnect | None = None,
-    scoped_tokens: ScopedTokenWiring | None = None,
-) -> Starlette:
-    """Standalone Starlette app wrapping build_routes() -- what this
-    module's own tests construct against, the same "no filesystem/global-
-    singleton dependency" convention web/routes_approvals.py's create_app()
-    already established."""
-    return Starlette(routes=build_routes(
-        controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
-        notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_origin,
-        require_human_session=require_human_session, ai_client=ai_client, scoped_tokens=scoped_tokens,
-    ))
-
-
 # How long an org-mode settings render waits for this principal's missing auto-accept rule names
 # (build_org_routes's _await_rule_names) before showing shortened ids instead -- one connector
 # read per unresolved id, normally well under this; anything slower finishes in the background.
 _RULE_NAME_WAIT_SECONDS = 3.0
 
-# What a person is told when the administrator has not turned scoped tokens on (ADR 0165); the
-# store raises the same text from ``create``.
 _SCOPED_TOKENS_DISABLED = (
     "Scoped tokens are not enabled on this install. "
     "Your administrator turns them on on the Admin page."
@@ -1599,6 +524,18 @@ _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule", "update_policy_rule", "set_policy_rule_verbs",
     "set_step_up_scope",
 })
+
+
+
+def _approved_upstream_audit(approvals: Sequence[Mapping[str, str]]) -> str:
+    """The settings audit-line clause naming each approved upstream tool and its gate, sorted by name;
+    empty when nothing was approved."""
+    names = sorted({a["tool"] for a in approvals})
+    if not names:
+        return ""
+    return ", upstream tools approved: " + ", ".join(
+        f"{name} ({auto_accept.TOOL_TO_GATE.get(name, 'unknown')})" for name in names
+    )
 
 
 def build_org_routes(
@@ -1611,39 +548,34 @@ def build_org_routes(
     scoped_token_policy: ScopedTokenPolicy | None = None,
     scoped_token_store: ScopedTokenStore | None = None,
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
+    agent_runtime: agent_runtimes.N8nRuntimeConfig | None = None,
 ) -> list[BaseRoute]:
-    """Org mode's own settings route list (ADR 0032, ADR 0033) --
-    ``GET /settings`` serves the exact same
-    settings_window_html.build_html() local mode's own
-    ``_render_settings_page`` above does, capability-filtered for org mode
-    (``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's
-    own docstring). It is the same page for an administrator as for anyone
+    """The settings route list (ADR 0032, ADR 0033) --
+    ``GET /settings`` serves settings_window_html.build_html(),
+    capability-filtered (``mode="org"``, ``is_admin=principal.is_admin`` --
+    see that function's own docstring). It is the same page for an administrator as for anyone
     else: the install-wide privacy policy and the usage stats are Admin
     sections (web/routes_admin.py), and ``GET /settings/privacy`` redirects
     there.
 
     Writes go through one generic
-    ``POST /api/settings/{action}`` -- the exact same path and JSON body
-    shape local mode's own dispatcher already answers, restricted to
+    ``POST /api/settings/{action}``, restricted to
     ``_ORG_ALLOWED_ACTIONS`` (every action ``org_settings_scope.
     ACTION_SCOPES`` actually routes for ``ORG_MODE``, which is also
     everything the shared page's own JS bridge ever posts for a signed-in
-    org principal). The shared renderer's page carries the exact same PF_WEBAUTHN_JS/
-    step-up bridge shim local mode's own page does, so a 428/403 step-up
-    refusal here shows the same passkey prompt local mode's does, instead
+    org principal). The page carries PF_WEBAUTHN_JS and the step-up bridge
+    shim, so a 428/403 step-up refusal here shows a passkey prompt instead
     of a raw JSON body replacing the page.
 
     This module still contributes the auth/CSRF/authorization/step-up/
-    audit machinery, shared with local mode's own ``build_routes`` above
-    where the two modes' dispatch is the same shape (``_needs_step_up``/
+    audit machinery, shared with the Admin routes (``_needs_step_up``/
     ``_settings_step_up_response``/``_apply_step_up_gate``,
     ``_record_settings_audit``, ``org_settings_scope.is_action_permitted``).
 
     ``install_wide_settings`` is the server's live install-wide config; the page only reads it
     to load each signed-in principal's own settings on top of it.
 
-    ``step_up``/``step_up_origin`` gate org mode the way local mode's own
-    dispatch is gated (ADR 0034): every org-routed
+    ``step_up``/``step_up_origin`` gate the dispatch (ADR 0034): every org-routed
     ``_SENSITIVE_ACTIONS`` member below (``add_policy_rule``,
     ``remove_policy_rule``) demands the same fresh WebAuthn assertion whenever
     ``step_up.require_passkey`` is on. Required, as
@@ -1654,7 +586,7 @@ def build_org_routes(
     writes ungated for a caller that forgets to pass it.
 
     ``connector_registry`` lets the Auto-accept page show a rule's resource ids (a Drive folder, a
-    task list, a Jira project, ...) by name, the way local mode's page does: an id with no cached
+    task list, a Jira project, ...) by name: an id with no cached
     name yet is resolved through *this principal's own* connectors (``ConnectorRegistry.get``),
     into this principal's own ``resource_names.py`` cache -- see ``_await_rule_names`` below.
     ``None`` (a hand-built ``OrgAuth`` with no registry, this module's own older tests) shows
@@ -1676,25 +608,25 @@ def build_org_routes(
     def _current_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
 
+    def _session_email_verified(request: Request) -> bool:
+        """Whether this browser session's sign-in verified the person's email."""
+        session = sessions.get_session(request.cookies.get(org_session.SESSION_COOKIE, ""))
+        return session is not None and session.email_verified
+
     def _guard_step_up(principal: Principal, action: str, form_body: dict[str, Any]) -> JSONResponse | None:
         """Called after ``is_action_permitted`` already passed -- a passkey
         prompt for an action this principal isn't authorized to take either
-        way would be a worse refusal than the authorization refusal itself,
-        the same ordering local mode's own ``require_human_session`` check
-        keeps ahead of its step-up check. Returns ``None`` to let the
-        caller proceed; records the refusal in the audit log, under this
-        principal, for every other case before returning the response to
-        send as-is -- the same step local mode's own ``settings_action``
-        above now takes too (see ``_record_settings_audit``'s own
-        docstring), just already factored out here since org mode's
-        dispatch always needed it.
+        way would be a worse refusal than the authorization refusal itself.
+        Returns ``None`` to let the caller proceed; records the refusal in
+        the audit log, under this principal, for every other case before
+        returning the response to send as-is (see
+        ``_record_settings_audit``'s own docstring).
 
         ``form_body`` is, despite the name, a JSON body's already-decoded
         dict (ADR 0032 -- ``settings_action`` below, this function's only
         caller since the four bespoke form-POST routes it used to serve
         are gone) -- ``webauthn_assertion``, if present, is already a
-        ``dict``, the same as local mode's own ``payload.get(
-        "webauthn_assertion")``, not the JSON-encoded *string* a multipart
+        ``dict``, not the JSON-encoded *string* a multipart
         form field carried it as (``_parse_form_assertion``, still used by
         ``handle_org_config_upload`` above, which is still a real multipart
         route)."""
@@ -1712,23 +644,20 @@ def build_org_routes(
 
     def _ensure_principal_settings_loaded() -> None:
         # Lazy import -- daemon_main.py pulls in the whole connector/client
-        # stack at module level, the same reason every other cross-module
-        # call into it from web/*.py (e.g. settings_controller.py's own
-        # telegram_submit_2fa) imports it inside the function that needs it
-        # rather than at module scope.
+        # stack at module level, so every cross-module call into it from
+        # web/*.py imports it inside the function that needs it rather than
+        # at module scope.
         from ..daemon_main import _load_principal_settings
 
         _load_principal_settings(install_wide_config=install_wide_settings)
 
     def _org_state(principal: Principal) -> dict[str, Any]:
-        """Org mode's counterpart of ``_snapshot(controller)`` (ADR 0032)
-        above -- the exact same settings_window_html.build_html() shape,
-        built fresh per request (org mode is stateless per request, unlike
-        local mode's single long-lived ``SettingsController``) rather than
+        """The settings_window_html.build_html() state (ADR 0032), built
+        fresh per request (the server is stateless per request) rather than
         cached anywhere. General's PII fields and Privacy Filter both read
         the install-wide config directly (admin-only in this mode, with a
-        fail-closed ``"block"`` default for an unconfigured group --
-        unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
+        fail-closed ``"block"`` default for an unconfigured group, see
+        ``_privacy_state_from_config``);
         Auto-accept reads this principal's own on-disk rules; Audit Log
         this principal's own recent decisions; Stats (admin only,
         ADR 0217) install-wide counts from every principal's files on disk. Sections
@@ -1746,7 +675,7 @@ def build_org_routes(
         rows = auto_accept.get_policy_rows()
         # The viewing principal's own recent decisions -- per-principal, exactly like
         # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
-        # with the same agent column local mode's page gets.
+        # with its agent column.
         # A log that cannot be read costs the page its list, never the request -- the same
         # posture _record_settings_audit takes for a write.
         try:
@@ -1757,7 +686,6 @@ def build_org_routes(
         return {
             "error": "",
             "general": {
-                "update_check_enabled": True, "update_check_beta": False,
                 "org_installed": False, "org_installed_date": "",
                 "version": about["version"],
                 "notifications_enabled": True, "notifications_detail": "minimal",
@@ -1804,9 +732,8 @@ def build_org_routes(
                 resolving.discard(principal.id)
 
     async def _await_rule_names(principal: Principal) -> None:
-        """Org mode's counterpart of local mode's ``SettingsController._resolve_names_async``.
-        Local mode resolves in the background and pushes a fresh snapshot to the open tab once
-        done; org mode has no live push (``live_updates=False`` below), so this instead waits up
+        """Resolves the names a rule's resource ids are shown by. There is no live push
+        (``live_updates=False`` below), so this waits up
         to ``_RULE_NAME_WAIT_SECONDS`` for the lookup before the page renders. A slower lookup
         keeps running and fills the cache for the next load rather than holding the request."""
         if connector_registry is None:
@@ -1969,11 +896,18 @@ def build_org_routes(
         return principal, bound
 
     async def _create_and_deliver(
-        principal: Principal, bound: dict[str, Any], *, audit_suffix: str = "",
+        principal: Principal, bound: dict[str, Any], *, session_email_verified: bool = False, audit_suffix: str = "",
+        upstream_approvals: Sequence[Mapping[str, str]] = (),
     ) -> tuple[ScopedToken | None, Response]:
         """Mint the token and answer with its secret, once. Returns the token (``None`` when
         nothing was created) and the response to give."""
         store = scoped_token_store or get_store()
+        from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
+
+        held_audiences = (
+            upstream_mcp_runtime.held_audiences(principal, session_email_verified)
+            if upstream_mcp_runtime.configured() else {}
+        )
         with principal_scope(principal):
             try:
                 _ensure_principal_settings_loaded()
@@ -1986,6 +920,11 @@ def build_org_routes(
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
                         allow_personal_data_reads=bound["allow_personal_data_reads"],
+                        upstream_audiences=bound.get("upstream_audiences") or None,
+                        principal_email_verified=session_email_verified,
+                        held_audiences=held_audiences,
+                        is_admin=principal.is_admin,
+                        upstream_approvals=upstream_approvals,
                     ),
                 )
             except ScopedTokenError as exc:
@@ -1997,6 +936,7 @@ def build_org_routes(
                 f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)"
                 + (", personal data allowed" if token.allow_personal_data else "")
                 + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
+                + _approved_upstream_audit(upstream_approvals)
                 + audit_suffix
                 + f" (principal={principal.id})",
             )
@@ -2011,7 +951,10 @@ def build_org_routes(
         if isinstance(gated, Response):
             return gated
         principal, bound = gated
-        _token, response = await _create_and_deliver(principal, bound)
+        _token, response = await _create_and_deliver(
+            principal, bound, session_email_verified=_session_email_verified(request),
+            upstream_approvals=bound["upstream_approvals"],
+        )
         return response
 
     def _proposal_fingerprint_body(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -2033,6 +976,64 @@ def build_org_routes(
             return JSONResponse({"error": scoped_token_proposals.WIDENED_MESSAGE}, status_code=400)
         return None
 
+    async def _deliver_proposal(
+        principal: Principal, bound: dict[str, Any], proposal: scoped_token_proposals.TokenProposal,
+        *, session_email_verified: bool = False,
+    ) -> Response:
+        """Create the token from a delivery proposal and put it into the runtime. The secret goes to
+        the runtime and is never in the answer (ADR 0278). The proposal comes back on a refusal that
+        left nothing behind, not on a 500, where a token may still exist."""
+        registry = scoped_token_proposals.get_registry()
+        api = agent_runtimes.api_for(agent_runtime) if agent_runtime is not None else None
+        if agent_runtime is None or api is None:
+            registry.restore(proposal)
+            return JSONResponse({"error": agent_runtimes.DELIVERY_UNAVAILABLE}, status_code=503)
+        store = scoped_token_store or get_store()
+        from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
+
+        held_audiences = (
+            upstream_mcp_runtime.held_audiences(principal, session_email_verified)
+            if upstream_mcp_runtime.configured() else {}
+        )
+        with principal_scope(principal):
+            try:
+                _ensure_principal_settings_loaded()
+            except policy_store.V1PolicyConfigError as exc:
+                return JSONResponse({"error": _v1_settings_message(principal, exc)}, status_code=500)
+            outcome = await run_in_threadpool(
+                lambda: runtime_credentials.deliver(
+                    principal=principal, bound=bound, proposal=proposal, config=agent_runtime, api=api,
+                    token_store=store, policy=token_policy, on_abandoned=runtime_credential_sweeper.wake,
+                    held_audiences=held_audiences, principal_email_verified=session_email_verified,
+                ),
+            )
+            token = outcome.token
+            record = outcome.record
+            if token is None or record is None:
+                if outcome.status != 500:
+                    registry.restore(proposal)
+                return JSONResponse({"error": outcome.error}, status_code=outcome.status)
+            _record_settings_audit(
+                principal,
+                f"Created scoped token '{token.label}' ({token.id}), {bound['days']} days, "
+                f"{len(token.rules)} rule(s), {len(token.tools)} tool(s)"
+                + (", personal data allowed" if token.allow_personal_data else "")
+                + (", personal data in reads allowed" if token.allow_personal_data_reads else "")
+                + " from a proposal, delivered to n8n"
+                + f" (principal={principal.id})",
+            )
+        scoped_token_proposals.record(
+            "scoped_token_proposal_accepted", proposal,
+            f"Token proposal '{proposal.request['label']}' accepted as '{token.label}' ({token.id})",
+        )
+        return JSONResponse(
+            {
+                "created": {"id": token.id, "label": token.label, "expires_at": token.expires_at},
+                "delivered": {"runtime": record.runtime, "credential_name": record.credential_name},
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
     async def scoped_token_create_from_proposal(request: Request) -> Response:
         gated = await _org_scoped_token_request(
             request, "create_proposed_scoped_token", _proposal_fingerprint_body, precheck=_proposal_precheck,
@@ -2044,7 +1045,13 @@ def build_org_routes(
         proposal = registry.take(principal.id, bound["proposal_id"])
         if proposal is None:
             return JSONResponse({"error": scoped_token_proposals.GONE_MESSAGE}, status_code=410)
-        token, response = await _create_and_deliver(principal, bound, audit_suffix=" from a proposal")
+        if proposal.delivery is not None:
+            return await _deliver_proposal(
+                principal, bound, proposal, session_email_verified=_session_email_verified(request),
+            )
+        token, response = await _create_and_deliver(
+            principal, bound, session_email_verified=_session_email_verified(request), audit_suffix=" from a proposal",
+        )
         if token is None:
             registry.restore(proposal)
             return response
@@ -2087,6 +1094,7 @@ def build_org_routes(
         token = store.get(principal.id, bound["token_id"])
         if token is None or not await run_in_threadpool(store.revoke, principal, bound["token_id"]):
             return JSONResponse({"error": "No such token."}, status_code=404)
+        runtime_credential_sweeper.wake()
         with principal_scope(principal):
             _record_settings_audit(
                 principal, f"Revoked scoped token '{token.label}' ({token.id}) (principal={principal.id})",
@@ -2115,6 +1123,30 @@ def build_org_routes(
                 )
         return JSONResponse({"renamed": {"id": renamed.id, "label": renamed.label}})
 
+    async def scoped_token_extend(request: Request) -> Response:
+        gated = await _org_scoped_token_request(request, "extend_scoped_token", _scoped_extend_fingerprint_body)
+        if isinstance(gated, Response):
+            return gated
+        principal, bound = gated
+        store = scoped_token_store or get_store()
+        try:
+            result = await run_in_threadpool(
+                store.extend, principal, bound["token_id"], bound["days"], policy=token_policy,
+            )
+        except ScopedTokenError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if result is None:
+            return JSONResponse({"error": "No such token."}, status_code=404)
+        _old_expiry, token = result
+        date = datetime.fromtimestamp(token.expires_at, timezone.utc).strftime("%Y-%m-%d")
+        text = f"Extended scoped token '{token.label}' ({token.id}) to {date}, {bound['days']} days"
+        record = runtime_credentials.get_store().for_token(principal.id, token.id)
+        if record is not None and record.state == runtime_credentials.DELIVERED:
+            text += f", delivered to n8n as '{runtime_credentials.strip_control(record.credential_name)}'"
+        with principal_scope(principal):
+            _record_settings_audit(principal, f"{text} (principal={principal.id})")
+        return JSONResponse({"extended": {"id": token.id, "label": token.label, "expires_at": token.expires_at}})
+
     async def scoped_token_revoke_all(request: Request) -> Response:
         gated = await _org_scoped_token_request(request, "revoke_all_scoped_tokens", lambda payload: {})
         if isinstance(gated, Response):
@@ -2122,6 +1154,7 @@ def build_org_routes(
         principal, _bound = gated
         store = scoped_token_store or get_store()
         count = await run_in_threadpool(store.revoke_all, principal.id)
+        runtime_credential_sweeper.wake()
         with principal_scope(principal):
             _record_settings_audit(principal, f"Revoked all scoped tokens ({count}) (principal={principal.id})")
         return JSONResponse({"revoked": count})
@@ -2151,16 +1184,16 @@ def build_org_routes(
             state = _org_state(principal)
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
-            mode=ORG_MODE, is_admin=principal.is_admin,
-            scoped_tokens=_org_scoped_token_data(principal), personal_transfer=True,
+            is_admin=principal.is_admin,
+            scoped_tokens=_org_scoped_token_data(dataclasses.replace(principal, email_verified=_session_email_verified(request))),
+            personal_transfer=True,
             scoped_proposal=scoped_proposal,
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         whats_new_version = await asyncio.to_thread(whats_new.pending_version, principal)
-        # PF_WEBAUTHN_JS/_settings_bridge_shim: the exact same ceremony helpers local
-        # mode's own _render_settings_page carries -- see that function's
-        # own comment. Whether it's ever exercised depends on this org's
-        # StepUpConfig, not on whether the helpers exist.
+        # PF_WEBAUTHN_JS/_settings_bridge_shim: the passkey ceremony helpers.
+        # Whether they're ever exercised depends on this org's StepUpConfig,
+        # not on whether the helpers exist.
         body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
         body += personal_transfer_shim(csrf=csrf, nonce=nonce)
@@ -2169,8 +1202,7 @@ def build_org_routes(
             nav_items=web_shell.org_nav_items(principal.is_admin), principal_label=principal.email or principal.display_name or principal.id,
             # Org mode has no per-request settings push to subscribe a
             # live stream to (state_stream.py's own StateStream.push_
-            # settings is wired to one local SettingsController's own
-            # on_change, module docstring).
+            # settings is not wired to org mode, module docstring).
             live_updates=False, notifications_enabled=False,
             csrf=csrf, whats_new_version=whats_new_version,
         )
@@ -2224,7 +1256,11 @@ def build_org_routes(
                 except policy_store.V1PolicyConfigError:
                     pass  # _wrap_org_settings meets the same error and renders it
                 else:
-                    shown = scoped_token_proposals.review_data(proposal, auto_accept.get_policy_rows())
+                    shown = scoped_token_proposals.review_data(
+                        proposal, auto_accept.get_policy_rows(),
+                        runtime_host=(urlsplit(agent_runtime.base_url).hostname or "") if agent_runtime else "",
+                        project_id=agent_runtime.project_id if agent_runtime else "",
+                    )
         return await _wrap_org_settings(
             request, principal, initial_section="scoped_tokens", scoped_proposal=shown,
         )
@@ -2300,11 +1336,9 @@ def build_org_routes(
         return f"Step-up scope for this principal changed from {before!r} to {after!r} (principal={principal.id})"
 
     async def settings_action(request: Request) -> Response:
-        """The generic ``POST /api/settings/{action}`` dispatcher org
-        mode shares (ADR 0032) -- the same path and JSON body shape local mode's
-        own ``settings_action`` above answers (this SPA's shared bridge,
-        settings_window_html.py's own ``pfSettingsPost``, posts the same
-        way regardless of mode), restricted to ``_ORG_ALLOWED_ACTIONS``.
+        """The generic ``POST /api/settings/{action}`` dispatcher (ADR 0032)
+        -- what this SPA's shared bridge, settings_window_html.py's own
+        ``pfSettingsPost``, posts to -- restricted to ``_ORG_ALLOWED_ACTIONS``.
         Gate order mirrors every other mutating route in this module:
         authenticated, then CSRF, then origin, then authorization, then
         step-up, then the mutation itself.
@@ -2358,6 +1392,7 @@ def build_org_routes(
         Route("/api/settings/scoped_tokens/create", scoped_token_create, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke", scoped_token_revoke, methods=["POST"]),
         Route("/api/settings/scoped_tokens/rename", scoped_token_rename, methods=["POST"]),
+        Route("/api/settings/scoped_tokens/extend", scoped_token_extend, methods=["POST"]),
         Route("/api/settings/scoped_tokens/revoke_all", scoped_token_revoke_all, methods=["POST"]),
         Route("/settings/scoped_tokens", scoped_tokens_page),
         Route("/settings/scoped_tokens/proposals/{proposal_id}", scoped_token_proposal_page),

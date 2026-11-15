@@ -1,72 +1,15 @@
 # Connect ChatGPT
 
-ChatGPT connects to PrivacyFence in two ways:
-
-- **ChatGPT desktop, in local mode.** The ChatGPT app on your computer connects to the local
-  daemon's `/mcp` endpoint on `localhost` with your own token. Checked on macOS.
-- **ChatGPT on the web, in organization mode**, through a Developer Mode app. ChatGPT on the web
-  connects to MCP servers from OpenAI's servers, not from your computer, so it needs a PrivacyFence
-  it can reach over public HTTPS. A local install listens on `localhost` only, on purpose, so
-  ChatGPT on the web cannot use it.
+ChatGPT on the web connects to PrivacyFence through a Developer Mode app. ChatGPT connects to MCP
+servers from OpenAI's servers, not from your computer, so it needs a PrivacyFence it can reach over
+public HTTPS: an organization deployment. A single-user Docker install on your computer listens on
+`localhost` only, on purpose, so ChatGPT cannot use it.
 
 Which deployment you have is explained in
-[Local mode and organization mode](how-it-works.md#local-mode-and-organization-mode).
+[Single-user and organization deployments](how-it-works.md#single-user-and-organization-deployments).
 
-Both were checked with a **personal ChatGPT plan**. Business, Enterprise and Edu workspaces are not
-verified (see [Organization mode](#organization-mode)).
-
-## Local mode
-
-| Platform | ChatGPT with a local install |
-|---|---|
-| macOS | ChatGPT desktop, as below. |
-| Windows | Not verified. The ChatGPT desktop app for Windows may take the same steps; they have not been checked. |
-| Linux | Not available: there is no ChatGPT desktop app for Linux. Use [Claude Code](connect-claude-code.md). |
-
-ChatGPT on the web cannot reach a local install on any platform.
-
-### ChatGPT desktop
-
-You need two things from PrivacyFence: the MCP URL and your token. Both are on **Settings → AI
-clients**.
-
-1. In PrivacyFence, open **Settings → AI clients**. Note the **MCP URL**, normally
-   `http://localhost:8765/mcp`.
-2. Click **Copy token** there, or choose **Copy AI Client Token** in the companion's menu bar menu.
-   Your token is now on the clipboard. Treat it like a password.
-3. In ChatGPT desktop, open **Settings** → **MCP servers** → **Add server**. The form is titled
-   **Connect to a custom MCP**.
-4. Fill it in:
-   - **Name:** `PrivacyFence`
-   - **Type:** **Streamable HTTP**
-   - **URL:** the MCP URL from step 1
-   - **Headers:** add `Authorization` with the value `Bearer ` followed by the token you copied
-5. Save, then turn the server on in a chat.
-
-The token stays the same across restarts, upgrades and reboots, so this is done once. **Rotate
-token** on **Settings → AI clients** replaces it; ChatGPT desktop then needs the new one. Without
-the companion, `--print-mcp-token` prints the same token in a terminal; the command for each
-platform is in [Connect Claude Code](connect-claude-code.md#local-mode).
-
-**Files in local mode.** ChatGPT desktop runs its commands on your computer, so it can use
-PrivacyFence's one-time links on `127.0.0.1` directly:
-
-- **Download:** a large file comes back as a one-time link, which ChatGPT fetches and saves where
-  you asked. ChatGPT asks for its own permission before writing to a folder such as `~/Downloads`.
-- **Upload:** PrivacyFence runs under its own system account and cannot read files in your home
-  folder, so a file path is refused, with a message that names `privacyfence_create_upload_slot`.
-  ChatGPT then sends the file through an upload link instead.
-
-**Confirmations in ChatGPT desktop.** ChatGPT desktop asks before running a tool that is not
-read-only, and offers to always allow it. PrivacyFence's approval card still decides every gated
-call; see [Confirmations](#confirmations).
-
-**How ChatGPT desktop is identified.** On a local install every approval card shows the requester
-as **Undetected**, whatever the client calls itself
-([ADR 0088](adr/0088-local-mode-shows-every-requester-as-undetected.md)). The audit log records the
-name the client gives: ChatGPT desktop gives `codex-mcp-client`, the same name as OpenAI's Codex
-command-line tool, so the two cannot be told apart
-([ADR 0103](adr/0103-chatgpt-is-matched-by-its-registered-name.md)).
+The steps were checked with a **personal ChatGPT plan**. Business, Enterprise and Edu workspaces are
+not verified (see [Organization mode](#organization-mode)).
 
 ## Organization mode
 
@@ -107,13 +50,12 @@ may use other addresses.
 
 ## Files
 
-A local path means nothing to the server, and ChatGPT does not run PrivacyFence's Claude Desktop
-extension. Files travel through one-time links instead
+A local path means nothing to the server. Files travel through one-time links instead
 ([ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md)):
 
 - **Upload** (for example `drive_upload_file`, or an email attachment): ChatGPT calls
   `privacyfence_create_upload_slot`, sends the file to the returned URL with an HTTP `PUT`, and
-  passes the returned `upload_id` to the tool.
+  passes the returned `upload:` reference to the tool.
 - **Download** (for example `drive_download_file`): a file of up to about 75 KB comes back in the
   tool result; a larger one becomes a short-lived, one-time link.
 
@@ -190,8 +132,6 @@ instead, with no administrator step. See
 | A call waits and nothing happens | It is waiting for your approval at `/approvals`. |
 | An upload fails after you approve it, with "the upload expired or was already used" | The deployment runs 5.0.0, and the approval waited. Ask your administrator to upgrade to 5.1.0 or later. |
 | Every card says **Not verified** | Expected when the registration's redirect URI is not the vendor's own callback; see [AI systems](org-mode-setup-guide.md#11-ai-systems). |
-| ChatGPT desktop cannot connect to PrivacyFence | Check that PrivacyFence is running, that the URL matches **Settings → AI clients**, and that the header value is `Bearer ` followed by the token. After **Rotate token**, paste the new token. |
-| **Copy token** says the companion is not running | Start PrivacyFence's companion app, or run `--print-mcp-token` in a terminal (see [Connect Claude Code](connect-claude-code.md#local-mode)). |
 
 Deployment problems are in the organization guide's
 [Troubleshooting](org-mode-setup-guide.md#15-troubleshooting).

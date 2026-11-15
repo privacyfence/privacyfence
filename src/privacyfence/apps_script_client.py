@@ -40,7 +40,6 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from .google_http import authorized_http
-from .google_oauth import authorize_local
 from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -120,24 +119,6 @@ class AppsScriptClient:
     # Authentication
     # ------------------------------------------------------------------ #
 
-    def authorize_interactive(self) -> None:
-        """Run the interactive OAuth flow and persist the token.
-
-        ``client_config`` comes from the organization config bundle (installed
-        via PrivacyFence Settings) -- the same Google OAuth client Drive/Gmail/etc.
-        already use, just with this connector's own scopes and its own
-        cached token file.
-        """
-        if not self._client_config:
-            raise AppsScriptClientError(
-                "No Google organization config installed. Install the configuration file on "
-                "Admin → Organization configuration in PrivacyFence Settings first."
-            )
-        logger.info("Starting Apps Script interactive OAuth flow")
-        creds = authorize_local(self._client_config, SCOPES)
-        self._save_token(creds)
-        logger.info("Apps Script OAuth token saved to '%s'", self._token_file)
-
     def _load_credentials(self) -> Credentials:
         # Guards concurrent refresh/save of the shared token file when
         # multiple threads hit an expired token at the same time.
@@ -145,7 +126,7 @@ class AppsScriptClient:
             if not os.path.exists(self._token_file):
                 raise AppsScriptClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Authenticate Apps Script from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
+                    "Connect Apps Script on the Connect page (/connect) to authorize."
                 )
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
             if creds.valid:
@@ -157,13 +138,13 @@ class AppsScriptClient:
                 except Exception as exc:  # noqa: BLE001 - surface a clear message
                     raise AppsScriptClientError(
                         f"Failed to refresh OAuth token: {exc}. "
-                        "Reconnect Apps Script from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                        "Connect Apps Script on the Connect page (/connect) to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
             raise AppsScriptClientError(
                 "Cached OAuth token is invalid and cannot be refreshed. "
-                "Reconnect Apps Script from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
+                "Connect Apps Script on the Connect page (/connect) to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:
