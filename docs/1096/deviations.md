@@ -176,7 +176,13 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p13-privilege-separation
 
-- pending
+- worker: Outside touches: tests/unit/test_macos_uninstall_message.py was deleted (it read the deleted macOS privilege-separation script; p15a also lists packaging tests) and tests/unit/web/test_server.py lost its dead privilege_separation imports and monkeypatches.
+- worker: paths.data_dir() and authority_dir() were compared before and after under three environment settings on Linux: identical, so the start-up data check is unaffected. scripts/build_deb.sh, build_dmg.sh, build_pkg.sh, debian/* and installer/* still mention the deleted scripts (p15a deletes them).
+- worker: The worker added one CHANGELOG.md line under [Unreleased].
+- scope: scope: tests/unit/test_macos_uninstall_message.py
+- scope: scope: tests/unit/web/test_server.py
+- review: After merge: unit suite 20044 passed, 3 skipped; integration contract set 12 passed, 1 skipped; test_org_guide_configs 23 passed, 1 skipped; the coverage ratchet passes.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p14a-ui-renderers
 
