@@ -32,7 +32,7 @@ config-authoring work, not something this module's `matches()` needs to know.
 Scope types with no old predicate to be checked against live in `NEW_SCOPE_SELECTORS` rather than
 `SCOPE_SELECTORS`, and their own tests exercise `matches()` directly: `drive.file` (no rule ever
 named one specific file by id rather than a folder), `apps_script.project` (Apps Script's tools had
-no scope at all), `grist.document` (Grist's seven operation keys name one document by id), `miro.board` (Miro's seven gated operation keys name one board by id), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
+no scope at all), `grist.document` (Grist's seven operation keys name one document by id), `miro.board` (Miro's seven gated operation keys name one board by id), `upstream.approved_tool` (a token-only approval of a gated upstream tool, pinned to the operator's declaration), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
 make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurable from the
 Auto-accept Settings page; see their own comment below for why they are not simply more
 `always_allow` rules. `slack.mentions_of_me` (thread replies), `slack.mentions_of_me_all_results` (searches) and
@@ -691,6 +691,26 @@ def _gmail_query_matches(value: Any, ctx: ReviewContext) -> bool:
     return any(q in matched for q in _values_of(value))
 
 
+# An administrator's approval of a `review`/`popup` upstream tool for one scoped token is a rule of
+# that token carrying this predicate. The engine's selector table is global, so a person's own rule
+# list must never carry it: `gate._rules_in_scope` and the Auto-accept readers drop it.
+TOKEN_ONLY_PREDICATES: frozenset[str] = frozenset({"upstream.approved_tool"})
+
+# Operation key ("<id>.<tool>") to the digest of the operator's declaration of it; filled by
+# `upstream_mcp_registry.register`, cleared by `unregister_all`. Empty in local mode.
+UPSTREAM_DECLARATIONS: dict[str, str] = {}
+
+
+def _upstream_approved_tool_matches(value: Any, _ctx: ReviewContext) -> bool:
+    """True only for ``"<operation>@<digest>"`` whose digest is the current one for the operation.
+    Never reads the call; an empty table, a malformed value or a changed declaration matches nothing."""
+    if not isinstance(value, str) or value.count("@") != 1:
+        return False
+    operation, digest = value.split("@")
+    current = UPSTREAM_DECLARATIONS.get(operation)
+    return current is not None and current == digest
+
+
 NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "drive.file": ScopeSelector(
         predicate="drive.file", scope_type="drive.file", kind=ScopeKind.IDENTITY,
@@ -711,6 +731,11 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "miro.board": ScopeSelector(
         predicate="miro.board", scope_type="miro.board", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.ARGS, matches=_miro_board_matches,
+    ),
+    "upstream.approved_tool": ScopeSelector(
+        predicate="upstream.approved_tool", scope_type="upstream.approved_tool",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.ARGS,
+        matches=_upstream_approved_tool_matches,
     ),
     "gmail.anything": ScopeSelector(
         predicate="gmail.anything", scope_type="gmail.anything", kind=ScopeKind.ATTRIBUTE,

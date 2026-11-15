@@ -771,6 +771,23 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
+    def test_the_gated_fieldset_text_is_exact(self):
+        html = build_html(_make_state(), mode="org", scoped_tokens={
+            **self.DATA, "delivery": "once",
+            "upstreams": [{"id": "kh", "label": "Hub", "tools": [], "audiences": [], "gated_tools": [
+                {"name": "kh_propose_change", "gate": "popup", "verb": "update", "effect": "Proposes.", "digest": "d"}]}],
+        })
+        assert "Upstream tools that change data or release results unseen" in html
+        assert 'data-st-gated-for="' in html and 'data-st-gated-tool="' in html
+        assert "data-st-gated-marker" in html and "data-st-gated-effect" in html
+        assert "writes data" in html and "result not reviewed by a person" in html
+        assert (
+            "Ticking approves this tool for every call the token makes, with no card. "
+            "If the operator later changes how the tool is declared, the approval stops working."
+        ) in html
+        assert "upstream_approvals: scopedUpstreamApprovals()" in html
+        assert "'results unseen'" in html and "a.gate === 'popup' ? 'writes data'" in html
+
     def test_the_form_offers_an_audience_fieldset_for_an_upstream_with_a_ticked_tool(self):
         html = build_html(_make_state(), mode="org", scoped_tokens={
             **self.DATA, "delivery": "once",

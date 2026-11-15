@@ -126,11 +126,23 @@ async def test_propose_change_names_the_sub(signer):
     assert json.loads(result.content[0].text) == {"proposal": "accepted", "by": "u1"}
 
 
+async def test_list_proposals_returns_proposals_for_the_callers_audiences(signer):
+    async with _session(_app(signer), signer, _caller("general")) as session:
+        result = await session.call_tool("list_proposals", {})
+    assert result.content[0].text == "1 proposal"
+    assert result.structured_content == {
+        "proposals": [{"id": "p1", "audience": "general", "text": "IBAN: DE89370400440532013000"}],
+    }
+    async with _session(_app(signer), signer, _caller("hr")) as session:
+        other = await session.call_tool("list_proposals", {})
+    assert other.structured_content == {"proposals": []}
+
+
 async def test_a_service_claim_lists_tools_and_gets_no_documents(signer):
     async with _session(_app(signer), signer, _caller("hr", principal_type="service")) as session:
         tools = await session.list_tools()
         result = await session.call_tool("search", {"query": "policy"})
-    assert {t.name for t in tools.tools} == {"search", "get_doc", "propose_change"}
+    assert {t.name for t in tools.tools} == {"search", "get_doc", "propose_change", "list_proposals"}
     assert _titles(result) == []
 
 
