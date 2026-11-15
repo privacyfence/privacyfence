@@ -355,9 +355,6 @@ Notes for your own apps:
 - **Telegram** needs no registration. Offer it under **Admin → Services**, and each person signs in
   with their phone number on `/connect`.
 
-The same app registrations can also carry the loopback redirect URIs used by desktop installs; the
-setup guides cover both.
-
 ### Built-in apps through the relay
 
 A provider accepts only the redirect URLs registered for an app. The built-in apps are
@@ -677,7 +674,7 @@ reject as an unknown directive; switch to it only on a newer nginx.
 
 Terminate TLS in the reverse proxy. The daemon can still terminate TLS itself, but only from the
 `server.tls` section of an upgraded server's 6.x bundle ([section 6](#a-6x-bundle-on-an-upgraded-server)):
-there is no environment variable for it, and `build_org_bundle.py` no longer writes one. A proxy
+there is no environment variable for it. A proxy
 handles certificate renewal and rate limiting as well.
 
 ### Optional: restrict access by IP address
@@ -976,9 +973,7 @@ Policy is split in two:
 **Install-wide policy.** A change made on the Admin page is written to the file and applies to everyone's
 next request, without a restart. You can also edit the file by hand and restart the daemon, but do
 not mix the two: saving from the Admin page rewrites the whole file from the copy the daemon loaded at
-startup, which drops any hand edit made since, comments and formatting included. In organization
-mode a privacy group that is missing from the file is treated as `block` (a desktop install uses
-`allow`), and **Admin → Privacy Filter** marks each group that is relying on that default. State every group
+startup, which drops any hand edit made since, comments and formatting included. A privacy group that is missing from the file is treated as `block`, and **Admin → Privacy Filter** marks each group that is relying on that default. State every group
 explicitly so the file documents the intended policy. The categories and their meaning are in
 [approvals and policy](approvals-and-policy.md).
 
@@ -1110,7 +1105,7 @@ Anyone who can edit workflows in that n8n, the AI client included, can use and r
 ## 12. Approvals and step-up
 
 Each person sees and decides only their own approvals, on `/approvals`. What gets gated, and how
-cards and always-allow rules work, is the same as on a desktop install; see
+cards and always-allow rules work, is described in
 [approvals and policy](approvals-and-policy.md).
 
 **Step-up** asks for proof that a person, not a stolen session, is approving. On a multi-user
@@ -1147,7 +1142,7 @@ With step-up on:
 
 **Sensitive settings writes.** Adding or removing an always-allow rule is sensitive: it changes what
 gets gated in future. When step-up and `require_passkey` are both on, it needs a fresh passkey
-confirmation, exactly as on a desktop install. With either off, it needs only a signed-in session. A
+confirmation. With either off, it needs only a signed-in session. A
 fresh identity-provider sign-in is never accepted for it. See
 [ADR 0034](adr/0034-sensitive-settings-writes-require-step-up-in-both-modes.md). The Admin page is
 stricter: its sensitive actions, including the privacy policy and PII detection, always ask for a
@@ -1175,7 +1170,7 @@ that a request arrived. Organization mode sends a **web push notification** inst
   installation, though they can install it too.
 - **What it says.** "PrivacyFence", and "1 approval pending" (or "N approvals pending"). Never the
   tool, the connector, the content, who is asking or anything else about the request, whatever
-  the notification detail level a desktop install uses.
+  the notification detail level.
 - **Where it goes.** The notification is sent from this server to the push service of the person's
   browser: Apple (`*.push.apple.com`), Google (`fcm.googleapis.com`), Mozilla
   (`*.push.services.mozilla.com`) or Microsoft (`*.notify.windows.com`), which delivers it to the
@@ -1188,7 +1183,7 @@ that a request arrived. Organization mode sends a **web push notification** inst
   and the pages no longer offer notifications. Subscriptions already stored stay on disk unused;
   delete `users/*/push_subscriptions.json` to remove them.
 
-The reasoning, and why a desktop install has no push at all, is in
+The reasoning is in
 [ADR 0081](adr/0081-org-mode-sends-a-count-only-web-push.md).
 
 ## 13. File delivery
@@ -1466,8 +1461,7 @@ from 8.x needs the backup you took before upgrading.
   start it and upload a config signed with the new key on **Admin → Services** for each provider
   that has one; confirm its fingerprint ([section 6](#signed-connector-configs)). Until a provider's
   config is uploaded again, it stays on its built-in app. Serials are kept.
-- **A bundle's signing key** (the legacy bundle of an upgraded server, or a desktop install's
-  bundle): stop the daemon, delete `org/org_bundle_signing_pubkey.txt` and start; the next bundle
+- **A bundle's signing key** (the legacy bundle of an upgraded server): stop the daemon, delete `org/org_bundle_signing_pubkey.txt` and start; the next bundle
   accepted pins the new key. After an upgrade, deleting the new-name pin is the rotation: the 6.x pin
   `org/org_config_signing_pubkey.txt` is not copied over it again. Delete the 6.x pins too only when
   going back to 6.x is no longer wanted. Delete `org_bundle_serial.txt` only to reset the serial.

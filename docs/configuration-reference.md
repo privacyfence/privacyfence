@@ -173,8 +173,6 @@ or empty `auto_accept` section means nothing auto-accepts.
 |---|---|---|---|---|
 | `logging.level` | string | `INFO` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. **Settings > Audit Log**, applied immediately. |
 | `logging.file` | string | `logs/privacyfence.log` | `logs/privacyfence.log` | Daemon log file. A relative path is resolved against PrivacyFence's data directory. |
-| `update_check.enabled` | bool | `true` | `true` | Once a day, check GitHub Releases for a newer version and show a banner. Never downloads or installs anything; a network failure is logged, not shown. **Settings > General > Check for Updates**. |
-| `update_check.include_beta` | bool | `false` | `false` | Also offer pre-releases. Same card. |
 
 ### Web server and MCP
 
@@ -451,12 +449,6 @@ running it by hand, for example with `docker compose exec`.
 | Option | What it does |
 |---|---|
 | `--config PATH` | Read `settings.yaml` from `PATH` instead of its default location. |
-| `--gmail-oauth`, `--drive-oauth`, `--calendar-oauth`, `--contacts-oauth`, `--tasks-oauth`, `--apps-script-oauth` | Sign in to that Google service in the browser from the command line, save the token, and exit. |
-| `--slack-oauth`, `--salesforce-oauth`, `--atlassian-oauth` | The same for Slack, Salesforce, and Jira plus Confluence. |
-| `--grist-oauth` | The same for Grist, when the bundle (or, on a server, a connector config) carries a Grist OAuth app. With an API key, use **Settings > Connectors** instead. |
-| `--miro-oauth` | The same for Miro, which needs the Miro app in the bundle, a connector config or the built-in app. |
-| `--telegram-setup` | Sign in to Telegram interactively (phone number and code) and exit. |
-| `--peek-login` | Sign in to Peek with Peek's device sign-in and save the token, then exit. |
 | `--revoke-scoped-tokens PRINCIPAL_ID` | Revoke every scoped token that account holds (the principal id the audit log and the Settings page show) and exit. Run it as the account the daemon runs as. |
 | `--rotate-upstream-claim-key` | Add a new Ed25519 key for the upstream identity claim and exit: it is published in the JWKS at once and starts signing 300 seconds later; the previous key stays published for `claim.key_overlap_hours`. Run it as the account the daemon runs as. See [Rotating the claim key](upstream-mcp.md#rotating-the-claim-key). |
 | `--revoke-upstream-claim-key KID` | Remove that key from the JWKS at once and exit. Refuses the only signing key. Run it as the account the daemon runs as. |
@@ -467,7 +459,4 @@ running it by hand, for example with `docker compose exec`.
 | `--retire-bundle` | Import the legacy bundle's app credentials as connector configs if that has not happened, and delete `org/org_bundle.json` once the environment says the same mode, server address and identity provider. |
 | `--grist-release PRINCIPAL_ID` | Release the Grist key PrivacyFence holds for that account: the provisioner deletes it in Grist if it created it, and PrivacyFence forgets it. Then the daemon exits. Needs the Grist provisioning key in the environment; run it as the account the daemon runs as. |
 
-The sign-in options need the app's credentials first (a connector config or the built-in app), except
-`--telegram-setup` and `--peek-login` (the latter asks for the Peek server address when none is
-configured). Connect services from **/connect** otherwise
-(see [Connecting a service](connecting-a-service.md)).
+Connect services from **/connect** (see [Connecting a service](connecting-a-service.md)).
