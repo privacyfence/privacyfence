@@ -356,7 +356,7 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
-    stLabel: '', stDays: null, stRules: {}, stTools: {}, stPersonalData: false, stPersonalDataReads: false, stAudiences: {}, stDuplicateOf: null,
+    stLabel: '', stDays: null, stRules: {}, stTools: {}, stGated: {}, stPersonalData: false, stPersonalDataReads: false, stAudiences: {}, stDuplicateOf: null,
     stNewGroup: null, stNewValue: '', stNewVerbs: {}, stNewRules: [], stDupRules: {},
     // Review panel for an AI-proposed token (window.__pfScopedProposal); spLabel === null until first drawn.
     spLabel: null, spDays: null, spRules: {}, spVerbs: {}, spTools: {}, spPersonalData: false, spPersonalDataReads: false, spTyped: '',
@@ -1373,6 +1373,12 @@ _JS = r"""
       if (t.expired) { inRuntime += ' \u00b7 kept until you extend or revoke the token'; }
       activityHtml += '<div class="pf-hint pf-st-runtime" data-st-runtime="1">' + esc(inRuntime) + '</div>';
     }
+    var approved = (t.approved_upstream_tools || []).map(function (a) {
+      return a.name + ' (' + (a.gate === 'popup' ? 'writes data' : 'results unseen') + ')';
+    });
+    if (approved.length) {
+      activityHtml += '<div class="pf-hint pf-st-approved" data-st-approved="1">Approved without a card: ' + esc(approved.join(', ')) + '</div>';
+    }
     var detail = '<details class="pf-st-detail"><summary>Rules and tools</summary>';
     detail += '<div class="pf-hint">Rules</div><ul class="pf-st-list">';
     if (t.rules.length === 0) { detail += '<li>None</li>'; }
@@ -1419,7 +1425,12 @@ _JS = r"""
     ui.stDupRules = {};
     t.rules.forEach(function (r) { ui.stDupRules[r.id] = true; });
     ui.stTools = {};
-    t.tools.forEach(function (name) { ui.stTools[name] = true; });
+    ui.stGated = {};
+    // Only tools this form still lists; a gated upstream tool stays unticked until an administrator ticks it again.
+    var listed = {};
+    SCOPED.tools.forEach(function (g) { g.tools.forEach(function (name) { listed[name] = true; }); });
+    (SCOPED.auto_tools || []).forEach(function (name) { listed[name] = true; });
+    t.tools.forEach(function (name) { if (listed[name]) { ui.stTools[name] = true; } });
     ui.stPersonalData = !!t.allow_personal_data;
     ui.stPersonalDataReads = !!t.allow_personal_data_reads;
     ui.stAudiences = {};
@@ -1439,6 +1450,7 @@ _JS = r"""
     ui.stDays = null;
     ui.stRules = {};
     ui.stTools = {};
+    ui.stGated = {};
     ui.stPersonalData = false;
     ui.stPersonalDataReads = false;
     ui.stAudiences = {};
@@ -1462,8 +1474,39 @@ _JS = r"""
   // An upstream whose tool is ticked, with the audiences the person holds.
   function scopedUpstreamsWithTools() {
     return (SCOPED.upstreams || []).filter(function (u) {
-      return u.tools.some(function (name) { return !!ui.stTools[name]; });
+      return u.tools.some(function (name) { return !!ui.stTools[name]; }) ||
+        (u.gated_tools || []).some(function (g) { return !!ui.stGated[g.name]; });
     });
+  }
+
+  // Per upstream, the tools an administrator may approve for the token: all unticked by default (ADR 0300).
+  function scopedGatedHtml() {
+    var html = '';
+    (SCOPED.upstreams || []).forEach(function (u) {
+      var gated = u.gated_tools || [];
+      if (!gated.length) { return; }
+      html += '<fieldset class="pf-st-gated" data-st-gated-for="' + esc(u.id) + '"><legend class="pf-row-title">Upstream tools that change data or release results unseen</legend>';
+      gated.forEach(function (g) {
+        var on = !!ui.stGated[g.name];
+        var marker = g.gate === 'popup' ? 'writes data' : 'result not reviewed by a person';
+        html += '<div class="pf-st-gated-tool"><div class="pf-chip pf-st-tool' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' +
+          (on ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(g.name + ', ' + marker) + '" data-st-gated-tool="' + esc(g.name) + '">' +
+          '<span>' + esc(g.name) + ' <span class="pf-st-meta">\u00b7 <span data-st-gated-marker="1">' + esc(marker) + '</span></span></span></div>' +
+          '<div class="pf-hint" data-st-gated-effect="1">' + esc(g.effect) + '</div></div>';
+      });
+      html += '<div class="pf-hint">Ticking approves this tool for every call the token makes, with no card. If the operator later changes how the tool is declared, the approval stops working.</div></fieldset>';
+    });
+    return html;
+  }
+
+  function scopedUpstreamApprovals() {
+    var out = [];
+    (SCOPED.upstreams || []).forEach(function (u) {
+      (u.gated_tools || []).forEach(function (g) {
+        if (ui.stGated[g.name]) { out.push({tool: g.name, digest: g.digest}); }
+      });
+    });
+    return out.sort(function (a, b) { return a.tool < b.tool ? -1 : (a.tool > b.tool ? 1 : 0); });
   }
 
   function scopedAudiencesHtml() {
@@ -1629,13 +1672,14 @@ _JS = r"""
       html += '</div></details>';
     }
     var uncovered = Object.keys(ui.stTools).filter(function (name) {
-      return ui.stTools[name] && scopedToolStatus(name, coverage).uncovered;
+      return ui.stTools[name] && !ui.stGated[name] && scopedToolStatus(name, coverage).uncovered;
     }).sort();
     if (uncovered.length) {
       html += '<div class="pf-st-notice" role="status" data-st-uncovered="1">No selected rule covers ' + esc(uncovered.join(', ')) +
         ', so ' + (uncovered.length === 1 ? 'its calls' : 'their calls') + ' will be denied. Select a rule that covers ' +
         (uncovered.length === 1 ? 'it' : 'them') + ', or untick ' + (uncovered.length === 1 ? 'it' : 'them') + '.</div>';
     }
+    html += scopedGatedHtml();
     html += scopedAudiencesHtml();
     var stPdOn = !!ui.stPersonalData;
     var stPdLabel = 'Let exports, downloads and page uploads carry personal data';
@@ -2156,7 +2200,7 @@ _JS = r"""
       });
     }
     var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
-    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rules: rules, tools: tools, allow_personal_data: !!ui.stPersonalData, allow_personal_data_reads: !!ui.stPersonalDataReads, upstream_audiences: scopedChosenAudiences() });
+    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rules: rules, tools: tools, allow_personal_data: !!ui.stPersonalData, allow_personal_data_reads: !!ui.stPersonalDataReads, upstream_audiences: scopedChosenAudiences(), upstream_approvals: scopedUpstreamApprovals() });
   }
 
   // -------------------------------------------------------------------- //
@@ -3273,6 +3317,11 @@ _JS = r"""
     if (stNewRemoveEl) { ui.stNewRules.splice(parseInt(stNewRemoveEl.getAttribute('data-st-new-remove'), 10), 1); render(pyState); return; }
     var stToolEl = e.target.closest('[data-st-tool]');
     if (stToolEl) { var tn = stToolEl.getAttribute('data-st-tool'); ui.stTools[tn] = !ui.stTools[tn]; render(pyState); return; }
+    var stGatedEl = e.target.closest('[data-st-gated-tool]');
+    if (stGatedEl) {
+      var gn = stGatedEl.getAttribute('data-st-gated-tool');
+      ui.stGated[gn] = !ui.stGated[gn]; ui.stTools[gn] = ui.stGated[gn]; render(pyState); return;
+    }
     var stAudienceEl = e.target.closest('[data-st-audience]');
     if (stAudienceEl) {
       var dk = stAudienceEl.getAttribute('data-st-audience-upstream') + '\u0000' + stAudienceEl.getAttribute('data-st-audience');
