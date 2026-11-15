@@ -225,5 +225,7 @@ Management site, or connect a site that has it.
 configured. Set it as step 2 of the [Jira Assets](#jira-assets) setup describes.
 
 **Jira Assets fails with `check_connection failed: HTTP 404: …` or `HTTP 400: …`** — the text after
-the second colon is Atlassian's reason. Most often the configured workspace id is not this site's: look
+the second colon is Atlassian's reason (or the reply text, when it has no standard reason; `no detail
+(empty body)` means Atlassian sent none), and the message ends with the failing route in brackets, such
+as `(GET objectschema/list)`. Most often the configured workspace id is not this site's: look
 it up again on the site the user connected.
