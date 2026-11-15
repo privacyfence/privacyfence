@@ -44,6 +44,11 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - level: Renumbered by the orchestrator: ADRs 0310 and 0311 are taken on main, so the five ADRs are 0312 to 0316 (plan 0310 to 0312, 0311 to 0313, 0312 to 0314, 0313 to 0315, 0314 to 0316). The ADR mentions in scripts/release_check.py and scripts/tag_release.py were changed from 0310 to 0312 by this phase; CLAUDE.md and docs/releasing.md follow in the retirement phase.
 - scope: scope: the five ADR files are renumbered 0312 to 0316 and the two script docstring edits were authorised by the orchestrator (see the renumbering entry above).
 - review: ADRs are 48 to 70 lines each, carry the Status lines of the design, and the index rows and old-ADR status cells use the renumbered numbers. Old ADR files 0021, 0132 and 0185 are untouched here.
+- scope: scope: docs/adr/0312-a-release-tag-is-created-only-by-tld-release-yml.md (renumbered ADR file, orchestrator decision)
+- scope: scope: docs/adr/0313-workflow-commands-come-from-the-tld-plugin.md (renumbered ADR file, orchestrator decision)
+- scope: scope: docs/adr/0314-plans-stay-on-main-as-the-record-of-their-change.md (renumbered ADR file, orchestrator decision)
+- scope: scope: docs/adr/0315-rulesets-and-required-checks-live-in-the-admin-policy.md (renumbered ADR file, orchestrator decision)
+- scope: scope: docs/adr/0316-the-releases-integration-branch-convention-is-retired.md (renumbered ADR file, orchestrator decision)
 
 ## p10-retirement
 
@@ -54,7 +59,11 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - final: Blocking finding 1: tests/unit/test_required_checks.py cited ADR 0313 where the renumbered rulesets ADR is 0315; fixed on the fix-1 branch together with three non-blocking text fixes (ADR 0316 verification command, ADR 0314 decision 4 wording, the blank line after the Cutting a release heading).
 - final: fix-1 merged: one fix worker covered the blocking finding and the three small non-blocking text fixes; its files belong to p4, p5 and p9, so the scope check lists them as outside p5.
+- final: Second review: approve, no findings.
+- scope: scope: docs/adr/0314-plans-stay-on-main-as-the-record-of-their-change.md (fix-1 text fix)
+- scope: scope: docs/adr/0316-the-releases-integration-branch-convention-is-retired.md (fix-1 text fix)
+- scope: scope: docs/releasing.md (fix-1 text fix)
 
 ## Finishing
 
-- pending
+- scope: Scope disposition: the p9 and fix-1 out-of-scope paths are accepted (renumbered ADR files, two script docstrings, three small text fixes) and still in the final diff. The dod gate passed in full on the feature branch: coverage run and floor, ruff, bandit, mypy, strict mypy.
