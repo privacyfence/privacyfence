@@ -256,6 +256,89 @@ class TestResolvers:
         assert StaticFileResolver(tmp_path / "nope.json").audiences_for("a@x.example", MAP) == frozenset()
 
 
+    def test_groups_for_returns_an_all_only_group_at_once(self, store):
+        snap(store, {EVERYONE: ["a@x.example"]})
+        assert SnapshotResolver(store).groups_for("A@x.example", MAP) == {EVERYONE}
+
+    def test_groups_for_waits_for_the_approval_of_a_restricted_audience(self, store):
+        snap(store, {EVERYONE: ["a@x.example"]})
+        snap(store, {EVERYONE: ["a@x.example"], MGMT: ["m@x.example"]}, now=NOW + 1)
+        resolver = SnapshotResolver(store)
+        assert resolver.groups_for("m@x.example", MAP) == frozenset()
+        store.approve(MGMT, "mgmt", "m@x.example", group_audiences=MAP, now=NOW + 2)
+        assert resolver.groups_for("m@x.example", MAP) == {MGMT}
+
+    def test_groups_for_needs_every_restricted_audience_approved(self, store):
+        both = {**MAP, MGMT: frozenset({"mgmt", "board"})}
+        snap(store, {EVERYONE: ["a@x.example"]}, mapping=both)
+        snap(store, {EVERYONE: ["a@x.example"], MGMT: ["m@x.example"]}, now=NOW + 1, mapping=both)
+        resolver = SnapshotResolver(store)
+        store.approve(MGMT, "mgmt", "m@x.example", group_audiences=both, now=NOW + 2)
+        assert resolver.groups_for("m@x.example", both) == frozenset()
+        store.approve(MGMT, "board", "m@x.example", group_audiences=both, now=NOW + 3)
+        assert resolver.groups_for("m@x.example", both) == {MGMT}
+
+    def test_groups_for_returns_a_group_mapped_to_no_audience(self, store):
+        open_map = {**MAP, "team@company": frozenset()}
+        snap(store, {EVERYONE: ["a@x.example"]}, mapping=open_map)
+        snap(store, {EVERYONE: ["a@x.example"], "team@company": ["t@x.example"]}, now=NOW + 1, mapping=open_map)
+        assert SnapshotResolver(store).groups_for("t@x.example", open_map) == {"team@company"}
+
+    def test_groups_for_drops_a_group_the_map_no_longer_names(self, store):
+        snap(store, {EVERYONE: ["a@x.example"]})
+        assert SnapshotResolver(store).groups_for("a@x.example", {MGMT: frozenset({"mgmt"})}) == frozenset()
+
+    def test_groups_for_applies_a_removal_at_once(self, store):
+        snap(store, {EVERYONE: ["a@x.example", "b@x.example"]})
+        resolver = SnapshotResolver(store)
+        assert resolver.groups_for("b@x.example", MAP) == {EVERYONE}
+        snap(store, {EVERYONE: ["a@x.example"]}, now=NOW + 1)
+        assert resolver.groups_for("b@x.example", MAP) == frozenset()
+
+    def test_groups_for_empty_email_is_empty(self, store, tmp_path):
+        snap(store, {EVERYONE: ["a@x.example"]})
+        assert SnapshotResolver(store).groups_for("", MAP) == frozenset()
+        static = tmp_path / "static.json"
+        static.write_text(json.dumps({"version": 1, "groups": {EVERYONE: [""]}}))
+        assert StaticFileResolver(static).groups_for("", MAP) == frozenset()
+
+    def test_static_groups_for_lists_member_groups_in_the_map(self, tmp_path):
+        path = tmp_path / "static.json"
+        path.write_text(json.dumps({"version": 1, "groups": {MGMT: ["A@x.example"], EVERYONE: ["a@x.example"]}}))
+        resolver = StaticFileResolver(path)
+        assert resolver.groups_for("a@x.example", MAP) == {MGMT, EVERYONE}
+        assert resolver.groups_for("b@x.example", MAP) == frozenset()
+
+    def test_static_groups_for_ignores_a_group_not_in_the_map(self, tmp_path):
+        path = tmp_path / "static.json"
+        path.write_text(json.dumps({"version": 1, "groups": {MGMT: ["a@x.example"], "other@company": ["a@x.example"]}}))
+        assert StaticFileResolver(path).groups_for("a@x.example", MAP) == {MGMT}
+
+
+class TestLookupEmail:
+    def test_lowercases_and_strips(self):
+        assert gm.lookup_email(" Ann@HR.Example ") == "ann@hr.example"
+
+    @pytest.mark.parametrize(
+        "value", [None, 5, b"a@b.example", "", "ann", "a@b@c", "a b@c.example", "@c.example", "a@", "a\x00b@c.example"],
+    )
+    def test_malformed_gives_none(self, value):
+        assert gm.lookup_email(value) is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "\u212Aate@x.example",  # Kelvin sign
+            "\u212Bsa@x.example",  # Angstrom sign
+            "\u0130nes@x.example",
+            "ann\u200b@x.example",  # zero-width space
+            "k\u00f6ln@x.example",
+        ],
+    )
+    def test_look_alikes_give_none(self, value):
+        assert gm.lookup_email(value) is None
+
+
 class TestSingleton:
     def test_set_and_get_store(self, tmp_path):
         custom = MembershipStore(tmp_path / gm.FILENAME)

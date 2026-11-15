@@ -6,6 +6,7 @@ Accepted — 2026-11-14. Amends [ADR 0286](0286-privacyfence-sends-the-upstream-
 Implemented: `src/privacyfence/identity_claim.py`, `src/privacyfence/upstream_claim_keys.py`,
 `web/routes_upstream_mcp.py`, `contrib/verifier/pf_claim_verify.py`. Issue
 [#1103](https://github.com/privacyfence/privacyfence/issues/1103).
+Amended by [ADR 0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md), 2026-11-15.
 
 ## Context
 

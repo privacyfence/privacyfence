@@ -338,6 +338,12 @@ the shape into the new frame and the sticky note out of its frame. The client ha
 
 ### Seed: Jira Assets
 
+The Assets live check and recording are suspended (https://github.com/privacyfence/privacyfence/issues/1131): the QA site's trial ended on
+2026-11-09 and Assets does not work on the free plan. `--check` and `--record` skip it with a
+`Suspended, not run` line; an explicit `--record assets` or a `qa-record-fixture.yml` dispatch for
+`assets` is refused with the reason and exits 1. The recorded fixtures in
+`tests/fixtures/live/assets/` keep being replayed by the unit tests.
+
 - [ ] Create an Assets schema with key exactly `PFQA`, holding the object types Account, Contract
       and Asset. Contract references Account, and Asset references Contract.
 - [ ] Create two accounts, two contracts and three assets, every label tagged `[QATEST]`.
@@ -350,7 +356,7 @@ the shape into the new frame and the sticky note out of its frame. The client ha
 - [ ] Turn on **Jira Assets** under **Admin → Features** on the QA server, with the workspace id
       shown at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`, and set the
       same id as `assets.workspace_id`: the live checks do not read the QA server's Admin settings.
-- [ ] If the Assets check fails with `check_connection failed: HTTP 400` or `HTTP 404`, the text
+- [ ] While the check is suspended nothing here applies; the bullet is for after it resumes. If the Assets check fails with `check_connection failed: HTTP 400` or `HTTP 404`, the text
       after the second colon is Atlassian's own reason and the message ends with the failing route in
       brackets (`GET servicedeskapi/assets/workspace` or `GET objectschema/list`). `no detail (empty
       body)` means Atlassian sent no reason. Compare `assets.workspace_id` in the runner's
@@ -369,6 +375,18 @@ the shape into the new frame and the sticky note out of its frame. The client ha
 | Optional rule | Predicate | Value | Operations |
 |---|---|---|---|
 | Approved schema | `approved_schema_ids` | `[<PFQA schema id>]` | `assets.read_object` |
+
+### Resuming the Assets live check
+
+1. Get a Jira Service Management plan that includes Assets (or a new trial) on the QA site.
+2. Check the seed (schema `PFQA` and the seed objects: a lapsed plan may have removed them) per the
+   seed list above.
+3. Read the site's workspace id at `https://<qa-site>.atlassian.net/rest/servicedeskapi/assets/workspace`
+   and set `assets.workspace_id` in the runner's `tests/fixtures/qa_environment.yaml`.
+4. Delete the `assets` entry from `SUSPENDED_CONNECTORS` in `scripts/qa_fixture_recorder.py` and the
+   test `test_assets_is_suspended_with_a_reason`, and merge that.
+5. Dispatch `qa-record-fixture.yml` with `connector=assets` and a branch, review and commit the
+   re-recorded fixtures.
 
 ### Seed: Confluence
 
@@ -448,7 +466,7 @@ there with `scripts/qa_runner_tokens.py pull`, or connect the accounts to a loca
   `LIFECYCLE_CHECKS` says why the others are excluded) and never writes a fixture. A cleanup that
   ran but left the object behind fails the run. Confluence, Grist, Miro and Salesforce have no cleanup step. The Miro lifecycle runs on `main`'s code only.
 
-With no connector named, every connector implemented for the mode runs. `--report-file PATH` also
+With no connector named, every connector implemented for the mode runs, except those in `SUSPENDED_CONNECTORS`; naming a suspended connector is refused (exit 1). `--report-file PATH` also
 saves the report; `-v`/`--verbose` turns on DEBUG logging on stderr. The exit status is non-zero
 when any result fails. An unknown connector name is reported on stderr and skipped.
 
@@ -648,7 +666,7 @@ check never records because its `--check` does not fail. It:
   script;
 - writes the built-in app credentials and copies the QA tokens and configuration in, as the live
   check does;
-- fails unless the connector is registered in `CONNECTOR_CHECKS`;
+- fails unless the connector is registered in `CONNECTOR_CHECKS`, and the recorder refuses a connector listed in `SUSPENDED_CONNECTORS`;
 - runs `--record <connector>` without `continue-on-error`, so a refused recording fails the job;
 - writes the refreshed tokens back, uploads the report as `qa-record-report-<connector>` and the
   recorded `tests/fixtures/live/<connector>` as the `recorded-fixture` artifact, then deletes the

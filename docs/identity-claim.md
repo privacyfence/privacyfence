@@ -41,7 +41,7 @@ Payload. A key is omitted, never `null`, when it does not apply.
 | `aud` | The `audience` the operator declared for this upstream. Accept only your own. |
 | `sub` | The principal's id: the person's id, `n8n-token:<token id>` for a scoped token, `privacyfence` for a service claim. |
 | `principal_type` | `claude_client`, `n8n_workflow`, `service` or `human` (see Principals). |
-| `email` | The verified email. Present only when `sub` is a person. |
+| `email` | The verified email. Present only when `sub` is a person and the address is verified. With `email_for_visibility: true` it is lower-cased and NFC (ASCII only: an address with a non-ASCII character gives no `email`). |
 | `approved_by` | The id of the person who created the token. Present only for `n8n_workflow`. |
 | `token_id` | The scoped token's id. Present only for `n8n_workflow`. |
 | `act` | `{"sub": <OAuth client id>, "agent": <attested agent id>}` for `claude_client` (the RFC 8693 actor). `agent` only when the client is attested; `sub` only when known. Absent for any other type. |
@@ -52,8 +52,10 @@ Payload. A key is omitted, never `null`, when it does not apply.
 
 `iss` has no path suffix. The public keys are at `<issuer>/upstream-mcp/jwks`.
 
-Only `sub`, `principal_type`, `audiences` and `req` may change what a query returns. `email`,
-`approved_by`, `token_id` and `act` are for your own audit.
+`sub`, `principal_type`, `audiences` and `req` may change what a query returns, and `email` too, but only
+when the upstream declared `email_for_visibility: true`
+([Email as a visibility input](#email-as-a-visibility-input-opt-in)). `approved_by`, `token_id` and
+`act` are for your own audit.
 
 ## Principals
 
@@ -76,6 +78,36 @@ so a creator who loses an audience takes it from the token on its next call.
 
 Filter by `audiences` inside your own query, not afterwards, so ranking and pagination stay correct and a
 guessed document id is still refused. An empty list matches no row.
+
+## Email as a visibility input (opt-in)
+
+By default `email` is for your audit only. An operator can make it a fifth input to what a query returns
+by declaring `email_for_visibility: true` on the upstream ([upstream-mcp.md](upstream-mcp.md)), for
+example so a knowledge hub can show an attendee-only record to the people on its attendee list. With the
+opt-in on, PrivacyFence promises, for every request it signs:
+
+- `email` is present only when `principal_type` is `claude_client`. A scoped token (`n8n_workflow`) and a
+  `service` claim never carry it, opted in or not.
+- It is the verified address only. "Verified" is what PrivacyFence treats as verified at sign-in: the
+  identity provider said so, or the operator trusts unverified addresses for an allowed domain
+  (`PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL`), which makes the address count as verified for that domain.
+  An address that is not verified gives no `email`.
+- It is lower-cased, in Unicode NFC, and ASCII only. An address with a non-ASCII character (a look-alike
+  such as the Kelvin sign, or a genuine internationalised address) gives no `email`, no `audiences` and
+  no `groups`; the sign-in itself still works.
+- It comes from the same verified source and goes through the same normaliser as `audiences`, so the
+  address in `email` is the address that decided the audiences.
+- `sub` stays when the person's address changes, and `email` follows.
+
+What the upstream does:
+
+- Filter inside your own query by exact match of `email` against your own list (an attendee list, say),
+  as for `audiences`, so ranking and pagination stay correct.
+- Use `email` only on a `tools/call` whose `req` matched. PrivacyFence also sends `email` on the other
+  requests of a person (`initialize`, `tools/list` and so on); never return data for those.
+- An absent `email` matches nothing.
+
+An upstream that did not opt in must keep treating `email` as audit-only.
 
 ## The request binding
 
@@ -226,6 +258,9 @@ that is not the table owner and has no `BYPASSRLS`.
 ## Versioning
 
 This document describes `claim_version` 1. Adding an optional claim keeps the version at 1, so ignore
-claims you do not know. Any other change (a changed meaning, a removed or newly required claim, another
+claims you do not know. An opt-in the operator declares per upstream, such as `email_for_visibility`,
+changes nothing for an upstream that does not opt in, so it keeps the version at 1. Once an upstream
+has opted in, though, any change to how `email` is filled (its source, its normalisation, the cases
+where it is present) is a breaking contract change: it needs `claim_version` 2 and a new `typ`. Any other change (a changed meaning, a removed or newly required claim, another
 canonicalisation) is `claim_version` 2 and a new `typ`, so a verifier for version 1 refuses it by
 design.
