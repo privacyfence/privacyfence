@@ -44,7 +44,7 @@ def browser():
 @pytest.fixture
 def page(browser):
     pg = browser.new_page()
-    pg.set_content(build_html(_state([]), initial_section="auto_accept"))
+    pg.set_content(build_html(_state([]), initial_section="auto_accept", mode="org"))
     pg.evaluate("window.__posts = []; window.__confirms = []; window.__answer = true;"
                 "window.confirm = function (t) { window.__confirms.push(t); return window.__answer; };"
                 "window.webkit = {messageHandlers: {pf: {postMessage: function (m) { window.__posts.push(m); }}}};")

@@ -75,7 +75,7 @@ def browser():
 @pytest.fixture
 def page(browser):
     pg = browser.new_page()
-    pg.set_content(build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(DATA)))
+    pg.set_content(build_html(_make_state(), initial_section="scoped_tokens", scoped_tokens=copy.deepcopy(DATA), mode="org"))
     yield pg
     pg.close()
 

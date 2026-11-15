@@ -22,9 +22,6 @@ from dataclasses import dataclass
 
 from ..principal import Principal
 
-# Read by settings_window_html.py for the capabilities it renders, until that module drops its
-# own mode parameter.
-LOCAL_MODE = "local"
 ORG_MODE = "org"
 
 

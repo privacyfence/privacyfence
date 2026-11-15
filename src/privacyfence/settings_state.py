@@ -8,10 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import __version__, agent_label, dialog_window_html, org_mode, web_prompt
+from . import __version__, agent_label, org_mode
 from .agent_identity import AgentIdentity, AgentSource
 from .apps_script_client import AppsScriptClient
-from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger
 from .calendar_client import CalendarClient
 from .contacts_client import ContactsClient
@@ -253,26 +252,6 @@ def call_on_main(fn: Callable[..., None], *args: Any) -> None:
         _main_dispatch(fn, *args)
         return
     fn(*args)
-
-
-def _pick_resource_index(*, title: str, prompt: str, options: list[str]) -> int | None:
-    """The generalized multi-resource picker, driven through whichever
-    ``ApprovalUI`` is currently live: register a choice dialog through the
-    same registry/blocking mechanism every approval card and confirmation
-    already uses (web_prompt.py, dialog_window_html.build_choice_html for
-    the markup), so the browser surfaces it as one more pending card with
-    the same "no longer pending" landing page an approval link already has.
-
-    ``None`` (no registry -- see approval_ui.py's deferred_registry
-    docstring; WebApprovalUI, the only implementation, always has one) is
-    what pick_resource's own caller already treats as "fall back to the
-    first resource" -- there is no abort path of its own.
-    """
-    registry = get_approval_ui().deferred_registry
-    if registry is None:
-        return None
-    html = dialog_window_html.build_choice_html(title=title, prompt=prompt, options=options)
-    return web_prompt.block_on_choice(registry, html)
 
 
 def _run_async(work: Callable[[], Any], on_done: Callable[[bool, Any], None]) -> None:

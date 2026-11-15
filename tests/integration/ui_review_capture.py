@@ -18,7 +18,7 @@ import pytest
 
 from privacyfence import paths as paths_module
 from privacyfence.card_builder import build_card_html
-from privacyfence.dialog_window_html import build_choice_html, build_confirmation_html
+from privacyfence.dialog_window_html import build_confirmation_html
 from privacyfence.principal import Principal, principal_scope
 
 from ..unit.test_pdf_render import text_pdf
@@ -29,7 +29,6 @@ browser = _smoke.browser
 pf_home = _smoke.pf_home
 org_server = _smoke.org_server
 org_server_and_ui = _smoke.org_server_and_ui
-local_server_with_settings = _smoke.local_server_with_settings
 local_server = _smoke.local_server
 
 _MARKDOWN_PREVIEW = _smoke._MARKDOWN_PREVIEW
@@ -199,7 +198,7 @@ def _open_settings_section(page, base_url: str, section: str) -> None:
     page.wait_for_selector(".pf-page, .pf-detail-page, .pf-about-page")
 
 
-# Every section an org admin sees; Connectors is local mode's alone (below).
+# Every section an org admin sees.
 @pytest.mark.parametrize("section", ["general", "auto_accept", "privacy", "audit", "about"])
 def test_settings(shot, org_server, section):
     page, save = shot
@@ -208,15 +207,6 @@ def test_settings(shot, org_server, section):
     _open_settings_section(page, server.base_url, section)
     save(f"settings-{section}")
 
-
-def test_settings_local_connectors(shot, local_server_with_settings):
-    """Local mode's Connectors section, the one section org mode never draws: every connector
-    row, none of them authenticated."""
-    page, save = shot
-    server, _web_ui = local_server_with_settings
-    _sign_in_local(page, server)
-    _open_settings_section(page, server.base_url, "connectors")
-    save("settings-local-connectors")
 
 
 _WRITE = {"title": "Send email", "preview": {"To": "alice@example.com", "Subject": "Q3 numbers"},
@@ -280,23 +270,19 @@ def test_card_with_the_deny_note_open(shot, kind):
 
 
 _DIALOGS = {
-    # web_approval_ui.py's show_pii_confirmation_popup, and a choice picker (show_rule_choice_popup).
+    # web_approval_ui.py's show_pii_confirmation_popup.
     "pii": lambda: build_confirmation_html(
         title="PrivacyFence — Possible PII Detected",
         message_lines=["PrivacyFence detected possible personal data in this content: Email address, National ID.",
                        "Are you sure you want to proceed?"],
         cancel_label="Cancel", confirm_label="Proceed",
     ),
-    "choice": lambda: build_choice_html(
-        title="PrivacyFence — Choose Auto-Accept Rule", prompt="Which rule should always allow this?",
-        options=["i_am_owner", "approved_folder: Finance", "approved_sender: alice@example.com"],
-    ),
 }
 
 
 @pytest.mark.parametrize("kind", list(_DIALOGS))
 def test_dialog(shot, kind):
-    """The PII confirmation and the choice dialog, as GET /approvals/{id} serves them."""
+    """The PII confirmation dialog, as GET /approvals/{id} serves them."""
     page, save = shot
     page.set_content(_DIALOGS[kind]())
     page.wait_for_function("() => !document.querySelector('[data-pf-action][aria-disabled=\"true\"]')")

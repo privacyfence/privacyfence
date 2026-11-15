@@ -50,7 +50,7 @@ def browser():
 @pytest.fixture
 def page(browser):
     pg = browser.new_page()
-    pg.set_content(build_html(_state(), initial_section="auto_accept"))
+    pg.set_content(build_html(_state(), initial_section="auto_accept", mode="org"))
     yield pg
     pg.close()
 
