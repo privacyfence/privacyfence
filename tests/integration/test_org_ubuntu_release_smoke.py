@@ -316,6 +316,11 @@ def _signed_org_config(
 def _write_org_config(home: Path, config: dict | bytes) -> None:
     org_dir = home / ".privacyfence" / "org"
     org_dir.mkdir(parents=True, exist_ok=True)
+    # A data directory that already holds org data must carry the data-format marker, or startup
+    # refuses it (``data_format.check_upgrade_source``); this is what a prepared install has.
+    (home / ".privacyfence" / "data_format.json").write_text(
+        json.dumps({"format": 7, "written_by": "smoke-test"}), encoding="utf-8"
+    )
     path = org_dir / "org_config.json"
     if isinstance(config, bytes):
         path.write_bytes(config)
