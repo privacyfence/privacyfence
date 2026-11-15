@@ -30,7 +30,6 @@ from privacyfence.grist_auth import (
     discover,
     normalize_server_url,
 )
-from privacyfence.oauth_loopback import OAuthLoopbackError
 
 pytestmark = pytest.mark.unit
 
@@ -748,35 +747,3 @@ class TestGristTokenProvider:
         provider = GristTokenProvider(CONFIG, "t.json", oauth_record())
         assert_no_secret(repr(provider))
         assert_no_secret(repr(CONFIG))
-
-
-class TestAuthorizeInteractive:
-    def test_runs_the_browser_flow_and_saves(self, tmp_path, net, monkeypatch):
-        net.answers[f"{SERVER}/.well-known/oauth-authorization-server"] = FakeResponse(200, document())
-        net.answers[BASIC_ENDPOINTS.token_endpoint] = token_answer()
-        seen: dict[str, Any] = {}
-
-        def fake_run(build, exchange, **kwargs):
-            seen.update(kwargs)
-            seen["url"] = build("http://localhost:53685/callback", "st", "ch")
-            return exchange(CODE, "http://localhost:53685/callback", "verifier")
-
-        monkeypatch.setattr(grist_auth.oauth_loopback, "run_browser_oauth", fake_run)
-        path = str(tmp_path / "t.json")
-        record = grist_auth.authorize_interactive(CONFIG, path)
-        assert seen["port"] == 53685 and seen["path"] == "/callback" and seen["redirect_host"] == "localhost"
-        assert seen["url"].startswith(f"{SERVER}/oidc/auth?")
-        assert record["auth"] == "oauth" and record["server_url"] == SERVER
-        assert grist_auth.load_token_file(path) == record
-
-    def test_loopback_error(self, tmp_path, net, monkeypatch):
-        net.answers[f"{SERVER}/.well-known/oauth-authorization-server"] = FakeResponse(200, document())
-
-        def fake_run(build, exchange, **kwargs):
-            raise OAuthLoopbackError("timed out")
-
-        monkeypatch.setattr(grist_auth.oauth_loopback, "run_browser_oauth", fake_run)
-        with pytest.raises(GristClientError) as err:
-            grist_auth.authorize_interactive(CONFIG, str(tmp_path / "t.json"))
-        assert str(err.value) == "Grist sign-in failed: timed out"
-        assert not (tmp_path / "t.json").exists()

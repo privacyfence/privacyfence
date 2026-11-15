@@ -17,13 +17,9 @@ from urllib.parse import urlencode
 
 import requests
 
-from .oauth_loopback import OAuthLoopbackError, run_browser_oauth
 from .secure_files import atomic_write_json
 
 logger = logging.getLogger(__name__)
-
-ATLASSIAN_OAUTH_PORT = 53684
-ATLASSIAN_REDIRECT_PATH = "/callback"
 
 AUTHORIZE_URL = "https://auth.atlassian.com/authorize"
 TOKEN_URL = "https://auth.atlassian.com/oauth/token"  # nosec B105  # an endpoint URL, not a credential
@@ -115,10 +111,8 @@ def is_unauthorized(exc: Exception) -> bool:
 def build_authorize_url(
     client_id: str, redirect_uri: str, state: str, code_challenge: str, scopes: list[str] | None = None,
 ) -> str:
-    """Atlassian's OAuth 2.0 (3LO) authorize URL -- factored out of
-    ``authorize_interactive`` so ``web/routes_connect.py``'s org-mode
-    server-redirect flow can build the same URL without going through
-    ``oauth_loopback.run_browser_oauth``'s local listener."""
+    """Atlassian's OAuth 2.0 (3LO) authorize URL, built for
+    ``web/routes_connect.py``'s server-redirect flow."""
     scope_str = " ".join(scopes or DEFAULT_SCOPES)
     params = {
         "audience": "api.atlassian.com",
@@ -137,7 +131,7 @@ def build_authorize_url(
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str, code_verifier: str) -> dict[str, Any]:
     """Exchanges an authorization code for an Atlassian token. Returns the
     raw token response (``access_token``/``refresh_token``), *before* the
-    accessible-resources lookup and site selection ``authorize_interactive``
+    accessible-resources lookup and site selection ``resolve_resource_and_save``
     does next -- kept separate so org mode's callback route can insert
     its own resource-choice page between exchange and persisting the token,
     the same way a multi-site account already needs a ``pick_resource``
@@ -170,11 +164,10 @@ def resolve_resource_and_save(
     token_file: str, access_token: str, refresh_token: str,
     pick_resource: Callable[[list[dict[str, Any]]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """The rest of ``authorize_interactive``'s own tail: list accessible
-    sites, choose one (directly if there's only one, via ``pick_resource``
-    otherwise), and persist the token record. Split out from
-    ``authorize_interactive`` for the same reason as ``exchange_code``
-    above."""
+    """List accessible sites, choose one (directly if there's only one, via
+    ``pick_resource`` otherwise), and persist the token record. Split from
+    ``exchange_code`` so the callback route can insert its own site choice
+    between the two."""
     resources = _fetch_accessible_resources(access_token)
     if not resources:
         raise AtlassianOAuthError("No accessible Atlassian sites were returned for this account.")
@@ -201,38 +194,6 @@ def resolve_resource_and_save(
     save_token_file(token_file, token_record)
     logger.info("Atlassian OAuth complete for site %s", token_record["site_url"])
     return token_record
-
-
-def authorize_interactive(
-    client_id: str,
-    client_secret: str,
-    token_file: str,
-    scopes: list[str] | None = None,
-    port: int = ATLASSIAN_OAUTH_PORT,
-    pick_resource: Callable[[list[dict[str, Any]]], dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Run Atlassian's OAuth 2.0 (3LO) browser flow and persist the token.
-
-    ``client_id``/``client_secret`` come from the organization config bundle.
-    ``pick_resource`` is called with the list of Atlassian sites this account
-    can access when there is more than one; it must return the chosen entry.
-    Returns the saved token record; raises ``AtlassianOAuthError`` on failure.
-    """
-
-    def _build(redirect_uri: str, state: str, code_challenge: str) -> str:
-        return build_authorize_url(client_id, redirect_uri, state, code_challenge, scopes)
-
-    def _exchange(code: str, redirect_uri: str, code_verifier: str) -> dict[str, Any]:
-        return exchange_code(client_id, client_secret, code, redirect_uri, code_verifier)
-
-    try:
-        response = run_browser_oauth(_build, _exchange, port=port, path=ATLASSIAN_REDIRECT_PATH)
-    except OAuthLoopbackError as exc:
-        raise AtlassianOAuthError(f"Atlassian sign-in failed: {exc}") from exc
-
-    return resolve_resource_and_save(
-        token_file, response["access_token"], response.get("refresh_token", ""), pick_resource,
-    )
 
 
 def refresh(client_id: str, client_secret: str, refresh_token: str) -> dict[str, Any]:

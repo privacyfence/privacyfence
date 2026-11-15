@@ -22,14 +22,10 @@ from urllib.parse import urlencode
 
 import requests
 
-from . import oauth_loopback
-from .oauth_loopback import OAuthLoopbackError
 from .secure_files import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
-MIRO_OAUTH_PORT = 53686
-MIRO_REDIRECT_PATH = "/callback"
 AUTHORIZE_URL = "https://miro.com/oauth/authorize"
 TOKEN_URL = "https://api.miro.com/v1/oauth/token"  # nosec B105  # an endpoint URL, not a credential
 REQUIRED_SCOPES = ("boards:read", "boards:write")
@@ -280,27 +276,3 @@ class MiroTokenProvider:
 
     def __repr__(self) -> str:
         return "MiroTokenProvider()"
-
-
-# --------------------------------------------------------------------------- #
-# Interactive sign-in
-# --------------------------------------------------------------------------- #
-
-
-def authorize_interactive(config: MiroOAuthConfig, token_file: str) -> dict[str, Any]:
-    """Sign in through the browser (loopback redirect), save and return the record."""
-
-    def _build(redirect_uri: str, state: str, _challenge: str) -> str:
-        return build_authorize_url(config.client_id, redirect_uri, state)
-
-    def _exchange(code: str, redirect_uri: str, _verifier: str) -> dict[str, Any]:
-        return exchange_code(config, code, redirect_uri)
-
-    try:
-        record = oauth_loopback.run_browser_oauth(
-            _build, _exchange, port=MIRO_OAUTH_PORT, path=MIRO_REDIRECT_PATH, redirect_host="localhost",
-        )
-    except OAuthLoopbackError as exc:
-        raise MiroClientError(f"Miro sign-in failed: {exc}") from exc
-    save_token_file(token_file, record)
-    return record

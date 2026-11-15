@@ -1,12 +1,6 @@
 """Tests for the shared Atlassian OAuth 2.0 (3LO) helper used by Jira and
-Confluence. run_browser_oauth itself (the local-redirect/state/PKCE
-mechanics) has its own dedicated real-HTTP-server tests in
-test_oauth_loopback.py, so here it's monkeypatched to capture and directly
-invoke the build_authorize_url/exchange closures authorize_interactive
-defines -- exercising this module's own logic (request construction,
-multi-site resource picking, token record assembly) without re-testing the
-loopback server underneath it.
-"""
+Confluence: the authorize URL, the code exchange, the site choice and the
+token record, as web/routes_connect.py calls them."""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -22,27 +16,6 @@ from privacyfence.atlassian_oauth import (
     refresh,
     save_token_file,
 )
-
-
-def capture_run_browser_oauth(monkeypatch, exchange_response=None, loopback_error=None):
-    """Monkeypatch run_browser_oauth to capture the closures authorize_interactive
-    builds and, unless loopback_error is given, immediately invoke exchange()
-    with a fixed code/redirect_uri/verifier -- exercising the real exchange()
-    closure (which itself calls requests.post, mocked separately per test)."""
-    captured: dict = {}
-
-    def fake(build_authorize_url, exchange, port, path, **kwargs):
-        captured["build_authorize_url_fn"] = build_authorize_url
-        captured["exchange_fn"] = exchange
-        captured["port"] = port
-        captured["path"] = path
-        captured["authorize_url"] = build_authorize_url("http://127.0.0.1:1234/callback", "state-abc", "challenge-xyz")
-        if loopback_error is not None:
-            raise loopback_error
-        return exchange("test-code", "http://127.0.0.1:1234/callback", "verifier-123")
-
-    monkeypatch.setattr(atlassian_oauth_module, "run_browser_oauth", fake)
-    return captured
 
 
 def fake_response(json_data=None, status_ok=True):
@@ -125,23 +98,13 @@ class TestRefresh:
 
 
 # ---------------------------------------------------------------------------- #
-# authorize_interactive: build_authorize_url closure
+# build_authorize_url: scopes
 # ---------------------------------------------------------------------------- #
 
-class TestAuthorizeInteractiveBuildUrl:
-    def test_default_scopes_and_required_params_present(self, monkeypatch, tmp_path):
-        captured = capture_run_browser_oauth(monkeypatch)
-        monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response({"access_token": "t"}))
-        monkeypatch.setattr(
-            atlassian_oauth_module, "_fetch_accessible_resources",
-            lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
-        )
-        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "me@x.com")
-        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
+class TestBuildAuthorizeUrlScopes:
+    def test_default_scopes_and_required_params_present(self):
+        url = atlassian_oauth_module.build_authorize_url("ci", "https://pf.example.com/cb", "state-abc", "challenge-xyz")
 
-        atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
-
-        url = captured["authorize_url"]
         assert "audience=api.atlassian.com" in url
         assert "client_id=ci" in url
         assert "response_type=code" in url
@@ -150,124 +113,25 @@ class TestAuthorizeInteractiveBuildUrl:
         assert "code_challenge_method=S256" in url
         assert "offline_access" in url  # part of the joined default scope string
 
-    def test_custom_scopes_override_defaults(self, monkeypatch, tmp_path):
-        captured = capture_run_browser_oauth(monkeypatch)
-        monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response({"access_token": "t"}))
-        monkeypatch.setattr(
-            atlassian_oauth_module, "_fetch_accessible_resources",
-            lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
-        )
-        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "")
-        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
-
-        atlassian_oauth_module.authorize_interactive(
-            "ci", "cs", str(tmp_path / "token.json"), scopes=["read:jira-work"],
+    def test_custom_scopes_override_defaults(self):
+        url = atlassian_oauth_module.build_authorize_url(
+            "ci", "https://pf.example.com/cb", "s", "c", scopes=["read:jira-work"],
         )
 
-        assert "read%3Ajira-work" in captured["authorize_url"] or "read:jira-work" in captured["authorize_url"]
+        assert "read%3Ajira-work" in url or "read:jira-work" in url
+        assert "offline_access" not in url
 
-
-    def test_assets_scopes_reach_the_authorize_url(self, monkeypatch, tmp_path):
-        captured = capture_run_browser_oauth(monkeypatch)
-        monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response({"access_token": "t"}))
-        monkeypatch.setattr(
-            atlassian_oauth_module, "_fetch_accessible_resources",
-            lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
-        )
-        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "")
-        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
-
-        atlassian_oauth_module.authorize_interactive(
-            "ci", "cs", str(tmp_path / "token.json"),
-            scopes=atlassian_oauth_module.scopes_for(assets=True),
+    def test_assets_scopes_reach_the_authorize_url(self):
+        url = atlassian_oauth_module.build_authorize_url(
+            "ci", "https://pf.example.com/cb", "s", "c", scopes=atlassian_oauth_module.scopes_for(assets=True),
         )
 
-        assert "read%3Acmdb-object%3Ajira" in captured["authorize_url"]
-
-
-class TestAssetsScopes:
-    def test_scopes_for_without_assets_is_the_default_list(self):
-        scopes = atlassian_oauth_module.scopes_for(assets=False)
-        assert scopes == atlassian_oauth_module.DEFAULT_SCOPES
-        assert scopes is not atlassian_oauth_module.DEFAULT_SCOPES
-        assert "read:cmdb-object:jira" not in scopes
-
-    def test_scopes_for_with_assets_appends_the_assets_scopes(self):
-        scopes = atlassian_oauth_module.scopes_for(assets=True)
-        assert scopes == atlassian_oauth_module.DEFAULT_SCOPES + atlassian_oauth_module.ASSETS_SCOPES
-        assert "read:cmdb-object:jira" in scopes
-
-    def test_assets_scopes_leave_out_the_jsm_scope(self):
-        # The developer console does not offer every app the JSM API; asking for its scope
-        # would fail the whole Atlassian sign-in (ADR 0188).
-        assert "read:servicedesk-request" not in atlassian_oauth_module.ASSETS_SCOPES
-
-    @pytest.mark.parametrize("config, expected", [
-        ({}, {}),
-        ({"connectors": {"assets": {"enabled": True}}}, {}),
-        ({"connectors": {"assets": {"workspace_id": ""}}}, {}),
-        ({"connectors": {"assets": {"workspace_id": " ws-1 "}}}, {"assets_workspace_id": "ws-1"}),
-    ])
-    def test_assets_workspace_override(self, config, expected):
-        assert atlassian_oauth_module.assets_workspace_override(config) == expected
-
-    def test_explicit_true_wins_over_a_bundle_without_the_flag(self):
-        cfg = {"connectors": {"assets": {"enabled": True}}}
-        assert atlassian_oauth_module.assets_enabled(cfg, {}) is True
-
-    def test_explicit_false_wins_over_the_bundle_flag(self):
-        cfg = {"connectors": {"assets": {"enabled": False}}}
-        assert atlassian_oauth_module.assets_enabled(cfg, {"atlassian": {"assets": True}}) is False
-
-    def test_bundle_flag_is_the_default(self):
-        assert atlassian_oauth_module.assets_enabled({}, {"atlassian": {"assets": True}}) is True
-
-    def test_off_when_neither_says_so(self):
-        assert atlassian_oauth_module.assets_enabled({}, {}) is False
-        assert atlassian_oauth_module.assets_enabled({"connectors": {"assets": {}}}, {"atlassian": {}}) is False
-
-
-# ---------------------------------------------------------------------------- #
-# authorize_interactive: exchange closure
-# ---------------------------------------------------------------------------- #
-
-class TestAuthorizeInteractiveExchange:
-    def test_exchange_posts_correct_grant_and_pkce_verifier(self, monkeypatch, tmp_path):
-        captured_post = {}
-        def fake_post(url, **kwargs):
-            captured_post["url"] = url
-            captured_post["json"] = kwargs["json"]
-            return fake_response({"access_token": "t", "refresh_token": "rt"})
-        monkeypatch.setattr(atlassian_oauth_module.requests, "post", fake_post)
-        capture_run_browser_oauth(monkeypatch)
-        monkeypatch.setattr(
-            atlassian_oauth_module, "_fetch_accessible_resources",
-            lambda token: [{"id": "cloud1", "url": "https://x.atlassian.net"}],
-        )
-        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: "")
-        monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: "")
-
-        atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
-
-        assert captured_post["url"] == atlassian_oauth_module.TOKEN_URL
-        assert captured_post["json"] == {
-            "grant_type": "authorization_code", "client_id": "ci", "client_secret": "cs",
-            "code": "test-code", "redirect_uri": "http://127.0.0.1:1234/callback",
-            "code_verifier": "verifier-123",
-        }
-
-    def test_exchange_http_failure_becomes_atlassian_oauth_error(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response(status_ok=False))
-        capture_run_browser_oauth(monkeypatch)
-
-        with pytest.raises(AtlassianOAuthError, match="OAuth exchange failed"):
-            atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
+        assert "read%3Acmdb-object%3Ajira" in url
 
 
 # ---------------------------------------------------------------------------- #
 # build_authorize_url / exchange_code / resolve_resource_and_save -- called
-# directly (not through run_browser_oauth) by web/routes_connect.py's
-# org-mode server-redirect flow.
+# directly by web/routes_connect.py's server-redirect flow.
 # ---------------------------------------------------------------------------- #
 
 class TestHoistedFunctions:
@@ -288,6 +152,31 @@ class TestHoistedFunctions:
         )
         response = atlassian_oauth_module.exchange_code("ci", "cs", "code", "https://pf.example.com/cb", "verifier")
         assert response == {"access_token": "at-1", "refresh_token": "rt-1"}
+
+    def test_exchange_code_posts_correct_grant_and_pkce_verifier(self, monkeypatch):
+        captured_post = {}
+
+        def fake_post(url, **kwargs):
+            captured_post["url"] = url
+            captured_post["json"] = kwargs["json"]
+            return fake_response({"access_token": "t", "refresh_token": "rt"})
+
+        monkeypatch.setattr(atlassian_oauth_module.requests, "post", fake_post)
+
+        atlassian_oauth_module.exchange_code("ci", "cs", "test-code", "https://pf.example.com/cb", "verifier-123")
+
+        assert captured_post["url"] == atlassian_oauth_module.TOKEN_URL
+        assert captured_post["json"] == {
+            "grant_type": "authorization_code", "client_id": "ci", "client_secret": "cs",
+            "code": "test-code", "redirect_uri": "https://pf.example.com/cb",
+            "code_verifier": "verifier-123",
+        }
+
+    def test_exchange_code_http_failure_becomes_atlassian_oauth_error(self, monkeypatch):
+        monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response(status_ok=False))
+
+        with pytest.raises(AtlassianOAuthError, match="OAuth exchange failed"):
+            atlassian_oauth_module.exchange_code("ci", "cs", "code", "https://pf.example.com/cb", "verifier")
 
     def test_exchange_code_missing_access_token_raises(self, monkeypatch):
         monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response({}))
@@ -335,42 +224,28 @@ class TestHoistedFunctions:
 
 
 # ---------------------------------------------------------------------------- #
-# authorize_interactive: end-to-end token record assembly
+# resolve_resource_and_save: token record assembly
 # ---------------------------------------------------------------------------- #
 
-class TestAuthorizeInteractiveTokenAssembly:
-    def _setup(self, monkeypatch, exchange_json, resources, pick_resource=None, account_email="", account_id=""):
-        capture_run_browser_oauth(monkeypatch)
-        monkeypatch.setattr(atlassian_oauth_module.requests, "post", lambda *a, **kw: fake_response(exchange_json))
+class TestResolveResourceTokenAssembly:
+    def _setup(self, monkeypatch, resources, account_email="", account_id=""):
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_accessible_resources", lambda token: resources)
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_email", lambda token, cloud_id: account_email)
         monkeypatch.setattr(atlassian_oauth_module, "_fetch_account_id", lambda token, cloud_id: account_id)
 
-    def test_loopback_error_becomes_atlassian_oauth_error(self, monkeypatch, tmp_path):
-        from privacyfence.oauth_loopback import OAuthLoopbackError
-        capture_run_browser_oauth(monkeypatch, loopback_error=OAuthLoopbackError("timed out"))
-
-        with pytest.raises(AtlassianOAuthError, match="sign-in failed"):
-            atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
-
-    def test_missing_access_token_raises(self, monkeypatch, tmp_path):
-        self._setup(monkeypatch, {"refresh_token": "rt"}, [])
-        with pytest.raises(AtlassianOAuthError, match="did not return an access token"):
-            atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
-
     def test_no_accessible_resources_raises(self, monkeypatch, tmp_path):
-        self._setup(monkeypatch, {"access_token": "t"}, [])
+        self._setup(monkeypatch, [])
         with pytest.raises(AtlassianOAuthError, match="No accessible Atlassian sites"):
-            atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
+            atlassian_oauth_module.resolve_resource_and_save(str(tmp_path / "token.json"), "t", "")
 
     def test_single_resource_auto_selected(self, monkeypatch, tmp_path):
         self._setup(
-            monkeypatch, {"access_token": "tok", "refresh_token": "rt"},
-            [{"id": "cloud1", "url": "https://x.atlassian.net"}], account_email="me@x.com", account_id="acct-1",
+            monkeypatch, [{"id": "cloud1", "url": "https://x.atlassian.net"}],
+            account_email="me@x.com", account_id="acct-1",
         )
         token_file = str(tmp_path / "token.json")
 
-        result = atlassian_oauth_module.authorize_interactive("ci", "cs", token_file)
+        result = atlassian_oauth_module.resolve_resource_and_save(token_file, "tok", "rt")
 
         assert result == {
             "access_token": "tok", "refresh_token": "rt", "cloud_id": "cloud1",
@@ -380,7 +255,7 @@ class TestAuthorizeInteractiveTokenAssembly:
 
     def test_scopes_are_the_union_over_resources_with_the_chosen_id(self, monkeypatch, tmp_path):
         self._setup(
-            monkeypatch, {"access_token": "t"},
+            monkeypatch,
             [
                 {"id": "c1", "url": "https://a.atlassian.net", "scopes": ["read:jira-work", "offline_access"]},
                 {"id": "c1", "url": "https://a.atlassian.net", "scopes": ["read:page:confluence", "read:jira-work"]},
@@ -388,29 +263,20 @@ class TestAuthorizeInteractiveTokenAssembly:
             ],
         )
 
-        result = atlassian_oauth_module.authorize_interactive(
-            "ci", "cs", str(tmp_path / "token.json"), pick_resource=lambda rs: rs[0],
+        result = atlassian_oauth_module.resolve_resource_and_save(
+            str(tmp_path / "token.json"), "t", "", pick_resource=lambda rs: rs[0],
         )
 
         assert result["scopes"] == ["offline_access", "read:jira-work", "read:page:confluence"]
 
-    def test_multiple_resources_without_pick_resource_raises(self, monkeypatch, tmp_path):
+    def test_multiple_resources_with_pick_resource_uses_its_choice(self, monkeypatch, tmp_path):
         self._setup(
-            monkeypatch, {"access_token": "t"},
+            monkeypatch,
             [{"id": "c1", "url": "https://a.atlassian.net"}, {"id": "c2", "url": "https://b.atlassian.net"}],
         )
-        with pytest.raises(AtlassianOAuthError, match="Multiple Atlassian sites"):
-            atlassian_oauth_module.authorize_interactive("ci", "cs", str(tmp_path / "token.json"))
 
-    def test_multiple_resources_with_pick_resource_uses_its_choice(self, monkeypatch, tmp_path):
-        resources = [
-            {"id": "c1", "url": "https://a.atlassian.net"},
-            {"id": "c2", "url": "https://b.atlassian.net"},
-        ]
-        self._setup(monkeypatch, {"access_token": "t"}, resources)
-
-        result = atlassian_oauth_module.authorize_interactive(
-            "ci", "cs", str(tmp_path / "token.json"), pick_resource=lambda rs: rs[1],
+        result = atlassian_oauth_module.resolve_resource_and_save(
+            str(tmp_path / "token.json"), "t", "", pick_resource=lambda rs: rs[1],
         )
 
         assert result["cloud_id"] == "c2"
