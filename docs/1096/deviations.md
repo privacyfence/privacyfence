@@ -224,7 +224,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p15b-build-workflow
 
-- pending
+- worker: docs/org-mode-setup-guide.md (outside touches, two lines): the sentence saying build_org_bundle.py builds desktop bundles only and refuses organization options was deleted with the script; p20b rewrites that guide.
+- scope: scope: docs/org-mode-setup-guide.md
+- review: The orchestrator checked build.yml after the merge with a YAML job-graph script: jobs are dedupe, build-org-image, sbom and finalize-release; finalize-release needs [sbom, build-org-image] with permissions contents: write only; every needs reference names an existing job; the one artifact download (PrivacyFence-*) matches the remaining sbom upload (PrivacyFence-sbom) and the org image artifacts have their own names; the Ubuntu release smoke test now runs in build-org-image and the R2 upload of t
+- retry: No tld CLI in the worker container; the orchestrator ran the checks, including the coverage ratchet (owner choice orch_roles); no roles are required for this diff.
 
 ## p15c-retire-endpoints
 
