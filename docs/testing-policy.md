@@ -217,7 +217,7 @@ QA organization server in a browser. Runner and QA-account setup: [`connector-qa
 
 - **`connector-live-check.yml`** — weekly (Monday 06:00 UTC) and on dispatch. Its `live-check` job
   (self-hosted, read-only) runs `qa_fixture_recorder.py --check` over every connector in
-  `CONNECTOR_CHECKS`; on drift, `--record` and the redacted diff is uploaded as an artifact. A separate
+  `CONNECTOR_CHECKS` that is not in `SUSPENDED_CONNECTORS`; on drift, `--record` and the redacted diff is uploaded as an artifact. A separate
   `open-drift-pr` job on a GitHub-hosted runner, the only one with write access, opens a PR on
   `chore/connector-live-fixture-drift` from it, reviewed like any other PR. Then `--lifecycle` (create, read back and update a tagged QA object in `calendar`, `confluence`, `grist`,
   `jira`, `miro`, `peek`, `salesforce` and `tasks`, and delete it where the connector can); a lifecycle failure fails the job.
@@ -233,6 +233,11 @@ QA organization server in a browser. Runner and QA-account setup: [`connector-qa
 - **`/qa-record <connector>`** (`.claude/commands/qa-record.md`) — dispatches `qa-record-fixture.yml`
   on `main` with the current branch as `branch`, then pulls and reviews the fixture diff. A connector name missing from
   `CONNECTOR_CHECKS` makes the recorder exit 0 having recorded nothing, so the command checks first.
+
+**Suspended connectors.** A connector listed in `SUSPENDED_CONNECTORS` in `scripts/qa_fixture_recorder.py`
+is not run, recorded or reported by the live workflows and refuses an explicit request, while its recorded
+fixtures stay in the replay tests. Jira Assets is suspended (its QA trial ended); see
+[`connector-qa.md`](connector-qa.md), "Resuming the Assets live check".
 
 A PR touching `src/privacyfence/*_client.py` or `src/privacyfence/connectors/**` owes a `--check`
 report, scoped to that connector, under a `## Local QA check` heading. Run it on a machine with QA

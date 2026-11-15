@@ -13,6 +13,7 @@ is explicit that the real QA grants live only on the self-hosted runner. So this
    `scripts/qa_fixture_recorder.py`. A name that isn't there makes the recorder report "has no
    recorder implementation yet" and then *exit 0*: a green run that recorded nothing. If no
    connector was named above, ask me which one rather than guessing.
+   A connector listed in `SUSPENDED_CONNECTORS` is refused by the recorder, so do not dispatch it.
 
    For a connector that is new, its token must first be connected on the QA server
    (`https://runner.privacyfence.eu`, `/connect`), which needs the connect pull request merged and

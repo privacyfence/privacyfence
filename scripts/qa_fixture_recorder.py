@@ -2566,6 +2566,15 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
     f"{set(EXPECTED_FIXTURES) ^ set(CONNECTOR_CHECKS)}"
 )
 
+# Connectors whose LIVE check and recording are switched off, each with the reason. The entry stays in
+# CONNECTOR_CHECKS and EXPECTED_FIXTURES so the recorded fixtures keep being replayed by the unit tests
+# and qa-record-fixture.yml's guard still finds it. To resume: delete the entry and the test
+# test_assets_is_suspended_with_a_reason (docs/connector-qa.md, "Resuming the Assets live check").
+SUSPENDED_CONNECTORS: dict[str, str] = {
+    "assets": "Jira Assets needs a paid plan and the QA site's trial ended on 2026-11-09 (https://github.com/privacyfence/privacyfence/issues/1131)",
+}
+assert set(SUSPENDED_CONNECTORS) <= set(CONNECTOR_CHECKS), "SUSPENDED_CONNECTORS names an unknown connector"
+
 
 # ---------------------------------------------------------------------------- #
 # Bounded lifecycle tests -- create a fresh, uniquely-tagged QA object, read it back,
@@ -3365,11 +3374,18 @@ def render_lifecycle_report(results: list[LifecycleResult]) -> str:
 
 def run(mode: str, connectors: list[str], report_file: str | None) -> int:
     manifest = load_manifest()
-    requested = connectors or sorted(CONNECTOR_CHECKS)
+    refused = False
+    requested = connectors or [n for n in sorted(CONNECTOR_CHECKS) if n not in SUSPENDED_CONNECTORS]
     record = mode == "record"
 
     all_results: list[CheckResult] = []
     for name in requested:
+        if name in SUSPENDED_CONNECTORS:
+            print(f"'{name}' is suspended: {SUSPENDED_CONNECTORS[name]}. To resume, delete its entry from "
+                  "SUSPENDED_CONNECTORS in scripts/qa_fixture_recorder.py and follow docs/connector-qa.md "
+                  '"Resuming the Assets live check".', file=sys.stderr)
+            refused = True
+            continue
         check_fn = CONNECTOR_CHECKS.get(name)
         if check_fn is None:
             print(f"'{name}' has no recorder implementation yet -- add a check_{name}() function and "
@@ -3385,12 +3401,22 @@ def run(mode: str, connectors: list[str], report_file: str | None) -> int:
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / r.fixture_relpath).write_text(json.dumps(r.raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    command = f"qa_fixture_recorder.py --{mode} {' '.join(requested)}"
+    suspended_names = (
+        sorted(SUSPENDED_CONNECTORS) if not connectors else sorted(set(connectors) & set(SUSPENDED_CONNECTORS))
+    )
+    ran = [n for n in requested if n not in SUSPENDED_CONNECTORS]  # unknown names stay in the command
+    command = f"qa_fixture_recorder.py --{mode}" + (f" {' '.join(ran)}" if ran else "")
     report = render_report(command, all_results)
+    if suspended_names:
+        report += "\n" + "\n".join(
+            f"Suspended, not run: {n} -- {SUSPENDED_CONNECTORS[n]}" for n in suspended_names
+        )
     print(report)
     if report_file:
         Path(report_file).write_text(report + "\n", encoding="utf-8")
 
+    if refused:
+        return 1
     return 0 if all(r.ok for r in all_results) else 1
 
 
@@ -3437,7 +3463,8 @@ def main() -> int:
     )
     parser.add_argument(
         "connectors", nargs="*",
-        help="Connector name(s), e.g. confluence. Default: all implemented for the selected mode.",
+        help="Connector name(s), e.g. confluence. Default: all implemented for the selected mode, "
+             "except suspended ones (SUSPENDED_CONNECTORS).",
     )
     parser.add_argument("--report-file", help="Also save the printed report to this path.")
     parser.add_argument(
