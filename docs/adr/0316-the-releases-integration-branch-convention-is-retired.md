@@ -39,7 +39,7 @@ main reason the old branch-protection script took a `--branch` argument.
 
 ## Verification
 
-- `grep -rn 'releases/' .github/workflows` finds only the refusal in `qa-record-fixture.yml`.
+- `grep -rn 'releases/\*' .github/workflows` finds only the refusal in `qa-record-fixture.yml`.
 - `scripts/tag_release.py` refuses to tag from any branch but `main`.
 
 ## Related

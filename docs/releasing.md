@@ -17,6 +17,7 @@ after another release already took that number (see `d929510`, "Revert version b
 together with other pending CRs", from back when that was still how it worked).
 
 ## Cutting a release
+
 **Cutting a release is a tag, not a commit.** Once `main` is at the commit you want to release,
 dispatch `tld-release.yml` on `main` (below) with `version` and `dry_run`. Versions are PEP 440 short
 form: `v4.0.0` stable, `v4.0.0a13` pre-release (a=alpha, b=beta, rc=release-candidate). Always pass

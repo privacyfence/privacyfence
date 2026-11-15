@@ -23,8 +23,8 @@ implementation did differently.
 3. **Citing a plan.** An ADR may cite a plan under `docs/<issue>/` as the record of a change, but states its
    decision in full and never relies on the plan to explain it (rule 4).
 4. **Plan records are history.** The docs tests skip plan records entirely: they are not held to the link and
-   reference checks, which `tests/unit/test_docs_links.py` and `tests/unit/test_docs_references_exist.py`
-   already do.
+   reference checks (`tests/unit/test_docs_links.py` and `tests/unit/test_docs_references_exist.py` already
+   skip them).
 
 ## Alternatives considered
 
