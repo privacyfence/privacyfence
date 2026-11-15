@@ -33,7 +33,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p7-release-branch-docs
 
-- pending
+- review: No doorbell arrived from this worker; found it finished by its session state and branch head. Diff matches section 3.7; the unit suite and ruff passed after the merge.
 
 ## p8-release-branch-workflows
 
