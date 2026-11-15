@@ -261,6 +261,7 @@ class McpDispatcher:
         connector = self.connectors.get(connector_name)
         if connector is None:
             raise ValueError(f"Unknown connector: {connector_name!r}")
+        args = self._declared_args_only(connector, tool, args)
 
         # principal_id folds into both the dedupe key and the
         # last-write timestamp below.
@@ -374,6 +375,20 @@ class McpDispatcher:
             f"{principal_id}:{scope_id}:{session_key}:{agent_id}:{connector_name}:{tool}:"
             f"{json.dumps(args, sort_keys=True, default=str)}"
         )
+
+    @staticmethod
+    def _declared_args_only(connector: Connector, tool: str, args: dict) -> dict:
+        """Drops every argument the tool does not declare, so an agent holding a cached schema that
+        still sends a parameter a later release removed is ignored instead of raising ``TypeError``
+        in the connector. A tool with a verbatim ``input_schema`` (an upstream MCP tool) or no spec
+        at all is left alone: its own schema, not a ``ToolParam`` list, says what it takes."""
+        for spec in connector.tool_specs():
+            if spec.name == tool:
+                if spec.input_schema is not None:
+                    return args
+                declared = {p.name for p in spec.params} | _CONNECTOR_COMPUTED_ARGS
+                return {k: v for k, v in args.items() if k in declared}
+        return args
 
     @staticmethod
     def _is_read_only(connector: Connector, tool: str) -> bool:

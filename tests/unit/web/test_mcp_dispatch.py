@@ -24,7 +24,7 @@ import pytest
 from privacyfence import agent_runtimes, local_files, org_mode, scoped_tokens
 from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
-from privacyfence.connector import Connector, ToolSpec
+from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedback
 from privacyfence import gate
 from privacyfence.gate import GateDeniedError, is_unattended
@@ -34,6 +34,9 @@ from privacyfence.web import mcp_dispatch
 from privacyfence.web.mcp_dispatch import McpDispatcher
 
 from ...helpers import policy_rules
+
+
+_PARAMS = [ToolParam(name="x", annotation="int", required=False)]
 
 
 class FakeConnector(Connector):
@@ -53,8 +56,10 @@ class FakeConnector(Connector):
 
     def tool_specs(self) -> list[ToolSpec]:
         return [
-            ToolSpec(name=f"{self._name}_tool", description="test read tool", read_only=True),
-            ToolSpec(name=f"{self._name}_write_tool", description="test write tool", read_only=False),
+            ToolSpec(name=f"{self._name}_tool", description="test read tool", read_only=True, params=list(_PARAMS)),
+            ToolSpec(
+                name=f"{self._name}_write_tool", description="test write tool", read_only=False, params=list(_PARAMS),
+            ),
         ]
 
     async def call(self, tool: str, args: dict) -> object:
@@ -110,7 +115,7 @@ class UnattendedAwareConnector(Connector):
         return self._name
 
     def tool_specs(self) -> list[ToolSpec]:
-        return [ToolSpec(name=f"{self._name}_tool", description="t", read_only=True)]
+        return [ToolSpec(name=f"{self._name}_tool", description="t", read_only=True, params=list(_PARAMS))]
 
     async def call(self, tool: str, args: dict) -> object:
         self.observed_unattended.append(is_unattended())
@@ -173,6 +178,33 @@ class TestCall:
         await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "reason": "r"})
         assert seen == ['{"x": 1}']
         assert gate.current_request_args() is None
+
+    async def test_an_argument_the_tool_does_not_declare_is_dropped_before_the_connector(self):
+        # An agent with a cached schema may still send a parameter a later release removed; it is
+        # ignored, not passed on to blow up the connector with a TypeError.
+        connector = FakeConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "destination_dir": "~/Downloads", "local_path": "/etc/hosts"})
+        assert connector.calls == [("gmail_tool", {"x": 1})]
+
+    async def test_an_argument_the_connector_computes_itself_is_not_dropped(self):
+        connector = FakeConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "is_self_dm": True})
+        assert connector.calls == [("gmail_tool", {"x": 1, "is_self_dm": True})]
+
+    async def test_a_tool_with_a_verbatim_input_schema_keeps_every_argument(self):
+        class UpstreamConnector(FakeConnector):
+            def tool_specs(self) -> list[ToolSpec]:
+                return [ToolSpec(
+                    name="up_tool", description="upstream", read_only=True,
+                    input_schema={"type": "object", "properties": {}, "additionalProperties": True},
+                )]
+
+        connector = UpstreamConnector("up")
+        dispatcher = _dispatcher({"up": connector})
+        await dispatcher.call("s1", "up", "up_tool", {"anything": 1})
+        assert connector.calls == [("up_tool", {"anything": 1})]
 
     async def test_unknown_connector_raises(self):
         dispatcher = _dispatcher({})
@@ -479,7 +511,7 @@ class TestCall:
         dispatcher = _dispatcher({"gmail": connector}, unattended_sessions_enabled=True)
         await dispatcher.call("s1", "gmail", "gmail_tool", {})
         dispatcher.begin_unattended_session("s1", "scheduled run")
-        await dispatcher.call("s1", "gmail", "gmail_tool", {"z": 1})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert connector.observed_unattended == [False, True]
 
     async def test_a_different_sessions_unattended_flag_does_not_leak(self):
@@ -499,7 +531,7 @@ class TestCall:
         with principal_scope(Principal(id="bob")):
             await dispatcher.call("shared", "gmail", "gmail_tool", {})
         with principal_scope(Principal(id="alice")):
-            await dispatcher.call("shared", "gmail", "gmail_tool", {"z": 1})
+            await dispatcher.call("shared", "gmail", "gmail_tool", {"x": 1})
         assert connector.observed_unattended == [False, True]
 
 
