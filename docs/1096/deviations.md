@@ -304,7 +304,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p20-docs-user
 
-- pending
+- worker: CHANGELOG.md link anchor #chatgpt-desktop dropped (heading gone; test_docs_links checks it). Also removed desktop/local-mode text from google-cloud-setup, salesforce-setup, grist-setup, atlassian-setup, peek-setup, oidc-provider, upstream-mcp, connector-qa; kept the 'Human and unattested sessions' heading (website/security links it) and the 'Desktop app' Google OAuth client (used by sync_room_directory.py); removed settings.yaml.example key web.settings.allow_quit (unread).
+- scope: README's three description paragraphs, website/canonical-description.md and website/index.html still say PrivacyFence runs on an employee's own computer (macOS, Windows or Linux); they must match verbatim, so they are left for one follow-up edit. Peek and Grist error messages in src still say 'Authenticate... in PrivacyFence Settings' and peek-setup.md quotes a --peek-login message: stale text for the final review.
 
 ## p21-docs-contributor
 
