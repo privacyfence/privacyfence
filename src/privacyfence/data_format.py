@@ -4,7 +4,7 @@ PrivacyFence 8 drops the code that upgrades data written by older releases. That
 when every install has run a 7.x release that finished all of those upgrades for every person
 and left proof. ``migrate_everything`` runs at every 7.x start, for every principal, and writes
 ``data_format.json`` in the data directory once nothing is left to convert. The file travels
-with the data (and with its backups); 8.x and its installers read its ``format`` key and nothing
+with the data (and with its backups); 8.x reads its ``format`` key and nothing
 else, so that key never changes shape.
 """
 

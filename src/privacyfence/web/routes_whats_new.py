@@ -1,4 +1,4 @@
-"""Org mode's "What's new" page and its seen endpoint (ADR 0238). Local mode mounts neither.
+"""The organization server's "What's new" page and its seen endpoint (ADR 0238).
 
 - ``GET /whats-new``: the release notes since the version the signed-in principal last saw
   (``whats_new.notes_since``), newest first. Opening it records the running version as seen.

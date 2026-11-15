@@ -1,9 +1,7 @@
 """Org-mode browser sessions: the session cookie is Secure, HttpOnly,
 SameSite=Lax, with a short idle timeout. A server-side session store mapping an opaque, unguessable
 session id to the ``Principal`` that authenticated it via web/routes_org_
-identity.py's ``/login`` -- deliberately not the local-mode ``session_
-auth.py`` model of "the cookie's own value is the one shared secret
-everyone in the install has": org mode has more than one user, so each
+identity.py's ``/login``: the server has more than one user, so each
 session has to carry its own, distinct identity.
 
 This backs org mode's principal-scoped ``/approvals``, ``/security`` and
@@ -37,9 +35,7 @@ DEFAULT_IDLE_TIMEOUT_SECONDS = 30 * 60
 # A hard cap
 # from creation, regardless of activity -- the sliding idle timeout above
 # is not enough on its own, since a session an attacker (or a script) keeps
-# "active" by polling never idles out. Same figure and rationale as
-# web/session_auth.py's own DEFAULT_ABSOLUTE_TIMEOUT_SECONDS (that module's
-# local-mode counterpart to this one): long enough that a workday's worth
+# "active" by polling never idles out. Long enough that a workday's worth
 # of real use doesn't force a re-login mid-task, short enough that a
 # session -- unlike this store's previous unbounded-lifetime design -- has
 # a real ceiling. Once it lapses the only way back in is /login again.
@@ -56,9 +52,7 @@ class OrgSession:
 
 class OrgSessionStore:
     """In-memory -- a session dying with the daemon process is an accepted
-    cost (the same one local mode's own mcp_token file avoids only because
-    there's nothing to distribute across a restart there either way), not a
-    design gap: persisting live sessions across a
+    cost, not a design gap: persisting live sessions across a
     restart would mean persisting session ids in plaintext somewhere, which
     is a bigger new risk than "sign in again after a restart.\""""
 
@@ -136,15 +130,12 @@ def authenticated(request: Request, store: OrgSessionStore) -> Principal | None:
 
 
 def set_session_cookie(response: Response, session_id: str, *, secure: bool = True) -> None:
-    # secure=True by default (unlike session_auth.py's local-mode cookie): an
-    # organization server is HTTPS-mandatory, so a Secure cookie is never
-    # silently dropped there the way it would be over local mode's deliberate
-    # plain-HTTP loopback transport (ADR 0010). Single-user mode is the one
+    # secure=True by default: an organization server is HTTPS-mandatory, so a
+    # Secure cookie is never silently dropped there. Single-user mode is the one
     # caller that passes False: it is served only over plain http on localhost,
     # and Safari does not keep a Secure cookie on http://localhost.
     #
-    # samesite="lax", NOT "strict" -- the one place org mode's cookie
-    # policy has to differ from local mode's. This cookie is minted at the
+    # samesite="lax", NOT "strict". This cookie is minted at the
     # end of an OIDC round trip: routes_org_identity.py's /oauth/idp/
     # login-callback sets it and redirects to the post-login page, and that
     # redirect is still part of a top-level navigation the *IdP* initiated.
@@ -175,13 +166,11 @@ def clear_session_cookie(response: Response) -> None:
 
 def check_csrf(request: Request, csrf: str | None) -> bool:
     """Double-submit check for org-mode mutations, mirroring web/session_auth.py's own
-    ``check_csrf`` exactly -- but against ``pf_org_session`` instead of
-    local mode's ``pf_session``. The session id itself doubles as the CSRF
-    token here for the same reason it does in local mode: it's server-set,
-    HttpOnly (page JS can never read it out of the cookie jar), and only
-    reachable by a page this server itself rendered baking the same value
-    in -- and unlike local mode's *shared* token, each org session already
-    has its own unguessable id (``OrgSessionStore.create()``), so no
+    ``check_csrf`` exactly -- but against ``pf_org_session``. The session id
+    itself doubles as the CSRF token: it's server-set, HttpOnly (page JS can
+    never read it out of the cookie jar), and only reachable by a page this
+    server itself rendered baking the same value in -- and each org session
+    already has its own unguessable id (``OrgSessionStore.create()``), so no
     separate per-session CSRF value needs to be minted and tracked."""
     cookie = request.cookies.get(SESSION_COOKIE, "")
     if not cookie or not csrf:

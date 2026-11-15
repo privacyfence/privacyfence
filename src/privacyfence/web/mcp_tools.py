@@ -15,11 +15,9 @@ descriptions, same input shapes) since routes_mcp.py replaces the bridge as
 the thing serving them, not what they are. One exception has no bridge-era
 counterpart: ``PRIVACYFENCE_STATUS_TOOL``, the meta-tool that
 tells a client an install is not set up yet. There is deliberately no
-meta-tool that mints a sign-in link for the agent (ADR 0013): ADR 0003 makes
-the companion mandatory on all three platforms, and a session is not
-something to hand the party it governs (web/session_auth.py's
-``PROVENANCE_*``). What stands in for one is the companion itself, and ``privacyfence-app
---print-sign-in-link`` for a human whose companion menu is out of reach.
+meta-tool that mints a sign-in link for the agent (ADR 0013): a session is
+not something to hand the party it governs. The person signs in to the
+server themselves, and connects services on its Connect page.
 """
 from __future__ import annotations
 

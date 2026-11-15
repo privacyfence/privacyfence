@@ -1,5 +1,4 @@
-"""CSRF and origin checks for the ``pf_session`` cookie, plus the refusal body a route
-returns when a session is valid but may not take a sensitive action.
+"""CSRF and origin checks for the ``pf_session`` cookie.
 
 ``check_csrf`` is a double-submit check: the session id itself doubles as the token (the same
 reasoning ``web/org_session.py``'s ``check_csrf`` gives). ``check_origin`` is defense in depth on
@@ -12,34 +11,6 @@ import hmac
 from starlette.requests import Request
 
 SESSION_COOKIE = "pf_session"
-
-
-def human_session_required_json(what: str) -> tuple[dict[str, str], int]:
-    """The body and status a route returns when the session is not a human one
-    -- a ``403`` rather than the ``401`` an *unauthenticated* request
-    gets, because the session is perfectly valid and the answer is still
-    no. Returned as a plain ``(body, status)`` pair rather than a
-    ``JSONResponse`` so this module keeps importing only what its own page
-    rendering needs, and each caller builds the response type its own route
-    already returns.
-
-    ``what`` names the refused act ("approve a decision", "change this
-    setting") -- the message has to be actionable for the human who is
-    legitimately looking at the page and has no idea why their click did
-    nothing, and the action they need is always the same one: reopen this
-    page from the companion, which is what makes a session ``human``."""
-    return (
-        {
-            "error": "human_session_required",
-            "message": (
-                f"This sign-in session cannot {what}. PrivacyFence can only tell that a person "
-                "asked for a session when it was opened from the PrivacyFence companion (the "
-                "menu-bar/tray icon, or the PrivacyFence entry in your applications menu) -- "
-                "reopen Approvals from there and try again."
-            ),
-        },
-        403,
-    )
 
 
 def check_csrf(request: Request, csrf: str | None) -> bool:
@@ -73,5 +44,4 @@ __all__ = [
     "SESSION_COOKIE",
     "check_csrf",
     "check_origin",
-    "human_session_required_json",
 ]

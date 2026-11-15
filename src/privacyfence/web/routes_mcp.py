@@ -178,7 +178,7 @@ def _connection_of(ctx: ServerRequestContext) -> Connection | None:
 
 # Looks up the DCR ``client_name`` registered under an access token's ``client_id``, or None.
 # Org mode passes ``OrgOAuthProvider.client_name`` -- read-only by contract, since it runs on every
-# tool call; local mode has no DCR registrations and passes nothing.
+# tool call; a caller with no DCR registrations passes nothing.
 ClientNameLookup = Callable[[str], str | None]
 
 # Looks up the registry agent_id an access token's ``client_id`` is attested as by its registered
@@ -374,14 +374,9 @@ def build_mcp_server(
             logger.info("tools/list_changed notification failed for one session: %s", exc)
 
     def _broadcast_tools_changed() -> None:
-        # Called via McpDispatcher.notify_tools_changed(), itself called
-        # from SettingsController.refresh_connectors()'s on-main-thread
-        # `done()` callback (daemon_main.py wires
-        # controller.set_connectors_changed_listener(mcp_dispatcher.
-        # notify_tools_changed)) -- that callback already runs on this
-        # server's own asyncio loop (settings_controller.call_on_main ->
-        # web/state_stream.call_soon_threadsafe), so a running loop is
-        # always available here in production; a test that calls this
+        # Called via McpDispatcher.notify_tools_changed() on this server's
+        # own asyncio loop, so a running loop is available here in
+        # production; a test that calls this
         # directly with no loop running (e.g. exercising the dispatcher in
         # isolation) simply notifies nobody, since live_connections is empty
         # in that case anyway.
@@ -450,9 +445,8 @@ def build_mcp_server(
         # audit_log.py, pii_detector.py, privacy_filter.py,
         # resource_names.py) resolves against whatever this sets for the
         # rest of the call, including everything gate.py's gated_call()
-        # does. LOCAL_PRINCIPAL in local mode; in org mode the
-        # real signed-in human -- see
-        # mcp_auth.principal_from_access_token's own docstring for how each
+        # does: the real signed-in human -- see
+        # mcp_auth.principal_from_access_token's own docstring for how it
         # is resolved.
         access_token = get_access_token()
         principal = principal_from_access_token(access_token)
@@ -676,12 +670,9 @@ class _SessionIdOnlyOnSuccess:
     rejected frame becomes a connection that can never recover, for as long as
     the client process lives.
 
-    ``mcpb/shim/src/sessionFetch.ts`` defends the bundled shim against the
-    same cascade from the client side, which is what reaches a user whose
-    daemon is older than this. This is the other half of it: a client pointed
-    straight at ``/mcp`` -- a documented setup, ``claude mcp add --transport
-    http privacyfence ...``, with no shim anywhere in it -- is protected here
-    or not at all.
+    A client pointed straight at ``/mcp`` -- a documented setup, ``claude mcp
+    add --transport http privacyfence ...`` -- is protected here or not at
+    all.
 
     A session id is only ever meaningful on a response that established or
     used a session; on a failure it names, at best, something already gone.
@@ -729,8 +720,7 @@ def _is_initialize(body: bytes | None) -> bool:
     """Whether ``body`` is (or, for a batch, contains) an ``initialize``
     request. Deliberately the *only* thing this module reads out of a /mcp
     request body: which method is being called is JSON-RPC envelope framing,
-    not knowledge of what the method does -- the same line ``mcpb/shim/src/
-    proxy.ts`` draws for the same reason."""
+    not knowledge of what the method does."""
     if not body:
         return False
     try:
@@ -865,23 +855,16 @@ def build_mcp_asgi_app(
     Returns the app alongside its session manager so server.py can fold
     ``mcp_lifespan`` into the combined app's own lifespan.
 
-    ``verifier`` is the seam org mode plugs into: pass
-    ``web/oauth_provider.py``'s ``OrgOAuthProvider`` (which satisfies
-    ``TokenVerifier`` via its own ``verify_token``) instead of building a
-    one-off single-token ``PerUserTokenVerifier`` for a caller with no
-    multi-principal registration to grow -- exactly one of ``token``/
-    ``verifier`` should be given. web/server.py's real local-mode wiring
-    always passes ``verifier`` (a long-lived ``PerUserTokenVerifier``
-    ``MINT MCP`` registers new principals into, ADR 0008), never ``token``.
-    ``resource_metadata_url`` (RFC 9728, org mode only) is threaded into a
+    ``verifier`` is web/oauth_provider.py's ``OrgOAuthProvider`` (which
+    satisfies ``TokenVerifier`` via its own ``verify_token``), or a test's
+    own verifier. ``resource_metadata_url`` (RFC 9728) is threaded into a
     401 response's ``WWW-Authenticate`` header so a client that gets one
-    knows where to discover this server's authorization server; local
-    mode has no such document to point to, so it stays ``None`` there.
-    ``client_names`` (org mode only) is ``OrgOAuthProvider.client_name``,
+    knows where to discover this server's authorization server.
+    ``client_names`` is ``OrgOAuthProvider.client_name``,
     which attributes each tool call to its DCR client's claimed name --
-    see ``_resolve_agent``. ``attested_agents`` (org mode only) is
-    ``OrgOAuthProvider.attested_agent_id``, the redirect-URI attestation (ADR 0224); ``overrides`` (local mode only) is
-    ``settings.yaml``'s ``agent_overrides:`` section (``agent_overrides.py``).
+    see ``_resolve_agent``. ``attested_agents`` is
+    ``OrgOAuthProvider.attested_agent_id``, the redirect-URI attestation (ADR 0224); ``overrides`` is
+    an ``agent_overrides:`` section (``agent_overrides.py``); the server passes none.
     """
     server = build_mcp_server(dispatcher, client_names=client_names, attested_agents=attested_agents, overrides=overrides)
     session_manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=False)

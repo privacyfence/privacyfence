@@ -550,25 +550,21 @@ def build_org_routes(
     scoped_token_page_data: Callable[[Principal], dict[str, Any]] | None = None,
     agent_runtime: agent_runtimes.N8nRuntimeConfig | None = None,
 ) -> list[BaseRoute]:
-    """Org mode's own settings route list (ADR 0032, ADR 0033) --
-    ``GET /settings`` serves the exact same
-    settings_window_html.build_html() local mode's own
-    ``_render_settings_page`` above does, capability-filtered for org mode
-    (``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's
-    own docstring). It is the same page for an administrator as for anyone
+    """The settings route list (ADR 0032, ADR 0033) --
+    ``GET /settings`` serves settings_window_html.build_html(),
+    capability-filtered (``mode="org"``, ``is_admin=principal.is_admin`` --
+    see that function's own docstring). It is the same page for an administrator as for anyone
     else: the install-wide privacy policy and the usage stats are Admin
     sections (web/routes_admin.py), and ``GET /settings/privacy`` redirects
     there.
 
     Writes go through one generic
-    ``POST /api/settings/{action}`` -- the exact same path and JSON body
-    shape local mode's own dispatcher already answers, restricted to
+    ``POST /api/settings/{action}``, restricted to
     ``_ORG_ALLOWED_ACTIONS`` (every action ``org_settings_scope.
     ACTION_SCOPES`` actually routes for ``ORG_MODE``, which is also
     everything the shared page's own JS bridge ever posts for a signed-in
-    org principal). The shared renderer's page carries the exact same PF_WEBAUTHN_JS/
-    step-up bridge shim local mode's own page does, so a 428/403 step-up
-    refusal here shows the same passkey prompt local mode's does, instead
+    org principal). The page carries PF_WEBAUTHN_JS and the step-up bridge
+    shim, so a 428/403 step-up refusal here shows a passkey prompt instead
     of a raw JSON body replacing the page.
 
     This module still contributes the auth/CSRF/authorization/step-up/
@@ -579,8 +575,7 @@ def build_org_routes(
     ``install_wide_settings`` is the server's live install-wide config; the page only reads it
     to load each signed-in principal's own settings on top of it.
 
-    ``step_up``/``step_up_origin`` gate org mode the way local mode's own
-    dispatch is gated (ADR 0034): every org-routed
+    ``step_up``/``step_up_origin`` gate the dispatch (ADR 0034): every org-routed
     ``_SENSITIVE_ACTIONS`` member below (``add_policy_rule``,
     ``remove_policy_rule``) demands the same fresh WebAuthn assertion whenever
     ``step_up.require_passkey`` is on. Required, as
@@ -591,7 +586,7 @@ def build_org_routes(
     writes ungated for a caller that forgets to pass it.
 
     ``connector_registry`` lets the Auto-accept page show a rule's resource ids (a Drive folder, a
-    task list, a Jira project, ...) by name, the way local mode's page does: an id with no cached
+    task list, a Jira project, ...) by name: an id with no cached
     name yet is resolved through *this principal's own* connectors (``ConnectorRegistry.get``),
     into this principal's own ``resource_names.py`` cache -- see ``_await_rule_names`` below.
     ``None`` (a hand-built ``OrgAuth`` with no registry, this module's own older tests) shows
@@ -621,22 +616,17 @@ def build_org_routes(
     def _guard_step_up(principal: Principal, action: str, form_body: dict[str, Any]) -> JSONResponse | None:
         """Called after ``is_action_permitted`` already passed -- a passkey
         prompt for an action this principal isn't authorized to take either
-        way would be a worse refusal than the authorization refusal itself,
-        the same ordering local mode's own ``require_human_session`` check
-        keeps ahead of its step-up check. Returns ``None`` to let the
-        caller proceed; records the refusal in the audit log, under this
-        principal, for every other case before returning the response to
-        send as-is -- the same step local mode's own ``settings_action``
-        above now takes too (see ``_record_settings_audit``'s own
-        docstring), just already factored out here since org mode's
-        dispatch always needed it.
+        way would be a worse refusal than the authorization refusal itself.
+        Returns ``None`` to let the caller proceed; records the refusal in
+        the audit log, under this principal, for every other case before
+        returning the response to send as-is (see
+        ``_record_settings_audit``'s own docstring).
 
         ``form_body`` is, despite the name, a JSON body's already-decoded
         dict (ADR 0032 -- ``settings_action`` below, this function's only
         caller since the four bespoke form-POST routes it used to serve
         are gone) -- ``webauthn_assertion``, if present, is already a
-        ``dict``, the same as local mode's own ``payload.get(
-        "webauthn_assertion")``, not the JSON-encoded *string* a multipart
+        ``dict``, not the JSON-encoded *string* a multipart
         form field carried it as (``_parse_form_assertion``, still used by
         ``handle_org_config_upload`` above, which is still a real multipart
         route)."""
@@ -654,23 +644,20 @@ def build_org_routes(
 
     def _ensure_principal_settings_loaded() -> None:
         # Lazy import -- daemon_main.py pulls in the whole connector/client
-        # stack at module level, the same reason every other cross-module
-        # call into it from web/*.py (e.g. settings_controller.py's own
-        # telegram_submit_2fa) imports it inside the function that needs it
-        # rather than at module scope.
+        # stack at module level, so every cross-module call into it from
+        # web/*.py imports it inside the function that needs it rather than
+        # at module scope.
         from ..daemon_main import _load_principal_settings
 
         _load_principal_settings(install_wide_config=install_wide_settings)
 
     def _org_state(principal: Principal) -> dict[str, Any]:
-        """Org mode's counterpart of ``_snapshot(controller)`` (ADR 0032)
-        above -- the exact same settings_window_html.build_html() shape,
-        built fresh per request (org mode is stateless per request, unlike
-        local mode's single long-lived ``SettingsController``) rather than
+        """The settings_window_html.build_html() state (ADR 0032), built
+        fresh per request (the server is stateless per request) rather than
         cached anywhere. General's PII fields and Privacy Filter both read
         the install-wide config directly (admin-only in this mode, with a
-        fail-closed ``"block"`` default for an unconfigured group --
-        unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
+        fail-closed ``"block"`` default for an unconfigured group, see
+        ``_privacy_state_from_config``);
         Auto-accept reads this principal's own on-disk rules; Audit Log
         this principal's own recent decisions; Stats (admin only,
         ADR 0217) install-wide counts from every principal's files on disk. Sections
@@ -688,7 +675,7 @@ def build_org_routes(
         rows = auto_accept.get_policy_rows()
         # The viewing principal's own recent decisions -- per-principal, exactly like
         # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
-        # with the same agent column local mode's page gets.
+        # with its agent column.
         # A log that cannot be read costs the page its list, never the request -- the same
         # posture _record_settings_audit takes for a write.
         try:
@@ -746,9 +733,8 @@ def build_org_routes(
                 resolving.discard(principal.id)
 
     async def _await_rule_names(principal: Principal) -> None:
-        """Org mode's counterpart of local mode's ``SettingsController._resolve_names_async``.
-        Local mode resolves in the background and pushes a fresh snapshot to the open tab once
-        done; org mode has no live push (``live_updates=False`` below), so this instead waits up
+        """Resolves the names a rule's resource ids are shown by. There is no live push
+        (``live_updates=False`` below), so this waits up
         to ``_RULE_NAME_WAIT_SECONDS`` for the lookup before the page renders. A slower lookup
         keeps running and fills the cache for the next load rather than holding the request."""
         if connector_registry is None:
@@ -1206,10 +1192,9 @@ def build_org_routes(
         )
         csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
         whats_new_version = await asyncio.to_thread(whats_new.pending_version, principal)
-        # PF_WEBAUTHN_JS/_settings_bridge_shim: the exact same ceremony helpers local
-        # mode's own _render_settings_page carries -- see that function's
-        # own comment. Whether it's ever exercised depends on this org's
-        # StepUpConfig, not on whether the helpers exist.
+        # PF_WEBAUTHN_JS/_settings_bridge_shim: the passkey ceremony helpers.
+        # Whether they're ever exercised depends on this org's StepUpConfig,
+        # not on whether the helpers exist.
         body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
         body += personal_transfer_shim(csrf=csrf, nonce=nonce)
@@ -1353,11 +1338,9 @@ def build_org_routes(
         return f"Step-up scope for this principal changed from {before!r} to {after!r} (principal={principal.id})"
 
     async def settings_action(request: Request) -> Response:
-        """The generic ``POST /api/settings/{action}`` dispatcher org
-        mode shares (ADR 0032) -- the same path and JSON body shape local mode's
-        own ``settings_action`` above answers (this SPA's shared bridge,
-        settings_window_html.py's own ``pfSettingsPost``, posts the same
-        way regardless of mode), restricted to ``_ORG_ALLOWED_ACTIONS``.
+        """The generic ``POST /api/settings/{action}`` dispatcher (ADR 0032)
+        -- what this SPA's shared bridge, settings_window_html.py's own
+        ``pfSettingsPost``, posts to -- restricted to ``_ORG_ALLOWED_ACTIONS``.
         Gate order mirrors every other mutating route in this module:
         authenticated, then CSRF, then origin, then authorization, then
         step-up, then the mutation itself.

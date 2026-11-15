@@ -120,8 +120,7 @@ def principal_from_access_token(token: AccessToken | None) -> Principal:
     is_admin ``OrgOAuthProvider._mint_tokens`` stashed there. Falls back to
     ``client_id`` only if a verifier somehow returns a token with no
     ``subject`` at all -- better than crashing, though nothing in this
-    codebase does that today outside local mode's own case, which is
-    handled above already.
+    codebase does that today.
 
     A scoped token (ADR 0164, ``client_id="scoped:<id>"``) owned by the
     local principal resolves to ``LOCAL_PRINCIPAL`` itself; any other owner

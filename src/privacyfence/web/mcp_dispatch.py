@@ -155,10 +155,8 @@ class McpDispatcher:
         # builds a bundle from. In memory only; end_session() drops it.
         self._session_calls: dict[tuple[str, Hashable], list[tuple[str, dict[str, Any], str]]] = {}
         # The deferred-approval registry privacyfence_await_approval polls
-        # -- None when nothing in this install can ever produce a
-        # pending approval (native-only local mode with /mcp still enabled),
-        # in which case every id this tool is asked about is simply
-        # "unknown".
+        # -- None in a test that never wires one, in which case every id
+        # this tool is asked about is simply "unknown".
         self._registry = registry
         # privacyfence_status's own per-connector view -- {name, enabled,
         # authenticated, blocked_by} rows, reusing SettingsController's
@@ -260,9 +258,8 @@ class McpDispatcher:
         # tool with the same arguments within _DEDUPE_TTL_SECONDS would
         # share one cache entry -- the second caller getting handed the
         # first caller's actual result, not a mere inefficiency but a
-        # cross-principal data leak. Harmless in local mode (there's only
-        # ever the one principal), but this dispatcher is shared process-
-        # wide, so it has to be correct once a second principal exists.
+        # cross-principal data leak: this dispatcher is shared process-wide
+        # by every principal.
         principal_id = current_principal().id
         # The scoped token's id, "" for an unscoped call: a scoped call must never be handed a
         # full-token call's result or pending approval without passing the gate itself, nor a

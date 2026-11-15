@@ -48,18 +48,17 @@ Configuration is split into two files (see paths.py):
     and docs/google-cloud-setup.md. It's plain data, not a credential, and is
     handed straight to CalendarConnector; the Calendar OAuth client itself
     never carries Workspace-admin directory scope. ``mode``/``server``/
-    ``idp`` switch this daemon into org mode — a real OAuth 2.1 authorization
-    server on ``/mcp`` instead of the local shared-secret token, human
-    identity resolved via the org's own OIDC IdP (see ADR 0011). Absent
-    (every install that hasn't opted in) means local mode. See org_mode.py and org_identity.py
-    for the schema, or build a bundle with ``scripts/build_org_bundle.py
-    --mode org ...``.
+    ``idp`` configure the organization server — a real OAuth 2.1 authorization
+    server on ``/mcp``, human identity resolved via the org's own OIDC IdP
+    (see ADR 0011); ``mode`` must be ``org`` (ADR 0301). See org_mode.py and
+    org_identity.py for the schema, or build a bundle with
+    ``scripts/build_org_bundle.py --mode org ...``.
   - ``config/settings.yaml``   — per-user settings: privacy policy,
     connectors{enabled}, auto_accept (the policy rules),
     pii_detection{enabled, detect_ip_addresses, detect_financial_figures,
     audit_match_details}, step_up{enabled, scope, rp_id, rp_name,
-    require_passkey} (local mode's own WebAuthn passkey enrollment config,
-    see step_up_config.py). No secrets live here. Lives under
+    require_passkey} (the WebAuthn passkey enrollment config, see
+    step_up_config.py). No secrets live here. Lives under
     ``paths.authority_dir()``, not the user-dir root
     directly -- see that function's own docstring.
 Per-user credentials (OAuth tokens, Telegram session) live under
@@ -441,8 +440,8 @@ def _warn_if_legacy_bundle_changed() -> None:
 def load_org_config() -> dict[str, Any]:
     """Load the installed organization config bundle.
 
-    Three states, not two: absent entirely → {} (local mode, same
-    "missing config → connector skipped" philosophy used for every
+    Three states, not two: absent entirely → {} (no organization config yet,
+    the same "missing config → connector skipped" philosophy used for every
     connector below); a valid JSON object → parsed and returned as
     configured; present but broken (unreadable, malformed JSON, or a
     non-object top level) → raise ``org_mode.ConfigurationError`` and
@@ -454,9 +453,7 @@ def load_org_config() -> dict[str, Any]:
     downgrade to no IdP-backed auth at all (an empty bundle
     reads as organization mode with no identity provider), triggerable by anything that can truncate or
     corrupt the file — not a state this daemon should ever paper over.
-    A desktop (local-mode) bundle is installed in PrivacyFence Settings under
-    Admin → Organization configuration → "Install configuration file…". An
-    organization server takes no new bundle (settings come from the
+    An organization server takes no new bundle (settings come from the
     environment, its own apps from signed connector configs).
 
     Bundle signing (ADR 0016): a well-formed-but-hostile *replacement* of
@@ -468,9 +465,7 @@ def load_org_config() -> dict[str, Any]:
     pinned signing key raises ConfigurationError the same as a malformed
     one, and ``mode: org`` additionally requires the bundle to actually
     be signed at all (see that module's own docstring for the trust-on-
-    first-use model). A local-mode install that has never adopted
-    signing is unaffected — this call is then a no-op past the "no
-    signing key pinned yet and no signature present" pass-through case.
+    first-use model). With no bundle file at all, this call is a no-op.
     """
     global _bundle_adopted_this_start
     # Runs several times per process, so only ever set it to True.
@@ -715,8 +710,8 @@ def _audit_step_up_requirement_change(change: StepUpRequirementChange) -> None:
     """
     decision = "step_up_requirement_enabled" if change.is_required else "step_up_requirement_disabled"
     summary = (
-        "local mode's step_up.require_passkey is now enforced" if change.is_required
-        else "local mode's step_up.require_passkey was turned off"
+        "step_up.require_passkey is now enforced" if change.is_required
+        else "step_up.require_passkey was turned off"
     )
     try:
         get_audit_logger().record(AuditEntry(
@@ -785,10 +780,10 @@ def check_storage_permissions(org_mode_active: bool) -> None:
     permissions were restored *after* the ``chmod`` that would have fixed
     them ran.
 
-    Local mode logs every finding at ``warning`` and keeps starting -- the
-    same "detectable, not necessarily preventable" posture the bundle
-    hash-logging above takes. Org mode -- centrally managed, and held to a
-    stricter standard -- fails closed: ``InsecurePermissionsError``
+    With ``org_mode_active`` false every finding is logged at ``warning`` and the
+    start goes on -- the same "detectable, not necessarily preventable"
+    posture the bundle hash-logging above takes. The organization server --
+    centrally managed, and held to a stricter standard -- fails closed: ``InsecurePermissionsError``
     propagates out of ``run_app()`` through the same top-level "print and
     refuse to start" path a broken org config's ``ConfigurationError``
     already uses (main()'s own ``except Exception``).
@@ -929,8 +924,8 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     - ``init_privacy_filter()`` -- without it, ``privacy_
       filter._REGISTRY`` (also a ``PrincipalRegistry``, see that module's
       docstring) kept its default empty-dict entry for every principal but
-      whichever one happened to be scoped when a local-mode ``run_app()``
-      called ``init_privacy_filter`` directly. ``category_policy()``'s own
+      whichever one happened to be scoped when ``run_app()`` called
+      ``init_privacy_filter`` directly. ``category_policy()``'s own
       "group absent from the registry" fallback is a hardcoded "allow" --
       the *opposite* of org mode's intended fail-closed ``block`` default
       (``privacy_filter.init_privacy_filter``'s own ``fail_safe_default``)
@@ -1864,8 +1859,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # Before the web server is built (it loads the scoped token store, whose tokens must already
     # hold their own rules) and for every person, signed in or not.
     data_format.migrate_everything(log=logger.warning)
-    # Same "org mode fails closed, local mode warns" posture as the
-    # rest of this function's fail-safe defaults now that mode is known.
+    # The organization server fails closed on loose storage permissions.
     check_storage_permissions(True)
     init_privacy_filter(config, org_managed=True)
     # From here on every reader gets the effective config; the raw bundle stays for the
@@ -1876,12 +1870,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     for warning in check_consistency_warnings():
         logger.warning(warning)
 
-    # Centralized audit forwarding is org-mode-only (see
-    # org_mode.AuditForwardingConfig's own docstring) -- a local-mode
-    # install's organization config could theoretically carry an
-    # "audit_forwarding" section, but there is no "centralize" to speak of
-    # for a single employee's own machine, so it's ignored outside org
-    # mode regardless of what the section says.
+    # Centralized audit forwarding (see org_mode.AuditForwardingConfig's own
+    # docstring).
     audit_forwarder = None
     audit_forwarding_config = org_mode.AuditForwardingConfig.from_org_config(org_config)
     if audit_forwarding_config.enabled:
@@ -1935,8 +1925,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # _warm_connector_caches' own docstring) waits for that loop to be
     # captured instead. None when this daemon never starts the web server
     # at all -- that's only org mode with mcp.enabled off (see
-    # _maybe_start_web_server's own docstring); local mode always starts
-    # one now, so there's always a loop to wait for there.
+    # _maybe_start_web_server's own docstring).
     web_loop = server.wait_until_ready(timeout=5) if server is not None else None
     logger.info("Startup complete")
 
@@ -1966,8 +1955,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 def run_revoke_scoped_tokens(principal_id: str) -> int:
     """The administrator's way to take back every scoped token one person
     holds (ADR 0165), for when their access is revoked for good. Runs as the
-    account that owns the data (``main`` dispatches it after the runtime
-    identity check) and writes the person's ``scoped_tokens.json`` directly;
+    account that owns the data (``main`` dispatches it before anything else
+    starts) and writes the person's ``scoped_tokens.json`` directly;
     a running daemon notices the change the next time a token is presented.
 
     ``principal_id`` must be ``local`` or name an existing ``users/<id>``
@@ -2006,12 +1995,12 @@ def _upstream_claim_keyset() -> Any:
 
 
 def run_rotate_upstream_claim_key() -> int:
-    """Add a new Ed25519 key to the upstream identity-claim key set (plan 3.4).
+    """Add a new Ed25519 key to the upstream identity-claim key set.
 
     The new key is published in the JWKS at once and starts signing five minutes
     later, so verifiers' cached key sets already hold it; the previous key stays
-    published for the overlap. Runs as the account that owns the data, after the
-    runtime identity check; a running server re-reads the file on its next call.
+    published for the overlap. Run it as the account that owns the data; a running
+    server re-reads the file on its next call.
     """
 
     try:
@@ -2207,8 +2196,8 @@ def run_relay_dns_records() -> int:
 def run_peek_release(principal_id: str) -> int:
     """The administrator's way to take back the Peek token PrivacyFence minted
     for one person and stop renewing it, for when they have left. Runs as the
-    account that owns the data (``main`` dispatches it after the runtime
-    identity check) in its own process, so it neither reaches a running
+    account that owns the data (``main`` dispatches it before anything else
+    starts) in its own process, so it neither reaches a running
     daemon's connector registry nor needs one: a daemon keeps its cached
     connector, and so the revoked token, until it is evicted, and Peek
     refuses the token meanwhile. The Peek account stays. A person who
@@ -2348,9 +2337,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--revoke-scoped-tokens", metavar="PRINCIPAL_ID", default=None,
         help=(
-            "Revoke every scoped token the account PRINCIPAL_ID holds ('local' in local mode, or the "
-            "principal id the audit log and the org Settings page show) and exit. Run it as the "
-            "account the daemon runs as."
+            "Revoke every scoped token the account PRINCIPAL_ID holds (the principal id the audit "
+            "log and the Settings page show) and exit. Run it as the account the daemon runs as."
         ),
     )
     parser.add_argument(

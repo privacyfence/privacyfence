@@ -73,11 +73,3 @@ class TestCsrfAndOrigin:
 
         assert calls == [("sess-abc", "sess-abc")]
 
-
-class TestHumanSessionRequired:
-    def test_the_refusal_body_is_a_403_that_names_the_way_back(self):
-        body, status = sa.human_session_required_json("approve a decision")
-        assert status == 403  # not 401: the session is valid, the answer is still no
-        assert body["error"] == "human_session_required"
-        assert "approve a decision" in body["message"]
-        assert "companion" in body["message"]

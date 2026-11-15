@@ -253,7 +253,7 @@ def _privacy_rows(install_wide_settings: dict[str, Any]) -> dict[str, Any]:
     """The install-wide privacy policy as the page draws it. A group the file does not mention
     reads as ``block``, the fail-closed default an organization server enforces."""
     privacy = _privacy_state_from_config(install_wide_settings, fail_safe_default="block")
-    # Calendar's free/busy switch and the Gmail signature are one desktop's own settings; an
+    # Calendar's free/busy switch and the Gmail signature are not install-wide settings; an
     # organization server has neither, so they are not drawn rather than drawn to 404.
     privacy["groups"] = [g for g in privacy["groups"] if g["key"] != "calendar"]
     privacy.pop("gmail_append_signature", None)
@@ -503,8 +503,8 @@ def _dispatch(
 
 
 def _current_pii_flag(action: str, params: dict[str, Any], settings: dict[str, Any]) -> bool:
-    """toggle_pii_detection and toggle_pii_category flip the *current* value, as the menu toggle
-    in local mode does, and as the shared page's switches post (no value in the body).
+    """toggle_pii_detection and toggle_pii_category flip the *current* value, as the shared
+    page's switches post (no value in the body).
     ``org_install_policy.apply_change`` itself takes the wanted value, which suits a form that
     could be submitted stale or twice but not this control; working out the flip here keeps the
     page unaware of the difference."""

@@ -1,5 +1,5 @@
 """Shared decide-time WebAuthn step-up sequence: web/routes_approvals.py's
-local-mode routes, its org-mode routes, web/routes_settings.py and the batch
+routes, web/routes_settings.py and the batch
 decide endpoint (approvals.PendingApprovalRegistry.answer_batch) all need
 "begin a challenge, store it, verify a resubmitted assertion against it",
 and this module is the one copy of it.
@@ -43,9 +43,8 @@ def begin_step_up(
 
     Returns the options JSON to embed in a ``428`` body, or ``None`` when
     this principal has no enrolled credential at all -- the caller decides
-    what "no credential" means for it (local mode's own evadable
-    fall-through, org mode's IdP link, or settings' unconditional
-    ``403``)."""
+    what "no credential" means for it (an evadable fall-through, the IdP
+    link, or settings' unconditional ``403``)."""
     begun = begin_assertion(principal, rp_id=rp_id) if rp_id else None
     if begun is None:
         return None
