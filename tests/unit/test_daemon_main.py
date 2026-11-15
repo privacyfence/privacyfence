@@ -12,6 +12,7 @@ real OAuth/HTTP clients (those are covered separately per-client).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -396,7 +397,7 @@ class TestLoadOrgConfig:
         (tmp_path / "org_bundle.json").write_text('{"mode": "org", corrupted')
         with pytest.raises(org_mode.ConfigurationError):
             org_config = daemon_main.load_org_config()
-            org_mode.resolve_mode(org_config)
+            org_mode.validate_mode(org_config)
 
 
 def _write_signed_bundle(tmp_path, bundle, private_key=None):
@@ -3433,8 +3434,7 @@ class TestRunApp:
         assert "already running" in caplog.text
         assert not any(record.levelno >= logging.ERROR for record in caplog.records)
 
-    @pytest.mark.parametrize("org", [False, True])
-    def test_run_app_migrates_before_the_web_server_is_built(self, monkeypatch, org):
+    def test_run_app_migrates_before_the_web_server_is_built(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         self._patch_common(monkeypatch)
@@ -3451,9 +3451,6 @@ class TestRunApp:
             daemon_main, "_maybe_start_web_server",
             lambda *args, **kwargs: order.append("server") or real_start(*args, **kwargs),
         )
-        if org:
-            monkeypatch.setattr(org_mode, "resolve_mode", lambda bundle: "org")
-
         assert daemon_main.run_app({}, "config.yaml") == 0
         assert order == ["migrate", "server"]
 
@@ -4430,8 +4427,14 @@ class TestLoadOrgConfigAdoption:
     @pytest.fixture(autouse=True)
     def _signing_requirement_is_tested_elsewhere(self, monkeypatch):
         # Adoption copies and reads files; whether the bundle must be signed is
-        # TestLoadOrgConfigSigning's subject, so these unsigned fixtures skip it.
-        monkeypatch.setattr(org_mode, "resolve_mode", lambda data: "unsigned-fixture")
+        # TestLoadOrgConfigSigning's subject, so these unsigned fixtures count as signed.
+        from privacyfence import org_bundle_signing
+
+        real = org_bundle_signing.verify_and_maybe_pin
+        monkeypatch.setattr(
+            org_bundle_signing, "verify_and_maybe_pin",
+            lambda data, directory: dataclasses.replace(real(data, directory), signed=True),
+        )
 
     @staticmethod
     def _legacy_files(tmp_path):

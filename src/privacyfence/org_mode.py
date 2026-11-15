@@ -1,15 +1,6 @@
-"""``mode: local`` vs. ``mode: org`` -- the one setting every other
-difference between the two operating modes follows from. Lives in
-``org_bundle.json`` (alongside the org server, TLS and IdP settings), not
-settings.yaml: it's
-an install-wide decision, not a per-user preference, and org_bundle.json is
-already the file daemon_main.py reads before it knows anything about a
-principal at all.
-
-Absent entirely, ``mode`` resolves to ``"local"`` -- an existing install's
-org_bundle.json (today only ever carrying Google/Slack/Salesforce/
-Atlassian app registrations, per daemon_main.py's own module docstring)
-keeps meaning exactly what it already means, with no migration.
+"""The ``mode`` setting of ``org_bundle.json`` and ``PRIVACYFENCE_MODE``: organization mode is the
+only mode (ADR 0298). Absent, ``mode`` means ``org``; ``org`` is accepted; ``local`` and any other
+value refuse the start (``validate_mode``).
 """
 from __future__ import annotations
 
@@ -31,9 +22,9 @@ from .peek_client import PeekClientError, normalize_base_url
 
 logger = logging.getLogger(__name__)
 
-Mode = Literal["local", "org"]
+# Still the type of the ``mode`` parameters other modules declare.
+Mode = Literal["org"]
 
-DEFAULT_MODE: Mode = "org"
 DEFAULT_BIND_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
@@ -62,15 +53,6 @@ GOOGLE_ISSUER = "https://accounts.google.com"
 # Hostnames a single-user install may be served at: it has one administrator who signs in with a
 # setup code, which is only acceptable when nothing but this computer can reach it.
 SINGLE_USER_HOSTS = ("localhost", "127.0.0.1")
-
-# Shown in the daemon log, privacyfence_status, every desktop page and (once) the companion.
-LOCAL_MODE_DEPRECATION = (
-    "Desktop mode is deprecated and will be removed in PrivacyFence 8. PrivacyFence's built-in "
-    "sign-in for Google, Slack, Salesforce, Atlassian and Miro works only in organization mode "
-    "and the Docker image. Move to an organization server, or try the Docker image on this "
-    "computer: https://privacyfence.eu/docs/moving-to-organization-mode/"
-)
-
 
 class ConfigurationError(ValueError):
     """Raised for organization configuration that is present but broken --
@@ -105,16 +87,15 @@ def refuse_local_mode(source_label: str, value: str) -> None:
     raise ConfigurationError(f"{source_label} must be \"org\".")
 
 
-def resolve_mode(org_config: dict[str, Any]) -> Mode:
-    """``"org"``, or a ``ConfigurationError`` when the bundle's ``mode`` or ``PRIVACYFENCE_MODE``
-    names anything else."""
+def validate_mode(org_config: dict[str, Any]) -> None:
+    """Raise ``ConfigurationError`` when the bundle's ``mode`` or ``PRIVACYFENCE_MODE`` names
+    anything but ``org``."""
     env_mode = _env(MODE_ENV)
     if env_mode:
         refuse_local_mode(MODE_ENV, env_mode)
     if "mode" in org_config:
         mode = org_config["mode"]
         refuse_local_mode("org_bundle.json's \"mode\"", mode if isinstance(mode, str) else repr(mode))
-    return "org"
 
 
 def _own_idp_env_names_set() -> bool:
@@ -148,8 +129,8 @@ def builtin_signin_selected(org_config: dict[str, Any]) -> bool:
 
 
 def is_single_user(org_config: dict[str, Any]) -> bool:
-    """Organization mode with no identity provider: one administrator, on this computer only."""
-    return resolve_mode(org_config) == "org" and not _idp_present(org_config)
+    """No identity provider: one administrator, on this computer only."""
+    return not _idp_present(org_config)
 
 
 _env_ignored_warned = False
@@ -326,8 +307,7 @@ class ServerConfig:
     """Org mode's listener and transport settings, made concrete per install
     (see docs/org-mode-setup-guide.md's "Reverse proxy and TLS"). Only org mode
     reads this class -- ``daemon_main.py`` calls ``from_org_config`` only
-    when ``resolve_mode`` says org, and local mode binds its own hardcoded
-    ``localhost``. The defaults (``bind_host="127.0.0.1"``, no TLS, no
+    for an organization server. The defaults (``bind_host="127.0.0.1"``, no TLS, no
     trusted proxies) are the same loopback listener
     ``scripts/build_org_bundle.py`` writes when ``--server-bind-host`` isn't
     passed, so a bundle with no ``bind_host`` binds exactly what a bundle
@@ -640,8 +620,7 @@ class AuditForwardingConfig:
     ``org_bundle.json``'s ``audit_forwarding`` section, org-mode-only like
     ``ServerConfig``/``DownloadDeliveryConfig`` above -- local mode never
     looks at this at all (there is no "centralize" to speak of for a single
-    employee's own machine); see daemon_main.py's ``run_app`` for the
-    ``resolve_mode(org_config) == "org"`` gate.
+    employee's own machine).
 
     Forwarding is *additional* visibility, never a replacement for the
     local audit log ``audit_log.py``'s ``AuditLogger`` always writes --
@@ -840,8 +819,6 @@ class PeekProvisioningConfig:
             return PeekProvisioningConfig(
                 key_env=key_env, trust_unverified_email=flags["trust_unverified_email"],
             )
-        if resolve_mode(org_config) != "org":
-            raise ConfigurationError("org_bundle.json's \"peek\".\"auto_provision\" needs \"mode\": \"org\"")
         if not peek.get("base_url"):
             raise ConfigurationError("org_bundle.json's \"peek\".\"auto_provision\" needs \"peek\".\"base_url\"")
         try:
@@ -893,8 +870,6 @@ class GristProvisioningConfig:
             )
         if not raw.get("enabled", False):
             return GristProvisioningConfig(enabled=False)
-        if resolve_mode(org_config) != "org":
-            raise ConfigurationError("org_bundle.json's \"grist\".\"auto_provision\" needs \"mode\": \"org\"")
         server_url = grist.get("server_url") or ""
         if not server_url:
             raise ConfigurationError(
@@ -963,7 +938,6 @@ __all__ = [
     "DEFAULT_AUDIT_FORWARDING_KIND",
     "DEFAULT_INLINE_MAX_BYTES",
     "DEFAULT_LINK_TTL_SECONDS",
-    "DEFAULT_MODE",
     "DEFAULT_GRIST_PROVISIONING_KEY_ENV",
     "DEFAULT_PEEK_PROVISIONING_KEY_ENV",
     "DEFAULT_SYSLOG_PORT",
@@ -979,5 +953,5 @@ __all__ = [
     "base64_length",
     "builtin_signin_selected",
     "inline_result_length",
-    "resolve_mode",
+    "validate_mode",
 ]
