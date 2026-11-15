@@ -142,7 +142,7 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
           MAIN: "main"
-          CHECK_SCRIPT: ""
+          CHECK_SCRIPT: "scripts/release_check.py"
           VERSION: ${{ steps.tag.outputs.version }}
         run: |
           set -euo pipefail
