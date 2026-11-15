@@ -47,7 +47,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p10-retirement
 
-- pending
+- worker: The worker used the renumbered ADR numbers 0312, 0313 and 0314 in the three old-ADR status lines and the links in CLAUDE.md and docs/releasing.md. tld profile validate was run by the orchestrator and passed.
+- review: Diff matches sections 3.4, 3.8 and 3.9; seven protected-path entries removed, six kept.
 
 ## Final review
 
