@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   build:
-    # The check's name, and so what scripts/update_branch_protection.py requires. Unique on purpose:
+    # The check's name, and so what .tld/admin-policy.yaml requires. Unique on purpose:
     # build.yml and publish-pypi.yml also have a job called `build`, and a required check matches by
     # name alone.
     name: website-build

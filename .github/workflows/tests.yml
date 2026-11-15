@@ -273,8 +273,8 @@ jobs:
   # The per-PR leg of build.yml's `build-org-image` (amd64 only): builds the organization-mode
   # Docker image from this checkout's wheel and runs tests/integration/test_org_docker_image.py
   # against it, so a break in the Dockerfile, entrypoint or health check surfaces on the PR
-  # rather than on a release tag. Deliberately not in scripts/update_branch_protection.py's
-  # REQUIRED_STATUS_CHECKS: it needs a Docker daemon and a multi-minute image build, so it
+  # rather than on a release tag. Deliberately not in the required checks of .tld/admin-policy.yaml:
+  # it needs a Docker daemon and a multi-minute image build, so it
   # reports on every PR without blocking merges.
   org-docker-image:
     runs-on: ubuntu-latest
