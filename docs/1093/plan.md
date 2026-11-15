@@ -4,17 +4,16 @@
 
 ## Summary
 
-**Use it:** To cut a release, the maintainer (or `/cut-release`) dispatches `tld-release.yml` on `main` with an explicit `version`; the dry run is the default, the owner approves the `tld-release` environment, and the run shows every check plus the `CHANGELOG.md` body that will ship. `release.yml` is gone. Required checks and merge rules are edited in `.tld/admin-policy.yaml` and applied with `tld ops repo-admin apply`; `scripts/update_branch_protection.py` is gone, and so is the `releases/*` integration-branch convention. Plans live at `docs/<issue>/plan.md` and stay on `main`.
+**Use it:** To cut a release, the maintainer (or `/cut-release`) dispatches `tld-release.yml` on `main` with an explicit `version`; the dry run is the default, the owner approves the `tld-release` environment, and the run shows every check plus the `CHANGELOG.md` body that will ship. A real cut from `/cut-release` also waits for the owner's yes on the board. `release.yml` is gone. Required checks and merge rules are edited in `.tld/admin-policy.yaml` and applied with `tld ops repo-admin apply`; `scripts/update_branch_protection.py` is gone, and so is the `releases/*` integration-branch convention. Plans live at `docs/<issue>/plan.md` and stay on `main`.
 
-**Scope:** Changes: `build.yml` gets a top-level `permissions: contents: read`. A new `scripts/release_check.py` runs the old pre-flight checks as `tld-release.yml`'s `check_script`; `tag_release.py` gains `--check-only`. The admin policy lists all ten required checks and sets merge-commit-only; a new test keeps that list in line with the workflows. The `releases/**` triggers and docs go. The release docs, `/cut-release`, `CLAUDE.md`, `CONTRIBUTING.md`, §2.7, the PR template, the steward skill and the profile describe tld, not devflow. Five ADRs are added. Unchanged: what `build.yml`, `publish-pypi.yml` and the other tag-triggered workflows do, the version scheme, every secret.
+**Scope:** `build.yml` gets a top-level `permissions: contents: read`. A new `scripts/release_check.py` runs the old pre-flight checks as `tld-release.yml`'s `check_script`; `tag_release.py` gains `--check-only`. The admin policy lists all ten required checks and sets merge-commit-only; a new test keeps that list in line with the workflows. The `releases/**` triggers and docs go; the QA recording workflow keeps refusing such branches. The release docs, `/cut-release`, `CLAUDE.md`, `CONTRIBUTING.md`, §2.7, the PR template, the steward skill and the profile describe tld, not devflow. Five ADRs are added. Unchanged: what `build.yml`, `publish-pypi.yml` and the other tag-triggered workflows do, the version scheme, every secret.
 
-**Security:** The tag is created through the REST API with `TLD_RELEASE_TOKEN`, an owner token in the owner-approved `tld-release` environment; the check script runs in a clone with no token. Today four overlapping branch and tag rulesets guard the repository, and the old `main` ruleset has no bypass actor, which cancels the policy's `admin_bypass`; the owner deletes the duplicates by hand after applying the policy (§3.6). No secret is created, read or moved by any phase.
+**Security:** The tag is created through the REST API with `TLD_RELEASE_TOKEN`, an owner token in the owner-approved `tld-release` environment; the check script runs in a clone with no token. Four overlapping branch and tag rulesets guard the repository today, and the old `main` ruleset has no bypass actor, which cancels the policy's `admin_bypass`. The policy's `tld-main` ruleset tightens review (one approval, stale approvals dismissed, last push approved by someone else) and loosens two settings (up-to-date branches, code-owner review); the owner deletes the duplicates by hand after applying it (§3.6). No secret is created, read or moved by any phase.
 
 **Review focus:**
-- §3.6: replacing four live rulesets with `tld-main` and `tld-tags` loosens two settings (up-to-date branches, code-owner review).
+- §3.6: replacing four live rulesets with `tld-main` and `tld-tags`, with the tightened and loosened settings.
 - §3.2: `release_check.py` runs `tag_release.py --no-fetch --check-only` in tld-release's token-less clone.
-- §3.3: the post-tag "did `build.yml` start" poll moves to `/cut-release` and the docs.
-- §3.5: `/cut-release` dispatches a real run only after the owner's yes on the board.
+- §3.3 and §3.5: the post-tag "did `build.yml` start" poll moves to `/cut-release` and the docs, and a real run needs the board's yes.
 - §3.8: which protected-path entries the last phase removes.
 
 ## 1. Goal
@@ -29,8 +28,8 @@ Measured on `main` at 3563d2538 (the plan branch is merged with it).
 
 - **Already done on `main`, so not planned again:**
   - The docs tests skip tld plan records: `tests/unit/test_docs_links.py:62` and `tests/unit/test_docs_references_exist.py:97-101` treat `docs/<digits>/plan.md` as a plan document, and `docs/1095`, `docs/1096` and others are on `main`.
-  - `hooks.protect_paths_allow` in `.tld/toolkit.yaml:118-130` holds twelve entries, among them `build.yml`, `release.yml`, `tests.yml`, `website-build.yml`, `dependency-audit.yml` and `.tld/toolkit.yaml`. It does not hold `qa-record-fixture.yml`.
-  - The desktop drop (ADR 0301, ADR 0309): `docs/downloads-and-release-kpi.md` is deleted; `build.yml` has four jobs (`dedupe`, `build-org-image`, `sbom`, `finalize-release`); `docs/releasing.md:57` still says "confirm `build`, `build-org-image` ...", and no job called `build` exists any more.
+  - `hooks.protect_paths_allow` in `.tld/toolkit.yaml:129-141` holds twelve entries, among them `build.yml`, `release.yml`, `tests.yml`, `website-build.yml`, `dependency-audit.yml` and `.tld/toolkit.yaml`. It does not hold `qa-record-fixture.yml`.
+  - The desktop drop (ADR 0301, ADR 0309): `docs/downloads-and-release-kpi.md` is deleted; `build.yml` has four jobs (`dedupe`, `build-org-image`, `sbom`, `finalize-release`); `docs/releasing.md:63-64` still says "confirm `build`, `build-org-image` ...", and no job called `build` exists any more.
   - ADRs go up to 0309; the next free number is 0310.
 - **`build.yml`** has `on:` at `:3` and `jobs:` at `:8` with no top-level `permissions:`. The jobs declare their own: `dedupe` (`:14`, `contents: read`, `actions: write`), `build-org-image` (`:68`, `contents: read`), `sbom` (`:208`, `contents: read`), `finalize-release` (`:285`, `contents: write`). It is the only workflow without a top-level block.
 - **`release.yml`** ("Cut release tag", environment `release`, secret `RELEASE_TAG_TOKEN`) runs `scripts/r2_release.py channel`, `scripts/changelog_section.py` (stable only), `scripts/tag_release.py [--push]`, and after a real push polls two minutes for a `build.yml` run.
@@ -52,7 +51,7 @@ Measured on `main` at 3563d2538 (the plan branch is merged with it).
 - **`scripts/update_branch_protection.py`** writes `REQUIRED_STATUS_CHECKS` (10 entries, `:96-107`) into the ruleset named by `--branch` (`main` or `releases/**`). `tests/unit/test_update_branch_protection.py` tests it and, in `TestRequiredChecksList` (`:353-395`), also keeps the list equal to the jobs of `tests.yml` and `website-build.yml`. `tests/unit/test_definition_of_done_drift.py:72-87` imports the list to check that `docs/testing-policy.md` names every check. Mentioned in `docs/testing-policy.md:86-92`, `CONTRIBUTING.md:42`, `.github/workflows/tests.yml:276` and `.github/workflows/website-build.yml:30` (comments).
 - **`releases/**` convention:** `CONTRIBUTING.md:32-47` (a subsection), `CLAUDE.md:6`, `.claude/skills/steward/SKILL.md:66`, `docs/release-testing.md:25`, `docs/testing-policy.md:51,91,140,151,228`, `docs/connector-qa.md:645`, `.claude/commands/qa-record.md:26`; triggers `branches: [main, "releases/**"]` in `tests.yml:8`, `website-build.yml:18`, `dependency-audit.yml:47`, with comments at `tests.yml:5-7`, `website-build.yml:3-4`, `dependency-audit.yml:45-46`; and a refusal of `releases/*` branches in `qa-record-fixture.yml:99-108`. No `releases/*` branch exists on origin.
 - **devflow wording:** `.tld/toolkit.yaml:1,3`; `CLAUDE.md:18-21` (the whole "Commands and skills" section describes devflow's `plan/` branches and deleted plans); `.claude/skills/steward/SKILL.md:3,9`; `docs/testing-policy.md:272`; ADR index row 0132 (`docs/adr/README.md:232`). `.tld/admin-policy.yaml:1` names the repository `tkcs-lab/tkcs-lab-devflow`, a real name that stays.
-- **Plan lifecycle text that tld made untrue:** `CONTRIBUTING.md:16-18,54-55,62-65,68-69`; `docs/adr/README.md:8,15,44-48`; `docs/coding-and-testing-guidelines.md:350-352` (§2.7); `.github/pull_request_template.md:27-29`; `.tld/toolkit.yaml` `verify.dod_manual` row 2.
+- **Plan lifecycle text that tld made untrue:** `CONTRIBUTING.md:16-18,54-55,62-65,68-70`; `docs/adr/README.md:8,15,44-48`; `docs/coding-and-testing-guidelines.md:350-352` (§2.7); `.github/pull_request_template.md:27-29`; `.tld/toolkit.yaml` `verify.dod_manual` row 2.
 - **Protected paths.** The tld `protect-paths` hook blocks `.github/workflows/**` and `.tld/toolkit.yaml` by default; `hooks.protect_paths_allow` is read only from `main`. `.tld/admin-policy.yaml` and the docs are not protected. `tld-release.yml` is writable only between `tld guard allow-workflow-install tld-release.yml` and `tld guard end-allow`. A session may dispatch `tld-release.yml` with `dry_run` true; a real run needs `tld guard allow-release tld-release.yml`.
 - **Status of the first run.** The implement run of this plan's earlier version is parked on manual step mb2 and started no phase (`tld plan phase-status` on the feature branch: `started: false`), so this revision replaces the plan in place.
 
@@ -202,22 +201,21 @@ The decision (owner, 2026-11-15): `.tld/admin-policy.yaml` is the one place the 
   - `test_python_matrix_legs_are_required`: `Test (Python {v}, core suite)` for every `v` in `jobs.test-python-compat.strategy.matrix.python-version`, and no other check starting with `Test (Python `
   - `test_sync_client_matrix_legs_are_required`: the same for `Sync client (Python {v})` and `jobs.sync`
   - `test_website_build_is_required_and_runs_on_every_pull_request`: the assertions of the deleted test of that name, against `website-build.yml` (the workflow's `on` key is read as `True` by PyYAML)
-- `tests/unit/test_definition_of_done_drift.py`: `_required_status_checks()` (`:72-77`) reads the policy list instead of importing the script. The two docstring or comment mentions of the script go with it.
-- Comment edits: `tests.yml:276` "Deliberately not in scripts/update_branch_protection.py's REQUIRED_STATUS_CHECKS" becomes "Deliberately not in the required checks of .tld/admin-policy.yaml"; `website-build.yml:30` "so what scripts/update_branch_protection.py requires" becomes "so what .tld/admin-policy.yaml requires".
+- `tests/unit/test_definition_of_done_drift.py`: `_required_status_checks()` (`:72-77`) reads the policy list instead of importing the script, and the failure message at `:85` says `the required checks` instead of `REQUIRED_STATUS_CHECKS`.
+- Comment edits: in `tests.yml:276-277` the words "scripts/update_branch_protection.py's\n  # REQUIRED_STATUS_CHECKS: it needs" become "the required checks of .tld/admin-policy.yaml:\n  # it needs" (the sentence then reads "Deliberately not in the required checks of .tld/admin-policy.yaml: it needs a Docker daemon ..."); `website-build.yml:30` "so what scripts/update_branch_protection.py requires" becomes "so what .tld/admin-policy.yaml requires".
 - `docs/testing-policy.md:86-92`, the "Required checks" paragraph, becomes: "**Required checks.** `rulesets.default_branch.required_status_checks` in `.tld/admin-policy.yaml` is the reviewed list: `test`, the three `Test (Python 3.x, core suite)` checks, `static-analysis`, `org-mode-smoke`, the two `Sync client (Python 3.x)` checks, `website-build` (`website-build.yml`'s job, which also runs on every PR) and `n8n-node`. Update it in the PR that adds, renames or removes one of those jobs; `tests/unit/test_required_checks.py` fails when the list and the workflows disagree. The owner applies it to the live `tld-main` ruleset with `tld ops repo-admin apply` after the PR merges; no CI job does it, and `tld ops repo-admin audit` shows what differs." Also `:272`: "- **`/dod`** (from the devflow toolkit; its rows are `verify` in `.tld/toolkit.yaml`)" becomes "- **`/tld:dod`** (from the tld plugin; its rows are `verify` in `.tld/toolkit.yaml`)".
 
 **Live changes (manual, after the merge, §5).** The owner applies the policy first, so `tld-main` exists with all ten checks, then deletes `main`, `default-branch`, `release tags` and `releases/**` by hand. Deleting before applying would leave the default branch unprotected for the gap.
 
 ### 3.7 The `releases/*` convention is dropped
 
-Remove, in one phase:
+Remove, in two phases (docs, then workflows):
 - `CONTRIBUTING.md`: the subsection `### Release integration branches (`releases/*`)` (`:32-47`, up to the blank line before `## Decisions, plans and ADRs`).
 - `CLAUDE.md:6`: "branch naming, pull requests, `releases/*` integration\n  branches, and the plan/ADR lifecycle." becomes "branch naming, pull requests, and the plan/ADR lifecycle."
-- `.claude/skills/steward/SKILL.md:66`: the bullet "**`releases/*` is protected like `main`.** ..." and its continuation line.
-- `docs/testing-policy.md`: `:51` "every push to `main` or `releases/**`" becomes "every push to `main`"; `:140` "a push to `main`/`releases/**`" becomes "a push to `main`"; `:151` "every push to `main`/`releases/**`" becomes "every push to `main`"; `:228` the list "`main`, `stable`, `releases/*`, `refs/…`, `pull/…`" loses `releases/*`.
-- `docs/connector-qa.md:645`: "`main`, `stable`, `releases/*` or starts with" becomes "`main`, `stable` or starts with"; `.claude/commands/qa-record.md:26`: "`stable`, `releases/*`, `refs/…`" becomes "`stable`, `refs/…`".
-- `.github/workflows/tests.yml:5-8`: the three comment lines go and the trigger becomes `branches: [main]`. `website-build.yml`: header lines 3-4 say "on pushes to main" without `releases/**`, and `:18` becomes `branches: [main]`. `dependency-audit.yml:45-47`: the two comment lines go, `branches: [main]`.
-- `.github/workflows/qa-record-fixture.yml:99-108`: the comment and the guard lose `releases/*`: comment "main and stable are never recorded for: this workflow commits straight to the branch, which main must never accept outside a PR merge, and stable follows the latest stable release (ADR 0169). refs/ and pull/ would reach a pull-request ref, and with it a fork's code, on the runner that holds the QA credentials." The condition drops `|| [[ "${BRANCH}" == releases/* ]]` and the message becomes "never main, stable, or a refs/ or pull/ ref." `pages.yml` is untouched: it never had the pattern.
+- `.claude/skills/steward/SKILL.md:66`: the one-line bullet "**`releases/*` is protected like `main`.** If work is targeting one, branch from it and PR back into it." (line 67 is a different bullet and stays).
+- `docs/testing-policy.md`: `:51` "every push to `main` or `releases/**`" becomes "every push to `main`"; `:140` "a push to `main`/`releases/**`" becomes "a push to `main`"; `:151` "every push to `main`/`releases/**`" becomes "every push to `main`". Line 228 (the QA workflow's refusal list) stays.
+- `.github/workflows/tests.yml:5-8`: the three comment lines go and the trigger becomes `branches: [main]`. `website-build.yml`: header lines 3-4 become `# Builds privacyfence.eu with scripts/build_site.py on every pull request and on pushes to main,` and `# without deploying anything (pages.yml deploys, from main only). It proves both ways`, and `:18` becomes `branches: [main]`. `dependency-audit.yml:45-47`: the two comment lines go, `branches: [main]`.
+- `.github/workflows/qa-record-fixture.yml:99`: only the first comment line changes, from "# releases/* is protected the same as main (see CONTRIBUTING.md), and so is stable --" to "# main and stable are protected, and releases/* stays refused (ADR 0181) though no such branch is used any more --". The guard itself keeps refusing `releases/*`: it is a deny list, ADR 0181 names the refusal, `docs/connector-qa.md:645`, `.claude/commands/qa-record.md:26` and `docs/testing-policy.md:228` describe it, and a refusal of a branch nobody uses costs nothing. `pages.yml` is untouched: it never had the pattern.
 
 Rejected: keeping the convention with a hand-made `releases/**` ruleset when one is cut. No such branch has existed in this repository's history that the owner relies on, the live ruleset is stale (8 checks), and the second ruleset was the main reason the script took a `--branch` argument.
 
@@ -235,7 +233,7 @@ Rejected: keeping the convention with a hand-made `releases/**` ruleset when one
   - **`CONTRIBUTING.md:16-18`:** "`plan/` branches hold a plan document while its work is open (see [Decisions, plans and ADRs](#decisions-plans-and-adrs)) and are never PR'd themselves." becomes "A plan is written on its feature branch as `docs/<issue>/plan.md` (see [Decisions, plans and ADRs](#decisions-plans-and-adrs)) and reaches `main` with that branch's PR."
   - **`CONTRIBUTING.md:54-55`** (Plans bullet): "**Plans** (what we are about to do, and in what order) are a GitHub issue, or `docs/<issue>/plan.md` with its `deviations.md` (what the implementation did differently). They are written on the feature branch, reach `main` with the feature PR, and stay there as the record of why the change was made; they are not edited after that."
   - **`CONTRIBUTING.md:62-65`:** "**A plan's decisions become ADRs before it merges.** The PR that brings a plan to `main` adds or amends an ADR for every decision the plan made — anything hard to reverse, touching a trust boundary or the release/distribution path, or rejecting an alternative for a non-obvious reason — or says in its description that the plan made none."
-  - **`CONTRIBUTING.md:68-69`:** "ADRs link to issues, PRs, commits and source files. A plan under `docs/<issue>/` may be cited as the record of a change, but an ADR states its decision in full and never relies on the plan to explain it."
+  - **`CONTRIBUTING.md:68-70`:** replace only the sentence "ADRs link to issues, PRs, commits and\n  source files, never to a plan document, which will not outlive it." with "ADRs link to issues, PRs, commits and source files. A plan under `docs/<issue>/` may be cited as the record of a change, but an ADR states its decision in full and never relies on the plan to explain it." The sentence before it ("if it meets the bar above, it gets an ADR in the same PR.") stays.
   - **`docs/adr/README.md`:** line 8 "Plans come and go" becomes "Plans record one change as it was planned"; the Plan table row: Home "A GitHub issue, or `docs/<issue>/plan.md` with `deviations.md`, written on the feature branch", Lifecycle "Kept. Reaches `main` with the feature PR and stays as the record of the change; not edited after that. Its decisions are extracted here **before** it merges"; rule 4 "**Link only to things that last.** Issues, PRs, commit SHAs, source files, other ADRs, and a plan under `docs/<issue>/`. A top-level `docs/*-plan.md` from before plans were kept was deleted when its work landed: to cite one, give the commit that deleted it and the path, e.g. `git show 96cd5af4^:docs/https-connector-refactor-plan.md`."; rule 5 "**A plan reaching `main` is gated on this directory.** The PR that brings a plan to `main` either adds or amends the ADRs for every decision the plan contained, or states in its description that the plan contained none." (the rest of rule 5 is unchanged).
   - **§2.7** (`docs/coding-and-testing-guidelines.md:350-352`), **PR template** (`.github/pull_request_template.md:27-29`) and **`.tld/toolkit.yaml` `dod_manual` row 2:** replace "A PR that deletes a plan document extracts that plan's decisions into ADRs first" (toolkit: "A deleted plan document needs its decisions extracted into ADRs first") with "A PR that brings a plan document (`docs/<issue>/plan.md`) to `main` extracts that plan's decisions into ADRs first" (toolkit: "A plan document reaching `main` (`docs/<issue>/plan.md`) needs its decisions extracted into ADRs first"). The rest of each row is unchanged.
 - **`CLAUDE.md`, "## Commands and skills".** Replace the whole section, from its heading up to "## Parallel sessions & worktrees", with:
@@ -264,12 +262,12 @@ Rejected: keeping the convention with a hand-made `releases/**` ruleset when one
     [`docs/coding-and-testing-guidelines.md`](docs/coding-and-testing-guidelines.md#3-adding-a-connector), "Adding a connector".
   ```
 
-  The retirement phase turns "ADR 0311" and "ADR 0312" into links once the files exist.
+  Phase p10 turns "ADR 0311" and "ADR 0312" into links once the files exist.
 - **`.claude/skills/steward/SKILL.md`:** in the description "the devflow `pr-steward` skill" becomes "the tld plugin's pr-steward policy"; `:9` "sits on top of the `pr-steward` skill" becomes "sits on top of the tld plugin's pr-steward policy"; `:69` "Dispatch `release.yml` (dry run first) instead." becomes "Use `/cut-release`, which dispatches `tld-release.yml` (dry run first)."
-- **ADR index row 0132** (phase p8): its Status cell becomes "Superseded by 0311". Its title cell stays: titles quote the ADR.
+- **ADR index row 0132** (phase p9): its Status cell becomes "Superseded by 0311". Its title cell stays: titles quote the ADR.
 - **The protected-path lock.** Manual step mb1 had the owner merge `hooks.protect_paths_allow` on `main` (done: PRs 1111 and 1115). This plan edits one protected file that list lacks, `.github/workflows/qa-record-fixture.yml`, so `mb1-allow-qa-record-fixture` adds it (only an allow list on `main` counts). The retirement phase removes exactly the entries this plan used, as its last edit to `.tld/toolkit.yaml`: `.github/workflows/build.yml`, `.github/workflows/release.yml`, `.github/workflows/tests.yml`, `.github/workflows/website-build.yml`, `.github/workflows/dependency-audit.yml`, `.github/workflows/qa-record-fixture.yml` and `.tld/toolkit.yaml`. The other entries (`publish-pypi.yml`, `publish-org-image.yml`, `publish-n8n-node.yml`, `deploy-oauth-relay-worker.yml`, `ai-client-canary.yml`, `pages.yml`) belong to the desktop removal and stay; the final reply tells the owner they look stale. The removal takes effect when the feature PR merges. Rejected: leaving the allow list in place (it would keep the workflows and the profile editable by every later session).
 
-### 3.9 The ADRs (phase p8)
+### 3.9 The ADRs (phases p9 and p10)
 
 Each uses the template in `docs/adr/README.md`, has the Status `Accepted — <the date the phase runs, YYYY-MM-DD>` and is 40-80 lines long. Files under `docs/adr/`.
 
@@ -283,9 +281,9 @@ Each uses the template in `docs/adr/README.md`, has the Status `Accepted — <th
 - **0311**, `0311-workflow-commands-come-from-the-tld-plugin.md`. Title: "workflow commands come from the tld plugin". Status: "Supersedes 0132." Decision: `/tld:*` commands, the guard hooks (`protect-paths`, `no-git-tag`, `plan-gate`, `board-gate`) and the status board come from the tld plugin enabled in the Claude Project; the project facts are `.tld/toolkit.yaml`, validated by `tld profile validate`; `.claude/skills/steward/SKILL.md` keeps only PrivacyFence policy; there is no SessionStart install of the plugin. Alternatives: stay on devflow; install tld from a SessionStart hook pinned to a tag (as 0132 rejected for devflow). Consequences: protected files (`.github/workflows/**`, `.tld/toolkit.yaml`) need an allow list on `main` before a session may edit them; a real release dispatch from a session needs `tld guard allow-release`; the plugin version is not pinned in this repository.
 - **0312**, `0312-plans-stay-on-main-as-the-record-of-their-change.md`. Title: "plans stay on `main` as the record of their change". Decision: the lifecycle sentence of §3.8, and that the docs tests skip plan records entirely (already in `tests/unit/test_docs_links.py` and `tests/unit/test_docs_references_exist.py`). Alternatives: keep deleting plans (tld's implement cannot: no phase may touch the plan); move plans to `docs/plans/<n>/` (rejected by the owner: `plan_dir` stays `docs/`); hold plan records to the reference checks (a later rename would force editing a historical record). Consequences: ADR README rules 4 and 5 change as in §3.8; `build_site.py` publishes only top-level `docs/*.md`, so plans never reach the website.
 - **0313**, `0313-rulesets-and-required-checks-live-in-the-admin-policy.md`. Title: "rulesets and required checks live in the admin policy". Decision: `.tld/admin-policy.yaml` is the one list of required checks and merge-method settings; `tld ops repo-admin apply` writes `tld-main` and `tld-tags`; `scripts/update_branch_protection.py` is retired; `tests/unit/test_required_checks.py` keeps the list equal to the workflows; the owner deletes rulesets the policy does not own. Alternatives: keep the script for `main` (two sources); keep it read-only (it needs an owner token and compares against a ruleset the policy no longer writes); a CI job that applies the policy (the token would need ruleset admin rights). Consequences: §3.6's loosened settings (no strict up-to-date rule, no code-owner review requirement, one approval with an admin bypass through a pull request); merge methods are restricted by `repo_settings`, not by a ruleset; the policy's `admin_bypass` works only once the old `main` ruleset is deleted. Verification: `tests/unit/test_required_checks.py`.
-- **0314**, `0314-the-releases-integration-branch-convention-is-retired.md`. Title: "the `releases/*` integration-branch convention is retired". Decision: no long-lived `releases/*` branches; `main` is the only integration branch; no CI trigger, ruleset or document keeps the pattern. Alternatives: keep the convention with a hand-made ruleset when a branch is cut; keep a script just for `releases/**`. Consequences: a batch of work that must wait is a feature branch or a feature flag, and the `v*` tags are cut from `main` only (`tag_release.py` already refuses another branch).
-- **Status lines on old ADRs** (README rule 3: one line each, nothing else in the body): 0185 gains "Superseded by [ADR 0310](0310-a-release-tag-is-created-only-by-tld-release-yml.md)."; 0021 gains "Amended by [ADR 0310](0310-a-release-tag-is-created-only-by-tld-release-yml.md): the tag is created by `tld-release.yml` with `TLD_RELEASE_TOKEN`."; 0132 gains "Superseded by [ADR 0311](0311-workflow-commands-come-from-the-tld-plugin.md)." ADRs 0030 and 0023 are unchanged.
-- **Index rows** (`docs/adr/README.md`): five new rows at the end in the existing format, Status cells: 0310 "Accepted; supersedes 0185, amends 0021; relates to 0023, 0030", 0311 "Accepted; supersedes 0132", 0312 "Accepted", 0313 "Accepted", 0314 "Accepted"; row 0185's Status cell becomes "Superseded by 0310"; row 0021's becomes "Accepted (retroactive); amended by 0185, 0310" (read the current cell and append only "; amended by 0310"); row 0132's becomes "Superseded by 0311".
+- **0314**, `0314-the-releases-integration-branch-convention-is-retired.md`. Title: "the `releases/*` integration-branch convention is retired". Decision: no long-lived `releases/*` branches; `main` is the only integration branch; no CI trigger, ruleset or contributor document keeps the pattern. The QA recording workflow keeps refusing `releases/*` branches as a harmless deny-list entry (ADR 0181 is unchanged). Alternatives: keep the convention with a hand-made ruleset when a branch is cut; keep a script just for `releases/**`. Consequences: a batch of work that must wait is a feature branch or a feature flag, and the `v*` tags are cut from `main` only (`tag_release.py` already refuses another branch).
+- **Status lines on old ADRs** (phase p10; README rule 3: one line each, nothing else in the body): 0185 gains "Superseded by [ADR 0310](0310-a-release-tag-is-created-only-by-tld-release-yml.md)."; 0021 gains "Amended by [ADR 0310](0310-a-release-tag-is-created-only-by-tld-release-yml.md): the tag is created by `tld-release.yml` with `TLD_RELEASE_TOKEN`."; 0132 gains "Superseded by [ADR 0311](0311-workflow-commands-come-from-the-tld-plugin.md)." ADRs 0030 and 0023 are unchanged.
+- **Index rows** (`docs/adr/README.md`, phase p9): five new rows at the end in the existing format, Status cells: 0310 "Accepted; supersedes 0185, amends 0021; relates to 0023, 0030", 0311 "Accepted; supersedes 0132", 0312 "Accepted", 0313 "Accepted", 0314 "Accepted"; row 0185's Status cell becomes "Superseded by 0310"; row 0021's becomes "Accepted (retroactive); amended by 0185, 0310" (read the current cell and append only "; amended by 0310"); row 0132's becomes "Superseded by 0311".
 
 ## 4. ADRs
 
@@ -296,6 +294,8 @@ Each uses the template in `docs/adr/README.md`, has the Status `Accepted — <th
 - 0314: the `releases/*` integration-branch convention is retired.
 
 ## 5. Manual steps
+
+These steps follow the playbook's two places: `manual_before` before the first phase, `manual_after` after the last phase merges into the feature branch. Because `tld-release` and `tld-main` act only on `main`, the three `manual_after` items are done after the feature PR merges and reported there as a follow-up.
 
 ### Before implementation
 
@@ -317,7 +317,7 @@ Each uses the template in `docs/adr/README.md`, has the Status `Accepted — <th
 
 **3. ma1-dry-run-with-check-script: after the feature PR merges, dry-run `tld-release.yml` with the new check script (about 10 minutes).**
 1. Open https://github.com/privacyfence/privacyfence/actions/workflows/tld-release.yml, then **Run workflow** on `main`, with the next pre-release `version` (a stable dry run fails until a release PR has opened its `CHANGELOG.md` section) and `dry_run` ticked. Approve the environment.
-2. Open the run. "Run the project's release check" must list `==> release channel`, then `==> tag checks`, and must end with `release check passed for v<version>`.
+2. Open the run. "Run the project's release check" must list `==> release channel`, then `==> tag checks`, and must end with a line that starts `release check passed for v<version>`.
 3. Report back as a PR line: `tld-release dry run with release_check.py: pass|fail <run URL>`.
 
 **4. ma2-apply-the-policy-and-delete-the-old-rulesets: make `tld-main` the only ruleset on the default branch (about 15 minutes, after the merge).**
@@ -345,7 +345,7 @@ Each uses the template in `docs/adr/README.md`, has the Status `Accepted — <th
 - **The first annotated tag.** `git describe --tags` (`setuptools_scm`), `r2_release.py check-tag` and `release_run_guard.py` handle annotated tags (20 old annotated tags exist). Not proven: whether `github.sha` on a push of an annotated tag created through the API is the commit that `release_run_guard.py` compares. `/cut-release` step 7 watches every real cut for the `build.yml` and `publish-pypi.yml` runs, and a pre-release is preferred for the first one.
 - **Token scope.** If the real cut fails at "Publish the tag" with a 403 that mentions workflows, the fine-grained token also needs **Workflows: write**. A settings fix for the owner, found at the first real cut.
 - **`ma1` happens after the merge**, because tld-release runs only on `main`; the PR carries it as an unchecked item. Before the merge the script is proven by `tests/unit/test_release_check.py` and by p2's local run against a clone.
-- **ADR numbers.** If another PR takes 0310-0314 first, renumber in p8 (README rule 6) and update every "ADR 031x" mention on this branch; record the mechanical rename as a deviation.
+- **ADR numbers.** If another PR takes 0310-0314 first, renumber in p9 (README rule 6) and update every "ADR 031x" mention on this branch; record the mechanical rename as a deviation.
 - **A required check that never reports blocks every merge.** `tests/unit/test_required_checks.py` guards names and matrices; it cannot see a job-level `if:` added later, so a reviewer of a `tests.yml` change checks that too.
 
 ## Implementation manifest
@@ -358,7 +358,7 @@ max_parallel: 2
 manual_before:
   - id: mb1-allow-qa-record-fixture
     title: Add qa-record-fixture.yml to hooks.protect_paths_allow on main
-    why: p7 edits that workflow; the protect-paths hook reads its allow list only from main, so without it the phase is refused.
+    why: p8 edits that workflow; the protect-paths hook reads its allow list only from main, so without it the phase is refused.
     done_when: git show origin/main:.tld/toolkit.yaml lists .github/workflows/qa-record-fixture.yml under hooks.protect_paths_allow.
   - id: mb2-tld-release-ready
     title: TLD_RELEASE_TOKEN set in tld-release and one green tld-release dry run on main
@@ -382,7 +382,8 @@ final_checks:
   - CHANGELOG.md has no new version heading and no new entry (nothing user-visible changes)
   - "`test ! -e .github/workflows/release.yml && test ! -e scripts/update_branch_protection.py` exits 0"
   - "`git grep -n 'release\\.yml' -- . ':!CHANGELOG.md' ':!docs/adr/' ':(exclude,glob)docs/[0-9]*/**' | grep -v tld-release` prints nothing"
-  - "`git grep -n 'releases/\\*' -- . ':!CHANGELOG.md' ':!docs/adr/' ':(exclude,glob)docs/[0-9]*/**'` prints nothing"
+  - "`git grep -n 'releases/\\*' -- . ':!CHANGELOG.md' ':!docs/adr/' ':(exclude,glob)docs/[0-9]*/**' ':!.github/workflows/qa-record-fixture.yml' ':!docs/connector-qa.md' ':!.claude/commands/qa-record.md' ':!docs/testing-policy.md'` prints nothing"
+  - "`git grep -n 'releases/\\*\\*' -- docs/testing-policy.md` prints nothing"
   - "`git grep -n -i 'devflow\\|claude-toolkit' -- . ':!CHANGELOG.md' ':!docs/adr/' ':(exclude,glob)docs/[0-9]*/**' | grep -v 'tkcs-lab-devflow'` prints nothing"
 phases:
   - id: p1-build-permissions
@@ -427,14 +428,14 @@ phases:
          Fake `subprocess.run` on the imported module with monkeypatch; only
          test_an_invalid_version_fails_at_the_channel_step runs the real scripts.
       5. Local proof, recorded in your report. In the repository run `git fetch -q --tags origin main`. Let
-         NEWEST be the output of `git tag --list 'v*' --sort=-v:refname | head -1`; the version is NEWEST without
-         the leading v, with its pre-release number plus one (v7.1.0a2 gives 7.1.0a3), or, when NEWEST is stable,
-         its patch plus one followed by a1 (v7.0.2 gives 7.0.3a1). Then in a scratch directory run
+         NEWEST be the highest release tag by PEP 440: `git tag --list 'v*' | sed 's/^v//' | python3 -c "import sys; from packaging.version import Version; print(max(sys.stdin.read().split(), key=Version))"`;
+         the version is NEWEST with its pre-release number plus one (7.1.0a2 gives 7.1.0a3), or, when NEWEST is stable,
+         its patch plus one followed by a1 (7.0.2 gives 7.0.3a1). Then in a scratch directory run
          `git clone -q --no-local <repo path> chk && cd chk && git fetch -q --tags`, then
-         `git checkout -q -B main origin/main && git branch -q --set-upstream-to=origin/main main`,
+         `git checkout -q -B main $(git -C <repo path> rev-parse origin/main) && git update-ref refs/remotes/origin/main HEAD && git branch -q --set-upstream-to=origin/main main`,
          copy in scripts/release_check.py and scripts/tag_release.py from your branch, commit them, run
          `git update-ref refs/remotes/origin/main HEAD`, then `python3 scripts/release_check.py <version>`.
-         It must end with `release check passed`. Quote the last five lines.
+         It must end with a line starting `release check passed for v<version>`. Quote the last five lines.
       6. Run `python3 -m pytest tests/unit/test_release_check.py tests/unit/test_tag_release.py -q` and `ruff check scripts tests/unit`.
       Comments and docstrings carry no issue numbers, phase ids or plan references (tests/unit/test_code_no_history.py).
       Stop condition: if step 5 fails, run the same command with `scripts/tag_release.py <version> --no-fetch
@@ -529,7 +530,7 @@ phases:
       - python3 -m pytest tests/unit/test_required_checks.py -q passes with 5 tests
       - python3 -m pytest tests/unit/test_definition_of_done_drift.py -q passes
       - test ! -e scripts/update_branch_protection.py
-      - "`git grep -n update_branch_protection -- . ':!CHANGELOG.md' ':!docs/adr/' ':(exclude,glob)docs/[0-9]*/**'` prints nothing"
+      - "`git grep -n update_branch_protection -- . ':!CHANGELOG.md' ':!docs/adr/' ':(exclude,glob)docs/[0-9]*/**' ':!CONTRIBUTING.md'` prints nothing"
       - "`python3 -c \"import yaml; d=yaml.safe_load(open('.tld/admin-policy.yaml')); print(len(d['rulesets']['default_branch']['required_status_checks']))\"` prints 10"
       - grep -n 'allow_squash_merge: false' .tld/admin-policy.yaml matches
       - 'grep -n ''check_script: scripts/release_check.py'' .tld/admin-policy.yaml matches'
@@ -562,36 +563,60 @@ phases:
       - grep -n 'docs/<issue>/plan.md' CONTRIBUTING.md CLAUDE.md docs/coding-and-testing-guidelines.md .github/pull_request_template.md matches in each file
       - grep -n 'release\.yml' CLAUDE.md .claude/skills/steward/SKILL.md | grep -v tld-release prints nothing
       - python3 -m pytest tests/unit/test_docs_no_history.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py tests/unit/test_definition_of_done_drift.py -q passes
-  - id: p7-drop-release-branches
-    title: Drop the releases/* convention, its CI triggers and its docs
+  - id: p7-release-branch-docs
+    title: Drop the releases/* convention from the contributor docs
     depends_on: [p5-rulesets-in-policy, p6-tld-lifecycle-docs]
-    complexity: M
+    complexity: S
     touches:
       - CONTRIBUTING.md
       - CLAUDE.md
       - .claude/skills/steward/SKILL.md
       - docs/testing-policy.md
-      - docs/connector-qa.md
-      - .claude/commands/qa-record.md
+    brief: |
+      Design: docs/1093/plan.md section 3.7, the bullets for CONTRIBUTING.md, CLAUDE.md:6, the steward skill and docs/testing-policy.md (lines 51, 140, 151 only; line 228 stays).
+      1. CONTRIBUTING.md: delete the subsection `### Release integration branches (`releases/*`)` through the paragraph that ends
+         "never ships to production ahead of that branch's eventual merge into `main`.", with the blank line that followed it, so that
+         `## Decisions, plans and ADRs` follows the "Before opening a PR" list as it did before the subsection.
+      2. CLAUDE.md line 6: the literal edit of 3.7.
+      3. .claude/skills/steward/SKILL.md: delete the one-line bullet at line 66 and nothing else.
+      4. docs/testing-policy.md: the three literal edits of 3.7.
+      5. Run `python3 -m pytest tests/unit/test_docs_no_history.py tests/unit/test_docs_links.py tests/unit/test_docs_references_exist.py -q` and `python3 -m pytest tests/unit -q`.
+      Stop condition: if a test reads text you removed, stop with status=blocked and quote it.
+    acceptance:
+      - grep -n 'Release integration branches' CONTRIBUTING.md prints nothing
+      - grep -n 'releases/\*' CONTRIBUTING.md CLAUDE.md .claude/skills/steward/SKILL.md prints nothing
+      - grep -n 'releases/\*\*' docs/testing-policy.md prints nothing
+      - python3 -m pytest tests/unit -q passes
+  - id: p8-release-branch-workflows
+    title: Drop the releases/** triggers from the workflows
+    depends_on: [p5-rulesets-in-policy]
+    complexity: S
+    touches:
       - .github/workflows/tests.yml
       - .github/workflows/website-build.yml
       - .github/workflows/dependency-audit.yml
       - .github/workflows/qa-record-fixture.yml
     brief: |
-      Design: docs/1093/plan.md section 3.7 (all of it).
-      1. Make the edits of 3.7 file by file, with the literal texts given there. Find each place with
-         `git grep -n 'releases/\*' -- . ':!CHANGELOG.md' ':!docs/adr/' ':(exclude,glob)docs/[0-9]*/**'`; matches under docs/adr/, the plan folders docs/<n>/ and CHANGELOG.md stay.
-      2. After the workflow edits, check each file still parses: `python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/tests.yml .github/workflows/website-build.yml .github/workflows/dependency-audit.yml .github/workflows/qa-record-fixture.yml`.
-      3. Run `python3 -m pytest tests/unit -q` and `ruff check .`.
-      Stop condition: if a workflow edit is refused as a protected path, mb1 is not on main or the allow list lost the file: stop with status=blocked. If a test reads the removed text, stop with status=blocked and quote it.
+      Design: docs/1093/plan.md section 3.7, the workflow bullets.
+      1. .github/workflows/tests.yml: delete the three comment lines above `branches: [main, "releases/**"]` (they start `# releases/** carries`)
+         and change that line to `branches: [main]`.
+      2. .github/workflows/website-build.yml: replace the two header lines 3-4 with the two literal lines of 3.7, and change
+         `branches: [main, "releases/**"]` to `branches: [main]`.
+      3. .github/workflows/dependency-audit.yml: delete the two comment lines above `branches: [main, "releases/**"]` (they start `# releases/** is protected`)
+         and change that line to `branches: [main]`.
+      4. .github/workflows/qa-record-fixture.yml: change only the first of the four comment lines at line 99, with the literal of 3.7. Leave the guard condition and its error message unchanged.
+      5. Run `python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" .github/workflows/tests.yml .github/workflows/website-build.yml .github/workflows/dependency-audit.yml .github/workflows/qa-record-fixture.yml`,
+         then `python3 -m pytest tests/unit -q` and `ruff check .`.
+      Stop condition: if an edit is refused as a protected path, mb1 is not on main or the allow list lost the file: stop with status=blocked. If a test reads the removed text, stop with status=blocked and quote it.
     acceptance:
-      - "`git grep -n 'releases/\\*' -- . ':!CHANGELOG.md' ':!docs/adr/' ':(exclude,glob)docs/[0-9]*/**'` prints nothing"
+      - grep -n 'releases/\*\*' .github/workflows/tests.yml .github/workflows/website-build.yml .github/workflows/dependency-audit.yml prints nothing
       - grep -n 'branches: \[main\]' .github/workflows/tests.yml .github/workflows/website-build.yml .github/workflows/dependency-audit.yml matches in each file
-      - grep -n 'Release integration branches' CONTRIBUTING.md prints nothing
+      - grep -n 'CONTRIBUTING' .github/workflows/qa-record-fixture.yml prints nothing
+      - grep -n 'releases/\*' .github/workflows/qa-record-fixture.yml still matches (the guard is kept)
       - python3 -m pytest tests/unit -q passes
-  - id: p8-adrs
+  - id: p9-adrs
     title: ADRs 0310-0314 and the ADR index
-    depends_on: [p1-build-permissions, p3-release-workflows, p4-release-docs, p7-drop-release-branches]
+    depends_on: [p1-build-permissions, p3-release-workflows, p4-release-docs, p7-release-branch-docs, p8-release-branch-workflows]
     complexity: M
     touches:
       - docs/adr/0310-a-release-tag-is-created-only-by-tld-release-yml.md
@@ -599,46 +624,47 @@ phases:
       - docs/adr/0312-plans-stay-on-main-as-the-record-of-their-change.md
       - docs/adr/0313-rulesets-and-required-checks-live-in-the-admin-policy.md
       - docs/adr/0314-the-releases-integration-branch-convention-is-retired.md
-      - docs/adr/0021-release-tag-push-never-uses-github-token.md
-      - docs/adr/0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md
-      - docs/adr/0185-a-release-tag-is-created-only-by-release-yml.md
       - docs/adr/README.md
     brief: |
-      Design: docs/1093/plan.md sections 3.9 (ADRs, Status lines, index rows) and 3.8 (the docs/adr/README.md lifecycle edits).
+      Design: docs/1093/plan.md sections 3.9 (ADRs and index rows) and 3.8 (the docs/adr/README.md lifecycle edits).
       1. Check `ls docs/adr` and the open PRs' ADR files: if 0310-0314 is taken, take the next free numbers, use them everywhere below, and record the renumbering as a deviation.
       2. Write the five ADRs of 3.9 from the template in docs/adr/README.md, Accepted with today's date (UTC), 40-80 lines each. Content comes only from plan sections 3.3-3.9; do not cite the plan, a phase id or an issue number inside an ADR.
-      3. Add the one Status line each to ADRs 0185, 0021 and 0132 (3.9). Change nothing else in those files.
-      4. docs/adr/README.md: line 8, the Plan table row and rules 4 and 5 (3.8), and the index rows (3.9).
-      5. Run `python3 -m pytest tests/unit -q -k "adr or docs"` and `ruff check .`.
+      3. docs/adr/README.md: line 8, the Plan table row and rules 4 and 5 (3.8), and the five new index rows and the three changed Status cells (0185, 0021, 0132) of 3.9.
+      4. Run `python3 -m pytest tests/unit -q -k "adr or docs"` and `ruff check .`.
       Stop condition: if an ADR index test rejects a row format, copy the format of the row above it and stop with status=blocked if it still fails.
     acceptance:
       - ls docs/adr/031[0-4]-*.md lists five files (or the renumbered ones named in deviations)
       - grep -c -E '^\| \[031[0-4]\]' docs/adr/README.md prints 5
-      - grep -n 'Amended by \[ADR 0310\]' docs/adr/0021-release-tag-push-never-uses-github-token.md matches
-      - grep -n 'Superseded by \[ADR 0310\]' docs/adr/0185-a-release-tag-is-created-only-by-release-yml.md matches
-      - grep -n 'Superseded by \[ADR 0311\]' docs/adr/0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md matches
+      - grep -n 'Superseded by 0310' docs/adr/README.md matches
       - python3 -m pytest tests/unit -q -k "adr or docs" passes
-  - id: p9-retirement
-    title: Profile wording, ADR links, and the protected-path lock
-    depends_on: [p8-adrs]
-    complexity: S
+  - id: p10-retirement
+    title: Old-ADR status lines, profile wording, ADR links and the protected-path lock
+    depends_on: [p9-adrs]
+    complexity: M
     touches:
+      - docs/adr/0021-release-tag-push-never-uses-github-token.md
+      - docs/adr/0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md
+      - docs/adr/0185-a-release-tag-is-created-only-by-release-yml.md
       - .tld/toolkit.yaml
       - CLAUDE.md
       - docs/releasing.md
     brief: |
-      Design: docs/1093/plan.md sections 3.4 (the ci.dispatchable row), 3.8 (toolkit header, dod_manual row 2, the lock) and 3.9.
-      1. CLAUDE.md: turn "ADR 0311" and "ADR 0312" into [ADR 0311](docs/adr/0311-workflow-commands-come-from-the-tld-plugin.md)
-         and [ADR 0312](docs/adr/0312-plans-stay-on-main-as-the-record-of-their-change.md) (use the renumbered files if p8 renumbered).
+      Design: docs/1093/plan.md sections 3.4 (the ci.dispatchable row), 3.8 (toolkit header, dod_manual row 2, the lock) and 3.9 (Status lines).
+      1. Add the one Status line each to ADRs 0185, 0021 and 0132 (3.9), using the final numbers of p9. Change nothing else in those files.
+      2. CLAUDE.md: turn "ADR 0311" and "ADR 0312" into [ADR 0311](docs/adr/0311-workflow-commands-come-from-the-tld-plugin.md)
+         and [ADR 0312](docs/adr/0312-plans-stay-on-main-as-the-record-of-their-change.md) (use the renumbered files if p9 renumbered).
          docs/releasing.md: turn the plain "ADR 0310" mentions into [ADR 0310](adr/0310-a-release-tag-is-created-only-by-tld-release-yml.md).
-      2. .tld/toolkit.yaml: the header of 3.8, the dod_manual row 2 of 3.8, and the ci.dispatchable row of 3.4 (replace the `release.yml` row).
+      3. .tld/toolkit.yaml: the header of 3.8, the dod_manual row 2 of 3.8, and the ci.dispatchable row of 3.4 (replace the `release.yml` row).
          Run `tld profile validate .tld/toolkit.yaml` and `python3 -m pytest tests/unit/test_definition_of_done_drift.py -q`.
-      3. Last edit of the phase: delete from `hooks.protect_paths_allow` in .tld/toolkit.yaml exactly the seven entries listed in 3.8
+      4. Last edit of the phase: delete from `hooks.protect_paths_allow` in .tld/toolkit.yaml exactly the seven entries listed in 3.8
          (`build.yml`, `release.yml`, `tests.yml`, `website-build.yml`, `dependency-audit.yml`, `qa-record-fixture.yml` and `.tld/toolkit.yaml`) and keep the other six. Run `tld profile validate .tld/toolkit.yaml` again.
-      4. CHANGELOG.md gets no entry: nothing user-visible changes.
-      5. Run `python3 -m pytest tests/unit -q` and `ruff check .`.
-      Stop condition: if `tld profile validate` rejects the profile, stop with status=blocked and quote it. If the allow list on this branch differs from the twelve entries named in section 2, remove only the seven named ones and report the difference.
+      5. CHANGELOG.md gets no entry: nothing user-visible changes.
+      6. Run `python3 -m pytest tests/unit -q` and `ruff check .`.
+      Stop condition: if `tld profile validate` rejects the profile, stop with status=blocked and quote it. If the allow list on this branch does not hold the thirteen entries (the twelve of section 2 plus qa-record-fixture.yml from mb1), remove only the seven named ones and report the difference.
     acceptance:
+      - grep -n 'Amended by \[ADR 0310\]' docs/adr/0021-release-tag-push-never-uses-github-token.md matches
+      - grep -n 'Superseded by \[ADR 0310\]' docs/adr/0185-a-release-tag-is-created-only-by-release-yml.md matches
+      - grep -n 'Superseded by \[ADR 0311\]' docs/adr/0132-workflow-commands-come-from-the-devflow-toolkit-plugins.md matches
       - grep -n 'workflow: release.yml' .tld/toolkit.yaml prints nothing
       - grep -n 'workflow: tld-release.yml' .tld/toolkit.yaml matches
       - grep -n -i 'devflow\|claude-toolkit' .tld/toolkit.yaml prints nothing
