@@ -10,7 +10,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-release-check-script
 
-- pending
+- retry: Worker reported blocked first because the tld plugin is missing in worker containers; the orchestrator ruled roles are not required (tld roles required: none) and the worker reissued status=done at the same head.
+- review: Diff matches the design of sections 3.2 and 3.3; the one failing unit test in the worker run was the plan line 32 reference, since fixed on the feature branch.
 
 ## p3-release-workflows
 
