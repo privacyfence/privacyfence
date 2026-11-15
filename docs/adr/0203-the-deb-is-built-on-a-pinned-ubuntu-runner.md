@@ -6,6 +6,8 @@ Accepted — 2026-10-19. Implemented: `.github/workflows/build.yml` (`build-deb`
 "pin the build runner" alternative [ADR 0039](0039-installers-refuse-an-os-below-the-support-matrix.md)
 left for later.
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 The `.deb` ships a PyInstaller bundle linked against the build host's glibc, so the runner image

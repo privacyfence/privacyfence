@@ -11,6 +11,8 @@ declares `libc6`/`systemd` floors.
 Amended by [ADR 0044](0044-the-deb-declares-only-the-architectures-ci-builds.md): `debian/control`
 now declares `amd64` only.
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 Local mode needed a desktop install path on Linux equivalent to the macOS DMG. Before this

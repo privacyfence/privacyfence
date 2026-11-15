@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Supersedes [ADR 0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md).
+Accepted — 2026-11-14. Supersedes [ADR 0112](0112-stable-releases-are-listed-on-the-mcp-registry-with-the-mcpb.md). Implemented.
 
 ## Context
 

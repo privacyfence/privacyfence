@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Supersedes [ADR 0024](0024-pre-releases-are-publicly-downloadable.md); amends [ADR 0277](0277-the-websites-primary-call-to-action-is-install.md).
+Accepted — 2026-11-14. Supersedes [ADR 0024](0024-pre-releases-are-publicly-downloadable.md); amends [ADR 0277](0277-the-websites-primary-call-to-action-is-install.md). Implemented.
 
 ## Context
 

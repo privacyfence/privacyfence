@@ -5,6 +5,8 @@
 Accepted — 2026-09-24.
 Amends [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) (the `.deb` now declares dependency floors).
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 The three installers built by `build.yml` declared no minimum OS. The macOS app bundle carried

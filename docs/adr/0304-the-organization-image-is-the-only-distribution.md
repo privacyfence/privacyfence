@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Amends [ADR 0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md), [ADR 0040](0040-telegram-app-credentials-ship-in-every-distribution.md), [ADR 0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md), [ADR 0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md), [ADR 0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md), [ADR 0208](0208-the-organization-image-is-published-to-ghcr-for-stable-releases-only.md), [ADR 0209](0209-the-organization-image-is-tested-in-build-yml-and-pushed-by-a-workflow-of-its-own.md), [ADR 0255](0255-built-in-oauth-apps-ship-in-every-distribution.md); relates to [ADR 0295](0295-the-supported-python-floor-is-3-11-5.md).
+Accepted — 2026-11-14. Amends [ADR 0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md), [ADR 0040](0040-telegram-app-credentials-ship-in-every-distribution.md), [ADR 0114](0114-the-glama-listing-runs-a-tool-catalog-not-a-hosted-privacyfence.md), [ADR 0161](0161-privacyfence-sync-is-a-separate-plain-mcp-client.md), [ADR 0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md), [ADR 0208](0208-the-organization-image-is-published-to-ghcr-for-stable-releases-only.md), [ADR 0209](0209-the-organization-image-is-tested-in-build-yml-and-pushed-by-a-workflow-of-its-own.md), [ADR 0255](0255-built-in-oauth-apps-ship-in-every-distribution.md); relates to [ADR 0295](0295-the-supported-python-floor-is-3-11-5.md). Implemented.
 
 ## Context
 

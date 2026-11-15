@@ -8,6 +8,8 @@ phase P4b. The shim was removed on 2026-09-02 (`8ea876c8`) in favour of a "Conne
 (P4c), and restored on 2026-09-03 (`beb445a2`); the plan's D12 records that reversal.
 [ADR 0007](0007-local-file-bridge.md) builds on this decision.
 
+**Superseded by [ADR 0299](0299-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md), 2026-11-15.**
+
 ## Context
 
 Before the HTTP refactor, `PrivacyFence.mcpb` wrapped the Node bridge (`bridge/`): an stdio MCP

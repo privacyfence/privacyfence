@@ -4,6 +4,8 @@
 
 Accepted — 2026-10-15.
 
+**Deprecated: ADR 0300 retired the download Worker, 2026-11-15.**
+
 ## Context
 
 The privacy page at `/privacy/` says the download Worker adds one to a counter when someone downloads

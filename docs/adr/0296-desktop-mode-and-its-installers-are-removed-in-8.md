@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Supersedes [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md), [ADR 0003](0003-separated-installs-only.md), [ADR 0261](0261-local-mode-is-deprecated-in-7-and-removed-in-8.md).
+Accepted — 2026-11-14. Supersedes [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md), [ADR 0003](0003-separated-installs-only.md), [ADR 0261](0261-local-mode-is-deprecated-in-7-and-removed-in-8.md). Implemented.
 
 ## Context
 

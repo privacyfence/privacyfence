@@ -5,6 +5,8 @@
 Accepted — 2026-10-30. Implemented: `src/privacyfence/data_format.py`.
 Relates to [ADR 0041](0041-only-the-current-install-layout-is-supported.md), [ADR 0047](0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md), [ADR 0171](0171-auto-accept-rules-use-nine-verbs.md), [ADR 0172](0172-one-stored-auto-accept-rule-per-scope.md), [ADR 0228](0228-an-extra-scope-can-give-each-verb-its-own-predicate.md) and [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md).
 
+Amended by [ADR 0297](0297-8x-refuses-a-data-directory-that-is-not-ready-for-it.md), 2026-11-15.
+
 ## Context
 
 8.x should delete the code that upgrades data from older releases: the version-1 policy clean-up

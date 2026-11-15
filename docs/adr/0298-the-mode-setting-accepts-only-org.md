@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Relates to [ADR 0260](0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md).
+Accepted — 2026-11-14. Relates to [ADR 0260](0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md). Implemented.
 
 ## Context
 

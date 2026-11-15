@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Supersedes [ADR 0007](0007-local-file-bridge.md), [ADR 0012](0012-mcpb-shim-connects-claude-desktop-to-local-mode.md); amends [ADR 0028](0028-clients-without-the-shim-get-capability-urls.md), [ADR 0160](0160-org-mode-exports-are-delivered-by-a-one-time-link.md).
+Accepted — 2026-11-14. Supersedes [ADR 0007](0007-local-file-bridge.md), [ADR 0012](0012-mcpb-shim-connects-claude-desktop-to-local-mode.md); amends [ADR 0028](0028-clients-without-the-shim-get-capability-urls.md), [ADR 0160](0160-org-mode-exports-are-delivered-by-a-one-time-link.md). Implemented.
 
 ## Context
 

@@ -5,6 +5,8 @@
 Accepted — 2026-10-15. Implemented.
 Amends [ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md).
 
+**Deprecated: ADR 0296 removed desktop mode, 2026-11-15.**
+
 ## Context
 
 `handoff/` is group-writable by design ([ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md)).

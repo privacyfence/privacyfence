@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Supersedes [ADR 0057](0057-stable-tags-are-gated-on-graphical-session-coverage.md); amends [ADR 0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md).
+Accepted — 2026-11-14. Supersedes [ADR 0057](0057-stable-tags-are-gated-on-graphical-session-coverage.md); amends [ADR 0087](0087-two-claude-desktop-extensions-ship-in-the-dmg-and-the-windows-installer.md). Implemented.
 
 ## Context
 

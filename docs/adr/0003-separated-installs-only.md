@@ -14,6 +14,8 @@ the declinable first-start admin prompt (#428 D1) as *shipping* mechanisms. ADR 
 1–6 are otherwise unchanged and are the reason this one exists: this ADR decides nothing new about
 what the boundary is, only that a supported install is never on the wrong side of it.
 
+**Superseded by [ADR 0296](0296-desktop-mode-and-its-installers-are-removed-in-8.md), 2026-11-15.**
+
 ## Context
 
 #428 Phase 4 moved local mode's daemon onto its own OS account. #426 made a session insufficient to

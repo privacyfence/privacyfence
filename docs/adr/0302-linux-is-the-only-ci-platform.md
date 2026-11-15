@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-11-14. Relates to [ADR 0057](0057-stable-tags-are-gated-on-graphical-session-coverage.md).
+Accepted — 2026-11-14. Relates to [ADR 0057](0057-stable-tags-are-gated-on-graphical-session-coverage.md). Implemented.
 
 ## Context
 
