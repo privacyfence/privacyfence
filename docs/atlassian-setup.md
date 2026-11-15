@@ -252,5 +252,6 @@ Management site, or connect a site that has it.
 **Jira Assets says "could not look up this site's Assets workspace id"** — no workspace id is
 configured. Set it as step 2 of the [Jira Assets](#jira-assets) setup describes.
 
-**Jira Assets fails with `check_connection failed: 404 Error`** — the configured workspace id is not
-this site's. Look it up again on the site the user connected.
+**Jira Assets fails with `check_connection failed: HTTP 404: …` or `HTTP 400: …`** — the text after
+the second colon is Atlassian's reason. Most often the configured workspace id is not this site's: look
+it up again on the site the user connected.
