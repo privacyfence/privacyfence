@@ -246,7 +246,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p16-ci-legs
 
-- pending
+- review: After merge: tests.yml jobs are test, test-python-compat, org-mode-smoke, org-docker-image, static-analysis, n8n-node and sync with every needs reference resolving; REQUIRED_STATUS_CHECKS no longer names platform-windows or platform-macos; all 59 coverage floors name existing modules; the coverage ratchet passes. The live branch-protection ruleset is NOT changed (owner step ma1 before merging the pull request, otherwise the two removed checks stay required and block the merge).
+- review: The worker reported no deviations.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p17-deps
 
