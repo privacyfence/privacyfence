@@ -1,14 +1,13 @@
 # Organization deployment
 
-This guide sets up PrivacyFence as one central Linux service that many people in an organization
-use. Everyone signs in with the organization's identity provider, connects their own accounts, and
+This guide sets up PrivacyFence as one central server, delivered as a Docker image, that many people
+in an organization use. Everyone signs in with the organization's identity provider, connects their own accounts, and
 approves their own AI requests in the browser. It is written for the IT administrator who runs the
 server.
 
-For a single person on their own computer, run the Docker image in single-user mode instead
-([Organization deployment with Docker](org-mode-docker.md#run-it-on-this-computer)). The desktop
-install is deprecated in PrivacyFence 7 and removed in 8
-([Moving to organization mode](moving-to-organization-mode.md)).
+PrivacyFence runs only as an organization server. One person on their own computer runs the same
+image in single-user mode ([Organization deployment with Docker](org-mode-docker.md#run-it-on-this-computer)).
+A 7.x desktop install moves over as described in [Moving to organization mode](moving-to-organization-mode.md).
 
 ## Contents
 
@@ -34,16 +33,16 @@ An organization deployment has six parts:
 
 | Part | What it is |
 |---|---|
-| The daemon | `privacyfence-app`, installed from PyPI into a virtual environment and run by systemd as a dedicated, unprivileged account. It listens on `127.0.0.1:8765`. |
-| The server settings | A few environment variables (`privacyfence.env`, or the systemd unit's `EnvironmentFile`): that this is an organization server, its public address, and the identity provider. There is no bundle to build. |
+| The daemon | `privacyfence-app`, run from the `ghcr.io/privacyfence/privacyfence-org` image as an unprivileged user. It listens on port 8765 inside the container, which only the reverse proxy reaches. |
+| The server settings | A few environment variables (`privacyfence.env`): that this is an organization server, its public address, and the identity provider. There is no bundle to build. |
 | The Admin page | `/admin`, for administrators: which services are offered, file delivery, sign-in restrictions, step-up, scoped tokens, audit forwarding and the rest. It writes `org/admin_config.json`. |
-| A reverse proxy | Caddy or nginx on the same host. It terminates HTTPS on your public hostname and forwards to the daemon. |
+| A reverse proxy | Caddy, from the compose file, or nginx. It terminates HTTPS on your public hostname and forwards to the daemon. |
 | Your identity provider | Any OpenID Connect (OIDC) provider your staff already sign in to, or, for a small Google Workspace team, PrivacyFence's built-in Google sign-in. It decides who a person is. |
 | Connector apps | One OAuth app per service you offer. By default PrivacyFence's built-in apps, reached through the PrivacyFence relay at `oauth.privacyfence.eu`; or your organization's own app, uploaded as a signed connector config. Each person authorizes their own account against it. No credentials are shared between people. |
 
 **The order of a first setup.**
 
-1. Point DNS at the server and put the reverse proxy in front of it ([sections 3, 7 and 8](#3-service-account-and-install)).
+1. Point DNS at the server and put the reverse proxy in front of it ([sections 3 and 7](#3-service-account-and-install)).
 2. Register one OIDC client with your identity provider ([section 4](#4-identity-provider)), or choose the built-in Google sign-in.
 3. Write the environment file ([section 6](#6-server-settings-and-your-own-apps)) and start the daemon.
 4. Sign in as a named administrator ([section 9](#9-first-sign-in-and-validation)).
@@ -63,22 +62,18 @@ What people see, all at `https://<your-hostname>`:
 | `/admin` | Administrators only: everything install-wide ([The Admin page](#the-admin-page)). `/settings/privacy` forwards here. |
 | `/mcp` | The MCP endpoint AI clients connect to. It uses OAuth 2.1 with dynamic client registration. |
 
-**This is the only way claude.ai can use PrivacyFence.** A desktop install listens on `localhost`,
+**This is the only way claude.ai can use PrivacyFence.** A single-user install listens on `localhost`,
 which claude.ai's servers cannot reach. Claude Desktop, Claude Code and other MCP-compatible clients
 can use either kind of install. [Section 9](#9-first-sign-in-and-validation) shows how to add each
 client.
 
-To run the daemon and the reverse proxy as containers, follow
-[Organization deployment with Docker](org-mode-docker.md) instead of sections 3, 7 and 8; every
-other section applies unchanged.
+Sections 3 and 8 point to [Organization deployment with Docker](org-mode-docker.md), which also
+runs the reverse proxy; the other sections apply to the container.
 
 ## 2. Prerequisites
 
-- **A Linux server.** Ubuntu 24.04 is the reference: it ships Python 3.12, and you add
-  `python3-venv`. Any other Linux with Python 3.11.5 or newer, the `venv` module and systemd works the
-  same way. Do not install the PrivacyFence `.deb` on this host. The `.deb` is the desktop package:
-  it creates its own `privacyfence` account and `/var/lib/privacyfence` layout, and the daemon
-  installed here would pick that layout up.
+- **A Linux host with Docker.** Docker Engine 24 or newer with the Compose plugin 2.24 or newer
+  ([Organization deployment with Docker](org-mode-docker.md#prerequisites)).
 - **A public hostname** (for example `pf.acme.example.com`) with DNS pointing at the server, and a
   TLS certificate for it. Caddy obtains one automatically if ports 80 and 443 are reachable. The
   hostname must be reachable from the internet if people will use claude.ai, because claude.ai
@@ -92,48 +87,16 @@ other section applies unchanged.
 - **Admin access to your identity provider**, to register one OIDC client.
 - **Admin access to each connector's developer console** for the services you want to offer.
 - **Only if you register your own connector apps:** a way to sign a connector config. That is
-  `sign_connector_config.py`, which is not part of the PyPI package (download it from the GitHub
-  Release that matches the version you install, where it is attached to every stable release, or
-  take `scripts/sign_connector_config.py` from the repository at that version's tag; it needs the
+  `sign_connector_config.py` (download it from the GitHub Release that matches the version you
+  run, where it is attached to every stable release, or take `scripts/sign_connector_config.py` from the repository at that version's tag; it needs the
   `cryptography` package), or the browser tool ([section 6](#signed-connector-configs)). Built-in apps
   need neither.
 
 ## 3. Service account and install
 
-With the Docker image, skip this section and sections 7 and 8; see
-[Organization deployment with Docker](org-mode-docker.md).
-
-Create a dedicated system account. Its home directory holds all PrivacyFence data:
-
-```bash
-sudo apt install python3-venv
-sudo useradd --system --home-dir /var/lib/privacyfence-org --create-home \
-  --shell /usr/sbin/nologin privacyfence-org
-```
-
-Install PrivacyFence into a virtual environment owned by root, so the service cannot change its own
-code:
-
-```bash
-sudo python3 -m venv /opt/privacyfence/venv
-sudo /opt/privacyfence/venv/bin/pip install privacyfence
-```
-
-To install a specific version, use `pip install privacyfence==X.Y.Z`. PyPI carries stable releases
-only.
-
-The daemon keeps its data in `~/.privacyfence/` of the account it runs as, here
-`/var/lib/privacyfence-org/.privacyfence/`. This guide calls that directory the **data directory**.
-It creates every directory there with mode `0700` and refuses to start in organization mode if the
-data directory, its `org/` directory, or its `users/` tree grants any access to group or others.
-Create the `org/` directory now, as the service account, so it has the right owner before the daemon
-first writes there:
-
-```bash
-sudo -u privacyfence-org install -d -m 700 /var/lib/privacyfence-org/.privacyfence/org
-```
-
-The layout of the data directory is in [section 14](#backup).
+The server runs as the Docker image `ghcr.io/privacyfence/privacyfence-org`, as an unprivileged user
+inside the container. [Files](org-mode-docker.md#files) lists what to put on the host and
+[Start](org-mode-docker.md#start) starts it.
 
 ## 4. Identity provider
 
@@ -168,7 +131,7 @@ You give the server the client in the environment file ([section 6](#6-server-se
 ```ini
 PRIVACYFENCE_IDP_ISSUER=https://idp.acme.example.com
 PRIVACYFENCE_IDP_CLIENT_ID=<client id>
-PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/etc/privacyfence-org/idp_client_secret
+PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret
 ```
 
 Set the issuer and the client ID together or not at all. The secret comes from
@@ -480,29 +443,25 @@ An organization server needs no bundle. Three things configure it:
 
 ### The environment file
 
-For the systemd install, write `/etc/privacyfence-org.env` (root-owned, mode `0600`; the unit in
-[section 8](#8-hardened-systemd-unit) reads it). With Docker it is `privacyfence.env` next to
-`compose.yaml` ([Docker](org-mode-docker.md#quick-start)).
+The environment file is `privacyfence.env` next to `compose.yaml`, root-owned with mode `0600`
+([Docker](org-mode-docker.md#quick-start)).
 
 ```ini
-PRIVACYFENCE_MODE=org
-PRIVACYFENCE_ISSUER_URL=https://pf.acme.example.com
-PRIVACYFENCE_TRUSTED_PROXIES=127.0.0.1
-
 PRIVACYFENCE_IDP_ISSUER=https://idp.acme.example.com
 PRIVACYFENCE_IDP_CLIENT_ID=<client id from section 4>
-PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/etc/privacyfence-org/idp_client_secret
+PRIVACYFENCE_IDP_CLIENT_SECRET_FILE=/run/secrets/idp_client_secret
 PRIVACYFENCE_ADMIN_EMAILS=alice@acme.example.com
 ```
 
-`PRIVACYFENCE_MODE=org` makes it an organization server; `PRIVACYFENCE_ISSUER_URL` is the public
-origin from which every redirect URI and link is built; `PRIVACYFENCE_TRUSTED_PROXIES` lists the
-reverse proxy ([section 7](#7-reverse-proxy-and-tls)). The client secret is in its own file, owned by
-`root` and readable by the service (for example `root:privacyfence-org`, mode `0640`), so it does
-not sit in the unit or the process environment listing. [Section 4](#4-identity-provider) covers the
-identity provider variables and admins, and the
-[configuration reference](configuration-reference.md#environment-variables) lists every variable. The daemon
-listens on `127.0.0.1:8765` unless `PRIVACYFENCE_BIND_HOST` and `PRIVACYFENCE_PORT` say otherwise.
+The image sets `PRIVACYFENCE_MODE=org` and `PRIVACYFENCE_BIND_HOST=0.0.0.0`. `compose.yaml` sets
+`PRIVACYFENCE_ISSUER_URL`, the public origin from which every redirect URI and link is built, from
+`PF_HOSTNAME` in `.env`, and `PRIVACYFENCE_TRUSTED_PROXIES`, which lists the reverse proxy
+([section 7](#7-reverse-proxy-and-tls)). The client secret is in its own file, owned by `10001:10001`
+and mounted as a Docker secret, so it does not sit in `docker inspect` or the process environment
+listing ([Quick start](org-mode-docker.md#quick-start), step 5). [Section 4](#4-identity-provider) covers
+the identity provider variables and admins, and the
+[configuration reference](configuration-reference.md#environment-variables) lists every variable. The
+daemon listens on port 8765 inside the container unless `PRIVACYFENCE_PORT` says otherwise.
 
 Without any identity provider variable the daemon starts in **single-user mode**: one administrator,
 served only at `http://localhost` or `http://127.0.0.1`, signed in with a setup code and a passkey.
@@ -605,30 +564,35 @@ The Admin page shows the same notice. A new bundle cannot be installed any more:
 before PrivacyFence 8 drops the bundle:
 
 ```bash
-sudo -H -u privacyfence-org /opt/privacyfence/venv/bin/privacyfence-app --print-env-from-bundle \
-  --idp-secret-file /var/lib/privacyfence-org/idp_client_secret
+docker compose exec privacyfence privacyfence-app --print-env-from-bundle \
+  --idp-secret-file /var/lib/privacyfence-org/.privacyfence/org/idp_client_secret
 ```
 
 This prints the `PRIVACYFENCE_*` lines for the bundle's mode, server address and identity provider,
 with the client secret written to the file you name (a new file, mode `0600`) and referenced by
 `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE`; it never prints the secret. Put the lines in the environment
-file (move the secret file where `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE` says, readable by the service
-account), restart, and retire the bundle with that environment loaded:
+file, copy the secret file out of the container, mount it as the Docker secret that
+`PRIVACYFENCE_IDP_CLIENT_SECRET_FILE` names, and delete the copy in the container. Recreate the
+container and retire the bundle:
 
 ```bash
-sudo sh -c 'set -a; . /etc/privacyfence-org.env; set +a; exec sudo -H -u privacyfence-org --preserve-env /opt/privacyfence/venv/bin/privacyfence-app --retire-bundle'
+docker compose cp privacyfence:/var/lib/privacyfence-org/.privacyfence/org/idp_client_secret ./idp_client_secret
+docker compose exec privacyfence rm /var/lib/privacyfence-org/.privacyfence/org/idp_client_secret
+docker compose up -d
+docker compose exec privacyfence privacyfence-app --retire-bundle
 ```
 
 It checks that the environment yields the same mode, server address and identity provider (and
 refuses, naming the first difference, if it does not), imports the credentials if that has not
 happened, records the retirement and deletes `org/org_bundle.json`. Until then a bundle with an `idp`
-section wins over the variables. With Docker the same command runs in the container:
-`docker compose exec privacyfence privacyfence-app --retire-bundle`.
+section wins over the variables.
 
 ## 7. Reverse proxy and TLS
 
-The daemon listens on `127.0.0.1:8765` and never needs to be reachable directly. Put a reverse
-proxy in front of it that:
+The daemon never needs to be reachable directly. The compose file in
+[Organization deployment with Docker](org-mode-docker.md#files) runs Caddy in front of it; the
+examples below show what a proxy must do and how to restrict it. Put a reverse proxy in front of the
+daemon that:
 
 - terminates HTTPS for your public hostname;
 - passes the original `Host` header through unchanged. The daemon answers only requests addressed
@@ -642,8 +606,8 @@ proxy in front of it that:
 
 The daemon trusts forwarded headers only from the addresses you list in
 `PRIVACYFENCE_TRUSTED_PROXIES` (comma-separated; wildcards such as `0.0.0.0/0` are refused), and
-from nowhere by default. A proxy on the same host must be listed as
-`127.0.0.1` (or `::1`) like any other.
+from nowhere by default. `compose.yaml` sets it to Caddy's fixed address; a proxy on the host
+itself is listed as `127.0.0.1` (or `::1`) like any other.
 
 Rate-limit `/register`, `/authorize` and `/token` at the proxy. `/register` accepts anonymous
 requests by design (that is dynamic client registration). The daemon caps registered clients at
@@ -657,9 +621,11 @@ streams responses without further configuration:
 
 ```
 pf.acme.example.com {
-    reverse_proxy 127.0.0.1:8765
+    reverse_proxy privacyfence:8765
 }
 ```
+
+The compose file's Caddyfile does the same with `{$PF_HOSTNAME}` as the site address.
 
 ### nginx
 
@@ -769,7 +735,7 @@ pf.acme.example.com {
     # }
     # respond @browser_denied 403
 
-    reverse_proxy 127.0.0.1:8765
+    reverse_proxy privacyfence:8765
 }
 ```
 
@@ -777,7 +743,7 @@ Replace `198.51.100.0/24` with your VPN or office range, or remove it if claude.
 client. Write the paths exactly as shown: `/mcp*` would also match `/mcp-files/...`. `remote_ip`
 is the address connected to Caddy; if a CDN or load balancer sits in front, list it under
 `servers { trusted_proxies static <range> }` in Caddy's global options and use `client_ip`
-instead. Run `caddy validate --config /etc/caddy/Caddyfile` and `sudo systemctl reload caddy` after
+instead. Run `docker compose exec caddy caddy validate --config /etc/caddy/Caddyfile` and `docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile` after
 each change. With nginx, the same rules are a `geo` block on `$remote_addr` and a `return 403` in a
 `location` for the machine paths.
 
@@ -801,7 +767,7 @@ sudo ufw status verbose
 
 Add the SSH rule before `ufw enable`, or you lock yourself out of the server. Outgoing stays open:
 the daemon needs the identity provider, every connector's API and the push services
-([section 2](#2-prerequisites)), and pip needs PyPI.
+([section 2](#2-prerequisites)).
 
 **Port 443 limited to given addresses.** If people reach the browser pages only through the VPN,
 the firewall can limit 443 as well: replace `sudo ufw allow 443/tcp` with one rule per range. That
@@ -842,65 +808,31 @@ about 75 KB each way. Requests from outside the rules show up as `403` in the pr
 all when the firewall dropped them. The file transfers tell you where claude.ai's sandbox connects
 from: if every `/mcp-files/` request in the proxy log comes from `160.79.104.0/21`, you can add
 `/mcp-files/*` to the machine rule. Otherwise its only protection is the single-use link that
-expires after 300 seconds. After the first renewal (`journalctl -u caddy | grep -i certificate`),
+expires after 300 seconds. After the first renewal (`docker compose logs caddy | grep -i certificate`),
 confirm the certificate was renewed rather than failing quietly.
 
 ## 8. Hardened systemd unit
 
-Save this as `/etc/systemd/system/privacyfence-org.service`:
+The compose file in [Organization deployment with Docker](org-mode-docker.md#compose-file) applies
+these container settings:
 
-```ini
-[Unit]
-Description=PrivacyFence (organization deployment)
-After=network-online.target
-Wants=network-online.target
+- The daemon's root filesystem is read-only (`read_only: true`), with `/tmp` as a `tmpfs`.
+- All Linux capabilities are dropped (`cap_drop: ALL`), and `no-new-privileges` is set.
+- The daemon runs as the image's unprivileged user `privacyfence-org` (uid and gid `10001`).
+- Its data lives in the named volume `pf-data`, mounted at `/var/lib/privacyfence-org/.privacyfence`.
+- The daemon publishes no port. Only Caddy publishes ports (80, 443 and UDP 443), and both
+  containers sit on a private network with fixed addresses, so `PRIVACYFENCE_TRUSTED_PROXIES` names
+  Caddy as the one trusted proxy.
+- Both containers restart unless stopped (`restart: unless-stopped`), and the daemon gets 30 seconds
+  to stop (`stop_grace_period: 30s`).
+- The server settings are read from `privacyfence.env` and `.env`; secrets are mounted as Docker
+  secrets.
 
-[Service]
-Type=simple
-User=privacyfence-org
-Group=privacyfence-org
-ExecStart=/opt/privacyfence/venv/bin/privacyfence-app
-Restart=on-failure
-RestartSec=5
-UMask=0077
-# The server settings from section 6, plus any audit-forwarding bearer token and the Peek and Grist
-# provisioning keys; the file holds NAME=value lines, mode 0600, owned by root.
-EnvironmentFile=/etc/privacyfence-org.env
-
-# Filesystem: read-only everywhere except the data directory.
-ProtectSystem=strict
-ReadWritePaths=/var/lib/privacyfence-org
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-
-# Privileges and kernel surface.
-NoNewPrivileges=true
-CapabilityBoundingSet=
-AmbientCapabilities=
-RestrictSUIDSGID=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectClock=true
-ProtectHostname=true
-RestrictNamespaces=true
-RestrictRealtime=true
-LockPersonality=true
-SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then start it and follow the log:
+Start it and follow the log:
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now privacyfence-org
-journalctl -u privacyfence-org -f
+docker compose up -d
+docker compose logs -f privacyfence
 ```
 
 On a good start the log contains a line beginning `Org mode active -- MCP-over-HTTP at
@@ -910,10 +842,6 @@ before you start it.
 
 Notes:
 
-- `ReadWritePaths` must be the service account's home directory, because the data directory is
-  `~/.privacyfence/` inside it.
-- If the daemon terminates TLS itself, keep the certificate and key outside `/home` (hidden by
-  `ProtectHome`) or add them with `BindReadOnlyPaths=`.
 - On first start the daemon creates the install-wide `settings.yaml` from its packaged example. That
   file must keep `web.mcp.enabled: true` (the packaged value): with it off, the daemon starts but
   serves nothing in organization mode.
@@ -990,7 +918,7 @@ Run these through the public hostname, not through `127.0.0.1`:
 - [ ] A write request from the client appears in your `/approvals`, and not in a second test user's.
 - [ ] Approving it (with step-up, if on) completes the request, and it appears under
   **Settings → Audit Log**.
-- [ ] After `sudo systemctl restart privacyfence-org`, the AI client keeps working without a new
+- [ ] After `docker compose restart privacyfence`, the AI client keeps working without a new
   sign-in, and the browser asks you to sign in again.
 
 ## 10. Install-wide and per-user policy
@@ -1381,13 +1309,13 @@ paths marked "skip", with the daemon stopped (or from a filesystem snapshot):
 | `users/<principal>/downloads/`, `users/<principal>/uploads/` | Skip: short-lived encrypted staging. |
 | `logs/privacyfence.log` | Optional: the runtime log. |
 
-Also keep, outside the server: the connector-config signing key, the systemd unit, the proxy
-configuration, the environment file and the files it points to (the identity provider's client
+Also keep, outside the server: the connector-config signing key, the proxy
+configuration (`compose.yaml` and the `Caddyfile`), the environment file and the files it points to (the identity provider's client
 secret, provisioning keys).
 
 A backup holds live connector tokens and client secrets. Encrypt it and restrict access as you
 would the credentials themselves. To restore, stop the daemon, restore the directory with owner
-`privacyfence-org` and modes unchanged (the daemon refuses to start if they are looser than
+`10001:10001` (the image's `privacyfence-org` user) and modes unchanged (the daemon refuses to start if they are looser than
 `0700`), start it, and run the [validation checklist](#validation-checklist).
 
 ### What a restart keeps
@@ -1403,14 +1331,18 @@ would the credentials themselves. To restore, stop the daemon, restore the direc
 
 ### Upgrade
 
-Install the new version into the same virtual environment and restart. Your data is kept:
+Change `PRIVACYFENCE_IMAGE_TAG` in `.env` to the new release, then pull the image and recreate the
+container. Your data is kept in the volume:
 
 ```bash
-sudo /opt/privacyfence/venv/bin/pip install --upgrade privacyfence
-sudo systemctl restart privacyfence-org
+docker compose pull
+docker compose up -d
 ```
 
-Read the release's entry in the [changelog](../CHANGELOG.md) first and back up before upgrading.
+Then open the Admin page and check the version and the `Ready for PrivacyFence 8` line
+([Upgrading to 8.x](#upgrading-to-8x)). Back up first ([Backup](#backup)).
+
+Read the release's entry in the [changelog](../CHANGELOG.md) before upgrading.
 
 After an upgrade, each person sees a strip linking to What's new (`/whats-new`) the first time they
 open PrivacyFence, listing the changelog sections since the version they last used.
@@ -1448,9 +1380,10 @@ automatic accounts), because 7.x never changes a 6.x file: `org/org_config.json`
 every other file 6.x reads (`settings.yaml`, `scoped_tokens.json`, `org/oauth_clients.json`,
 `oauth_refresh.json`, the push key, `credentials/`), stay in a format 6.x reads.
 
-1. Stop 7.x (`sudo systemctl stop privacyfence-org`).
-2. Install 6.x: `sudo /opt/privacyfence/venv/bin/pip install "privacyfence<7"`.
-3. Start it. It runs with `org_config.json` as it was.
+1. Stop 7.x (`docker compose stop privacyfence`).
+2. Set `PRIVACYFENCE_IMAGE_TAG` in `.env` to the latest 6.x image tag you ran before, and
+   `docker compose pull`.
+3. Start it (`docker compose up -d`). It runs with `org_config.json` as it was.
 
 What does not carry back: changes made on the Admin page, connections made through the relay, and
 anything made in single-user mode. 6.x runs with the configuration `org_config.json` holds, and
@@ -1460,12 +1393,13 @@ To upgrade to 7.x again from 6.x's *current* files, instead of continuing with w
 the daemon and delete these files, then start 7.x, which adopts and imports again:
 
 ```bash
+docker compose run --rm --no-deps -T --entrypoint sh privacyfence -c '
 cd /var/lib/privacyfence-org/.privacyfence/org
-sudo rm -rf connector_configs
-sudo rm -f org_bundle.json org_bundle_adopted.json org_bundle_signing_pubkey.txt org_bundle_serial.txt admin_config.json connector_config_signing_pubkey.txt connector_config_serials.json
+rm -rf connector_configs
+rm -f org_bundle.json org_bundle_adopted.json org_bundle_signing_pubkey.txt org_bundle_serial.txt admin_config.json connector_config_signing_pubkey.txt connector_config_serials.json'
 ```
 
-The first line matters: an app credential changed in `org_config.json` while on 6.x is otherwise
+The `rm -rf connector_configs` line matters: an app credential changed in `org_config.json` while on 6.x is otherwise
 ignored, because 7.x keeps using the copy it imported.
 
 Deleting only `org_bundle.json` re-adopts `org_config.json`; if 7.x has since recorded a newer serial
@@ -1486,7 +1420,7 @@ At every start 7.x brings every person's data up to date, whether or not they ha
 older policy sections, version-2 auto-accept rules, scoped tokens that only name rules, and the
 retired verb names (rewritten in `settings.yaml` and in each token's own rules; the previous file is
 kept beside it as `settings.yaml.pre-canonical-verbs.bak` or `scoped_tokens.json.pre-canonical-verbs.bak`,
-readable by the service account only). When nothing is left, and the admin config exists, it writes
+readable by the image's user only). When nothing is left, and the admin config exists, it writes
 `data_format.json` in the data directory. The file travels with the data and its backups. If anything
 stops it, the start logs `Not ready for PrivacyFence 8: <problem>`, the Admin page says `Ready for
 PrivacyFence 8: not yet.` with the count and the first three problems, and the next start tries
@@ -1494,138 +1428,26 @@ again. Fix the problem, restart, and look again:
 
 | Problem | Fix |
 |---|---|
-| `the users directory cannot be read` | The service account cannot read `users/`; restore its owner and mode `0700`. |
+| `the users directory cannot be read` | The image's user (uid 10001) cannot read `users/`; restore its owner and mode `0700`. |
 | `<person>: settings.yaml cannot be read` or `is not a mapping` | The person's `users/<person>/authority/config/settings.yaml` is unreadable or not a YAML mapping. Fix the permissions, or restore the file from a backup. |
-| `<person>: could not rewrite settings.yaml` | The service account cannot write that file; fix the owner, mode or disk space. |
+| `<person>: could not rewrite settings.yaml` | The image's user (uid 10001) cannot write that file; fix the owner, mode or disk space. |
 | `<person>: settings.yaml still has v1 policy sections` | Remove the `auto_accept_rules` and `auto_accept_grants` sections; the person recreates the rules on **Settings → Auto-accept**. Rules in that format are not converted automatically. |
 | `<person>: rules are still in the version-2 format` | The upgrade could not save the file; make it writable and restart. |
 | `<person>: scoped_tokens.json cannot be read` | The file is damaged. Restore it from a backup, or remove it (the person's tokens stop working and are created again). |
 | `<person>: scoped token <id> still names rules` | The upgrade could not save the file; make it writable and restart. |
 | `<person>: could not be migrated` | Read the log lines above it for the cause. |
-| `the admin config has not been created` | Start the daemon once more as the service account with write access to `org/`. |
-| `the data-format marker could not be written` | The service account cannot write `data_format.json` in the data directory. |
+| `the admin config has not been created` | Start the container once more with the volume writable by uid 10001. |
+| `the data-format marker could not be written` | The image's user (uid 10001) cannot write `data_format.json` in the data directory. |
 
 The other direction is refused: 7.x refuses to start on data a newer release has already moved on
 (`This data was last used by PrivacyFence <version> … Install <version> or newer.`), so a downgrade
 from 8.x needs the backup you took before upgrading.
 
-### Optional: upgrade automatically
-
-A systemd timer can run the upgrade above every night and keep the server on the latest stable
-release. `pip install --upgrade` skips pre-releases, and PyPI carries stable releases only, so it
-never picks up a test build. The trade-off is the advice above: nobody reads the changelog before
-an upgrade, and each one restarts the daemon, which drops pending approvals and browser sessions
-([What a restart keeps](#what-a-restart-keeps)). Pick an hour when nobody is approving requests, and
-have a nightly backup run before it.
-
-Save the upgrade script as `/usr/local/sbin/privacyfence-upgrade`, owned by root with mode `0755`.
-It restarts only when the version changed, then waits up to a minute for the daemon to answer on
-`127.0.0.1:8765`. If it does not, it installs the previous version again and restarts:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-VENV=/opt/privacyfence/venv
-UNIT=privacyfence-org
-PROBE=http://127.0.0.1:8765/.well-known/oauth-authorization-server
-
-current() { "$VENV/bin/python" -c 'from importlib.metadata import version; print(version("privacyfence"))'; }
-healthy() {
-    for _ in $(seq 12); do
-        sleep 5
-        if systemctl is-active --quiet "$UNIT" && curl -fsS -o /dev/null "$PROBE"; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-before=$(current)
-"$VENV/bin/pip" install --quiet --upgrade privacyfence
-after=$(current)
-
-if [[ "$before" == "$after" ]]; then
-    echo "privacyfence $after is the latest stable release"
-    exit 0
-fi
-
-echo "Upgraded privacyfence $before -> $after; restarting $UNIT"
-systemctl restart "$UNIT"
-if healthy; then
-    echo "$UNIT is healthy on $after"
-    exit 0
-fi
-
-echo "$UNIT is not healthy on $after; going back to $before" >&2
-"$VENV/bin/pip" install --quiet "privacyfence==$before"
-systemctl restart "$UNIT"
-exit 1
-```
-
-The script runs pip as root because root owns the virtual environment
-([section 3](#3-service-account-and-install)); the service account still cannot change its own
-code.
-
-`/etc/systemd/system/privacyfence-upgrade.service`:
-
-```ini
-[Unit]
-Description=Upgrade PrivacyFence to the latest stable release
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/privacyfence-upgrade
-```
-
-`/etc/systemd/system/privacyfence-upgrade.timer`:
-
-```ini
-[Unit]
-Description=Nightly PrivacyFence upgrade
-
-[Timer]
-OnCalendar=*-*-* 04:17:00
-RandomizedDelaySec=15min
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-Turn it on, run it once by hand and read the result:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now privacyfence-upgrade.timer
-sudo systemctl start privacyfence-upgrade.service
-journalctl -u privacyfence-upgrade.service -n 30
-systemctl list-timers privacyfence-upgrade.timer
-```
-
-Notes:
-
-- **The fallback is a safety net, not a rollback.** It catches a daemon that does not start or does
-  not answer. It does not catch one that starts but misbehaves, it does not undo dependency
-  upgrades pip made along the way, and going back is safe only if the earlier version reads the
-  data as the newer one left it. When it fires, restore from the backup if the older version
-  misbehaves too.
-- **Alerts.** A failed run leaves `privacyfence-upgrade.service` in the `failed` state. Add
-  `OnFailure=` to its `[Unit]` section, pointing at a notification unit, or alert on it alongside
-  the daemon ([Monitoring](#monitoring)).
-- **Majors.** `pip install --upgrade` moves to 8.x as soon as it is on PyPI. Pin the major in the
-  script (`privacyfence<8`) until the Admin page says `Ready for PrivacyFence 8: yes.`
-  ([Upgrading to 8.x](#upgrading-to-8x)).
-- **Holding a version.** `sudo systemctl disable --now privacyfence-upgrade.timer` stops automatic
-  upgrades until you enable the timer again.
-
 ### Monitoring
 
 - **Probe:** `GET https://pf.acme.example.com/.well-known/oauth-authorization-server` returns `200`
   without authentication while the daemon and proxy are up. There is no separate health endpoint.
-- **Service:** alert on `systemctl is-failed privacyfence-org` and on repeated restarts.
+- **Service:** alert on a container that is not `running` in `docker compose ps`, and on repeated restarts.
 - **Log lines worth alerting on:** `Refusing to start`, `Configuration error`, `Fatal error`,
   `Connector registry is at capacity`, `registered-client limit`, and failures to reach the identity
   provider.
@@ -1678,12 +1500,12 @@ Notes:
 
 ## 15. Troubleshooting
 
-**The daemon will not start.** Run `journalctl -u privacyfence-org -n 50`. The last lines name the
+**The daemon will not start.** Run `docker compose logs --tail 50 privacyfence`. The last lines name the
 cause:
 
 | Message contains | Fix |
 |---|---|
-| `PRIVACYFENCE_MODE must be "local" or "org"` | Fix the value in the environment file. |
+| `PRIVACYFENCE_MODE must be "org".`, or `desktop mode is not part of PrivacyFence 8` | Remove `PRIVACYFENCE_MODE` from the environment file, or set it to `org`. |
 | `Set both PRIVACYFENCE_IDP_ISSUER and PRIVACYFENCE_IDP_CLIENT_ID, or neither.` | Only one of the two is set. Set both ([section 4](#4-identity-provider)). |
 | `Set PRIVACYFENCE_IDP_CLIENT_SECRET or PRIVACYFENCE_IDP_CLIENT_SECRET_FILE, not both.` | Keep one of them. |
 | `Organization mode without an identity provider is single-user mode and runs only at http://localhost` | The server has a public `PRIVACYFENCE_ISSUER_URL` but no identity provider. Set `PRIVACYFENCE_IDP_ISSUER` and `PRIVACYFENCE_IDP_CLIENT_ID`, or `PRIVACYFENCE_IDP=builtin-google` ([section 6](#the-environment-file)). |
@@ -1695,7 +1517,7 @@ cause:
 | `Organization servers no longer take a new org_bundle.json`, `has "mode": "org" but is not signed`, `failed signing-key verification`, or `rollback refused` | The adopted `org/org_bundle.json` was edited or replaced. Put the original back (a copy of `org/org_config.json`), and make changes in the environment file and on the Admin page: a server takes no new bundle. |
 | `This data was last used by PrivacyFence … Install … or newer.` | The data was written by a newer release. Install that release, or restore the backup from before the upgrade. |
 | `is not HTTPS -- org mode requires every IdP endpoint to be HTTPS`, or a discovery error | The identity provider's issuer or endpoints are not HTTPS, or the server cannot reach `<issuer>/.well-known/openid-configuration`. |
-| `Refusing to start in organization mode:` followed by a permissions finding | A directory in the data directory grants group or other access. Set it back to `0700`, owned by `privacyfence-org`. |
+| `Refusing to start in organization mode:` followed by a permissions finding | A directory in the data directory grants group or other access. Set it back to `0700`, owned by uid and gid `10001`. |
 | `auto_accept_rules` or `auto_accept_grants` | See [Upgrade](#upgrade). |
 
 **The service is running but nothing answers.** Check that the install-wide `settings.yaml` has

@@ -235,13 +235,12 @@ jobs:
   # PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS -- unset everywhere else in this
   # file, so the `test` job's own full-suite run above always skips it
   # instantly. Otherwise the only thing that sets that variable is
-  # build.yml's tag-triggered build-deb job, so an org-mode break would
+  # build.yml's tag-triggered build-org-image job, so an org-mode break would
   # first surface on a release tag. This job runs it as its own per-PR
   # leg instead: the module's own
-  # "Why a --target install, not the .deb" section is what keeps this
+  # "Why a --target install" section is what keeps this
   # cheap enough to run on every PR (a `pip install --target` of this
-  # package, seconds, not build.yml's real PyInstaller/.deb pipeline,
-  # minutes) without waiting for a release tag to find out org mode broke.
+  # package, seconds, not build.yml's image build, minutes) without waiting for a release tag to find out org mode broke.
   org-mode-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -258,14 +257,13 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[test]"
 
-      # Without nginx and systemd-analyze the guide config test skips its parser checks; here
-      # they must run, so a missing binary fails the step instead.
+      # Without nginx the guide config test skips its parser check; here it must run, so a
+      # missing binary fails the step instead.
       - name: Install nginx for the org guide config check
         run: sudo apt-get update && sudo apt-get install -y nginx
 
-      - name: Check the org guide's systemd unit and nginx configs
+      - name: Check the org guide's nginx configs
         run: |
-          command -v systemd-analyze
           command -v nginx
           pytest -v -rs tests/integration/test_org_guide_configs.py
 

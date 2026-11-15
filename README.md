@@ -8,7 +8,7 @@ PrivacyFence is an open-source privacy and approval gateway between AI assistant
 
 PrivacyFence enforces, independently of the AI, what an assistant may see and do. Sensitive reads and consequential actions require human approval, while routine requests can be automated by policy. Optional PII detection runs locally before personal data reaches the AI, and every decision is audited.
 
-PrivacyFence runs on an employee’s own computer (macOS, Windows, or Linux) or as a central deployment on infrastructure the organization controls, allowing web clients such as claude.ai to connect as well. Connector credentials stay with PrivacyFence, never with the AI client, and no data passes through a PrivacyFence-operated server. When an organization server uses PrivacyFence’s built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead.
+PrivacyFence runs as an organization server, delivered as a Docker image, on infrastructure the organization controls, allowing web clients such as claude.ai to connect as well. Connector credentials stay with PrivacyFence, never with the AI client, and no data passes through a PrivacyFence-operated server. When an organization server uses PrivacyFence’s built-in sign-in apps, only the sign-in redirect passes through the PrivacyFence relay, and an organization can use its own apps instead.
 
 **Website:** [privacyfence.eu](https://privacyfence.eu/) · **Install:** [privacyfence.eu/install](https://privacyfence.eu/install/) · **Docs:** [privacyfence.eu/docs](https://privacyfence.eu/docs/)
 
