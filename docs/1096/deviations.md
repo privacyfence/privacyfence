@@ -103,7 +103,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p10a-google-loopback
 
-- pending
+- worker: google_oauth.py coverage after merge is 100% (no floor listed); the oauth_loopback module itself stays until p10b.
+- retry: No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff. The worker reported no deviations.
 
 ## p10b-other-loopback
 
