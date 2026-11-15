@@ -199,7 +199,11 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p14b-mode-validation
 
-- pending
+- worker: The brief said to delete Mode; the worker stopped blocked because admin_config.py, oauth_apps.py and web/routes_admin.py (p14c files) still import it in about 20 signatures. Orchestrator decision: Mode = Literal["org"] stays in org_mode.py and its __all__ until p14c deletes it with the mode parameters.
+- worker: The two Peek and Grist auto-provision "needs mode org" guards were deleted with their tests; the adoption fixtures that pinned resolve_mode were replaced by a fixture that marks the bundle signed (the signing check no longer depends on the mode); run_app_migrates lost its org parameter; mode= call sites in daemon_main.py pass the literal "org" until p14c.
+- worker: validate_mode is called when the bundle is loaded (with the bundle) and at the start of run_app (with an empty dict, so only PRIVACYFENCE_MODE is checked there).
+- review: After merge: unit suite 20041 passed, 3 skipped; integration set 12 passed, 1 skipped; coverage ratchet passes (org_mode 100%; the worker noted the daemon_main floor of 96% is stale against 97.34%, left for p22).
+- retry: Sent back once for the Mode decision. No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles); no roles are required for this diff.
 
 ## p14c-mode-parameters
 
