@@ -27,6 +27,8 @@ import asyncio
 import json
 from unittest.mock import MagicMock
 
+from urllib.parse import urljoin
+
 import httpx
 import httpx2
 import pytest
@@ -38,6 +40,7 @@ from privacyfence import approval_ui  # noqa: E402
 from privacyfence.approvals import PendingApprovalRegistry  # noqa: E402
 from privacyfence.connectors.calendar import CalendarConnector  # noqa: E402
 from privacyfence.connectors.drive import DriveConnector  # noqa: E402
+from privacyfence.org_mode import DownloadDeliveryConfig  # noqa: E402
 from privacyfence.drive_client import DriveFile, DriveFileContent  # noqa: E402
 from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
@@ -57,18 +60,24 @@ def _fake_drive_client() -> MagicMock:
         id="f1", name="report.txt", mime_type="text/plain", size=len(_FILE_BYTES),
         modified_time="2026-09-28T00:00:00Z", owners=["alice@example.com"],
     )
+    # The approval card's preview reads the content; the delivery after approval fetches the bytes.
     client.get_file_content.return_value = DriveFileContent(
         file=client.get_file_metadata.return_value, content_bytes=_FILE_BYTES, truncated=False,
     )
+    client.download_file_bytes.return_value = {
+        "data": _FILE_BYTES, "name": "report.txt", "mime_type": "text/plain",
+        "size_bytes": len(_FILE_BYTES),
+    }
     return client
 
 
 @pytest.fixture
 def local_server(tmp_path):
-    # The daemon never writes into the user's destination_dir: a download comes back as a
-    # one-time capability link.
+    # A download comes back as a one-time capability link.
     drive = DriveConnector(_fake_drive_client())
     drive.my_email = "me@example.com"
+    # Every download goes through a one-time link, never inline.
+    drive.download_config = DownloadDeliveryConfig(inline_max_bytes=0)
     calendar_client = MagicMock()
     calendar = CalendarConnector(calendar_client)
     calendar.my_email = "me@example.com"
@@ -107,7 +116,7 @@ def _decisions(audit_dir) -> list[tuple[str, str]]:
     return [(r.get("tool", ""), r.get("decision", "")) for r in _rows(audit_dir)]
 
 
-_DOWNLOAD_ARGS = {"file_id": "f1", "destination_dir": "~/Downloads", "reason": "check the audit trail"}
+_DOWNLOAD_ARGS = {"file_id": "f1", "reason": "check the audit trail"}
 
 
 async def test_pending_drive_download_hands_out_no_link(local_server):
@@ -146,7 +155,7 @@ async def test_approved_download_is_audited_as_approved_under_one_request_id(loc
     released = await _call(server, "drive_download_file", _DOWNLOAD_ARGS)
     assert released["delivery"] == "link"
     async with httpx.AsyncClient() as http_client:
-        served = await http_client.get(released["download_url"])
+        served = await http_client.get(urljoin(server.mcp_url, released["download_url"]))
     assert served.status_code == 200
     assert served.content == _FILE_BYTES
 
