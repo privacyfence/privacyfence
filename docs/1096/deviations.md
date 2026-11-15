@@ -93,7 +93,13 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p09-controller-channel
 
-- pending
+- worker: Outside touches (orchestrator-approved after the worker stopped blocked): tests/unit/web/test_agent_attestation.py (audit_rows now imported from settings_state) and tests/unit/test_privilege_separation.py (the control_channel import and three tests removed; the file is deleted whole by p13).
+- worker: scripts/qa_web_smoke.py and scripts/qa_readme_screenshots.py were deleted whole, because they could only build a local WebServer(controller=...). docs/images/screenshots/README.md still names qa_readme_screenshots.py as the source of the README screenshots; the docs phases need to fix that row. tests/unit/test_code_no_history.py still lists qa_readme_screenshots.py in an allowlist.
+- worker: tests/integration/test_settings_personal_transfer_browser.py was deleted whole: every test used the local server and SettingsController, and no organization browser equivalent was added (Chromium unavailable to the worker).
+- worker: The ADR 0166 and 0198 edits only turn the settings_controller.py link into plain text.
+- scope: scope: tests/unit/test_privilege_separation.py
+- scope: scope: tests/unit/web/test_agent_attestation.py
+- retry: Sent back once after the worker stopped blocked on the two outside-touches files. No tld CLI in the worker container; the orchestrator ran the checks (owner choice orch_roles), including session_auth at 100% coverage; no roles are required for this diff.
 
 ## p10a-google-loopback
 
