@@ -61,6 +61,10 @@ DEFAULT_DOCUMENTS: list[dict[str, str]] = [
     {"id": "4", "audience": "finance", "title": "Finance policy", "body": "Expense policy."},
 ]
 
+PROPOSALS: list[dict[str, str]] = [
+    {"id": "p1", "audience": "general", "text": "IBAN: DE89370400440532013000"},
+]
+
 # The verified claim of the request being handled.
 _claims: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("reference_claims")
 
@@ -69,13 +73,13 @@ def _text(payload: object, *, error: bool = False) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(payload))], is_error=error)
 
 
-def _build_server(documents: list[dict]) -> MCPServer:
-    def allowed() -> list[dict]:
+def _build_server(documents: list[dict], proposals: list[dict] | None = None) -> MCPServer:
+    def allowed(items: list[dict] | None = None) -> list[dict]:
         claims = _claims.get()
         audiences = set(claims.get("audiences") or [])
         if claims.get("principal_type") == "service":
             return []
-        return [d for d in documents if d["audience"] in audiences]
+        return [d for d in (documents if items is None else items) if d["audience"] in audiences]
 
     async def list_tools(ctx: ServerRequestContext, _params: Any) -> types.ListToolsResult:
         def tool(name: str, description: str, props: list[str]) -> types.Tool:
@@ -91,6 +95,7 @@ def _build_server(documents: list[dict]) -> MCPServer:
             tool("search", "Search documents.", ["query"]),
             tool("get_doc", "Fetch one document.", ["id"]),
             tool("propose_change", "Propose a change to a document.", ["id", "text"]),
+            tool("list_proposals", "List change proposals.", []),
         ])
 
     async def call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
@@ -106,6 +111,12 @@ def _build_server(documents: list[dict]) -> MCPServer:
             return types.CallToolResult(content=[types.TextContent(type="text", text="not found")], is_error=True)
         if params.name == "propose_change":
             return _text({"proposal": "accepted", "by": _claims.get()["sub"]})
+        if params.name == "list_proposals":
+            # The personal data is only in the structured part, so a caller that scans only the text misses it.
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text="1 proposal")],
+                structured_content={"proposals": allowed(PROPOSALS if proposals is None else proposals)},
+            )
         return types.CallToolResult(
             content=[types.TextContent(type="text", text=f"unknown tool {params.name}")], is_error=True,
         )

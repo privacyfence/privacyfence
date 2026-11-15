@@ -73,7 +73,7 @@ async def _client(signer, **app_kwargs):
 async def test_list_tools_uses_the_service_claim(signer):
     async with _client(signer) as client:
         tools = await client.list_tools()
-    assert [t.name for t in tools] == ["search", "get_doc", "propose_change"]
+    assert [t.name for t in tools] == ["search", "get_doc", "propose_change", "list_proposals"]
 
 
 async def test_call_tool_returns_text(signer):
