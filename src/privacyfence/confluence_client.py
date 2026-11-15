@@ -6,7 +6,7 @@ access token + cloud id are per-user, shared with the Jira client (a single
 Atlassian OAuth grant covers both products).
 
 Required config keys:
-  access_token – OAuth bearer token from atlassian_oauth.authorize_interactive
+  access_token – OAuth bearer token from the Atlassian OAuth sign-in (atlassian_oauth)
   cloud_id     – the Atlassian site's cloud id, used to build the
                  api.atlassian.com/ex/confluence/{cloud_id}/wiki proxy URL
   site_url     – the human-facing site URL (for page links), optional

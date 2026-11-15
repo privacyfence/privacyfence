@@ -63,4 +63,4 @@ the app. Miro documents no PKCE.
   ADR [0142](0142-grist-connects-by-oauth-with-an-app-in-the-bundle-and-by-api-key-otherwise.md),
   ADR [0196](0196-every-connector-is-offered-only-when-the-org-config-has-its-section.md)
 - [`miro_auth.py`](../../src/privacyfence/miro_auth.py),
-  [`oauth_loopback.py`](../../src/privacyfence/oauth_loopback.py)
+  `oauth_loopback.py`

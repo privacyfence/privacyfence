@@ -3,9 +3,7 @@ connects each principal's own services: ``GET /connect`` lets a signed-in
 principal see which of Google/Slack/Salesforce/Atlassian/Telegram they've
 authorized and connect the rest, and ``GET /oauth/start/{service}``/
 ``GET /oauth/callback/{service}`` are the server-side redirect endpoints
-that make it possible from a phone with no desktop in the loop --
-``oauth_loopback.py``'s local ``webbrowser.open()``/loopback-listener flow
-only ever worked when the browser and the daemon were the same machine.
+that make it possible from a phone with no desktop in the loop.
 
 **Not** a port of settings_window_html.py/routes_settings.py's ~30-action
 surface into org mode -- that's real, separate follow-up work (see web/

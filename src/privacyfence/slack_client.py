@@ -4,8 +4,8 @@ Uses a single Slack user token (``xoxp-...``) so the connector sees exactly
 what the authenticated user sees — all channels, DMs, and private groups they
 are a member of — without requiring a bot to be invited anywhere.
 
-The token is obtained via Slack's OAuth v2 browser flow (see
-``authorize_interactive`` below), driven from PrivacyFence Settings. The
+The token is obtained via Slack's OAuth v2 server-redirect flow (see
+``build_authorize_url`` and ``exchange_code`` below), driven from PrivacyFence Settings. The
 Slack app itself (client id/secret) is organization-level config installed via
 the "Install configuration file…" action on Admin → Organization configuration — a user only ever
 sees a browser consent screen, never a token to copy/paste.
@@ -49,13 +49,9 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.http_retry.builtin_handlers import RateLimitErrorRetryHandler
 
-from .oauth_loopback import OAuthLoopbackError, run_browser_oauth
 from .secure_files import atomic_write_json
 
 logger = logging.getLogger(__name__)
-
-SLACK_OAUTH_PORT = 53682
-SLACK_REDIRECT_PATH = "/callback"
 
 # How long the on-disk whole-workspace directory snapshots (see
 # refresh_user_directory()/refresh_channel_directory()) are trusted before
@@ -196,11 +192,8 @@ def message_read_state(ts: str, last_read: str, *, own: bool = False) -> str:
 def build_authorize_url(
     client_id: str, redirect_uri: str, state: str, user_scopes: list[str] | None = None,
 ) -> str:
-    """Slack's OAuth v2 authorize URL -- separate from ``authorize_interactive``
-    so ``web/routes_connections.py``'s org-mode server-redirect flow
-    can build the same URL without going through
-    ``oauth_loopback.run_browser_oauth``'s local
-    listener. ``state`` is a CSRF token the caller generates and later
+    """Slack's OAuth v2 authorize URL, built for ``web/routes_connect.py``'s
+    server-redirect flow. ``state`` is a CSRF token the caller generates and later
     verifies on the callback -- Slack's OAuth v2 has no PKCE support, so
     there is no ``code_challenge`` parameter here (unlike Salesforce/
     Atlassian below)."""
@@ -217,8 +210,7 @@ def build_authorize_url(
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict[str, Any]:
     """Exchanges an authorization code for a Slack user token and returns
     the normalized token record -- *not* yet saved to disk (see
-    ``save_token_record`` below). Shared by ``authorize_interactive``'s
-    local-mode loopback flow and org mode's server-redirect flow;
+    ``save_token_record`` below). Used by org mode's server-redirect flow;
     raises ``SlackClientError`` on any failure.
     """
     client = WebClient()
@@ -252,36 +244,6 @@ def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: s
 
 def save_token_record(token_file: str, token_record: dict[str, Any]) -> None:
     atomic_write_json(token_file, token_record)
-
-
-def authorize_interactive(
-    client_id: str,
-    client_secret: str,
-    token_file: str,
-    user_scopes: list[str] | None = None,
-    port: int = SLACK_OAUTH_PORT,
-) -> dict[str, Any]:
-    """Run Slack's OAuth v2 browser flow and persist the resulting user token.
-
-    ``client_id``/``client_secret`` come from the organization config bundle
-    (the Slack app IT registered). Returns the saved token record; raises
-    ``SlackClientError`` on failure.
-    """
-
-    def _build(redirect_uri: str, state: str, code_challenge: str) -> str:
-        return build_authorize_url(client_id, redirect_uri, state, user_scopes)
-
-    def _exchange(code: str, redirect_uri: str, code_verifier: str) -> dict[str, Any]:
-        return exchange_code(client_id, client_secret, code, redirect_uri)
-
-    try:
-        token_record = run_browser_oauth(_build, _exchange, port=port, path=SLACK_REDIRECT_PATH)
-    except OAuthLoopbackError as exc:
-        raise SlackClientError(f"Slack sign-in failed: {exc}") from exc
-
-    save_token_record(token_file, token_record)
-    logger.info("Slack OAuth complete for team %r", token_record["team_name"])
-    return token_record
 
 
 def _fetch_account_email(access_token: str, user_id: str) -> str:

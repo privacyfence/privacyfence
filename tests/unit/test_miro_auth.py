@@ -26,7 +26,6 @@ from privacyfence.miro_auth import (
     MiroTokenProvider,
     bundle_settings,
 )
-from privacyfence.oauth_loopback import OAuthLoopbackError
 
 pytestmark = pytest.mark.unit
 
@@ -549,55 +548,3 @@ class TestMiroTokenProvider:
         provider, _ = self.provider(tmp_path, record(access_token=ACCESS, refresh_token=REFRESH))
         assert_no_secret(repr(provider))
         assert_no_secret(str(provider))
-
-
-class TestAuthorizeInteractive:
-    @staticmethod
-    def capture(monkeypatch: pytest.MonkeyPatch, result: Any) -> dict[str, Any]:
-        seen: dict[str, Any] = {}
-
-        def fake_run(build, exchange, **kwargs):
-            seen.update(build=build, exchange=exchange, kwargs=kwargs)
-            if isinstance(result, Exception):
-                raise result
-            return exchange("the-code", REDIRECT, "verifier")
-
-        monkeypatch.setattr(miro_auth.oauth_loopback, "run_browser_oauth", fake_run)
-        return seen
-
-    def test_loopback_arguments_and_saved_record(self, monkeypatch, tmp_path):
-        seen = self.capture(monkeypatch, None)
-        post = fake_post(monkeypatch, FakeResponse(200, token_answer()))
-        path = str(tmp_path / "miro_token.json")
-        result = miro_auth.authorize_interactive(CONFIG, path)
-        assert seen["kwargs"] == {"port": 53686, "path": "/callback", "redirect_host": "localhost"}
-        assert post.calls[0]["data"]["code"] == "the-code"
-        assert post.calls[0]["data"]["redirect_uri"] == REDIRECT
-        assert miro_auth.load_token_file(path) == {**result, "user_id": result["user_id"]}
-        assert result["access_token"] == ACCESS
-
-    def test_build_callback_ignores_the_challenge(self, monkeypatch, tmp_path):
-        seen = self.capture(monkeypatch, None)
-        fake_post(monkeypatch, FakeResponse(200, token_answer()))
-        miro_auth.authorize_interactive(CONFIG, str(tmp_path / "t.json"))
-        url = seen["build"](REDIRECT, "st4te", "ignored-challenge")
-        assert url == miro_auth.build_authorize_url("client-id", REDIRECT, "st4te")
-        assert "ignored-challenge" not in url
-
-    def test_loopback_failure_is_mapped(self, monkeypatch, tmp_path):
-        self.capture(monkeypatch, OAuthLoopbackError("timed out"))
-        path = tmp_path / "t.json"
-        with pytest.raises(MiroClientError) as info:
-            miro_auth.authorize_interactive(CONFIG, str(path))
-        assert str(info.value) == "Miro sign-in failed: timed out"
-        assert not path.exists()
-
-    def test_a_refused_token_saves_nothing_and_leaks_nothing(self, monkeypatch, tmp_path):
-        self.capture(monkeypatch, None)
-        fake_post(monkeypatch, FakeResponse(200, token_answer(scope="boards:read")))
-        path = tmp_path / "t.json"
-        with pytest.raises(MiroClientError) as info:
-            miro_auth.authorize_interactive(CONFIG, str(path))
-        assert not path.exists()
-        assert_no_secret(str(info.value))
-        assert "the-code" not in str(info.value)
