@@ -70,6 +70,10 @@ class MembershipResolver(Protocol):
         """The audiences ``email`` holds; ``frozenset()`` for an empty or unverified email."""
         ...
 
+    def groups_for(self, email: str, group_audiences: Mapping[str, frozenset[str]]) -> frozenset[str]:
+        """The groups whose every restricted audience is approved for ``email``; empty for an empty email."""
+        ...
+
 
 def normalize_email(value: Any) -> str | None:
     """Lower-cased ``value`` when it is an email-shaped string (exactly one ``@``, no whitespace)."""
@@ -441,6 +445,20 @@ class SnapshotResolver:
                     held.add(audience)
         return frozenset(held)
 
+    def groups_for(self, email: str, group_audiences: Mapping[str, frozenset[str]]) -> frozenset[str]:
+        email = (email or "").strip().lower()
+        if not email:
+            return frozenset()
+        mapping = _normalized_map(group_audiences)
+        held: set[str] = set()
+        for group in self._store.members_of(email):
+            audiences = mapping.get(group)
+            if audiences is None:
+                continue
+            if all(a == UNRESTRICTED_AUDIENCE or self._store.has_approval(email, group, a) for a in audiences):
+                held.add(group)
+        return frozenset(held)
+
 
 class StaticFileResolver:
     """Audiences from ``{"version": 1, "groups": {"group": ["email", ...]}}``; no approvals."""
@@ -490,6 +508,16 @@ class StaticFileResolver:
             if email in emails:
                 held |= mapping.get(group, frozenset())
         return frozenset(held)
+
+    def groups_for(self, email: str, group_audiences: Mapping[str, frozenset[str]]) -> frozenset[str]:
+        email = (email or "").strip().lower()
+        if not email:
+            return frozenset()
+        mapping = _normalized_map(group_audiences)
+        with self._lock:
+            self._refresh()
+            groups = self._groups
+        return frozenset(group for group, emails in groups.items() if email in emails and group in mapping)
 
 
 # ---------------------------------------------------------------------- singleton

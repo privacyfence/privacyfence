@@ -265,6 +265,46 @@ class TestHeldAudiences:
         assert held == {"kh": frozenset(), "wiki": frozenset()}
 
 
+class TestApprovedGroups:
+    def test_a_verified_member_gets_the_sorted_groups(self, configured):
+        assert upstream_mcp_runtime.approved_groups_for_email(" Ann@HR.example ", True) == (
+            "everyone@co.example", "finance@co.example", "hr@co.example",
+        )
+
+    def test_unverified_empty_and_unconfigured_give_nothing(self, configured):
+        assert upstream_mcp_runtime.approved_groups_for_email("ann@hr.example", False) == ()
+        assert upstream_mcp_runtime.approved_groups_for_email("", True) == ()
+        upstream_mcp_runtime.reset()
+        assert upstream_mcp_runtime.approved_groups_for_email("ann@hr.example", True) == ()
+
+    def test_look_alike_addresses_give_nothing(self, configured):
+        assert upstream_mcp_runtime.approved_groups_for_email("ann\u200b@hr.example", True) == ()
+        assert upstream_mcp_runtime.approved_groups_for_email("\u212Aate@hr.example", True) == ()
+
+    def test_a_group_two_upstreams_map_counts_once_every_restricted_audience_is_approved(self, tmp_path, upstreams):
+        path = tmp_path / "admin_config.json"
+        path.write_text(json.dumps({"upstream_mcp": {
+            "kh": {"groups": {"hr@co.example": ["hr"]}},
+            "wiki": {"groups": {"hr@co.example": ["wiki-hr"]}},
+        }}), encoding="utf-8")
+        store = group_membership.MembershipStore(tmp_path / "group_membership.json")
+        upstream_mcp_runtime.configure(
+            upstreams=upstreams, signer=_signer(tmp_path),
+            groups=GroupMapStore(path, frozenset({"kh", "wiki"})), resolver=group_membership.SnapshotResolver(store),
+        )
+        merged = upstream_mcp_runtime.all_group_audiences()
+        store.apply_snapshot({"hr@co.example": ["ann@hr.example"]}, group_audiences=merged, now=1000.0, max_additions=20)
+        store.apply_snapshot(
+            {"hr@co.example": ["ann@hr.example", "bob@hr.example"]},
+            group_audiences=merged, now=1001.0, max_additions=20,
+        )
+        assert upstream_mcp_runtime.approved_groups_for_email("bob@hr.example", True) == ()
+        store.approve("hr@co.example", "hr", "bob@hr.example", group_audiences=merged, now=1002.0)
+        assert upstream_mcp_runtime.approved_groups_for_email("bob@hr.example", True) == ()
+        store.approve("hr@co.example", "wiki-hr", "bob@hr.example", group_audiences=merged, now=1003.0)
+        assert upstream_mcp_runtime.approved_groups_for_email("bob@hr.example", True) == ("hr@co.example",)
+
+
 class TestAudiencesForEmail:
     def test_static_resolver_gives_the_union_over_groups(self, configured):
         assert upstream_mcp_runtime.audiences_for_email("kh", " Ann@HR.example ", True) == {
