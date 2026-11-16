@@ -65,7 +65,7 @@ jobs:
   # job graph connecting them the way `needs:` connects jobs within one file. This job is the
   # closest equivalent: it polls the REST API for build.yml's *own* run against this exact commit
   # (not "the latest run of build.yml," which could be a different tag or a stray
-  # workflow_dispatch) and blocks every job below on that run actually succeeding, via an ordinary
+  # workflow_dispatch) and blocks the `publish` job on that run actually succeeding, via an ordinary
   # `needs:` edge inside this workflow: the `publish` job waits on this one.
   #
   # A `workflow_dispatch` rerun (e.g. after a transient publish failure) is gated the same way: if
@@ -133,16 +133,17 @@ jobs:
             sleep "$poll_interval_s"
           done
 
-  publish:
-    needs: [dedupe, wait_for_build]
+  # Resolves the version and the release channel. Only a stable tag publishes (ADR 0289); for a
+  # pre-release tag or a run off a tag `publish` is skipped, so the run ends green, not failed.
+  resolve:
+    needs: dedupe
     if: needs.dedupe.outputs.duplicate != 'true'
     runs-on: ubuntu-latest
-    environment: npm   # must match the Environment name on npm's trusted publisher entry
-    env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}   # first publish only; empty once trusted publishing is set up
     permissions:
-      id-token: write   # trusted publishing and the provenance statement
       contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      channel: ${{ steps.release.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -166,16 +167,22 @@ jobs:
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Resolved version=$VERSION channel=$CHANNEL"
-
-      # Stable tags only: alpha/beta/rc tags and runs off a tag stop here.
-      - name: Stop unless the channel is stable
-        env:
-          CHANNEL: ${{ steps.release.outputs.channel }}
-        run: |
           if [[ "$CHANNEL" != "stable" ]]; then
             echo "::notice::Channel is ${CHANNEL}, not stable; nothing is published to npm."
-            exit 1
           fi
+
+  publish:
+    needs: [dedupe, wait_for_build, resolve]
+    if: needs.dedupe.outputs.duplicate != 'true' && needs.resolve.outputs.channel == 'stable'
+    runs-on: ubuntu-latest
+    environment: npm   # must match the Environment name on npm's trusted publisher entry
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}   # first publish only; empty once trusted publishing is set up
+    permissions:
+      id-token: write   # trusted publishing and the provenance statement
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -193,7 +200,7 @@ jobs:
       - name: Set the package version
         working-directory: n8n
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.resolve.outputs.version }}
         run: npm version "$VERSION" --no-git-tag-version
 
       - name: Lint
@@ -215,7 +222,7 @@ jobs:
         id: published
         working-directory: n8n
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           if [ "$(npm view n8n-nodes-privacyfence@"$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
             echo "published=true" >> "$GITHUB_OUTPUT"
