@@ -465,7 +465,7 @@ class TestState:
         state = world.client.get("/api/admin/state").json()
         assert {"services", "rooms", "unattended_sessions", "download_delivery", "web_push", "authz",
                 "step_up", "scoped_tokens", "agent_runtimes", "agent_runtimes_status", "audit_forwarding",
-                "restart_needed", "relay_status"} <= set(state)
+                "restart_needed", "relay_status", "upstream_servers"} <= set(state)
         assert {"privacy", "stats"} <= set(state)
         assert state["restart_needed"] == []
 
@@ -688,6 +688,38 @@ class TestPrivacyAndStatsState:
         csrf = world.sign_in(ADMIN)
         r = _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "redact"}, csrf)
         assert "stats" in r.json() and r.json()["privacy"]["default_policy"]["privacy"] == "redact"
+
+
+class TestUpstreamServers:
+    _ROW = {"id": "kh", "label": "Knowledge hub", "url": "https://kh.example/…", "state": "ready", "tools": [], "groups": []}
+
+    def test_nothing_declared(self):
+        world = World()
+        world.sign_in(ADMIN)
+        state = world.client.get("/api/admin/state").json()
+        assert state["upstream_servers"] == {"declared_by": "", "upstreams": []}
+
+    def test_declared_by_the_file_variable(self, monkeypatch):
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "admin_rows", lambda: [self._ROW])
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", "/srv/secret-place/upstreams.json")
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", '{"inline": "sentinel-inline"}')
+        world = World()
+        world.sign_in(ADMIN)
+        response = world.client.get("/api/admin/state")
+        assert response.json()["upstream_servers"] == {
+            "declared_by": "PRIVACYFENCE_UPSTREAM_MCP_FILE", "upstreams": [self._ROW],
+        }
+        assert "secret-place" not in response.text and "sentinel-inline" not in response.text
+
+    def test_declared_inline(self, monkeypatch):
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "admin_rows", lambda: [self._ROW])
+        monkeypatch.delenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", raising=False)
+        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", '{"inline": "sentinel-inline"}')
+        world = World()
+        world.sign_in(ADMIN)
+        response = world.client.get("/api/admin/state")
+        assert response.json()["upstream_servers"]["declared_by"] == "PRIVACYFENCE_UPSTREAM_MCP"
+        assert "sentinel-inline" not in response.text
 
 
 class TestGroupMembership:

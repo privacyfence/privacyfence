@@ -64,6 +64,7 @@ from .. import (
     paths,
     relay_client,
     settings_window_html,
+    upstream_mcp_config,
     upstream_mcp_runtime,
     web_shell,
 )
@@ -379,6 +380,19 @@ def _record_group_membership_audit(principal: Principal, decision: str, summary:
         logger.warning("Audit log write failed for a group membership decision: %s", exc)
 
 
+def _upstream_servers_state() -> dict[str, Any]:
+    """The declared upstream MCP servers, read-only (ADR 0319), and which variable declared them;
+    never the file's path or the inline text."""
+    rows = upstream_mcp_runtime.admin_rows()
+    declared_by = ""
+    if rows:
+        declared_by = (
+            upstream_mcp_config.ENV_VAR if os.environ.get(upstream_mcp_config.ENV_VAR, "").strip()
+            else upstream_mcp_config.ENV_VAR_INLINE
+        )
+    return {"declared_by": declared_by, "upstreams": rows}
+
+
 def _admin_state(
     *, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     principal: Principal, install_wide_settings: dict[str, Any] | None = None, issuer_url: str = "",
@@ -410,6 +424,7 @@ def _admin_state(
         state["privacy"] = _privacy_rows(install_wide_settings)
     state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))
     state["group_membership"] = _group_membership_state()
+    state["upstream_servers"] = _upstream_servers_state()
     return state
 
 

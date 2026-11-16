@@ -4,7 +4,7 @@
 then calls ``configure``. From there this module is the one place that knows the live upstream
 set: the connector list for a principal, the caller claim for one dispatched call (the only code
 that reads the caller contextvars on behalf of an upstream call, so connector code never does),
-the audiences a person holds, the ``privacyfence_status`` rows, and the lifespan that fetches each
+the audiences a person holds, the ``privacyfence_status`` rows and the Admin page's rows, and the lifespan that fetches each
 upstream's tool list once at startup, retrying with backoff until it succeeds. There is no periodic
 refresh: a description changing mid-session is a rug-pull vector.
 """
@@ -16,6 +16,7 @@ import functools
 import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx2
 
@@ -222,6 +223,49 @@ def status() -> list[dict[str, object]]:
             "tools_exposed": len(entry.catalog.specs()),
             "state": "ready" if entry.listed else "waiting_for_tool_list",
             "missing_tools": entry.catalog.missing() if entry.listed else [],
+        })
+    return rows
+
+
+def _shown_url(url: str) -> str:
+    """The scheme and host of ``url``, then ``/…`` when it has a path or query: either may carry a
+    key, and the Admin page needs only which server calls go to."""
+    parts = urlsplit(url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    return origin + "/…" if parts.path.strip("/") or parts.query else origin
+
+
+def admin_rows() -> list[dict[str, object]]:
+    """What the Admin page's Upstream MCP servers section shows (ADR 0319): each declared upstream with
+    its tool-list state, its declared tools and whether each is exposed, and the group-to-audience map
+    in force. It carries no secret and none of the upstream's own text."""
+    if _runtime is None:
+        return []
+    rows: list[dict[str, object]] = []
+    for entry in _runtime.entries.values():
+        upstream = entry.upstream
+        exposed = {spec.name for spec in entry.catalog.specs()} if entry.listed else set()
+        groups = _runtime.groups.group_audiences(upstream.id)
+        rows.append({
+            "id": upstream.id,
+            "label": upstream.label,
+            "url": _shown_url(upstream.url),
+            "audience": upstream.audience,
+            "state": "ready" if entry.listed else "waiting_for_tool_list",
+            "identity_claim": upstream.identity_claim,
+            "claim_lifetime_seconds": upstream.claim_lifetime_seconds,
+            "allowed_principal_types": list(upstream.allowed_principal_types),
+            "email_for_visibility": upstream.email_for_visibility,
+            "tools": [
+                {
+                    "name": tool.exposed_name, "gate": tool.gate, "verb": tool.verb, "effect": tool.effect,
+                    "state": ("exposed" if tool.exposed_name in exposed else "missing") if entry.listed else "waiting",
+                }
+                for tool in upstream.tools
+            ],
+            "groups": [
+                {"group": group, "audiences": sorted(audiences)} for group, audiences in sorted(groups.items())
+            ],
         })
     return rows
 

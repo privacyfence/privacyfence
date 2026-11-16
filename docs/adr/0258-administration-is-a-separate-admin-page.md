@@ -5,6 +5,7 @@
 Accepted — 2026-10-30. Implemented: `src/privacyfence/web/routes_admin.py`.
 Amends [ADR 0217](0217-the-org-admin-stats-page-shows-counts-only.md): the Stats section is on the Admin page.
 Relates to [ADR 0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md).
+Amended by [ADR 0319](0319-the-admin-page-shows-upstream-mcp-servers-read-only.md): the Admin page also shows the declared upstream MCP servers, read-only.
 
 ## Context
 

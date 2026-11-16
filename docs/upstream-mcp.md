@@ -137,8 +137,7 @@ the audiences of the Workspace groups they belong to. The map from groups to aud
   and the address is in an allowed domain (see [Who may sign in](org-mode-setup-guide.md#who-may-sign-in)).
   The single-user person is verified. An unverified or empty address gets no audiences, so the upstream
   returns no data for that person.
-- **Edits apply without a restart:** PrivacyFence re-reads the file when its modification time changes. There
-  is no Admin page control for the map; it is a file edit. Do it while no one is saving on the Admin page.
+- **Edits apply without a restart:** PrivacyFence re-reads the file when its modification time changes. **Admin → Upstream MCP servers** shows the map in force but cannot change it; it is a file edit. Do it while no one is saving on the Admin page.
 
 ### Operator keys
 
@@ -228,6 +227,10 @@ leaked key) and refuses the only signing key. See the
 Every call PrivacyFence forwards to an upstream writes one `upstream_forwarded` audit entry with the claim's
 `jti`, `sub`, principal type, audiences and `req` and how the call ended (including a refusal or a signing
 failure), so your upstream's log can be matched to PrivacyFence's. The claim and the arguments are never logged.
+
+### On the Admin page
+
+**Admin → Upstream MCP servers** shows each declared upstream: whether its tool list has arrived, its address (only its scheme and host, then `/…` when it has a path or query), its claim audience and identity-claim settings, who may call it, each declared tool with its gate, verb and effect and whether it is exposed, and the groups mapped to its audiences. It is read-only: change the declaration and restart, or edit `admin_config.json`. It never shows the declaration file's path, the inline text or the upstream's own tool descriptions ([ADR 0319](adr/0319-the-admin-page-shows-upstream-mcp-servers-read-only.md)).
 
 ### `privacyfence_status`
 

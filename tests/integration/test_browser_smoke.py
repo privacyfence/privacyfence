@@ -2707,7 +2707,7 @@ _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
 # The Admin page: every section an organization administrator sees, and the three a desktop
 # install's owner sees.
 _ORG_ADMIN_PAGE_SECTIONS = (
-    "services", "features", "delivery", "access", "step_up", "tokens", "audit", "privacy", "stats",
+    "services", "features", "delivery", "access", "step_up", "tokens", "upstreams", "audit", "privacy", "stats",
 )
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 
