@@ -174,6 +174,25 @@ class TestClientGroupsEnv:
         assert len(oidc_provider.clients_from_env()["peek"].groups_allowed) == 50
 
 
+class TestClientRequirePkceEnv:
+    def test_require_pkce_defaults_on(self, monkeypatch):
+        _client_env(monkeypatch)
+        assert oidc_provider.clients_from_env()["peek"].require_pkce is True
+
+    def test_require_pkce_false_parses(self, monkeypatch):
+        _client_env(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_REQUIRE_PKCE", "false")
+        assert oidc_provider.clients_from_env()["peek"].require_pkce is False
+
+    @pytest.mark.parametrize("value", ["yes", "False", "0"])
+    def test_require_pkce_must_be_true_or_false(self, monkeypatch, value):
+        _client_env(monkeypatch)
+        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_REQUIRE_PKCE", value)
+        with pytest.raises(ConfigurationError) as err:
+            oidc_provider.clients_from_env()
+        assert str(err.value) == "PRIVACYFENCE_OIDC_CLIENT_PEEK_REQUIRE_PKCE must be true or false"
+
+
 class TestAllowsGroup:
     def test_empty_allows_all(self):
         assert oidc_provider.OidcClient("p", ("https://p/cb",), SECRET).allows_group("a@x.example")
@@ -315,6 +334,38 @@ class TestProviderState:
         assert grant.principal == ANN
         assert grant.expires_at == 5_000.0 + 60
         assert _redeem(provider, code) is None
+
+    def _code_without_challenge(self, provider):
+        return provider.issue_code(
+            client_id="peek", redirect_uri="https://p/cb", principal=ANN, email_verified=True, nonce=None,
+            code_challenge=None, scope="openid", auth_time=1,
+        )
+
+    def test_a_grant_without_a_challenge_redeems_without_a_verifier(self, tmp_path):
+        provider = _provider(tmp_path, _Clock())
+        code = self._code_without_challenge(provider)
+        grant = provider.redeem_code(code, client_id="peek", redirect_uri="https://p/cb", code_verifier=None)
+        assert grant is not None and grant.principal == ANN
+
+    @pytest.mark.parametrize("verifier", [VERIFIER, ""])
+    def test_a_grant_without_a_challenge_refuses_a_verifier(self, tmp_path, verifier):
+        provider = _provider(tmp_path, _Clock())
+        code = self._code_without_challenge(provider)
+        assert provider.redeem_code(
+            code, client_id="peek", redirect_uri="https://p/cb", code_verifier=verifier
+        ) is None
+
+    @pytest.mark.parametrize("overrides", [{"client_id": "grist"}, {"redirect_uri": "https://p/other"}])
+    def test_a_grant_without_a_challenge_still_checks_client_and_redirect(self, tmp_path, overrides):
+        provider = _provider(tmp_path, _Clock())
+        code = self._code_without_challenge(provider)
+        args = {"client_id": "peek", "redirect_uri": "https://p/cb", **overrides}
+        assert provider.redeem_code(code, code_verifier=None, **args) is None
+
+    def test_a_grant_with_a_challenge_refuses_a_missing_verifier(self, tmp_path):
+        provider = _provider(tmp_path, _Clock())
+        code = _code(provider)
+        assert provider.redeem_code(code, client_id="peek", redirect_uri="https://p/cb", code_verifier=None) is None
 
     def test_code_expiry_with_an_injected_clock(self, tmp_path):
         clock = _Clock()

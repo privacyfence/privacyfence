@@ -1202,9 +1202,15 @@ def _start_org_web_server(
     oidc = None
     if oidc_clients:
         for client in oidc_clients.values():
+            stem = client.client_id.upper().replace("-", "_")
+            if not client.require_pkce:
+                logger.warning(
+                    "OIDC client %s signs in without PKCE (PRIVACYFENCE_OIDC_CLIENT_%s_REQUIRE_PKCE=false); "
+                    "turn it back on once the app sends PKCE.",
+                    client.client_id, stem,
+                )
             if not client.groups:
                 continue
-            stem = client.client_id.upper().replace("-", "_")
             if not upstream_mcp_runtime.configured():
                 raise org_mode.ConfigurationError(
                     f"PRIVACYFENCE_OIDC_CLIENT_{stem}_GROUPS needs an upstream MCP declaration: without one "

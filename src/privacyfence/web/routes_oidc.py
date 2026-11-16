@@ -2,7 +2,8 @@
 
 Discovery and the key set need no sign-in: the web apps fetch them server-side. ``/oidc/authorize``
 runs in the person's browser and reads the PrivacyFence browser session from ``sessions``; it never
-shows a consent page, since only apps the operator named can use it, and PKCE S256 is mandatory.
+shows a consent page, since only apps the operator named can use it, and PKCE S256 is required unless the operator turned it
+off for that app (an app that sends PKCE anyway is always checked).
 ``/oidc/token`` authenticates the app with its secret and swaps a code for an ID token and a
 five-minute access token, which only ``/oidc/userinfo`` accepts. These tokens and the MCP
 authorization server's tokens live in separate stores, so neither is accepted where the other is.
@@ -102,9 +103,12 @@ def build_routes(provider: OidcProvider, *, sessions: OrgSessionStore) -> list[R
         scopes = list(dict.fromkeys(query.get("scope", "").split()))
         if "openid" not in scopes:
             return _error_redirect(redirect_uri, "invalid_scope", "The openid scope is required.", state)
-        code_challenge = query.get("code_challenge", "")
-        if query.get("code_challenge_method") != "S256" or not _CODE_CHALLENGE_RE.fullmatch(code_challenge):
-            return _error_redirect(redirect_uri, "invalid_request", "PKCE with S256 is required.", state)
+        pkce_sent = "code_challenge" in query or "code_challenge_method" in query
+        code_challenge: str | None = None
+        if client.require_pkce or pkce_sent:
+            code_challenge = query.get("code_challenge", "")
+            if query.get("code_challenge_method") != "S256" or not _CODE_CHALLENGE_RE.fullmatch(code_challenge):
+                return _error_redirect(redirect_uri, "invalid_request", "PKCE with S256 is required.", state)
 
         session_id = request.cookies.get(SESSION_COOKIE, "")
         session = sessions.get_session(session_id) if session_id else None
@@ -149,7 +153,7 @@ def build_routes(provider: OidcProvider, *, sessions: OrgSessionStore) -> list[R
             _form_text(form.get("code")),
             client_id=client.client_id,
             redirect_uri=_form_text(form.get("redirect_uri")),
-            code_verifier=_form_text(form.get("code_verifier")),
+            code_verifier=_form_text(form.get("code_verifier")) if "code_verifier" in form else None,
         )
         if grant is None:
             return _json({"error": "invalid_grant"}, 400)
