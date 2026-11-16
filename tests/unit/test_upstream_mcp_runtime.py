@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -389,6 +390,59 @@ class TestStatus:
             "id": "kh", "label": "Knowledge hub", "tools_exposed": 1, "state": "ready",
             "missing_tools": ["kh_get_doc"],
         }
+
+
+class TestAdminRows:
+    def test_unconfigured_is_empty(self):
+        upstream_mcp_runtime.reset()
+        assert upstream_mcp_runtime.admin_rows() == []
+
+    def test_waiting_until_the_tool_list_arrives(self, configured):
+        row = upstream_mcp_runtime.admin_rows()[0]
+        assert row["state"] == "waiting_for_tool_list"
+        assert [tool["state"] for tool in row["tools"]] == ["waiting", "waiting"]
+
+    def test_ready_marks_each_declared_tool_exposed_or_missing(self, configured):
+        entry = upstream_mcp_runtime._runtime.entries["kh"]
+        entry.catalog.update([_tool("search")])
+        entry.listed = True
+        row = upstream_mcp_runtime.admin_rows()[0]
+        assert row["state"] == "ready"
+        assert row["tools"] == [
+            {"name": "kh_search", "gate": "auto", "verb": "search", "effect": "", "state": "exposed"},
+            {"name": "kh_get_doc", "gate": "auto", "verb": "read", "effect": "", "state": "missing"},
+        ]
+
+    def test_groups_are_the_map_in_force_sorted(self, tmp_path, configured):
+        expected = [
+            {"group": group, "audiences": sorted(audiences)}
+            for group, audiences in sorted(_GROUPS["upstream_mcp"]["kh"]["groups"].items())
+        ]
+        assert upstream_mcp_runtime.admin_rows()[0]["groups"] == expected
+        path = tmp_path / "admin_config.json"
+        path.write_text(json.dumps({"upstream_mcp": {"kh": {"groups": {"b@co.example": ["y", "x"]}}}}), encoding="utf-8")
+        later = path.stat().st_mtime + 10
+        os.utime(path, (later, later))
+        assert upstream_mcp_runtime.admin_rows()[0]["groups"] == [{"group": "b@co.example", "audiences": ["x", "y"]}]
+
+    @pytest.mark.parametrize(("url", "shown"), [
+        ("https://kh.example/mcp?key=s3cret", "https://kh.example/…"),
+        ("https://kh.example/mcp/s3cret/sse", "https://kh.example/…"),
+        ("https://kh.example:8443/mcp", "https://kh.example:8443/…"),
+        ("http://knowledge-hub:8080", "http://knowledge-hub:8080"),
+    ])
+    def test_the_path_and_query_of_the_address_are_hidden(self, tmp_path, url, shown):
+        declared = {**_FILE, "upstreams": [{**_FILE["upstreams"][0], "url": url}]}
+        path = tmp_path / "admin_config.json"
+        path.write_text(json.dumps(_GROUPS), encoding="utf-8")
+        upstream_mcp_runtime.configure(
+            upstreams=parse_upstreams(declared, source="test"), signer=_signer(tmp_path),
+            groups=GroupMapStore(path, frozenset({"kh"})),
+            resolver=group_membership.StaticFileResolver(tmp_path / "none.json"),
+        )
+        rows = upstream_mcp_runtime.admin_rows()
+        assert rows[0]["url"] == shown
+        assert "s3cret" not in json.dumps(rows)
 
 
 class _FlakyClient:

@@ -2028,7 +2028,7 @@ _JS = r"""
   var ADMIN_NAV_ITEMS = [
     ['services', 'Services'], ['features', 'Features'],
     ['delivery', 'File delivery'], ['access', 'Sign-in'], ['step_up', 'Step-up'],
-    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['membership', 'Group membership'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
+    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['upstreams', 'Upstream MCP servers'], ['membership', 'Group membership'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
   ];
 
   // The provider setup doc for each service on the website: the doc's file name without .md.
@@ -2530,6 +2530,64 @@ _JS = r"""
     return '<div class="pf-page"><h1 class="pf-page-title">Agent runtimes</h1>' + formCardHtml('runtimes', rows, 'agent runtimes') + '</div>';
   }
 
+  // The upstream MCP servers the operator declared (upstream_mcp_runtime.admin_rows). Read-only: the
+  // declaration is a file read at startup and the group map a file edit (ADR 0319), so nothing here
+  // changes either.
+  var UPSTREAM_GATE_TEXT = {
+    auto: 'Runs at once', review: 'Runs; a person sees the result before it is returned', popup: 'A person approves each call first',
+  };
+  var UPSTREAM_CALLER_TEXT = { claude_client: 'AI clients', n8n_workflow: 'Scoped tokens' };
+
+  function upstreamToolRow(tool) {
+    var text = (UPSTREAM_GATE_TEXT[tool.gate] || tool.gate) + '; verb ' + tool.verb + '.';
+    if (tool.effect) { text += ' ' + tool.effect; }
+    if (tool.state === 'missing') { text += ' Not exposed: the server does not list it, or its schema cannot be passed on.'; }
+    return rowHtml(tool.name, esc(text), '');
+  }
+
+  function upstreamCardHtml(u) {
+    var tools = u.tools || [];
+    var exposed = tools.filter(function (t) { return t.state === 'exposed'; }).length;
+    var stateText = u.state === 'ready' ? 'Ready: ' + exposed + ' of ' + tools.length + ' declared tool(s) exposed.' :
+      'Waiting for the server’s tool list. AI clients see none of its tools until it answers.';
+    var claimText = u.identity_claim === 'off' ? 'Off: calls carry no claim.' :
+      'Required, valid for ' + u.claim_lifetime_seconds + ' seconds' +
+      (u.email_for_visibility ? ', with the person’s verified email.' : '.');
+    var callers = (u.allowed_principal_types || []).map(function (p) { return UPSTREAM_CALLER_TEXT[p] || p; }).join(', ');
+    var summary = '<div class="card pf-card">' +
+      rowHtml('State', esc(stateText), '') +
+      rowHtml('Tool prefix', esc(u.id + '_'), '') +
+      rowHtml('Address', esc(u.url), '') +
+      rowHtml('Claim audience', esc(u.audience), '') +
+      rowHtml('Identity claim', esc(claimText), '') +
+      rowHtml('Who may call it', esc(callers), '') + '</div>';
+    var toolCard = '<div class="card pf-card">' + tools.map(upstreamToolRow).join('') + '</div>';
+    var groups = u.groups || [];
+    var groupRows = groups.length ? groups.map(function (g) { return rowHtml(g.group, esc((g.audiences || []).join(', ')), ''); }).join('') :
+      rowHtml('No group is mapped.', esc('Nobody holds an audience on this server. Map groups under upstream_mcp in admin_config.json.'), '');
+    return '<h2 class="pf-group-title">' + esc(u.label) + '</h2>' + summary +
+      '<h2 class="pf-group-title">' + esc(u.label + ': tools') + '</h2>' + toolCard +
+      '<h2 class="pf-group-title">' + esc(u.label + ': groups and audiences') + '</h2>' +
+      '<div class="card pf-card">' + groupRows + '</div>';
+  }
+
+  function renderUpstreams(state) {
+    var s = state.upstream_servers || {};
+    var rows = s.upstreams || [];
+    var title = '<h1 class="pf-page-title">Upstream MCP servers</h1>';
+    if (!rows.length) {
+      var doc = '<div><a class="pf-doc-link" href="https://privacyfence.eu/docs/upstream-mcp/" target="_blank" rel="noopener">' +
+        'How to declare an upstream MCP server</a></div>';
+      return '<div class="pf-page">' + title + '<div class="card pf-card">' +
+        rowHtml('No upstream MCP servers are declared.',
+          esc('Name a file in PRIVACYFENCE_UPSTREAM_MCP_FILE, or put the declaration in PRIVACYFENCE_UPSTREAM_MCP, and restart.') + doc, '') +
+        '</div></div>';
+    }
+    var intro = '<div class="muted">' + esc('Declared in ' + s.declared_by +
+      '. A change to the declaration needs a restart; a change to the groups in admin_config.json applies without one.') + '</div>';
+    return '<div class="pf-page">' + title + intro + rows.map(upstreamCardHtml).join('') + '</div>';
+  }
+
   // Who is waiting to join a group's restricted audience (src/privacyfence/group_membership.py). Each
   // card covers one (group, audience) and its buttons act on that row alone, never across groups.
   function membershipTimeText(at) {
@@ -2616,6 +2674,7 @@ _JS = r"""
       case 'step_up': return renderStepUp(state);
       case 'tokens': return renderTokens(state);
       case 'runtimes': return renderRuntimes(state);
+      case 'upstreams': return renderUpstreams(state);
       case 'membership': return renderMembership(state);
       case 'audit': return renderAuditForwarding(state);
       case 'privacy': return renderAdminPrivacy(state);
@@ -3130,7 +3189,7 @@ def _admin_capabilities(*, is_admin: bool) -> dict[str, Any]:
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
         "sections": dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "membership", "audit", "privacy", "stats"), is_admin,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "membership", "audit", "privacy", "stats"), is_admin,
         ),
         "not_applicable_actions": [],
         "defaults": _admin_section_defaults() if is_admin else {},

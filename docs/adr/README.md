@@ -350,7 +350,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0255](0255-built-in-oauth-apps-ship-in-every-distribution.md) | Built-in OAuth apps ship in the server distributions | Accepted; relates to 0040; amended by 0309 |
 | [0256](0256-org-config-holds-only-startup-settings-and-app-credentials.md) | The org config holds only startup settings and app credentials | Accepted; amends 0016, 0196 |
 | [0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md) | Operational settings live in a daemon-written admin config | Accepted; amends 0196, 0253; relates to 0016, 0034, 0068, 0070, 0200 |
-| [0258](0258-administration-is-a-separate-admin-page.md) | Administration is a separate Admin page | Accepted; amends 0217; relates to 0033 |
+| [0258](0258-administration-is-a-separate-admin-page.md) | Administration is a separate Admin page | Accepted; amends 0217; relates to 0033; amended by 0319 |
 | [0259](0259-org-servers-use-built-in-apps-through-a-domain-verified-relay.md) | Organization servers use the built-in apps through a domain-verified relay | Accepted; relates to 0011, 0186 |
 | [0260](0260-organization-mode-can-start-from-the-environment-and-run-single-user-on-localhost.md) | Organization mode can start from the environment and run single-user on localhost | Accepted; relates to 0011, 0177, 0213 |
 | [0261](0261-local-mode-is-deprecated-in-7-and-removed-in-8.md) | Local mode is deprecated in 7.x and removed in 8.x | Superseded by 0301 |
@@ -411,3 +411,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0316](0316-the-releases-integration-branch-convention-is-retired.md) | The `releases/*` integration-branch convention is retired | Accepted |
 | [0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md) | An org directory holding only admin_config.json is fresh | Accepted; amends 0302 |
 | [0318](0318-pkce-can-be-turned-off-for-one-named-oidc-app.md) | PKCE can be turned off for one named OIDC app | Accepted; amends 0273 |
+| [0319](0319-the-admin-page-shows-upstream-mcp-servers-read-only.md) | The Admin page shows upstream MCP servers read-only | Accepted; amends 0258; relates to 0285 |

@@ -989,7 +989,7 @@ class TestAdminSurfaceCapabilities:
     def test_an_org_admin_gets_every_section_and_nothing_is_suppressed(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin", is_admin=True))
         assert caps["sections"] == dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "membership", "audit", "privacy", "stats"), True,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "membership", "audit", "privacy", "stats"), True,
         )
         assert caps["not_applicable_actions"] == []
 
@@ -1032,7 +1032,8 @@ class TestAdminSurfaceCapabilities:
         assert pairs == [
             ("services", "Services"), ("features", "Features"),
             ("delivery", "File delivery"), ("access", "Sign-in"), ("step_up", "Step-up"),
-            ("tokens", "Scoped tokens"), ("runtimes", "Agent runtimes"), ("membership", "Group membership"),
+            ("tokens", "Scoped tokens"), ("runtimes", "Agent runtimes"), ("upstreams", "Upstream MCP servers"),
+            ("membership", "Group membership"),
             ("audit", "Audit forwarding"),
             ("privacy", "Privacy Filter"), ("stats", "Stats"),
         ]
@@ -1088,7 +1089,7 @@ class TestServicesSection:
     def test_the_nav_shows_only_the_sections_the_capabilities_include(self):
         org = _render_admin(_admin_state(_row("google", "Google")))
         assert re.findall(r'aria-label="([^"]+)" data-nav', org) == [
-            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Group membership",
+            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Upstream MCP servers", "Group membership",
             "Audit forwarding", "Privacy Filter", "Stats",
         ]
         assert 'aria-selected="true"' in org
@@ -1563,9 +1564,9 @@ class TestOrgAdminSections:
     def test_the_org_admin_surface_has_all_of_the_org_sections(self):
         caps = _admin_caps(build_html(_org_state(), surface="admin", is_admin=True))
         keys = [k for k, v in caps["sections"].items() if v]
-        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "membership", "audit", "privacy", "stats"]
+        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "membership", "audit", "privacy", "stats"]
         page = _render_org("services")
-        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Group membership", "Audit forwarding", "Privacy Filter", "Stats"):
+        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Upstream MCP servers", "Group membership", "Audit forwarding", "Privacy Filter", "Stats"):
             assert f'aria-label="{label}"' in page
 
 
@@ -1623,6 +1624,52 @@ class TestOrgAdminSections:
         assert "Credential type in n8n" in page
         assert '<option value="httpBearerAuth" selected>' in page and '<option value="privacyFenceApi"' in page
         assert "n8n.internal.example\" " not in page and re.search(r'value="https://n8n', page) is None
+
+    def test_upstreams_empty_state(self):
+        page = _render_org("upstreams", _org_state(upstream_servers={"declared_by": "", "upstreams": []}))
+        for text in ("Upstream MCP servers", "No upstream MCP servers are declared.", "PRIVACYFENCE_UPSTREAM_MCP_FILE",
+                     "https://privacyfence.eu/docs/upstream-mcp/"):
+            assert text in page, text
+        assert "data-action" not in page
+
+    def test_upstreams_ready_lists_tools_and_groups(self):
+        state = _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP_FILE", "upstreams": [{
+            "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/…", "audience": "kh-aud",
+            "state": "ready", "identity_claim": "required", "claim_lifetime_seconds": 60,
+            "allowed_principal_types": ["claude_client", "n8n_workflow"], "email_for_visibility": False,
+            "tools": [
+                {"name": "kh_search", "gate": "auto", "verb": "search", "effect": "", "state": "exposed"},
+                {"name": "kh_propose_change", "gate": "popup", "verb": "add", "effect": "Adds a proposal.", "state": "missing"},
+            ],
+            "groups": [{"group": "mgmt@co.example", "audiences": ["mgmt"]}],
+        }]})
+        page = _render_org("upstreams", state)
+        for text in ("Ready: 1 of 2 declared tool(s) exposed.", "Runs at once; verb search.",
+                     "A person approves each call first; verb add. Adds a proposal. Not exposed:", "mgmt@co.example",
+                     "Declared in PRIVACYFENCE_UPSTREAM_MCP_FILE.", "AI clients, Scoped tokens"):
+            assert text in page, text
+        assert "data-action" not in page
+
+    def test_upstreams_waiting_and_claim_off(self):
+        state = _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP", "upstreams": [{
+            "id": "kh", "label": "Knowledge hub", "url": "https://kh.example", "audience": "kh-aud",
+            "state": "waiting_for_tool_list", "identity_claim": "off", "claim_lifetime_seconds": 60,
+            "allowed_principal_types": ["claude_client"], "email_for_visibility": False,
+            "tools": [{"name": "kh_search", "gate": "auto", "verb": "search", "effect": "", "state": "waiting"}],
+            "groups": [],
+        }]})
+        page = _render_org("upstreams", state)
+        for text in ("Waiting for the server", "Off: calls carry no claim.", "No group is mapped."):
+            assert text in page, text
+
+    def test_upstream_text_is_escaped(self):
+        state = _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP", "upstreams": [{
+            "id": "kh", "label": "<b>KH</b>", "url": "https://kh.example", "audience": "a",
+            "state": "ready", "identity_claim": "off", "claim_lifetime_seconds": 60,
+            "allowed_principal_types": [], "email_for_visibility": False, "tools": [], "groups": [],
+        }]})
+        page = _render_org("upstreams", state)
+        assert "&lt;b&gt;KH&lt;/b&gt;" in page and "<b>KH</b>" not in page
 
     def test_group_membership_empty_state(self):
         state = _org_state(group_membership={"source": "snapshot", "updated_at": None, "pending": [], "last_rejected": None})
