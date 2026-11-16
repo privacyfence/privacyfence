@@ -4,6 +4,8 @@
 
 Accepted — 2026-11-14. Amends [ADR 0262](0262-7x-is-the-migration-checkpoint-for-8x.md). Implemented.
 
+Amended by [ADR 0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md), 2026-11-16.
+
 ## Context
 
 [ADR 0262](0262-7x-is-the-migration-checkpoint-for-8x.md) makes 7.x the migration checkpoint and has 8.x refuse data that 7.x has not prepared, but 8.x also has to refuse a desktop install's data, which 7.x never converts. Both cases must stop with a message that says what to do, before anything loads configuration.
@@ -14,7 +16,7 @@ Before every one-shot command and before configuration loads, `data_format.check
 
 1. The existing "marker is newer than this release" check runs first, on the marker read from `root`.
 2. If a desktop trace (`web_base_url` or `mcp_token`, at the data root or under `authority/`) exists and `org/org_bundle.json` does not contain `"mode": "org"`, start is refused with the desktop text. This holds with or without a marker. The bundle exception keeps an organization server that was converted in place on 6.x working.
-3. Otherwise, if the marker is missing or its format is below `MINIMUM_FORMAT`: when person data exists (`users`, `org`, `credentials` or `authority`) start is refused with the checkpoint text; when none exists the directory is fresh, and the marker is written at once. Writing it at first start means a single-user install restarted before its setup finished is not refused.
+3. Otherwise, if the marker is missing or its format is below `MINIMUM_FORMAT`: when person data exists (`users`, `org`, `credentials` or `authority`; an `org/` holding only `admin_config.json` does not count, [ADR 0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md)) start is refused with the checkpoint text; when none exists the directory is fresh, and the marker is written at once. Writing it at first start means a single-user install restarted before its setup finished is not refused.
 
 Desktop text, exactly:
 

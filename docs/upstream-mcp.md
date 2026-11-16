@@ -121,6 +121,7 @@ the audiences of the Workspace groups they belong to. The map from groups to aud
 }
 ```
 
+- The file may be written before the first start, for example by a deployment tool. It must hold `"version": 1`. A file that holds only some sections is filled with the defaults, and `PRIVACYFENCE_ALLOWED_DOMAINS` does not seed the allowed domains: set them on **Admin → Sign-in**.
 - A group name is lower case and email-shaped; an audience is 1-63 characters (`a-z`, `0-9`, `_`, `-`,
   starting with a letter or digit). At most 200 groups per upstream. A person's audiences are the union over
   every group they belong to.

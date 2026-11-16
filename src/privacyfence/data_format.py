@@ -109,18 +109,36 @@ def _holds_data(path: Path) -> bool:
     return path.is_dir() and any(path.iterdir())
 
 
+def _only_an_admin_config_seed(org: Path) -> bool:
+    """Whether ``org`` holds nothing but a regular ``admin_config.json``: the admin config was
+    written before the first start (ADR 0317). That file is never converted, so on its own it is
+    not data 7.x has to prepare."""
+    if org.is_symlink() or not org.is_dir():
+        return False
+    entries = list(org.iterdir())
+    return (
+        len(entries) == 1
+        and entries[0].name == admin_config.FILENAME
+        and not entries[0].is_symlink()
+        and entries[0].is_file()
+    )
+
+
 def check_upgrade_source(root: Path) -> None:
     """Refuse a data directory 8.x cannot trust (ADR 0302); write the marker into a fresh one.
 
     In order: data a newer release has moved on; desktop-install traces outside an organization
     server; data that 7.x has not marked as fully upgraded. A data directory that cannot be
-    inspected, or a fresh one the marker cannot be written into, is refused as well."""
+    inspected, or a fresh one the marker cannot be written into, is refused as well; an org/ holding only admin_config.json counts as fresh."""
     marker = read_marker(root)
     check_not_newer(marker)
 
     try:
         traces = [name for name in DESKTOP_TRACES if _present(root / name) or _present(root / "authority" / name)]
-        has_person_data = any(_holds_data(root / name) for name in PERSON_DATA)
+        has_person_data = any(
+            _holds_data(root / name) and not (name == "org" and _only_an_admin_config_seed(root / name))
+            for name in PERSON_DATA
+        )
     except OSError as exc:
         raise ConfigurationError(f"The data directory ({root}) could not be inspected: {exc}") from exc
     if traces and not _says_org(root):

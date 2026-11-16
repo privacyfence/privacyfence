@@ -394,7 +394,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298; amended by 0311 |
 | [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285 |
 | [0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md) | Desktop mode and its installers are removed in 8.x | Accepted; supersedes 0002, 0003, 0261 |
-| [0302](0302-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262 |
+| [0302](0302-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262; amended by 0317 |
 | [0303](0303-the-mode-setting-accepts-only-org.md) | The mode setting accepts only org | Accepted; relates to 0260 |
 | [0304](0304-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md) | Files move by upload slot, inline bytes or one-time link only | Accepted; supersedes 0007, 0012; amends 0028, 0160 |
 | [0305](0305-the-download-page-and-worker-are-retired.md) | The download page and the Worker are retired | Accepted; supersedes 0024; amends 0277 |
@@ -409,3 +409,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0314](0314-plans-stay-on-main-as-the-record-of-their-change.md) | Plans stay on `main` as the record of their change | Accepted |
 | [0315](0315-rulesets-and-required-checks-live-in-the-admin-policy.md) | Rulesets and required checks live in the admin policy | Accepted |
 | [0316](0316-the-releases-integration-branch-convention-is-retired.md) | The `releases/*` integration-branch convention is retired | Accepted |
+| [0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md) | An org directory holding only admin_config.json is fresh | Accepted; amends 0302 |
