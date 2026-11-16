@@ -314,17 +314,18 @@ segment (`+g<sha>`), which both indexes reject as an upload.
 `publish-n8n-node.yml` publishes the `n8n/` package (`n8n-nodes-privacyfence`) to npm with a
 provenance statement. It starts on the same `v*` tag push as `build.yml` and `publish-pypi.yml`,
 and its `wait_for_build` job blocks the publish on `build.yml`'s run for that commit succeeding.
-Only a **stable** tag publishes: the `publish` job runs `scripts/r2_release.py channel` on the
-version and stops unless it prints `stable`, so `a`/`b`/`rc` tags publish nothing. Every stable
+Only a **stable** tag publishes: the `resolve` job runs `scripts/r2_release.py channel` on the
+version, and the `publish` job runs only when it prints `stable`, so for `a`/`b`/`rc` tags the
+`publish` job is skipped and the run ends green without publishing anything. Every stable
 tag publishes a new package version, also when `n8n/` did not change.
 
-The job runs in the GitHub environment `npm` (with `id-token: write`). It installs npm 11.21.2,
-runs `npm ci`, sets the package version from the tag, runs `npm run lint` and `npm run build`,
-and then runs `npm publish --provenance --access public`. A rerun skips the publish when
-`npm view n8n-nodes-privacyfence@<version> version` already prints that version, so the workflow
-can be run again after a partial failure. `workflow_dispatch` takes one input, `dry_run`
-(default `true`), which adds `--dry-run` to the publish; dispatch it on a tag ref. The workflow
-never uses `n8n-node release`: that command bumps the version, commits and tags.
+The `publish` job runs in the GitHub environment `npm` (with `id-token: write`). It installs npm
+11.21.2, runs `npm ci`, sets the package version from the tag, runs `npm run lint` and `npm run
+build`, and then runs `npm publish --provenance --access public`. A rerun skips the publish when
+`npm view n8n-nodes-privacyfence@<version> version` already prints that version, so the workflow can
+be run again after a partial failure. `workflow_dispatch` takes one input, `dry_run` (default
+`true`), which adds `--dry-run` to the publish; dispatch it on a tag ref. The workflow never uses
+`n8n-node release`: that command bumps the version, commits and tags.
 
 **Authentication.** A package must exist on npm before a trusted publisher can be added to it, so
 the first publish uses a token: an automation token from npm, saved as the secret `NPM_TOKEN` of

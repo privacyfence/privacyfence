@@ -28,10 +28,11 @@ def _run_text(job: dict[str, Any]) -> str:
     return "\n".join(step.get("run", "") for step in _steps(job))
 
 
-def test_the_workflow_parses_and_has_the_three_jobs() -> None:
+def test_the_workflow_parses_and_has_the_four_jobs() -> None:
     jobs = _load()["jobs"]
-    assert set(jobs) == {"dedupe", "wait_for_build", "publish"}
-    assert set(jobs["publish"]["needs"]) == {"dedupe", "wait_for_build"}
+    assert set(jobs) == {"dedupe", "wait_for_build", "resolve", "publish"}
+    assert set(jobs["publish"]["needs"]) == {"dedupe", "wait_for_build", "resolve"}
+    assert jobs["resolve"]["needs"] == "dedupe"
     assert jobs["publish"]["environment"] == "npm"
 
 
@@ -68,10 +69,30 @@ def test_the_publish_command_uses_provenance_and_no_release_command() -> None:
             assert "npm run release" not in step.get("run", "")
 
 
-def test_the_publish_job_runs_for_stable_tags_only() -> None:
-    run = _run_text(_load()["jobs"]["publish"])
-    assert 'scripts/r2_release.py channel "$VERSION"' in run
-    assert '!= "stable"' in run
+def test_the_publish_job_is_skipped_unless_the_channel_is_stable() -> None:
+    jobs = _load()["jobs"]
+    assert 'scripts/r2_release.py channel "$VERSION"' in _run_text(jobs["resolve"])
+    assert jobs["resolve"]["outputs"]["channel"] == "${{ steps.release.outputs.channel }}"
+    assert "needs.resolve.outputs.channel == 'stable'" in jobs["publish"]["if"]
+    assert "needs.dedupe.outputs.duplicate != 'true'" in jobs["publish"]["if"]
+
+
+def test_a_pre_release_tag_does_not_fail_the_run() -> None:
+    jobs = _load()["jobs"]
+    for name, job in jobs.items():
+        for step in _steps(job):
+            run = step.get("run", "")
+            assert not ("stable" in run and "exit 1" in run), (name, step.get("name"))
+    assert "environment" not in jobs["resolve"]
+    assert "id-token" not in jobs["resolve"].get("permissions", {})
+
+
+def test_the_publish_job_takes_its_version_from_resolve() -> None:
+    publish = _load()["jobs"]["publish"]
+    versions = [s["env"]["VERSION"] for s in _steps(publish) if "VERSION" in s.get("env", {})]
+    assert versions
+    assert all(v == "${{ needs.resolve.outputs.version }}" for v in versions)
+    assert "steps.release" not in yaml.safe_dump(publish)
 
 
 def test_a_rerun_skips_an_already_published_version() -> None:
