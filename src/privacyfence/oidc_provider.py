@@ -4,7 +4,8 @@ The operator lists each app (its ``client_id``, redirect addresses and secret) i
 environment; nothing is registered dynamically. This module holds the parts that need no HTTP:
 the client list read from the environment, the RS256 signing key kept in the organization
 directory, and the provider object behind the routes in ``web/routes_oidc.py``: discovery, the key
-set, single-use authorization codes bound to a PKCE S256 challenge, ID tokens and short-lived access
+set, single-use authorization codes, bound to a PKCE S256 challenge unless the operator turned PKCE
+off for that app, ID tokens and short-lived access
 tokens for userinfo.
 
 Codes and access tokens live only in this process's memory and are capped, so a restart signs
@@ -67,6 +68,7 @@ class OidcClient:
     secret: str = field(repr=False)
     groups: bool = False
     groups_allowed: tuple[str, ...] = ()
+    require_pkce: bool = True
 
     def allows_group(self, group: str) -> bool:
         """Whether ``group`` may be sent to this app: every group when the allowlist is empty, else
@@ -140,6 +142,13 @@ def _client_groups(stem: str) -> tuple[bool, tuple[str, ...]]:
     return enabled, entries
 
 
+def _client_require_pkce(stem: str) -> bool:
+    raw = _env(f"{stem}REQUIRE_PKCE")
+    if raw not in ("", "true", "false"):
+        raise ConfigurationError(f"{stem}REQUIRE_PKCE must be true or false")
+    return raw != "false"
+
+
 def clients_from_env() -> dict[str, OidcClient]:
     """The clients named in ``PRIVACYFENCE_OIDC_CLIENTS``, keyed by ``client_id``.
 
@@ -165,7 +174,8 @@ def clients_from_env() -> dict[str, OidcClient]:
         secret = _client_secret(stem)
         groups, groups_allowed = _client_groups(stem)
         clients[name] = OidcClient(
-            client_id=name, redirect_uris=uris, secret=secret, groups=groups, groups_allowed=groups_allowed
+            client_id=name, redirect_uris=uris, secret=secret, groups=groups, groups_allowed=groups_allowed,
+            require_pkce=_client_require_pkce(stem),
         )
     return clients
 
@@ -267,7 +277,7 @@ class CodeGrant:
     principal: Principal
     email_verified: bool
     nonce: str | None
-    code_challenge: str
+    code_challenge: str | None  # None when the operator turned PKCE off for the client and none was sent
     scope: str  # the requested scopes, space-separated, "openid" always included
     auth_time: int
     expires_at: float
@@ -357,7 +367,7 @@ class OidcProvider:
         principal: Principal,
         email_verified: bool,
         nonce: str | None,
-        code_challenge: str,
+        code_challenge: str | None,
         scope: str,
         auth_time: int,
     ) -> str | None:
@@ -375,10 +385,16 @@ class OidcProvider:
             )
         return code
 
-    def redeem_code(self, code: str, *, client_id: str, redirect_uri: str, code_verifier: str) -> CodeGrant | None:
-        """The code's grant, consuming the code whatever the outcome. None unless the code is live,
-        was issued to ``client_id`` for ``redirect_uri``, and ``code_verifier`` matches its S256
-        challenge. An empty verifier never matches."""
+    def redeem_code(self, code: str, *, client_id: str, redirect_uri: str, code_verifier: str | None
+    ) -> CodeGrant | None:
+        """The code's grant, consuming the code whatever the outcome. None unless the code is live and
+        was issued to ``client_id`` for ``redirect_uri``, and then:
+
+        - a code issued with an S256 challenge needs a ``code_verifier`` that matches it; an empty or
+          missing verifier never matches;
+        - a code issued without a challenge (PKCE turned off for that app) needs ``code_verifier`` to
+          be None, meaning the form had no such field: a verifier, even an empty one, is refused so a
+          sign-in cannot be downgraded."""
         with self._lock:
             grant = self._codes.pop(code, None)
             now = self._clock()
@@ -386,6 +402,8 @@ class OidcProvider:
             return None
         if grant.client_id != client_id or grant.redirect_uri != redirect_uri:
             return None
+        if grant.code_challenge is None:
+            return grant if code_verifier is None else None
         if not code_verifier:
             return None
         if not hmac.compare_digest(_s256(code_verifier).encode(), grant.code_challenge.encode()):

@@ -5,6 +5,7 @@
 Accepted — 2026-10-31. Implemented: `src/privacyfence/oidc_provider.py`, `src/privacyfence/web/routes_oidc.py`.
 Relates to [ADR 0011](0011-org-mode-runs-its-own-oauth-authorization-server.md), [ADR 0061](0061-the-mcp-token-and-the-browser-session-are-audience-separated.md) and [ADR 0224](0224-an-org-registration-is-attested-by-its-redirect-uris.md).
 Amended by [ADR 0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md), 2026-11-15.
+Amended by [ADR 0318](0318-pkce-can-be-turned-off-for-one-named-oidc-app.md), 2026-11-16.
 
 ## Context
 

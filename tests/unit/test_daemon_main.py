@@ -1996,6 +1996,19 @@ class TestMaybeStartWebServerOrgMode:
         assert result.org.oidc.client("peek") is not None
         assert (tmp_path / "oidc_signing_key.pem").exists()
         assert "OIDC provider for 1 app(s) at http://localhost:8765/oidc" in caplog.text
+        assert "without PKCE" not in caplog.text
+
+    def test_an_oidc_client_with_pkce_off_logs_a_warning(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
+        self._oidc_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_REQUIRE_PKCE", "false")
+        with caplog.at_level(logging.INFO, logger=daemon_main.logger.name):
+            daemon_main._maybe_start_web_server(
+                {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+                unattended_sessions_enabled=False, org_config=self._single_user_config(),
+            )
+        assert "OIDC client peek signs in without PKCE (PRIVACYFENCE_OIDC_CLIENT_PEEK_REQUIRE_PKCE=false)" in caplog.text
 
     @staticmethod
     def _upstream_file(tmp_path, **overrides):

@@ -365,7 +365,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0270](0270-the-built-in-slack-app-reads-through-search-while-slack-throttles-it.md) | The built-in Slack app reads through search while Slack throttles it | Accepted; relates to 0255, 0269 |
 | [0271](0271-automatic-accounts-can-be-switched-on-from-the-environment.md) | Automatic accounts can be switched on from the environment | Accepted; relates to 0196, 0256, 0264 |
 | [0272](0272-a-single-user-install-provisions-its-one-person-as-verified.md) | A single-user install provisions its one person as verified | Accepted; relates to 0243, 0260, 0271 |
-| [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224, 0272; amended by 0311 |
+| [0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-names.md) | PrivacyFence is an OpenID Connect provider for apps the operator names | Accepted; relates to 0011, 0061, 0224, 0272; amended by 0311, 0318 |
 | [0274](0274-the-oidc-signing-key-is-generated-in-the-org-directory.md) | The OIDC signing key is generated in the org directory | Accepted; relates to 0273 |
 | [0275](0275-the-single-user-person-is-admin-at-privacyfence-localhost.md) | The single-user person is admin@privacyfence.localhost | Accepted; amends 0272 |
 | [0276](0276-links-to-a-docs-page-the-next-release-publishes-fall-back-to-github.md) | Links to a docs page the next release publishes fall back to GitHub until it does | Accepted; amends 0099 |
@@ -410,3 +410,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0315](0315-rulesets-and-required-checks-live-in-the-admin-policy.md) | Rulesets and required checks live in the admin policy | Accepted |
 | [0316](0316-the-releases-integration-branch-convention-is-retired.md) | The `releases/*` integration-branch convention is retired | Accepted |
 | [0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md) | An org directory holding only admin_config.json is fresh | Accepted; amends 0302 |
+| [0318](0318-pkce-can-be-turned-off-for-one-named-oidc-app.md) | PKCE can be turned off for one named OIDC app | Accepted; amends 0273 |

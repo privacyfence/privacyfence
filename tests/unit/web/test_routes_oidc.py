@@ -75,6 +75,8 @@ def test_only_get_is_allowed(tmp_path):
 ISS = "https://pf.example.com/oidc"
 PEEK_SECRET = "p" * 40
 GRIST_SECRET = "g" * 40
+FORGEJO_CB = "https://git.example.org/user/oauth2/privacyfence/callback"
+FORGEJO_SECRET = "f" * 40
 PEEK_CB = "https://peek.example.com/cb"
 GRIST_CB = "https://grist.example.com/cb?tenant=a"
 VERIFIER = "v" * 50
@@ -137,6 +139,17 @@ class _Env:
             data.update({"client_id": client_id, "client_secret": secret})
         data.update(extra or {})
         return self.http.post("/oidc/token", data=data, headers=headers)
+
+
+def _forgejo_env(tmp_path) -> _Env:
+    return _Env(tmp_path, clients={
+        "peek": oidc_provider.OidcClient("peek", (PEEK_CB,), PEEK_SECRET),
+        "forgejo": oidc_provider.OidcClient("forgejo", (FORGEJO_CB,), FORGEJO_SECRET, require_pkce=False),
+    })
+
+
+_FORGEJO = {"client_id": "forgejo", "redirect_uri": FORGEJO_CB}
+_FORGEJO_TOKEN = {"client_id": "forgejo", "secret": FORGEJO_SECRET, "redirect_uri": FORGEJO_CB}
 
 
 def _basic(client_id: str, secret: str) -> str:
@@ -414,6 +427,51 @@ def test_pkce_missing_verifier(tmp_path):
     # Even a challenge made from the empty verifier needs a verifier to be sent.
     code = env.code(code_challenge=_challenge(""))
     assert env.token(code, verifier=None).json() == {"error": "invalid_grant"}
+
+
+def test_pkce_off_client_full_flow_without_pkce(tmp_path):
+    env = _forgejo_env(tmp_path)
+    code = env.code(code_challenge=None, code_challenge_method=None, **_FORGEJO)
+    response = env.token(code, verifier=None, **_FORGEJO_TOKEN)
+    assert response.status_code == 200
+    assert _verify_id_token(env, response.json()["id_token"], audience="forgejo")["sub"]
+
+
+def test_pkce_off_client_that_sends_s256_is_still_checked(tmp_path):
+    env = _forgejo_env(tmp_path)
+    code = env.code(**_FORGEJO)
+    assert env.token(code, verifier="w" * 50, **_FORGEJO_TOKEN).json() == {"error": "invalid_grant"}
+    code = env.code(**_FORGEJO)
+    assert env.token(code, **_FORGEJO_TOKEN).status_code == 200
+
+
+@pytest.mark.parametrize("overrides", [
+    {"code_challenge": None},
+    {"code_challenge_method": None},
+    {"code_challenge": VERIFIER, "code_challenge_method": "plain"},
+    {"code_challenge": "short"},
+    {"code_challenge": "", "code_challenge_method": None},
+])
+def test_pkce_off_client_refuses_partial_or_plain_pkce(tmp_path, overrides):
+    response = _forgejo_env(tmp_path).authorize(**_FORGEJO, **overrides)
+    assert response.status_code == 302
+    query = _query(response)
+    assert query["error"] == ["invalid_request"]
+    assert query["error_description"] == ["PKCE with S256 is required."]
+
+
+@pytest.mark.parametrize("verifier", [VERIFIER, ""])
+def test_pkce_off_client_refuses_a_verifier_without_a_challenge(tmp_path, verifier):
+    env = _forgejo_env(tmp_path)
+    code = env.code(code_challenge=None, code_challenge_method=None, **_FORGEJO)
+    assert env.token(code, verifier=verifier, **_FORGEJO_TOKEN).json() == {"error": "invalid_grant"}
+
+
+def test_pkce_still_required_for_a_default_client(tmp_path):
+    response = _forgejo_env(tmp_path).authorize(code_challenge=None, code_challenge_method=None)
+    query = _query(response)
+    assert query["error"] == ["invalid_request"]
+    assert query["error_description"] == ["PKCE with S256 is required."]
 
 
 def test_token_bad_secret_401(tmp_path):

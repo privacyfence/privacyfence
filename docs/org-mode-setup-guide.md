@@ -598,7 +598,10 @@ PRIVACYFENCE_OIDC_CLIENT_FORGEJO_REDIRECT_URIS=https://git.example.org/user/oaut
 PRIVACYFENCE_OIDC_CLIENT_FORGEJO_SECRET_FILE=/run/secrets/oidc_forgejo_secret
 PRIVACYFENCE_OIDC_CLIENT_FORGEJO_GROUPS=true
 PRIVACYFENCE_OIDC_CLIENT_FORGEJO_GROUPS_ALLOWED=kh-*
+PRIVACYFENCE_OIDC_CLIENT_FORGEJO_REQUIRE_PKCE=false
 ```
+
+Forgejo sends no PKCE to an OpenID Connect source, so PKCE is turned off for this app only; the daemon warns about it at start.
 
 A groups app needs an upstream MCP declaration (`PRIVACYFENCE_UPSTREAM_MCP_FILE`): without one the start is
 refused. A group reaches Forgejo only if an upstream maps it in the `upstream_mcp` key of
