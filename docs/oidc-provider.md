@@ -30,6 +30,7 @@ PRIVACYFENCE_OIDC_CLIENT_GRIST_SECRET_FILE=/run/secrets/grist_oidc_client_secret
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET` | The secret itself. Set this or the file, never both. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS` | `true` or `false` (exact, lower case), default `false`. With `true` the app's ID token and userinfo carry `groups` ([Groups](#groups)). Needs an upstream MCP declaration. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS_ALLOWED` | Comma-separated group names that may be sent, each an exact name or a prefix ending in `*` such as `kh-*`; at most 50. Empty sends every mapped group. Needs `…_GROUPS=true`. |
+| `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REQUIRE_PKCE` | `true` or `false` (exact, lower case), default `true`. With `false` the app may sign in without PKCE, for an app that cannot send it, such as Forgejo. An app that sends PKCE anyway is still checked. The daemon warns at start. |
 
 A secret must be at least 32 characters after surrounding spaces are removed; `openssl rand -hex 32`
 makes a good one. Give the same secret to the app (Peek and Grist take it as their OIDC client
@@ -52,7 +53,10 @@ needs only the issuer: it finds the rest in the discovery document.
 | `<issuer>/userinfo` | The person's `sub`, `email`, `email_verified` and `name`, and `groups` for apps that opt in. |
 | `<issuer>/jwks` | The public key that signs ID tokens (RS256). |
 
-The flow is the authorization code flow with PKCE (`S256`), which is mandatory. Access tokens and ID
+The flow is the authorization code flow with PKCE (`S256`). PKCE
+is required unless `…_REQUIRE_PKCE=false` is set for that app; every app has a secret, so the
+token request is always authenticated
+([ADR 0318](adr/0318-pkce-can-be-turned-off-for-one-named-oidc-app.md)). Access tokens and ID
 tokens last 5 minutes, there are no refresh tokens, and there is no `end_session_endpoint`: the apps
 sign out locally. These tokens work only at `/oidc/userinfo`, never as an AI client's token, and an
 AI client's token does not work there.
@@ -169,6 +173,10 @@ not logged, in case it quotes the secret.
 
 **`…SECRET must be at least 32 characters`** — use a longer secret.
 
+**`…REQUIRE_PKCE must be true or false`** — write exactly `true` or `false`, in lower case, or leave it unset.
+
+**`OIDC client <name> signs in without PKCE …`** (a log warning) — `…_REQUIRE_PKCE=false` is set for this app. Remove it once the app sends PKCE.
+
 **`<path> is not a usable RSA signing key of at least 2048 bits; delete it to make a new one.`** —
 `oidc_signing_key.pem` is damaged or is a different kind of key. Delete it (this rotates the key).
 
@@ -184,7 +192,8 @@ match exactly, in lower case.
 equal one in `…_REDIRECT_URIS`, character for character. Compare scheme, host, port and path.
 
 **`PKCE with S256 is required.`** — the app did not send a `code_challenge` with
-`code_challenge_method=S256`. Peek and Grist do; a custom app must.
+`code_challenge_method=S256`. Peek and Grist do; a custom app must. For an app that cannot send PKCE, such as Forgejo, set `…_REQUIRE_PKCE=false`. An app
+with it off that sends only part of PKCE, or `plain`, is still refused.
 
 **`The openid scope is required.`** and **`Only response_type=code is supported.`** — the app
 asked for something PrivacyFence does not offer.
@@ -196,7 +205,8 @@ asked for something PrivacyFence does not offer.
 **`invalid_client`** (HTTP 401 from `/oidc/token`) — the app's secret does not match.
 
 **`invalid_grant`** (HTTP 400) — the code was already used, expired (it lasts 60 seconds), was issued
-to another app or redirect address, or the PKCE verifier does not match.
+to another app or redirect address, the PKCE
+verifier does not match, or a `code_verifier` was sent for a sign-in that used no PKCE.
 
 **`invalid_request`** (HTTP 400 from `/oidc/token`) — the app sent its secret both in the
 `Authorization` header and in the form.
