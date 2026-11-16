@@ -123,6 +123,14 @@ def _person_data(root, name="users"):
     (root / name / "entry").write_text("x")
 
 
+def _admin_config_seed(root):
+    """org/admin_config.json written before the first start, as a deployment tool leaves it."""
+    (root / "org").mkdir()
+    (root / "org" / "admin_config.json").write_text(
+        json.dumps({"version": 1, "upstream_mcp": {"kh": {"groups": {"everyone@example.org": ["all"]}}}})
+    )
+
+
 class TestCheckUpgradeSource:
     DESKTOP = "belongs to a PrivacyFence desktop install"
     CHECKPOINT = "has not been prepared for PrivacyFence 8"
@@ -167,6 +175,68 @@ class TestCheckUpgradeSource:
         data_format.check_upgrade_source(tmp_path)
 
         assert (tmp_path / "data_format.json").exists()
+
+    def test_an_admin_config_seed_alone_is_a_fresh_directory(self, tmp_path):
+        _admin_config_seed(tmp_path)
+        (tmp_path / "authority").mkdir()
+        seed = (tmp_path / "org" / "admin_config.json").read_text()
+
+        data_format.check_upgrade_source(tmp_path)
+
+        assert json.loads((tmp_path / "data_format.json").read_text())["format"] == 7
+        assert (tmp_path / "org" / "admin_config.json").read_text() == seed
+
+    def test_an_admin_config_seed_next_to_another_org_file_is_refused(self, tmp_path):
+        _admin_config_seed(tmp_path)
+        (tmp_path / "org" / "org_bundle.json").write_text("{}")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+        assert not (tmp_path / "data_format.json").exists()
+
+    def test_an_admin_config_seed_with_other_person_data_is_refused(self, tmp_path):
+        _admin_config_seed(tmp_path)
+        _person_data(tmp_path, "users")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_an_admin_config_symlink_is_refused(self, tmp_path):
+        (tmp_path / "elsewhere.json").write_text("{}")
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "admin_config.json").symlink_to(tmp_path / "elsewhere.json")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_an_admin_config_directory_is_refused(self, tmp_path):
+        (tmp_path / "org" / "admin_config.json").mkdir(parents=True)
+        (tmp_path / "org" / "admin_config.json" / "entry").write_text("x")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_an_org_symlink_to_a_seed_is_refused(self, tmp_path):
+        (tmp_path / "real_org").mkdir()
+        (tmp_path / "real_org" / "admin_config.json").write_text("{}")
+        (tmp_path / "org").symlink_to(tmp_path / "real_org")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_an_org_file_is_refused(self, tmp_path):
+        (tmp_path / "org").write_text("x")
+
+        with pytest.raises(ConfigurationError, match=self.CHECKPOINT):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_a_seeded_directory_still_refuses_a_desktop_trace(self, tmp_path):
+        _admin_config_seed(tmp_path)
+        (tmp_path / "mcp_token").write_text("x")
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
 
     @pytest.mark.parametrize("name", ["users", "org", "credentials", "authority"])
     def test_a_non_empty_person_data_directory_without_a_marker_is_refused(self, tmp_path, name):

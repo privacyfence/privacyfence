@@ -458,7 +458,7 @@ starts in single-user mode. The image already sets `PRIVACYFENCE_MODE=org` and
 | `PRIVACYFENCE_IDP_CLIENT_SECRET_FILE` | none | A Docker secret file (`/run/secrets/idp_client_secret`). `PRIVACYFENCE_IDP_CLIENT_SECRET` is the plain form; never both. |
 | `PRIVACYFENCE_ADMIN_EMAILS` | none | Admins by verified email. Microsoft Entra ID uses `PRIVACYFENCE_IDP_ADMIN_GROUP_CLAIM` and `PRIVACYFENCE_IDP_ADMIN_GROUP_VALUES` instead ([guide](org-mode-setup-guide.md#who-is-an-admin)). |
 | `PRIVACYFENCE_IDP` | none | `builtin-google` for the [built-in Google sign-in](org-mode-setup-guide.md#built-in-google-sign-in). |
-| `PRIVACYFENCE_ALLOWED_DOMAINS` | none | The allowed sign-in domains, with either sign-in method; first start only, then Admin → Sign-in. |
+| `PRIVACYFENCE_ALLOWED_DOMAINS` | none | The allowed sign-in domains, with either sign-in method; first start only (not when `org/admin_config.json` was written before it), then Admin → Sign-in. |
 | `PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL` | `false` | `true` on Microsoft Entra ID so allowed domains work; it trusts only addresses in `PRIVACYFENCE_ALLOWED_DOMAINS`. |
 | `PRIVACYFENCE_PEEK_BASE_URL`, `PRIVACYFENCE_GRIST_SERVER_URL`, `PRIVACYFENCE_GRIST_PROVISIONER_URL` | none | The Peek and Grist addresses. |
 | `PRIVACYFENCE_N8N_URL`, `PRIVACYFENCE_N8N_API_KEY_FILE` | none | The n8n address and the API key as a Docker secret file (the plain `PRIVACYFENCE_N8N_API_KEY` also works; never both), for delivering AI-proposed tokens to n8n. Switch the delivery on with the next row ([setup guide](org-mode-setup-guide.md#delivering-tokens-to-n8n)). |
