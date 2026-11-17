@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from privacyfence.policy import describe, propose  # noqa: E402
+from privacyfence.policy import registry  # noqa: E402
 from privacyfence.policy.registry import TOOL_REGISTRY  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -122,6 +123,8 @@ def _scope_candidates(tool: str) -> list[propose.ProposableScope]:
     entry = TOOL_REGISTRY.get(tool)
     if entry is None or entry.operation is None or entry.verb is None:
         return []
+    if entry.operation in registry.RULE_EXEMPT_OPERATIONS:
+        return []  # no rule can cover it (ADR 0322): the card offers no "Always allow"
     connector = propose.connector_of_operation(entry.operation)
     return [
         scope for scope in propose.PROPOSABLE_SCOPES

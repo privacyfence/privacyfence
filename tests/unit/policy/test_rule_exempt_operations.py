@@ -4,6 +4,8 @@ The tools themselves do not exist yet, so these tests use the constant's values 
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from privacyfence import auto_accept
@@ -73,3 +75,11 @@ def test_no_scope_derives_drive_tag_folder_tree_with_the_real_registry():
             assert "drive.tag_folder_tree" not in propose.operations_for(scope, verb)
         for extra in catalogue.EXTRA_SCOPES.values():
             assert "drive.tag_folder_tree" not in catalogue.extra_operations_for(extra, verb)
+
+
+@pytest.mark.parametrize("tool", ["drive_set_file_tags", "drive_tag_folder_tree"])
+def test_proposals_for_is_empty_for_an_exempt_tool(tool):
+    # A file that lives in a folder would otherwise earn an approved_sandbox_folder proposal.
+    file = SimpleNamespace(id="f1", parent_ids=["FOLDER1"], owners=["me@corp.com"], mime_type="text/plain")
+    ctx = make_ctx(connector="drive", tool=tool, args={}, raw_data=file)
+    assert propose.proposals_for(tool, ctx) == []
