@@ -95,6 +95,7 @@ class TestDispatch:
 
 APPS_SCRIPT_SIBLINGS = {
     "apps_script_list_projects": ("apps_script_get_content",),
+    "apps_script_create_project": ("apps_script_write_content", "apps_script_list_projects"),
     "apps_script_get_content": ("apps_script_write_content",),
     "apps_script_write_content": ("apps_script_get_content",),
     "apps_script_get_execution_log": ("apps_script_list_projects",),
@@ -129,6 +130,38 @@ class TestListProjects:
         await connector.call("apps_script_list_projects", {"max_results": 5})
 
         client.list_projects.assert_called_once_with(5)
+
+
+class TestCreateProject:
+    async def test_returns_project_and_writes_audit_entry(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.create_project.return_value = make_project(id="s9", name="New")
+
+        result = await connector.call("apps_script_create_project", {"title": "New"})
+
+        assert result == {"id": "s9", "name": "New", "created_time": "c", "modified_time": "m"}
+        client.create_project.assert_called_once_with("New")
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"decision": "auto_accepted"' in entries[0]
+        assert '"tool": "apps_script_create_project"' in entries[0]
+
+    async def test_never_reaches_the_gate(self, gated_call_spy):
+        connector, client = make_connector()
+        client.create_project.return_value = make_project(id="s9", name="New")
+
+        await connector.call("apps_script_create_project", {"title": "New"})
+
+        assert gated_call_spy == []
+
+    async def test_client_error_becomes_runtime_error(self):
+        connector, client = make_connector()
+        client.create_project.side_effect = AppsScriptClientError(
+            "create_project requires a non-empty title"
+        )
+
+        with pytest.raises(RuntimeError):
+            await connector.call("apps_script_create_project", {"title": " "})
 
 
 class TestGetContent:
@@ -358,6 +391,7 @@ class TestEveryToolIsAudited:
             files=[ScriptFile(name="Code", type="SERVER_JS", source="function foo() {}")]
         )
         client.get_execution_log.return_value = []
+        client.create_project.return_value = make_project()
         await assert_all_tools_leave_an_audit_trail(
             connector, apps_script_module, monkeypatch, tmp_path,
             arg_overrides={"apps_script_write_content": {"files": _VALID_FILES_JSON}},

@@ -416,3 +416,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0321](0321-drive-tags-are-plain-properties-and-collaborators-can-forge-them.md) | Drive tags are plain properties, and collaborators can forge them | Accepted; relates to 0320 |
 | [0322](0322-tag-writing-tools-are-popup-only-and-exempt-from-every-rule.md) | The tag-writing tools are popup-only and exempt from every rule | Accepted; relates to 0077, 0164, 0236 |
 | [0323](0323-the-oidc-provider-sends-no-group-membership.md) | The OIDC provider sends no group membership | Accepted; supersedes 0311; relates to 0273, 0298, 0299, 0310, 0318 |
+| [0324](0324-apps-script-can-create-an-empty-project-without-a-card.md) | Apps Script can create an empty project without a card | Accepted; amends 0075 |

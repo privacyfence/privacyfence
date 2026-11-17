@@ -1,8 +1,9 @@
 """Google Apps Script API client.
 
 Handles OAuth2 authorization and read/write access to a script project's
-*source* (the `.gs`/`.html` files plus the `appsscript.json` manifest), and
-best-effort read access to the result of a run the user triggered themselves.
+*source* (the `.gs`/`.html` files plus the `appsscript.json` manifest), can
+also create a new, empty standalone project, and has best-effort read access
+to the result of a run the user triggered themselves.
 
 Running a script is deliberately out of scope for this client and for
 PrivacyFence entirely -- see ``connectors/apps_script.py``'s module docstring
@@ -307,6 +308,28 @@ class AppsScriptClient:
     # ------------------------------------------------------------------ #
     # Write operations
     # ------------------------------------------------------------------ #
+
+    def create_project(self, title: str) -> ScriptProject:
+        """Create a new, empty standalone script project (projects.create with
+        only a title, never a parentId: no container-bound script)."""
+        title = (title or "").strip()
+        if not title:
+            raise AppsScriptClientError("create_project requires a non-empty title")
+        service = self._get_service()
+        try:
+            raw = service.projects().create(body={"title": title}).execute()
+        except HttpError as exc:
+            raise AppsScriptClientError(f"create_project failed: {exc}") from exc
+        script_id = raw.get("scriptId", "")
+        if not script_id:
+            raise AppsScriptClientError("create_project: the API returned no scriptId")
+        logger.info("create_project: created %s", script_id)
+        return ScriptProject(
+            id=script_id,
+            name=raw.get("title", "") or title,
+            created_time=raw.get("createTime", ""),
+            modified_time=raw.get("updateTime", ""),
+        )
 
     def write_content(self, script_id: str, files: list[dict]) -> dict:
         """Replace a script project's entire file set -- there is no

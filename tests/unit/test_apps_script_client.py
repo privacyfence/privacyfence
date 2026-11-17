@@ -454,6 +454,46 @@ class TestWriteContent:
 
 
 # ---------------------------------------------------------------------------- #
+# create_project
+# ---------------------------------------------------------------------------- #
+
+class TestCreateProject:
+    def test_requires_title(self):
+        service = MagicMock()
+        client = make_client(service)
+        with pytest.raises(AppsScriptClientError, match="requires a non-empty title"):
+            client.create_project("  ")
+        service.projects.return_value.create.assert_not_called()
+
+    def test_sends_title_only_and_maps_response(self):
+        service = MagicMock()
+        service.projects.return_value.create.return_value.execute.return_value = {
+            "scriptId": "s9", "title": "New", "createTime": "c", "updateTime": "u",
+        }
+        client = make_client(service)
+
+        result = client.create_project(" New ")
+
+        create = service.projects.return_value.create
+        assert create.call_args.kwargs["body"] == {"title": "New"}
+        assert result == ScriptProject(id="s9", name="New", created_time="c", modified_time="u")
+
+    def test_missing_script_id_raises(self):
+        service = MagicMock()
+        service.projects.return_value.create.return_value.execute.return_value = {}
+        client = make_client(service)
+        with pytest.raises(AppsScriptClientError, match="returned no scriptId"):
+            client.create_project("New")
+
+    def test_http_error_becomes_apps_script_client_error(self):
+        service = MagicMock()
+        service.projects.return_value.create.return_value.execute.side_effect = http_error(403)
+        client = make_client(service)
+        with pytest.raises(AppsScriptClientError, match="create_project failed"):
+            client.create_project("New")
+
+
+# ---------------------------------------------------------------------------- #
 # _get_service / _get_drive_service: must not share one service (and its
 # underlying httplib2 transport) across threads.
 # ---------------------------------------------------------------------------- #

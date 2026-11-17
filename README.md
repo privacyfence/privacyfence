@@ -64,7 +64,7 @@ Enterprise through an organization deployment; any MCP-compatible client can con
 | Google Drive, Docs & Sheets | Search, read, download, upload, move and write files; edit and format Docs; read, write and format Sheets |
 | Google Calendar | Read events, free/busy and rooms; create, update and delete events; out-of-office and working location |
 | Google Contacts, Tasks | Read, create and update contacts and tasks |
-| Google Apps Script | Read and write project source; read the result of a run you started (PrivacyFence never runs scripts) |
+| Google Apps Script | Create a new project, read and write project source; read the result of a run you started (PrivacyFence never runs scripts) |
 | Slack | List and read channels, DMs and threads; search; send messages; start group chats |
 | Telegram | Read and search chats; send messages |
 | Salesforce | Read records, search, run reports; create and update records |

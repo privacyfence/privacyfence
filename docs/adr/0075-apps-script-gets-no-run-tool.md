@@ -6,6 +6,7 @@ Accepted (recorded retroactively on 2026-09-25; decided around 2026-08-05 in
 [#154](https://github.com/privacyfence/privacyfence/issues/154)'s "Non-goals", implemented in
 `ea5a0c9b` and merged in [#171](https://github.com/privacyfence/privacyfence/pull/171)).
 Implemented.
+Amended by [ADR 0324](0324-apps-script-can-create-an-empty-project-without-a-card.md): a fifth tool, apps_script_create_project, creates an empty project.
 
 ## Context
 

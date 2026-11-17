@@ -362,6 +362,7 @@ TOOL_TO_GATE: dict[str, str] = {
     "tasks_move_task":                 "popup",
     # Apps Script
     "apps_script_list_projects":       "auto",
+    "apps_script_create_project":      "auto",
     "apps_script_get_content":         "review",
     "apps_script_write_content":       "popup",
     "apps_script_get_execution_log":   "review",
