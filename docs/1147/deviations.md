@@ -15,7 +15,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-exempt-operations
 
-- pending
+- None.
 
 ## p4-set-file-tags-tool
 
