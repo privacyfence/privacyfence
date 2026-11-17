@@ -47,7 +47,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- final: p3-exempt-operations: propose.proposals_for (policy/propose.py:600) never checks RULE_EXEMPT_OPERATIONS, so both tag tools offer an Always-allow button the engine never applies and the generated always-allow reference lists them; fix: return [] for an exempt operation, regenerate the reference, add a test.
 
 ## Finishing
 
