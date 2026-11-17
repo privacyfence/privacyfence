@@ -54,3 +54,13 @@ def test_suggested_rules_is_empty_for_an_exempt_operation(monkeypatch, operation
 @pytest.mark.parametrize("operation", EXEMPT)
 def test_exempt_operations_are_excluded_from_temp_accept(operation):
     assert operation in auto_accept._TEMP_ACCEPT_EXCLUDED_OPERATIONS
+
+
+def test_no_scope_derives_drive_set_file_tags_with_the_real_registry():
+    # The real registry now holds the tool: its operation is registered, yet no scope derives it.
+    assert registry.TOOL_REGISTRY["drive_set_file_tags"].operation == "drive.set_file_tags"
+    for verb in Verb:
+        for scope in propose.PROPOSABLE_SCOPES:
+            assert "drive.set_file_tags" not in propose.operations_for(scope, verb)
+        for extra in catalogue.EXTRA_SCOPES.values():
+            assert "drive.set_file_tags" not in catalogue.extra_operations_for(extra, verb)

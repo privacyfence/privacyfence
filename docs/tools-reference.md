@@ -96,7 +96,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Connector | Tools | `auto` | `review` | `popup` |
 |---|---:|---:|---:|---:|
 | [Gmail](#gmail) | 20 | 5 | 3 | 12 |
-| [Google Drive](#google-drive-including-sheets-and-docs) | 26 | 8 | 4 | 14 |
+| [Google Drive](#google-drive-including-sheets-and-docs) | 27 | 8 | 4 | 15 |
 | [Google Calendar](#google-calendar) | 14 | 6 | 1 | 7 |
 | [Google Contacts](#google-contacts) | 7 | 3 | 0 | 4 |
 | [Google Tasks](#google-tasks) | 8 | 3 | 0 | 5 |
@@ -111,7 +111,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Peek](#peek) | 12 | 2 | 3 | 7 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
 | [group membership sync](#privacyfence-administration) | 1 | 1 | 0 | 0 |
-| **Total** | **172** | **60** | **39** | **73** |
+| **Total** | **173** | **60** | **39** | **74** |
 
 ## Gmail
 
@@ -159,6 +159,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `drive_docs_edit_content` | write | `popup` | Replace one occurrence of existing text in a Google Doc with new Markdown, without touching the rest of the document. |
 | `drive_docs_format_content` | write | `popup` | Apply formatting (bold, italic, highlight, text color) to existing text in a Google Doc, located the same way as drive_docs_edit_content, without changing the text itself. |
 | `drive_move_file` | write | `popup` | Move a Drive file to a different folder. |
+| `drive_set_file_tags` | write | `popup` | Add or remove PrivacyFence tags on one Drive file. |
 | `drive_sheets_add_sheet` | write | `popup` | Add a new tab to an existing spreadsheet. |
 | `drive_sheets_delete_dimensions` | write | `popup` | Delete rows or columns from a sheet tab, including any values, formulas, and formatting they contain. |
 | `drive_sheets_format_range` | write | `popup` | Apply formatting to a range in a spreadsheet: bold/italic, colors, number format, horizontal/vertical alignment, text wrap, column width, frozen rows/columns, and merged cells. |

@@ -1203,6 +1203,68 @@ class TestWriteToolsGateAndPreview:
         assert "c1" not in connector.session_created_ids
         assert "c1" not in connector.own_write_revisions
 
+    async def test_set_file_tags_popup_preview_and_parsed_lists(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = make_file(tags=["old"])
+        client.set_tags.return_value = {"file_id": "f1", "tags": ["client-a", "old"]}
+
+        result = await connector.call(
+            "drive_set_file_tags", {"file_id": "f1", "add_tags": "Client-A, client-a", "remove_tags": ""}
+        )
+
+        assert result == {"file_id": "f1", "tags": ["client-a", "old"]}
+        kwargs = gated_call_spy[0]
+        assert kwargs["gate"] == "popup"
+        assert kwargs["tool"] == "drive_set_file_tags"
+        assert kwargs["preview"] == {
+            "File": "Q3 Report.gdoc", "Owner": "alice@example.com",
+            "Add tags": "client-a", "Remove tags": "(none)", "Current tags": "old",
+        }
+        assert kwargs["args"] == {"file_id": "f1", "add_tags": "Client-A, client-a", "remove_tags": ""}
+        client.set_tags.assert_called_once_with("f1", ["client-a"], [])
+
+    async def test_set_file_tags_refuses_a_folder_before_any_popup(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = make_file(
+            id="d1", name="Docs", mime_type="application/vnd.google-apps.folder"
+        )
+
+        with pytest.raises(ValueError, match="not folders"):
+            await connector.call("drive_set_file_tags", {"file_id": "d1", "add_tags": "a"})
+
+        assert gated_call_spy == []
+        client.set_tags.assert_not_called()
+
+    async def test_set_file_tags_refuses_no_tags(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = make_file()
+
+        with pytest.raises(ValueError, match="at least one tag"):
+            await connector.call("drive_set_file_tags", {"file_id": "f1"})
+
+        assert gated_call_spy == []
+        client.set_tags.assert_not_called()
+
+    async def test_set_file_tags_refuses_an_invalid_name(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = make_file()
+
+        with pytest.raises(ValueError, match="not a valid tag name"):
+            await connector.call("drive_set_file_tags", {"file_id": "f1", "add_tags": "bad name!"})
+
+        assert gated_call_spy == []
+        client.set_tags.assert_not_called()
+
+    async def test_set_file_tags_is_not_recorded_as_an_own_write(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = make_file()
+        client.set_tags.return_value = {"file_id": "f1", "tags": ["a"]}
+
+        await connector.call("drive_set_file_tags", {"file_id": "f1", "add_tags": "a"})
+
+        assert "f1" not in connector.session_created_ids
+        assert "f1" not in connector.own_write_revisions
+
     async def test_add_comment_gate_popup(self, gated_call_spy):
         connector, client = make_connector()
         client.get_file_metadata.return_value = make_file()
@@ -2460,6 +2522,8 @@ class TestEveryToolIsAudited:
                 # range_a1 must be a fully-bounded A1 range for _parse_a1_range
                 # to accept -- it's now validated before gating.
                 "drive_sheets_format_range": {"range_a1": "A1:B2"},
+                # at least one tag must be given -- validated before gating.
+                "drive_set_file_tags": {"add_tags": "client-a"},
                 # dimension must be 'ROWS' or 'COLUMNS' -- validated before gating.
                 "drive_sheets_insert_dimensions": {"dimension": "ROWS"},
                 "drive_sheets_delete_dimensions": {"dimension": "ROWS"},

@@ -21,6 +21,7 @@ from ..drive_client import (
     _parse_a1_range,
     resolve_download_name,
 )
+from ..drive_tags import parse_tag_list
 from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
 from ..org_mode import DownloadDeliveryConfig, base64_length
@@ -176,7 +177,7 @@ class DriveConnector(Connector):
                     "Search Google Drive and return matching file metadata "
                     "(id, name, mime_type, owners, sharing status). Returns a list of {id, name, "
                     "mime_type, size, created_time, modified_time, owners, shared, web_view_link, "
-                    "parent_ids, drive_id, thumbnail_link}: at most "
+                    "parent_ids, drive_id, thumbnail_link, tags}: at most "
                     "max_results files (default 20, capped at 1000), read across pages, in the order the Drive API "
                     "gives for the query; fields may be redacted by the user's privacy settings. "
                     "Use drive_list_folder to list one folder's children, or "
@@ -203,7 +204,7 @@ class DriveConnector(Connector):
                     "(name, owners, times, sharing status). Returns one file in the same shape "
                     "drive_list_files lists ({id, name, mime_type, size, created_time, "
                     "modified_time, owners, shared, web_view_link, parent_ids, drive_id, "
-                    "thumbnail_link}), or only {id} if the user's privacy settings hide file "
+                    "thumbnail_link, tags}), or only {id} if the user's privacy settings hide file "
                     "metadata. Use drive_get_file_content to read the file's text. "
                     "Auto-approved."
                 ),
@@ -417,6 +418,27 @@ class DriveConnector(Connector):
                     )),
                     ToolParam("name", "str", required=False, default="", description=(
                         "Name for the copy. Empty keeps the original file's name."
+                    )),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+            ),
+            ToolSpec(
+                name="drive_set_file_tags",
+                description=(
+                    "Add or remove PrivacyFence tags on one Drive file. Tags are comma-separated "
+                    "lowercase names (letters, digits, '.', '_', '-'; up to 40 characters; at most "
+                    "10 per call). A tag rule in Settings can auto-accept calls on files carrying "
+                    "the tag. Tags are visible to and changeable by anyone with edit access to the "
+                    "file. Folders cannot be tagged; use drive_tag_folder_tree. Requires user "
+                    "approval every time, which no rule can grant. Returns {file_id, tags}."
+                ),
+                params=[
+                    ToolParam("file_id", "str", description="Id of the file to tag, from " + _FILE_ID_SOURCES + "."),
+                    ToolParam("add_tags", "str", required=False, default="", description=(
+                        "Comma-separated tag names to add. Empty adds none."
+                    )),
+                    ToolParam("remove_tags", "str", required=False, default="", description=(
+                        "Comma-separated tag names to remove. Empty removes none."
                     )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -868,6 +890,8 @@ class DriveConnector(Connector):
             return await self._move_file(**args)
         if tool == "drive_copy_file":
             return await self._copy_file(**args)
+        if tool == "drive_set_file_tags":
+            return await self._set_file_tags(**args)
         if tool == "drive_add_comment":
             return await self._add_comment(**args)
         if tool == "drive_list_shared_drives":
@@ -1771,6 +1795,46 @@ class DriveConnector(Connector):
         # Not recorded as an own write: PrivacyFence did not write the copy's content and no popup
         # showed it, so reading it later must still get the personal-data check.
         return await self._fetch(self._drive.copy_file, file_id, destination_folder_id, name)
+
+    async def _set_file_tags(self, file_id: str, add_tags: str = "", remove_tags: str = "") -> Any:
+        add = parse_tag_list(add_tags)
+        remove = parse_tag_list(remove_tags)
+        if not add and not remove:
+            raise ValueError("Give at least one tag in add_tags or remove_tags.")
+        drive_file = await self._fetch(self._drive.get_file_metadata, file_id)
+        if getattr(drive_file, "mime_type", "") == "application/vnd.google-apps.folder":
+            raise ValueError(
+                "drive_set_file_tags tags files, not folders: use drive_tag_folder_tree to tag "
+                "everything under a folder."
+            )
+        name = getattr(drive_file, "name", file_id)
+        owners = getattr(drive_file, "owners", [])
+        current = getattr(drive_file, "tags", []) or []
+        await gated_call(
+            connector=self.name,
+            tool="drive_set_file_tags",
+            tool_name="Set Drive File Tags",
+            summary=f"Change tags on \"{name}\"",
+            sender=", ".join(owners) or "(unknown)",
+            raw_data={"file": drive_file},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "File": name, "Owner": ", ".join(owners) or "(unknown)",
+                "Add tags": ", ".join(add) or "(none)",
+                "Remove tags": ", ".join(remove) or "(none)",
+                "Current tags": ", ".join(current) or "(none)",
+            },
+            details_text=(
+                "A tag lets any auto-accept rule that names it cover this file from now on. "
+                "Anyone with edit access to the file can also change its tags."
+            ),
+            my_email=self.my_email,
+            session_created_ids=self.session_created_ids,
+            args={"file_id": file_id, "add_tags": add_tags, "remove_tags": remove_tags},
+        )
+        # Not recorded as an own write: the file's content is untouched.
+        return await self._fetch(self._drive.set_tags, file_id, add, remove)
 
     async def _add_comment(self, file_id: str, comment: str) -> Any:
         drive_file = await self._fetch(self._drive.get_file_metadata, file_id)

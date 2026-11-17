@@ -152,6 +152,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "drive_upload_file": Verb.ADD,
     "drive_move_file": Verb.MOVE,
     "drive_copy_file": Verb.MOVE,
+    "drive_set_file_tags": Verb.UPDATE,
     "drive_add_comment": Verb.UPDATE,
     "drive_sheets_get_values": Verb.READ,
     "drive_sheets_write_range": Verb.UPDATE,
