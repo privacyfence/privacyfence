@@ -3632,6 +3632,108 @@ class TestLifecycleTasks:
         assert result.cleanup_ok is None
 
 
+class _FakeDriveService:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def files(self):
+        return self
+
+    def update(self, fileId, body, supportsAllDrives=False):
+        owner = self.owner
+        owner.trash_calls.append((fileId, body))
+        if owner.trash_should_fail:
+            raise RuntimeError("trash refused")
+        owner.trashed = bool(body.get("trashed"))
+        return SimpleNamespace(execute=lambda: {"id": fileId})
+
+    def get(self, fileId, fields="", supportsAllDrives=False):
+        owner = self.owner
+        return SimpleNamespace(execute=lambda: {"trashed": owner.trashed})
+
+
+class _FakeDriveClient:
+    def __init__(self):
+        self.tags: list[str] = []
+        self.trashed = False
+        self.trash_calls: list[tuple] = []
+        self.trash_should_fail = False
+        self.fail_set_tags = False
+
+    def _get_service(self):
+        return _FakeDriveService(self)
+
+    def create_blank_file(self, name, mime_type, parent_folder_id=""):
+        self.name = name
+        return {"id": "f1", "name": name, "mime_type": mime_type}
+
+    def get_file_metadata(self, file_id):
+        return SimpleNamespace(id=file_id, tags=list(self.tags), modified_time="t")
+
+    def set_tags(self, file_id, add, remove):
+        if self.fail_set_tags:
+            raise recorder.DriveClientError("simulated set_tags failure")
+        self.tags = [t for t in self.tags if t not in remove] + [t for t in add if t not in self.tags]
+        return {"tags": list(self.tags)}
+
+
+class TestLifecycleDrive:
+    def test_registered(self):
+        assert recorder.LIFECYCLE_CHECKS["drive"] is recorder.lifecycle_drive
+
+    def test_happy_path_tags_round_trip_and_trashes(self, monkeypatch):
+        fake = _FakeDriveClient()
+        monkeypatch.setattr(recorder, "_build_drive_client", lambda: fake)
+
+        result = recorder.lifecycle_drive(manifest={})
+
+        assert result.connector == "drive"
+        assert result.ok, result.note
+        assert result.cleanup_ok is True
+        assert fake.trashed
+        assert fake.trash_calls == [("f1", {"trashed": True})]
+        assert fake.tags == ["pf-qa-a"]
+        assert fake.name.startswith(recorder.LIFECYCLE_TAG)
+
+    def test_failure_after_create_still_trashes_the_file(self, monkeypatch):
+        fake = _FakeDriveClient()
+        fake.fail_set_tags = True
+        monkeypatch.setattr(recorder, "_build_drive_client", lambda: fake)
+
+        result = recorder.lifecycle_drive(manifest={})
+
+        assert not result.ok
+        assert "simulated set_tags failure" in result.note
+        assert result.cleanup_ok is True
+        assert fake.trashed
+
+    def test_trash_failure_is_reported(self, monkeypatch):
+        fake = _FakeDriveClient()
+        fake.trash_should_fail = True
+        monkeypatch.setattr(recorder, "_build_drive_client", lambda: fake)
+
+        result = recorder.lifecycle_drive(manifest={})
+
+        assert result.ok
+        assert result.cleanup_ok is False
+        assert "cleanup call failed" in result.note
+
+    def test_create_failure_never_attempts_cleanup(self, monkeypatch):
+        fake = _FakeDriveClient()
+
+        def _boom(*args, **kwargs):
+            raise recorder.DriveClientError("simulated create failure")
+
+        fake.create_blank_file = _boom
+        monkeypatch.setattr(recorder, "_build_drive_client", lambda: fake)
+
+        result = recorder.lifecycle_drive(manifest={})
+
+        assert not result.ok
+        assert result.cleanup_ok is None
+        assert not fake.trash_calls
+
+
 class TestAttemptDelete:
     def test_success_returns_empty_string(self):
         assert recorder._attempt_delete(lambda: None) == ""

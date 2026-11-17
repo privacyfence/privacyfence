@@ -412,3 +412,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md) | An org directory holding only admin_config.json is fresh | Accepted; amends 0302 |
 | [0318](0318-pkce-can-be-turned-off-for-one-named-oidc-app.md) | PKCE can be turned off for one named OIDC app | Accepted; amends 0273 |
 | [0319](0319-the-admin-page-shows-upstream-mcp-servers-read-only.md) | The Admin page shows upstream MCP servers read-only | Accepted; amends 0258; relates to 0285 |
+| [0320](0320-drive-rules-match-on-file-tags-not-folder-ancestry.md) | Drive rules match on a file tag, not on folder ancestry | Accepted; relates to 0172, 0222, 0232 |
+| [0321](0321-drive-tags-are-plain-properties-and-collaborators-can-forge-them.md) | Drive tags are plain properties, and collaborators can forge them | Accepted; relates to 0320 |
+| [0322](0322-tag-writing-tools-are-popup-only-and-exempt-from-every-rule.md) | The tag-writing tools are popup-only and exempt from every rule | Accepted; relates to 0077, 0164, 0236 |

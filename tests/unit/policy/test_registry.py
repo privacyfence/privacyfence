@@ -217,6 +217,8 @@ _VERB_MATRIX: dict[str, Verb] = {
     "drive_upload_file": Verb.ADD,
     "drive_move_file": Verb.MOVE,
     "drive_copy_file": Verb.MOVE,
+    "drive_set_file_tags": Verb.UPDATE,
+    "drive_tag_folder_tree": Verb.UPDATE,
     "drive_add_comment": Verb.UPDATE,
     "drive_sheets_get_values": Verb.READ,
     "drive_sheets_write_range": Verb.UPDATE,
@@ -310,7 +312,7 @@ _VERB_MATRIX: dict[str, Verb] = {
 
 
 def test_tool_to_verb_matches_the_verb_matrix():
-    assert len(_VERB_MATRIX) == 112
+    assert len(_VERB_MATRIX) == 114
     assert TOOL_TO_VERB == _VERB_MATRIX
 
 

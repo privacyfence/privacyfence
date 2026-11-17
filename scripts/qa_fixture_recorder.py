@@ -35,7 +35,7 @@ this imports the same ``privacyfence`` package and third-party clients
 
     .venv/bin/python scripts/qa_fixture_recorder.py --lifecycle [connector ...]
         For each write-capable connector that supports it (calendar,
-        confluence, grist, jira, miro, peek, salesforce, tasks -- see the comment above LIFECYCLE_CHECKS
+        confluence, drive, grist, jira, miro, peek, salesforce, tasks -- see the comment above LIFECYCLE_CHECKS
         below for why the other connectors aren't included), creates a
         fresh, uniquely-tagged QA object, reads it back, updates it, reads
         it back again, then deletes it and confirms the deletion actually
@@ -2591,9 +2591,11 @@ assert set(SUSPENDED_CONNECTORS) <= set(CONNECTOR_CHECKS), "SUSPENDED_CONNECTORS
 #
 # Scoped to only the connectors whose PrivacyFence client exposes a full
 # create/get/update triple:
-#   - calendar, confluence, grist, jira, peek, salesforce, tasks
+#   - calendar, confluence, drive, grist, jira, peek, salesforce, tasks
 #     (grist and salesforce never delete: neither client has a delete, so their
-#     tagged QA objects accumulate until someone removes them by hand)
+#     tagged QA objects accumulate until someone removes them by hand;
+#     drive's cleanup trashes the file it just created and never deletes it
+#     permanently)
 # Deliberately excludes the rest of CONNECTOR_CHECKS's connectors, checked
 # against each *_client.py before writing this rather than assumed:
 #   - contacts -- ContactsClient.create_contact()'s own docstring says
@@ -2604,11 +2606,9 @@ assert set(SUSPENDED_CONNECTORS) <= set(CONNECTOR_CHECKS), "SUSPENDED_CONNECTORS
 #     GmailClient, so there is no read/update step to exercise; creating and
 #     immediately deleting a draft is not the create/read/update/delete
 #     cycle this section checks.
-#   - drive, slack -- both have write methods (create_blank_file/
-#     write_sheet_values, send_message) but neither exposes the kind of
-#     update-in-place-then-read-it-back pair the four connectors above do.
-#     Left for a future extension of this section rather than forced into a
-#     shape that doesn't fit.
+#   - slack -- send_message has no update-in-place-then-read-it-back pair
+#     like the connectors above. Left for a future extension of this
+#     section rather than forced into a shape that doesn't fit.
 #   - apps_script -- write_content() is a whole-file-set replace, so it
 #     covers the update step, but AppsScriptClient exposes no way to create
 #     a script project (no projects.create wrapper, and connectors/
@@ -3340,9 +3340,67 @@ def lifecycle_tasks(manifest: dict[str, Any]) -> LifecycleResult:
     return LifecycleResult("tasks", ok, note, cleanup_ok)
 
 
+def lifecycle_drive(manifest: dict[str, Any]) -> LifecycleResult:
+    """Creates a blank file in the QA account's root, adds two tags, removes
+    one, reading the tags back each time, then trashes the file. Trashes
+    only, never a permanent delete, and only the file this run just created.
+    ``modified_time`` before and after the tag change is logged, not asserted
+    (whether a properties-only update bumps it is what this reads back)."""
+    client = _build_drive_client()
+    suffix = uuid.uuid4().hex[:8]
+    name = f"{LIFECYCLE_TAG} drive file {suffix}"
+    tag_a, tag_b = "pf-qa-a", "pf-qa-b"
+
+    file_id = ""
+    ok, note, cleanup_ok = False, "", None
+    try:
+        created = client.create_blank_file(name, "text/plain")
+        file_id = created.get("id", "")
+        if not file_id:
+            raise DriveClientError("create_blank_file returned no id")
+        before = client.get_file_metadata(file_id)
+        client.set_tags(file_id, [tag_a, tag_b], [])
+        added = client.get_file_metadata(file_id)
+        if sorted(added.tags) != [tag_a, tag_b]:
+            raise DriveClientError(f"tags after add were {sorted(added.tags)!r}, expected {[tag_a, tag_b]!r}")
+        client.set_tags(file_id, [], [tag_b])
+        removed = client.get_file_metadata(file_id)
+        if sorted(removed.tags) != [tag_a]:
+            raise DriveClientError(f"tags after remove were {sorted(removed.tags)!r}, expected {[tag_a]!r}")
+        logger.info(
+            "drive lifecycle modified_time: before=%s after_add=%s after_remove=%s",
+            before.modified_time, added.modified_time, removed.modified_time,
+        )
+        ok, note = True, "create, add two tags, read back, remove one tag, read back all verified"
+    except Exception as exc:  # noqa: BLE001 - an unexpected failure here is the finding itself
+        ok, note = False, str(exc)
+    finally:
+        if file_id:
+            delete_note = _attempt_delete(
+                lambda: client._get_service().files().update(
+                    fileId=file_id, body={"trashed": True}, supportsAllDrives=True
+                ).execute(),
+                request_desc=f"file_id={file_id!r}",
+            )
+            if delete_note:
+                cleanup_ok, note = False, f"{note}; {delete_note}" if note else delete_note
+            else:
+                cleanup_ok, confirm_note = _confirm_deleted(
+                    lambda: client._get_service().files().get(
+                        fileId=file_id, fields="trashed", supportsAllDrives=True
+                    ).execute(),
+                    DriveClientError,
+                    is_deleted=lambda meta: bool(meta.get("trashed")),
+                )
+                if confirm_note:
+                    note = f"{note}; {confirm_note}" if note else confirm_note
+    return LifecycleResult("drive", ok, note, cleanup_ok)
+
+
 LIFECYCLE_CHECKS: dict[str, Callable[[dict[str, Any]], LifecycleResult]] = {
     "calendar": lifecycle_calendar,
     "confluence": lifecycle_confluence,
+    "drive": lifecycle_drive,
     "grist": lifecycle_grist,
     "jira": lifecycle_jira,
     "miro": lifecycle_miro,

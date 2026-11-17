@@ -196,12 +196,14 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `drive_docs_edit_content` | this folder |
 | `drive_docs_format_content` | this folder |
 | `drive_move_file` | these folders |
+| `drive_set_file_tags` |  |
 | `drive_sheets_add_sheet` | this folder |
 | `drive_sheets_delete_dimensions` | this folder |
 | `drive_sheets_format_range` | this folder |
 | `drive_sheets_insert_dimensions` | this folder |
 | `drive_sheets_rename_sheet` | this folder |
 | `drive_sheets_write_range` | this folder |
+| `drive_tag_folder_tree` |  |
 | `drive_upload_file` | this folder |
 | `drive_write_doc_content` | this folder |
 | `drive_write_file_content` | this folder |
@@ -304,3 +306,24 @@ chat) or because the card only proposes the fixed set of scopes it has always ha
 include Grist documents. You can still allow them from **Settings → Auto-accept → Add a rule**, or by letting the AI
 system propose a rule with `privacyfence_propose_policy_change`. Either way the rule is written
 only after you confirm it. See [Approvals and policy](approvals-and-policy.md#always-allow-and-policy-rules).
+
+### Google Drive — files with a tag
+
+This scope is added only from **Settings → Auto-accept → Add a rule**; no card offers it. You type a tag
+name (lowercase letters, digits, `.`, `_` and `-`, up to 40 characters) and tick the verbs. The rule then
+covers a call on one Drive file that carries the tag, wherever the file sits, with no folder walking. Tags are
+set with `drive_set_file_tags` (one file) or `drive_tag_folder_tree` (every file under a folder); both always
+show an approval popup, and no rule can cover them.
+
+| Verb | What it covers |
+|---|---|
+| read | reading a file's content, metadata and sheet values, and its revisions |
+| download | downloading the file |
+| update | writing the file's content, Docs and Sheets writes, and comments |
+| restructure | adding and renaming sheets, inserting and deleting rows and columns |
+| delete | deleting rows and columns |
+
+The scope **never covers move, copy or upload**: those name a destination, which a tag on the source file does
+not describe. **Anyone with edit access to a file can add or remove its tags**, so a tag rule is exactly as
+trustworthy as the people who can edit the tagged files; a collaborator can tag a file they shared with you to
+bring it under your rule. See [ADR 0321](adr/0321-drive-tags-are-plain-properties-and-collaborators-can-forge-them.md).

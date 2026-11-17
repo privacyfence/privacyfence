@@ -33,6 +33,12 @@ from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION
 
 GATES: frozenset[str] = frozenset({"auto", "review", "popup"})
 
+# Operations no auto-accept rule can ever cover (ADR 0322). Tagging must never be auto-accepted:
+# an agent that could tag a file without a popup could tag its way into any tag rule (ADR 0321).
+# Enforced in the engine (``find_matching_rule`` / ``preflight``), so even a hand-edited custom rule
+# cannot cover these; also subtracted from every scope's derived operations.
+RULE_EXEMPT_OPERATIONS: frozenset[str] = frozenset({"drive.set_file_tags", "drive.tag_folder_tree"})
+
 
 class Verb(str, Enum):
     """The nine verbs a rule can allow, grouped by family below."""
@@ -146,6 +152,8 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "drive_upload_file": Verb.ADD,
     "drive_move_file": Verb.MOVE,
     "drive_copy_file": Verb.MOVE,
+    "drive_set_file_tags": Verb.UPDATE,
+    "drive_tag_folder_tree": Verb.UPDATE,
     "drive_add_comment": Verb.UPDATE,
     "drive_sheets_get_values": Verb.READ,
     "drive_sheets_write_range": Verb.UPDATE,

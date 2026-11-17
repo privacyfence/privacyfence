@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from ..drive_tags import TAG_NAME_RE as _TAG_NAME_RE
 from ..assets_client import _ID_RE as _ASSETS_ID_RE
 from ..grist_client import DOC_ID_RE as _GRIST_DOC_ID_RE
 from ..miro_client import BOARD_ID_RE as _MIRO_BOARD_ID_RE
@@ -125,6 +126,10 @@ VALUE_FORMATS: dict[str, ValueFormat] = {
         _MIRO_BOARD_ID_RE, "a Miro board id",
         "the id from the board's address (the part after /app/board/), not its name or the full link",
         "uXjVOD6LSME=",
+    ),
+    "drive.tag": _fmt(
+        _TAG_NAME_RE, "a Drive tag name",
+        "a lowercase tag name of up to 40 characters: letters, digits, '.', '_' or '-'", "client-a",
     ),
     "gmail.query": _fmt(
         r"[^\x00-\x1f\x7f]{1,500}", "a Gmail search query",

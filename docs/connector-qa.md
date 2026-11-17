@@ -783,6 +783,12 @@ For each representative read, list, search, create, update, send or upload tool:
 - **Copy.** `drive_copy_file` on a QA file into a subfolder of the `PrivacyFence QA Sandbox`
   folder shows a card with the file, its current → destination folder and the copy's name. Approve
   it, then confirm the copy appears in the subfolder and the original stays where it was.
+- **Tag round trip.** `drive_set_file_tags` on a QA file (add `pf-test`) shows a card naming the file and the
+  tag and is never auto-accepted. Afterwards `drive_get_file_metadata` lists `tags: ["pf-test"]`. With the
+  rule "Google Drive — files with a tag", value `pf-test`, verb read, `drive_get_file_content` on the file reads
+  without a card; removing the tag (`remove_tags`) makes the same read ask again. `drive_tag_folder_tree` on a
+  sandbox subfolder shows one card with the file count and is never auto-accepted. The recorder's drive
+  lifecycle check (`scripts/qa_fixture_recorder.py --lifecycle`) runs the same add and remove against Drive.
 - **Always allow on a read.** Always allow on `drive_sheets_get_values` for a sheet you own
   proposes `i_am_owner`; if the sheet is also in an approved folder, the card offers a separate
   folder button rather than picking one.
