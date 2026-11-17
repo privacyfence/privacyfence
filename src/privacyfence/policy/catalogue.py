@@ -175,7 +175,7 @@ def extra_operations_for(extra: PolicyExtraScope, verb: Verb) -> frozenset[str]:
         for entry in registry.TOOL_REGISTRY.values()
         if entry.operation is not None and entry.verb == verb
         and propose.connector_of_operation(entry.operation) == extra.connector
-    ) - extra.excludes
+    ) - extra.excludes - registry.RULE_EXEMPT_OPERATIONS
 
 
 def scope_catalogue() -> list[dict[str, Any]]:

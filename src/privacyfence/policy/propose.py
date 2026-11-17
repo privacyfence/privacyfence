@@ -482,6 +482,7 @@ def operations_for(scope: ProposableScope, verb: Verb) -> frozenset[str]:
         if connector_of_operation(operation) == scope.connector
         and verb in registry.operation_verbs(operation)
         and operation not in scope.excludes
+        and operation not in registry.RULE_EXEMPT_OPERATIONS
     )
 
 

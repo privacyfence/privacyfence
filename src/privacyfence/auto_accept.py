@@ -45,6 +45,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TEMP_ACCEPT_EXCLUDED_OPERATIONS: frozenset[str] = frozenset({
+    # Tag-writing tools are popup-only and exempt from every rule (ADR 0322); defence in depth,
+    # since the grace window is never built for them.
+    "drive.set_file_tags",
+    "drive.tag_folder_tree",
     # Destructive with no undo path through PrivacyFence, unlike
     # insert/format -- gets the standing-rule treatment only (like
     # sheets.add_sheet/sheets.rename_sheet below), never the lighter-weight
