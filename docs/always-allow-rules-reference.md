@@ -203,6 +203,7 @@ A few Drive, Docs and Sheets tools also start a short same-file grace window whe
 | `drive_sheets_insert_dimensions` | this folder |
 | `drive_sheets_rename_sheet` | this folder |
 | `drive_sheets_write_range` | this folder |
+| `drive_tag_folder_tree` | this folder |
 | `drive_upload_file` | this folder |
 | `drive_write_doc_content` | this folder |
 | `drive_write_file_content` | this folder |

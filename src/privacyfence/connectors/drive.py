@@ -21,7 +21,7 @@ from ..drive_client import (
     _parse_a1_range,
     resolve_download_name,
 )
-from ..drive_tags import parse_tag_list
+from ..drive_tags import normalise_tag, parse_tag_list
 from ..google_errors import unavailable_error
 from ..gate import current_reason, gated_call
 from ..org_mode import DownloadDeliveryConfig, base64_length
@@ -439,6 +439,26 @@ class DriveConnector(Connector):
                     )),
                     ToolParam("remove_tags", "str", required=False, default="", description=(
                         "Comma-separated tag names to remove. Empty removes none."
+                    )),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+            ),
+            ToolSpec(
+                name="drive_tag_folder_tree",
+                description=(
+                    "Add (or with remove=true, remove) one tag on every file under a folder, "
+                    "including all subfolders, in one approved call. Files only, not folders; "
+                    "shortcuts are skipped; at most 200 files and 10 levels deep, otherwise nothing "
+                    "is changed and you are told how many were found. Files added to the folder "
+                    "later do not inherit the tag. Tags are visible to and changeable by anyone "
+                    "with edit access. Requires user approval every time, which no rule can grant. "
+                    "Returns {folder_id, tag, action, updated, skipped, failed}."
+                ),
+                params=[
+                    ToolParam("folder_id", "str", description="Id of the folder to tag, from " + _FILE_ID_SOURCES + "."),
+                    ToolParam("tag", "str", description="The tag name to add or remove (letters, digits, '.', '_', '-'; up to 40 characters)."),
+                    ToolParam("remove", "bool", required=False, default=False, description=(
+                        "True removes the tag from the files that carry it instead of adding it."
                     )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -892,6 +912,8 @@ class DriveConnector(Connector):
             return await self._copy_file(**args)
         if tool == "drive_set_file_tags":
             return await self._set_file_tags(**args)
+        if tool == "drive_tag_folder_tree":
+            return await self._tag_folder_tree(**args)
         if tool == "drive_add_comment":
             return await self._add_comment(**args)
         if tool == "drive_list_shared_drives":
@@ -1835,6 +1857,67 @@ class DriveConnector(Connector):
         )
         # Not recorded as an own write: the file's content is untouched.
         return await self._fetch(self._drive.set_tags, file_id, add, remove)
+
+    async def _tag_folder_tree(self, folder_id: str, tag: str, remove: bool = False) -> Any:
+        tag = normalise_tag(tag)
+        folder = await self._fetch(self._drive.get_file_metadata, folder_id)
+        if getattr(folder, "mime_type", "") != "application/vnd.google-apps.folder":
+            raise ValueError("drive_tag_folder_tree needs a folder id.")
+        max_items, max_depth = 200, 10
+        walk = await self._fetch(self._drive.walk_folder_files, folder_id, max_depth, max_items)
+        if walk.truncated:
+            raise ValueError(
+                f"The folder holds more than {max_items} files or more than {max_depth} levels. "
+                "Nothing was changed. Tag a smaller subfolder."
+            )
+        action = "remove" if remove else "add"
+        to_change = [f for f in walk.files if (tag in (f.tags or [])) == remove]
+        skipped = len(walk.files) - len(to_change)
+        result: dict[str, Any] = {
+            "folder_id": folder_id, "tag": tag, "action": action,
+            "updated": 0, "skipped": skipped, "failed": [],
+        }
+        if not to_change:
+            return result
+        name = getattr(folder, "name", folder_id)
+        listed = [f"- {f.name} ({f.id})" for f in to_change[:50]]
+        if len(to_change) > 50:
+            listed.append(f"…and {len(to_change) - 50} more")
+        await gated_call(
+            connector=self.name,
+            tool="drive_tag_folder_tree",
+            tool_name="Tag Drive Folder Tree",
+            summary=f"{'Remove' if remove else 'Add'} tag \"{tag}\" on {len(to_change)} files under \"{name}\"",
+            sender=", ".join(getattr(folder, "owners", [])) or "(unknown)",
+            raw_data={"file": folder},
+            filtered_data=None,
+            gate="popup",
+            preview={
+                "Folder": name,
+                "Action": "Remove tag" if remove else "Add tag",
+                "Tag": tag,
+                "Files to change": str(len(to_change)),
+                "Already in that state": str(skipped),
+            },
+            details_text="\n".join(listed),
+            my_email=self.my_email,
+            session_created_ids=self.session_created_ids,
+            args={"folder_id": folder_id, "tag": tag, "remove": remove},
+        )
+        # Exactly the snapshot the popup showed: no second walk. Not recorded as own writes.
+        updated = 0
+        failed: list[dict[str, str]] = []
+        for f in to_change:
+            try:
+                await asyncio.to_thread(
+                    self._drive.set_tags, f.id, [] if remove else [tag], [tag] if remove else []
+                )
+                updated += 1
+            except Exception as exc:  # one failure must not stop the rest
+                failed.append({"file_id": f.id, "error": str(exc)[:200]})
+        result["updated"] = updated
+        result["failed"] = failed
+        return result
 
     async def _add_comment(self, file_id: str, comment: str) -> Any:
         drive_file = await self._fetch(self._drive.get_file_metadata, file_id)
