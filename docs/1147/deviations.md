@@ -16,6 +16,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p3-exempt-operations
 
 - None.
+- retry: fix-1 after the final review: proposals_for now skips RULE_EXEMPT_OPERATIONS, and the always-allow reference generator got the same guard (blocked first on it, sent back once); docs/always-allow-rules-reference.md regenerated, the two tag tools now have an empty Always-allow cell.
+- scope: scope: docs/always-allow-rules-reference.md (regenerated; also in touches of p7-retire)
+- scope: scope: scripts/generate_always_allow_reference.py (exempt-operation guard in _scope_candidates)
 
 ## p4-set-file-tags-tool
 
