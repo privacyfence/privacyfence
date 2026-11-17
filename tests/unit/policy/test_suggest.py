@@ -212,3 +212,12 @@ class TestGmailQuerySuggestion:
     def test_a_gmail_read_no_longer_raises_for_the_query_scope(self):
         for tool in ("gmail_get_message", "gmail_get_thread", "gmail_download_attachment"):
             assert any(s["group"] == "gmail.query" for s in suggested_rules(tool, {}))
+
+
+class TestDriveTagSuggestion:
+    def test_a_drive_read_suggests_the_tag_scope_with_no_value(self):
+        suggestions = suggested_rules("drive_get_file_content", {"file_id": "f1"})
+        [suggestion] = [s for s in suggestions if s["group"] == "drive.tag"]
+        assert suggestion["verb"] == "read"
+        assert suggestion["value"] is None
+        assert suggestion["value_known"] is False

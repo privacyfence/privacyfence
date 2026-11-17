@@ -204,3 +204,17 @@ class TestGmailQueryValue:
     def test_refuses_an_odd_number_of_quotes(self):
         with pytest.raises(RuleValueError, match="unbalanced parentheses or quotes"):
             normalise_rule_value(["gmail.query"], 'label:"Proposed SPAM')
+
+
+class TestDriveTagValue:
+    def test_accepts_a_tag_name(self):
+        assert normalise_rule_value(["drive.tag"], "client-a") == ["client-a"]
+
+    def test_rejects_a_name_with_a_space_or_capital(self):
+        with pytest.raises(RuleValueError):
+            normalise_rule_value(["drive.tag"], "Client A")
+
+    def test_rejects_a_name_over_40_characters(self):
+        assert normalise_rule_value(["drive.tag"], "a" * 40)
+        with pytest.raises(RuleValueError):
+            normalise_rule_value(["drive.tag"], "a" * 41)

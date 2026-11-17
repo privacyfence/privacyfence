@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from privacyfence.policy import catalogue, propose, store
+from privacyfence.policy import registry
 from privacyfence.policy.registry import Verb
 from privacyfence.policy.value_format import RuleValueError
 
@@ -317,3 +318,70 @@ def test_slack_group_chats_never_reaches_send_message():
 def test_grist_document_rule_governs_every_tool_of_its_verb(verb, tools):
     rules = catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [verb])
     assert rules[0].operations == frozenset(tools)
+
+
+# What each existing extra scope derived on origin/main before extra_operations_for filtered by
+# propose.connector_of_operation, keyed by (scope id, verb name).
+_PRE_FIX_OPERATIONS = {
+    ('apps_script.project', 'READ'): frozenset(['apps_script.read_content', 'apps_script.read_execution_log']),
+    ('apps_script.project', 'UPDATE'): frozenset(['apps_script.write_content']),
+    ('gmail.filters', 'RESTRUCTURE'): frozenset(['gmail.create_filter', 'gmail.update_filter']),
+    ('gmail.query', 'READ'): frozenset(['gmail.read_message', 'gmail.read_thread']),
+    ('gmail.query', 'DOWNLOAD'): frozenset(['gmail.download_attachment']),
+    ('grist.document', 'READ'): frozenset(['grist.read_records']),
+    ('grist.document', 'ADD'): frozenset(['grist.add_records', 'grist.import_csv']),
+    ('grist.document', 'UPDATE'): frozenset(['grist.update_csv', 'grist.update_records']),
+    ('grist.document', 'RESTRUCTURE'): frozenset(['grist.add_columns', 'grist.create_table']),
+    ('miro.board', 'READ'): frozenset(['miro.get_items', 'miro.list_connectors', 'miro.list_items']),
+    ('miro.board', 'ADD'): frozenset(['miro.create_connectors', 'miro.create_items']),
+    ('miro.board', 'UPDATE'): frozenset(['miro.update_board', 'miro.update_items']),
+    ('peek.page', 'READ'): frozenset(['peek.read_comments', 'peek.read_stats']),
+    ('peek.page', 'ADD'): frozenset(['peek.upload_page']),
+    ('slack.direct_messages_to_me', 'READ'): frozenset(['slack.read_messages']),
+    ('slack.group_chats', 'SEND'): frozenset(['slack.create_group_chat']),
+    ('slack.mentions_of_me', 'READ'): frozenset(['slack.read_messages']),
+    ('slack.mentions_of_me', 'SEARCH'): frozenset(['slack.read_messages']),
+    ('slack.my_conversations', 'READ'): frozenset(['slack.read_messages']),
+    ('slack.my_conversations', 'SEARCH'): frozenset(['slack.read_messages']),
+}
+
+
+class TestDriveTagExtra:  # selected by -k drive_tag via the method names
+    @staticmethod
+    def _sheets_ops(verb):
+        return frozenset(
+            e.operation for e in registry.TOOL_REGISTRY.values()
+            if e.operation is not None and e.operation.startswith("sheets.") and e.verb == verb
+        )
+
+    def test_drive_tag_entry_is_in_the_scope_catalogue(self):
+        entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "drive.tag")
+        assert entry["connector"] == "drive"
+        assert entry["needs_value"] is True
+        assert entry["verbs"] == ["read", "download", "update", "restructure", "delete"]
+
+    def test_drive_tag_restructure_is_the_sheets_operations_with_that_verb(self):
+        extra = catalogue.EXTRA_SCOPES["drive.tag"]
+        operations = catalogue.extra_operations_for(extra, Verb.RESTRUCTURE)
+        assert operations and operations == self._sheets_ops(Verb.RESTRUCTURE)
+
+    def test_drive_tag_read_includes_the_drive_and_sheets_reads(self):
+        # There is no docs.* read operation: a Doc is read through drive.read_file_contents.
+        operations = catalogue.extra_operations_for(catalogue.EXTRA_SCOPES["drive.tag"], Verb.READ)
+        assert {"drive.read_file_contents", "sheets.read_values"} <= operations
+
+    def test_drive_tag_update_includes_the_docs_operations(self):
+        operations = catalogue.extra_operations_for(catalogue.EXTRA_SCOPES["drive.tag"], Verb.UPDATE)
+        assert any(o.startswith("docs.") for o in operations)
+        assert any(o.startswith("sheets.") for o in operations)
+
+    def test_drive_tag_move_and_add_are_not_offered(self):
+        assert not {Verb.MOVE, Verb.ADD} & set(catalogue.EXTRA_SCOPES["drive.tag"].verbs)
+
+    def test_drive_tag_fix_leaves_every_other_extra_scope_deriving_what_it_derived_before(self):
+        derived = {
+            (key, verb.name): catalogue.extra_operations_for(extra, verb)
+            for key, extra in catalogue.EXTRA_SCOPES.items() if key != "drive.tag"
+            for verb in extra.verbs
+        }
+        assert derived == _PRE_FIX_OPERATIONS
