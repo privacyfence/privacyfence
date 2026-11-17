@@ -592,6 +592,8 @@ def proposals_for(tool: str, ctx: ReviewContext) -> list[RuleProposal]:
     entry = TOOL_REGISTRY.get(tool)
     if entry is None or entry.operation is None or entry.verb is None:
         return []
+    if entry.operation in registry.RULE_EXEMPT_OPERATIONS:
+        return []  # no rule can cover it (ADR 0322): offering "Always allow" would write a dead rule
     connector = connector_of_operation(entry.operation)
     proposals: list[RuleProposal] = []
     for scope in PROPOSABLE_SCOPES:
