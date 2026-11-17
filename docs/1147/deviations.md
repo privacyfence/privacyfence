@@ -15,7 +15,6 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-exempt-operations
 
-- None.
 - retry: fix-1 after the final review: proposals_for now skips RULE_EXEMPT_OPERATIONS, and the always-allow reference generator got the same guard (blocked first on it, sent back once); docs/always-allow-rules-reference.md regenerated, the two tag tools now have an empty Always-allow cell.
 - scope: scope: docs/always-allow-rules-reference.md (regenerated; also in touches of p7-retire)
 - scope: scope: scripts/generate_always_allow_reference.py (exempt-operation guard in _scope_candidates)
@@ -51,6 +50,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## Final review
 
 - final: p3-exempt-operations: propose.proposals_for (policy/propose.py:600) never checks RULE_EXEMPT_OPERATIONS, so both tag tools offer an Always-allow button the engine never applies and the generated always-allow reference lists them; fix: return [] for an exempt operation, regenerate the reference, add a test.
+- final: Second final review (after fix-1): approve. Non-blocking, not fixed: the gmail.query comment in policy/scopes.py sits above the drive.tag entry (p2); the folder-tree approval digest covers counts and the first 50 names only, so a same-count swap of files beyond those 50 would reuse an earlier approval after a retry (p5); the CHANGELOG entry links none of ADRs 0320 to 0322 (p7).
 
 ## Finishing
 
