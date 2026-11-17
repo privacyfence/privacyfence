@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import logging
 import os
 import stat
 import sys
@@ -112,66 +111,25 @@ class TestClientsFromEnv:
             oidc_provider.clients_from_env()
 
 
-class TestClientGroupsEnv:
-    def test_groups_default_off(self, monkeypatch):
+class TestRemovedGroupsSettings:
+    @pytest.mark.parametrize(("suffix", "value"), [("GROUPS", "true"), ("GROUPS", "false"), ("GROUPS_ALLOWED", "kh-*")])
+    def test_a_groups_setting_refuses_the_start(self, monkeypatch, suffix, value):
         _client_env(monkeypatch)
-        client = oidc_provider.clients_from_env()["peek"]
-        assert client.groups is False and client.groups_allowed == ()
-
-    def test_groups_true_parses_with_entries(self, monkeypatch):
-        _client_env(monkeypatch)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS", "true")
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED", " KH-*, hr@x.example ,,")
-        client = oidc_provider.clients_from_env()["peek"]
-        assert client.groups is True
-        assert client.groups_allowed == ("kh-*", "hr@x.example")
-
-    def test_groups_false_parses(self, monkeypatch):
-        _client_env(monkeypatch)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS", "false")
-        assert oidc_provider.clients_from_env()["peek"].groups is False
-
-    @pytest.mark.parametrize("value", ["yes", "True", "1"])
-    def test_groups_must_be_true_or_false(self, monkeypatch, value):
-        _client_env(monkeypatch)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS", value)
+        monkeypatch.setenv(f"PRIVACYFENCE_OIDC_CLIENT_PEEK_{suffix}", value)
         with pytest.raises(ConfigurationError) as err:
             oidc_provider.clients_from_env()
-        assert str(err.value) == "PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS must be true or false"
-
-    def test_allowed_without_groups_is_refused(self, monkeypatch):
-        _client_env(monkeypatch)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED", "kh-*")
-        with pytest.raises(ConfigurationError) as err:
-            oidc_provider.clients_from_env()
+        stem = "PRIVACYFENCE_OIDC_CLIENT_PEEK_"
         assert str(err.value) == (
-            "PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED needs PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS=true"
+            f"{stem}GROUPS and {stem}GROUPS_ALLOWED were removed: the OIDC provider no longer sends a groups "
+            "claim (ADR 0323). Turn off the app's group-to-team mapping first (in Forgejo, "
+            "--group-team-map-removal), then remove both variables."
         )
 
-    @pytest.mark.parametrize("entry", ["*", "kh-*x", "bad entry", "-x*"])
-    def test_a_bad_entry_is_refused(self, monkeypatch, entry):
+    def test_an_empty_groups_setting_is_ignored(self, monkeypatch):
         _client_env(monkeypatch)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS", "true")
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED", entry)
-        with pytest.raises(ConfigurationError) as err:
-            oidc_provider.clients_from_env()
-        assert str(err.value) == (
-            f"PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED has an invalid entry: {entry}"
-        )
-
-    def test_more_than_fifty_entries_are_refused(self, monkeypatch):
-        _client_env(monkeypatch)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS", "true")
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED", ",".join(f"g{i}-*" for i in range(51)))
-        with pytest.raises(ConfigurationError) as err:
-            oidc_provider.clients_from_env()
-        assert str(err.value) == "PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED lists more than 50 entries"
-
-    def test_fifty_entries_pass(self, monkeypatch):
-        _client_env(monkeypatch)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS", "true")
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED", ",".join(f"g{i}-*" for i in range(50)))
-        assert len(oidc_provider.clients_from_env()["peek"].groups_allowed) == 50
+        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS", "")
+        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED", "")
+        assert "peek" in oidc_provider.clients_from_env()
 
 
 class TestClientRequirePkceEnv:
@@ -191,20 +149,6 @@ class TestClientRequirePkceEnv:
         with pytest.raises(ConfigurationError) as err:
             oidc_provider.clients_from_env()
         assert str(err.value) == "PRIVACYFENCE_OIDC_CLIENT_PEEK_REQUIRE_PKCE must be true or false"
-
-
-class TestAllowsGroup:
-    def test_empty_allows_all(self):
-        assert oidc_provider.OidcClient("p", ("https://p/cb",), SECRET).allows_group("a@x.example")
-
-    def test_exact_and_prefix(self):
-        client = oidc_provider.OidcClient(
-            "p", ("https://p/cb",), SECRET, groups=True, groups_allowed=("kh-*", "hr@x.example")
-        )
-        assert client.allows_group("kh-mgmt@x.example")
-        assert client.allows_group("hr@x.example")
-        assert not client.allows_group("hr2@x.example")
-        assert not client.allows_group("other@x.example")
 
 
 class TestSigningKey:
@@ -434,74 +378,6 @@ class TestProviderState:
         assert claims["iat"] == 5_000 and claims["exp"] == 5_300 and claims["auth_time"] == 4_000
         assert claims["nonce"] == "n" and claims["email_verified"] is False
         assert jwt.get_unverified_header(body["id_token"])["kid"] == provider._key.kid
-
-
-def _groups_provider(tmp_path, member_groups, *, groups=True, allowed=()):
-    key = oidc_provider.load_or_create_signing_key(tmp_path / "key.pem")
-    client = oidc_provider.OidcClient("peek", ("https://p/cb",), SECRET, groups=groups, groups_allowed=allowed)
-    return oidc_provider.OidcProvider(
-        issuer="https://pf/oidc", clients={"peek": client}, key=key, clock=_Clock(), member_groups=member_groups
-    )
-
-
-def _tokens(provider, *, verified=True):
-    code = provider.issue_code(
-        client_id="peek", redirect_uri="https://p/cb", principal=ANN, email_verified=verified, nonce=None,
-        code_challenge=CHALLENGE, scope="openid", auth_time=1,
-    )
-    return provider.issue_tokens(_redeem(provider, code))
-
-
-class TestClientGroups:
-    def test_an_opted_in_client_gets_groups_in_both_places(self, tmp_path):
-        provider = _groups_provider(tmp_path, lambda email, verified: ["B@x.example", "a@x.example", "b@x.example"])
-        body = _tokens(provider)
-        claims = jwt.decode(body["id_token"], options={"verify_signature": False})
-        assert claims["groups"] == ["a@x.example", "b@x.example"]
-        assert provider.userinfo(body["access_token"])["groups"] == ["a@x.example", "b@x.example"]
-
-    def test_a_client_not_opted_in_has_no_groups_key(self, tmp_path):
-        provider = _groups_provider(tmp_path, lambda email, verified: ["a@x.example"], groups=False)
-        body = _tokens(provider)
-        assert "groups" not in jwt.decode(body["id_token"], options={"verify_signature": False})
-        assert "groups" not in provider.userinfo(body["access_token"])
-
-    def test_the_allowlist_filters(self, tmp_path):
-        provider = _groups_provider(
-            tmp_path, lambda e, v: ["kh-a@x.example", "exact@x.example", "other@x.example"],
-            allowed=("kh-*", "exact@x.example"),
-        )
-        claims = jwt.decode(_tokens(provider)["id_token"], options={"verify_signature": False})
-        assert claims["groups"] == ["exact@x.example", "kh-a@x.example"]
-
-    @pytest.mark.parametrize("verified", [True, False])
-    def test_the_verified_flag_is_passed_on(self, tmp_path, verified):
-        seen = []
-        provider = _groups_provider(tmp_path, lambda email, v: seen.append((email, v)) or [])
-        _tokens(provider, verified=verified)
-        assert seen == [("ann@example.com", verified)]
-
-    def test_no_callable_gives_an_empty_list(self, tmp_path):
-        provider = _groups_provider(tmp_path, None)
-        body = _tokens(provider)
-        assert jwt.decode(body["id_token"], options={"verify_signature": False})["groups"] == []
-        assert provider.userinfo(body["access_token"])["groups"] == []
-
-    def test_a_person_with_no_membership_gets_an_empty_list(self, tmp_path):
-        provider = _groups_provider(tmp_path, lambda email, verified: ())
-        assert jwt.decode(_tokens(provider)["id_token"], options={"verify_signature": False})["groups"] == []
-
-    def test_a_failing_lookup_raises_and_logs_no_address(self, tmp_path, caplog):
-        def boom(email, verified):
-            raise RuntimeError("secret detail for ann@example.com")
-
-        provider = _groups_provider(tmp_path, boom)
-        with caplog.at_level(logging.WARNING, logger="privacyfence.oidc_provider"):
-            with pytest.raises(oidc_provider.GroupsUnavailableError):
-                _tokens(provider)
-        assert "OIDC groups lookup failed for client peek" in caplog.text
-        assert "ann@example.com" not in caplog.text
-        assert "secret detail" not in caplog.text
 
 
 class TestCoverageGaps:

@@ -93,8 +93,7 @@ opt-in on, PrivacyFence promises, for every request it signs:
   (`PRIVACYFENCE_IDP_TRUST_UNVERIFIED_EMAIL`), which makes the address count as verified for that domain.
   An address that is not verified gives no `email`.
 - It is lower-cased, in Unicode NFC, and ASCII only. An address with a non-ASCII character (a look-alike
-  such as the Kelvin sign, or a genuine internationalised address) gives no `email`, no `audiences` and
-  no `groups`; the sign-in itself still works.
+  such as the Kelvin sign, or a genuine internationalised address) gives no `email` and no `audiences`; the sign-in itself still works.
 - It comes from the same verified source and goes through the same normaliser as `audiences`, so the
   address in `email` is the address that decided the audiences.
 - `sub` stays when the person's address changes, and `email` follows.

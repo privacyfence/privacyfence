@@ -22,14 +22,13 @@ import base64
 import contextlib
 import hashlib
 import hmac
-import logging
 import os
 import re
 import secrets
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,18 +36,13 @@ import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from . import group_membership
 from .org_mode import ConfigurationError
 from .principal import Principal
-
-logger = logging.getLogger(__name__)
 
 CLIENTS_ENV = "PRIVACYFENCE_OIDC_CLIENTS"
 _CLIENT_STEM = "PRIVACYFENCE_OIDC_CLIENT_"
 _NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,31}")
 _MIN_SECRET_LENGTH = 32
-_MAX_GROUPS_ALLOWED = 50
-_GROUP_PREFIX_RE = re.compile(r"[a-z0-9][a-z0-9._+@-]{0,63}\*")
 _MIN_KEY_BITS = 2048
 _LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
@@ -66,22 +60,7 @@ class OidcClient:
     client_id: str
     redirect_uris: tuple[str, ...]
     secret: str = field(repr=False)
-    groups: bool = False
-    groups_allowed: tuple[str, ...] = ()
     require_pkce: bool = True
-
-    def allows_group(self, group: str) -> bool:
-        """Whether ``group`` may be sent to this app: every group when the allowlist is empty, else
-        an exact entry or a ``prefix*`` entry."""
-        if not self.groups_allowed:
-            return True
-        for entry in self.groups_allowed:
-            if entry.endswith("*"):
-                if group.startswith(entry[:-1]):
-                    return True
-            elif group == entry:
-                return True
-        return False
 
 
 def _env(name: str) -> str:
@@ -126,20 +105,13 @@ def _client_secret(stem: str) -> str:
     return secret
 
 
-def _client_groups(stem: str) -> tuple[bool, tuple[str, ...]]:
-    raw = _env(f"{stem}GROUPS")
-    if raw not in ("", "true", "false"):
-        raise ConfigurationError(f"{stem}GROUPS must be true or false")
-    enabled = raw == "true"
-    entries = tuple(part.strip().lower() for part in _env(f"{stem}GROUPS_ALLOWED").split(",") if part.strip())
-    if entries and not enabled:
-        raise ConfigurationError(f"{stem}GROUPS_ALLOWED needs {stem}GROUPS=true")
-    if len(entries) > _MAX_GROUPS_ALLOWED:
-        raise ConfigurationError(f"{stem}GROUPS_ALLOWED lists more than {_MAX_GROUPS_ALLOWED} entries")
-    for entry in entries:
-        if not (group_membership.GROUP_NAME_RE.fullmatch(entry) or _GROUP_PREFIX_RE.fullmatch(entry)):
-            raise ConfigurationError(f"{stem}GROUPS_ALLOWED has an invalid entry: {entry}")
-    return enabled, entries
+def _refuse_removed_groups(stem: str) -> None:
+    if _env(f"{stem}GROUPS") or _env(f"{stem}GROUPS_ALLOWED"):
+        raise ConfigurationError(
+            f"{stem}GROUPS and {stem}GROUPS_ALLOWED were removed: the OIDC provider no longer sends a groups "
+            "claim (ADR 0323). Turn off the app's group-to-team mapping first (in Forgejo, "
+            "--group-team-map-removal), then remove both variables."
+        )
 
 
 def _client_require_pkce(stem: str) -> bool:
@@ -172,9 +144,9 @@ def clients_from_env() -> dict[str, OidcClient]:
                     f"or has a user name or fragment: {uri}"
                 )
         secret = _client_secret(stem)
-        groups, groups_allowed = _client_groups(stem)
+        _refuse_removed_groups(stem)
         clients[name] = OidcClient(
-            client_id=name, redirect_uris=uris, secret=secret, groups=groups, groups_allowed=groups_allowed,
+            client_id=name, redirect_uris=uris, secret=secret,
             require_pkce=_client_require_pkce(stem),
         )
     return clients
@@ -293,10 +265,6 @@ def _s256(verifier: str) -> str:
     return _b64url(hashlib.sha256(verifier.encode()).digest())
 
 
-class GroupsUnavailableError(Exception):
-    """The groups lookup failed; the sign-in must fail rather than send an empty list."""
-
-
 class OidcProvider:
     """The OpenID Connect provider: issuer, clients, signing key, and the live codes and tokens."""
 
@@ -307,13 +275,11 @@ class OidcProvider:
         clients: dict[str, OidcClient],
         key: SigningKey,
         clock: Callable[[], float] = time.time,
-        member_groups: Callable[[str, bool], Iterable[str]] | None = None,
     ) -> None:
         self.issuer = issuer
         self._clients = clients
         self._key = key
         self._clock = clock
-        self._member_groups = member_groups
         self._lock = threading.Lock()
         self._codes: dict[str, CodeGrant] = {}
         # Insertion-ordered, so the first entry is always the oldest token.
@@ -331,10 +297,10 @@ class OidcProvider:
             "grant_types_supported": ["authorization_code"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["RS256"],
-            "scopes_supported": ["openid", "email", "profile", "groups"],
+            "scopes_supported": ["openid", "email", "profile"],
             "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
             "code_challenge_methods_supported": ["S256"],
-            "claims_supported": ["sub", "email", "email_verified", "name", "groups"],
+            "claims_supported": ["sub", "email", "email_verified", "name"],
         }
 
     def jwks(self) -> dict[str, object]:
@@ -410,16 +376,6 @@ class OidcProvider:
             return None
         return grant
 
-    def _groups_for(self, client: OidcClient, principal: Principal, email_verified: bool) -> list[str]:
-        if self._member_groups is None:
-            return []
-        try:
-            found = list(self._member_groups(principal.email, email_verified))
-        except Exception:
-            logger.warning("OIDC groups lookup failed for client %s", client.client_id)
-            raise GroupsUnavailableError from None
-        return sorted({g.lower() for g in found if client.allows_group(g.lower())})
-
     def issue_tokens(self, grant: CodeGrant) -> dict[str, object]:
         """The token response for a redeemed grant: an access token for userinfo and a signed ID
         token, both valid for five minutes."""
@@ -431,11 +387,6 @@ class OidcProvider:
             "email_verified": grant.email_verified,
             "name": principal.display_name,
         }
-        client = self._clients.get(grant.client_id)
-        groups: list[str] | None = None
-        if client is not None and client.groups:
-            groups = self._groups_for(client, principal, grant.email_verified)
-            user_claims["groups"] = groups
         with self._lock:
             now = self._clock()
             self._prune_locked(now)
@@ -455,8 +406,6 @@ class OidcProvider:
             "email_verified": grant.email_verified,
             "name": principal.display_name,
         }
-        if groups is not None:
-            claims["groups"] = groups
         if grant.nonce is not None:
             claims["nonce"] = grant.nonce
         id_token = jwt.encode(claims, self._key.private_key, algorithm="RS256", headers={"kid": self._key.kid})

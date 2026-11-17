@@ -23,7 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from ..oidc_provider import GroupsUnavailableError, OidcProvider
+from ..oidc_provider import OidcProvider
 from .org_session import SESSION_COOKIE, OrgSessionStore
 
 logger = logging.getLogger(__name__)
@@ -157,10 +157,7 @@ def build_routes(provider: OidcProvider, *, sessions: OrgSessionStore) -> list[R
         )
         if grant is None:
             return _json({"error": "invalid_grant"}, 400)
-        try:
-            body = provider.issue_tokens(grant)
-        except GroupsUnavailableError:
-            return _json({"error": "temporarily_unavailable"}, 503)
+        body = provider.issue_tokens(grant)
         logger.info("OIDC sign-in to %s for principal %s", client.client_id, grant.principal.id)
         return _json(body)
 

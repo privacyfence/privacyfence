@@ -403,7 +403,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0308](0308-the-mcp-registry-listing-of-the-extension-is-no-longer-published.md) | The MCP registry listing of the extension is no longer published | Accepted; supersedes 0112 |
 | [0309](0309-the-organization-image-is-the-only-distribution.md) | The organization image is the only distribution | Accepted; amends 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255; relates to 0295 |
 | [0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md) | `email` is an opt-in visibility input of the identity claim | Accepted; amends 0297; relates to 0298 |
-| [0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md) | The OIDC provider sends approved group membership to apps that opt in | Accepted; amends 0273, 0299; relates to 0298 |
+| [0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md) | The OIDC provider sends approved group membership to apps that opt in | Superseded by 0323 |
 | [0312](0312-a-release-tag-is-created-only-by-tld-release-yml.md) | A release tag is created only by `tld-release.yml` | Accepted; supersedes 0185, amends 0021; relates to 0023, 0030 |
 | [0313](0313-workflow-commands-come-from-the-tld-plugin.md) | Workflow commands come from the tld plugin | Accepted; supersedes 0132 |
 | [0314](0314-plans-stay-on-main-as-the-record-of-their-change.md) | Plans stay on `main` as the record of their change | Accepted |
@@ -415,3 +415,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0320](0320-drive-rules-match-on-file-tags-not-folder-ancestry.md) | Drive rules match on a file tag, not on folder ancestry | Accepted; relates to 0172, 0222, 0232 |
 | [0321](0321-drive-tags-are-plain-properties-and-collaborators-can-forge-them.md) | Drive tags are plain properties, and collaborators can forge them | Accepted; relates to 0320 |
 | [0322](0322-tag-writing-tools-are-popup-only-and-exempt-from-every-rule.md) | The tag-writing tools are popup-only and exempt from every rule | Accepted; relates to 0077, 0164, 0236 |
+| [0323](0323-the-oidc-provider-sends-no-group-membership.md) | The OIDC provider sends no group membership | Accepted; supersedes 0311; relates to 0273, 0298, 0299, 0310, 0318 |
