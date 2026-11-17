@@ -42,7 +42,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p7-retire
 
-- pending
+- worker: Edited scripts/generate_always_allow_reference.py (outside touches) to add the "Google Drive - files with a tag" section to the generator footer, because a test compares the generated always-allow reference with a fresh run; then reran the generator.
+- scope: scope: scripts/generate_always_allow_reference.py (generator footer for the new scope section; no other phase touches it)
 
 ## Final review
 
