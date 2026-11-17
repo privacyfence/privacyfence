@@ -29,7 +29,12 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-tag-folder-tree-tool
 
-- pending
+- worker: The tool description says "Requires user approval every time, which no rule can grant" instead of "Always requires user approval", because test_every_tool_definition_is_complete pins the wording (as in p4).
+- worker: Regenerated docs/tools-reference.md and docs/always-allow-rules-reference.md and bumped website tool counts (173 tools, Drive 28 tools, 16 need approval) because pinned tests fail otherwise; raised the _VERB_MATRIX count 113 to 114 in test_registry.py.
+- scope: scope: docs/always-allow-rules-reference.md (generated or pinned count update; also in touches of p7-retire)
+- scope: scope: docs/tools-reference.md (generated or pinned count update; also in touches of p7-retire)
+- scope: scope: website/connectors/index.html (generated or pinned count update; also in touches of p7-retire)
+- scope: scope: website/how-it-works/index.html (generated or pinned count update; also in touches of p7-retire)
 
 ## p6-recorder-check
 
