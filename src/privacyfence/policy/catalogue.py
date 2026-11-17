@@ -115,6 +115,12 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         verb_predicates=((Verb.SEARCH, "slack.my_conversations_all_results"),),
         value_optional=True,
     ),
+    "drive.tag": PolicyExtraScope(
+        predicate="drive.tag", connector="drive",
+        verbs=(Verb.READ, Verb.DOWNLOAD, Verb.UPDATE, Verb.RESTRUCTURE, Verb.DELETE),
+        label="Google Drive — files with a tag (anyone who can edit a file can set its tags)",
+        needs_value=True, value_hint="client-a, public-docs",
+    ),
     "gmail.query": PolicyExtraScope(
         predicate="gmail.query", connector="gmail",
         verbs=(Verb.READ, Verb.DOWNLOAD),
@@ -168,8 +174,8 @@ def extra_operations_for(extra: PolicyExtraScope, verb: Verb) -> frozenset[str]:
         entry.operation
         for entry in registry.TOOL_REGISTRY.values()
         if entry.operation is not None and entry.verb == verb
-        and entry.operation.split(".", 1)[0] == extra.connector
-    ) - extra.excludes
+        and propose.connector_of_operation(entry.operation) == extra.connector
+    ) - extra.excludes - registry.RULE_EXEMPT_OPERATIONS
 
 
 def scope_catalogue() -> list[dict[str, Any]]:

@@ -711,6 +711,13 @@ def _upstream_approved_tool_matches(value: Any, _ctx: ReviewContext) -> bool:
     return current is not None and current == digest
 
 
+def _drive_tag_matches(value: Any, ctx: ReviewContext) -> bool:
+    if not value:
+        return False
+    tags = set(getattr(_file_from(ctx.raw_data), "tags", []) or [])
+    return bool(tags & {str(v).lower() for v in _values_of(value)})
+
+
 NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "drive.file": ScopeSelector(
         predicate="drive.file", scope_type="drive.file", kind=ScopeKind.IDENTITY,
@@ -771,6 +778,10 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         matches=_my_conversations_all_results_matches,
     ),
     # The connector evaluates the query with Gmail itself and passes the matching rule values.
+    "drive.tag": ScopeSelector(
+        predicate="drive.tag", scope_type="drive.tag", kind=ScopeKind.ATTRIBUTE,
+        resolves_from=ResolvesFrom.FETCHED, matches=_drive_tag_matches,
+    ),
     "gmail.query": ScopeSelector(
         predicate="gmail.query", scope_type="gmail.query", kind=ScopeKind.ATTRIBUTE,
         resolves_from=ResolvesFrom.FETCHED, matches=_gmail_query_matches,

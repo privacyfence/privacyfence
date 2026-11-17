@@ -109,7 +109,7 @@ def _refuse_removed_groups(stem: str) -> None:
     if _env(f"{stem}GROUPS") or _env(f"{stem}GROUPS_ALLOWED"):
         raise ConfigurationError(
             f"{stem}GROUPS and {stem}GROUPS_ALLOWED were removed: the OIDC provider no longer sends a groups "
-            "claim (ADR 0320). Turn off the app's group-to-team mapping first (in Forgejo, "
+            "claim (ADR 0323). Turn off the app's group-to-team mapping first (in Forgejo, "
             "--group-team-map-removal), then remove both variables."
         )
 

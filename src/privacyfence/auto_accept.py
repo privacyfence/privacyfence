@@ -45,6 +45,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _TEMP_ACCEPT_EXCLUDED_OPERATIONS: frozenset[str] = frozenset({
+    # Tag-writing tools are popup-only and exempt from every rule (ADR 0322); defence in depth,
+    # since the grace window is never built for them.
+    "drive.set_file_tags",
+    "drive.tag_folder_tree",
     # Destructive with no undo path through PrivacyFence, unlike
     # insert/format -- gets the standing-rule treatment only (like
     # sheets.add_sheet/sheets.rename_sheet below), never the lighter-weight
@@ -107,6 +111,8 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "drive_upload_file":              "drive.upload_file",
     "drive_move_file":                "drive.move_file",
     "drive_copy_file":                "drive.copy_file",
+    "drive_set_file_tags":            "drive.set_file_tags",
+    "drive_tag_folder_tree":          "drive.tag_folder_tree",
     "drive_add_comment":              "drive.comment_file",
     "drive_sheets_get_values":        "sheets.read_values",
     "drive_sheets_write_range":       "sheets.write_range",
@@ -252,6 +258,8 @@ TOOL_TO_GATE: dict[str, str] = {
     "drive_write_doc_content":         "popup",
     "drive_move_file":                 "popup",
     "drive_copy_file":                 "popup",
+    "drive_set_file_tags":             "popup",
+    "drive_tag_folder_tree":           "popup",
     "drive_add_comment":               "popup",
     "drive_sheets_create":             "auto",
     "drive_sheets_get_metadata":       "auto",

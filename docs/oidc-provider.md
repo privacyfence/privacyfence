@@ -136,7 +136,7 @@ not logged, in case it quotes the secret.
 
 **`…SECRET must be at least 32 characters`** — use a longer secret.
 
-**`PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS and …_GROUPS_ALLOWED were removed: …`** — the app still sets a groups variable. Turn off the app's group-to-team mapping, then remove both variables ([ADR 0320](adr/0320-the-oidc-provider-sends-no-group-membership.md)).
+**`PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS and …_GROUPS_ALLOWED were removed: …`** — the app still sets a groups variable. Turn off the app's group-to-team mapping, then remove both variables ([ADR 0323](adr/0323-the-oidc-provider-sends-no-group-membership.md)).
 
 **`…REQUIRE_PKCE must be true or false`** — write exactly `true` or `false`, in lower case, or leave it unset.
 

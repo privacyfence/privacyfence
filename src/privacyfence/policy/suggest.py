@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ..auto_accept import ReviewContext
-from . import catalogue, propose, scopes
+from . import catalogue, propose, registry, scopes
 from .registry import TOOL_REGISTRY
 
 # The argument each extra scope's selector reads (``scopes._grist_document_matches`` and friends).
@@ -78,6 +78,8 @@ def suggested_rules(tool: str, args: dict[str, Any], my_email: str = "") -> list
     """
     entry = TOOL_REGISTRY.get(tool)
     if entry is None or entry.operation is None or entry.verb is None:
+        return []
+    if entry.operation in registry.RULE_EXEMPT_OPERATIONS:
         return []
     connector = propose.connector_of_operation(entry.operation)
     ctx = ReviewContext(connector="", tool=tool, args=args, raw_data=None, my_email=my_email)

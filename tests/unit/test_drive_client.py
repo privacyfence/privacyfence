@@ -25,6 +25,7 @@ from privacyfence.drive_client import (
     DriveClientError,
     DriveFile,
     DriveRevision,
+    FolderWalk,
     InlineRun,
     _col_letters_to_index,
     _docs_content_elements_to_markdown,
@@ -204,6 +205,19 @@ class TestParseFile:
             shared=True, web_view_link="https://x", parent_ids=["p1", "p2"], drive_id="d1",
             thumbnail_link="https://signed.example/thumb",
         )
+
+    def test_tags_come_from_properties(self):
+        f = DriveClient._parse_file({
+            "properties": {
+                "privacyfence-tag.b": "1", "privacyfence-tag.a": "1",
+                "privacyfence-tag.c": "2", "other": "1",
+            },
+        })
+        assert f.tags == ["a", "b"]
+        assert DriveClient._parse_file({"properties": None}).tags == []
+
+    def test_file_fields_request_properties(self):
+        assert "properties" in drive_client_module._FILE_FIELDS
 
     def test_missing_fields_default_sensibly(self):
         f = DriveClient._parse_file({})
@@ -4082,3 +4096,215 @@ class TestLiveFixtureParsing:
         drive_file = DriveClient._parse_file(raw)
 
         assert drive_file.id and drive_file.name
+
+
+# ---------------------------------------------------------------------------- #
+# set_tags
+# ---------------------------------------------------------------------------- #
+
+class TestSetTags:
+    @staticmethod
+    def _service(result=None, side_effect=None):
+        service = MagicMock()
+        execute = service.files.return_value.update.return_value.execute
+        if side_effect is not None:
+            execute.side_effect = side_effect
+        else:
+            execute.return_value = result
+        return service
+
+    def test_add_and_remove_body(self):
+        service = self._service({"id": "f1", "properties": {"privacyfence-tag.a": "1", "x": "y"}})
+        client = make_client(service)
+
+        result = client.set_tags("f1", ["a", "b"], ["c"])
+
+        assert result == {"file_id": "f1", "tags": ["a"]}
+        kwargs = service.files.return_value.update.call_args.kwargs
+        assert kwargs["fileId"] == "f1"
+        assert kwargs["body"] == {"properties": {
+            "privacyfence-tag.a": "1", "privacyfence-tag.b": "1", "privacyfence-tag.c": None,
+        }}
+        assert kwargs["fields"] == "id,properties"
+        assert kwargs["supportsAllDrives"] is True
+
+    def test_result_without_properties_gives_no_tags(self):
+        client = make_client(self._service({"id": "f1"}))
+        assert client.set_tags("f1", [], ["a"]) == {"file_id": "f1", "tags": []}
+
+    def test_empty_file_id_raises(self):
+        with pytest.raises(DriveClientError, match="non-empty file_id"):
+            make_client(MagicMock()).set_tags("", ["a"], [])
+
+    def test_no_tags_raises(self):
+        with pytest.raises(DriveClientError, match="at least one tag"):
+            make_client(MagicMock()).set_tags("f1", [], [])
+
+    def test_overlap_raises(self):
+        service = MagicMock()
+        with pytest.raises(DriveClientError, match="same tag: a"):
+            make_client(service).set_tags("f1", ["a"], ["a", "b"])
+        service.files.return_value.update.assert_not_called()
+
+    def test_too_many_tags_raises(self):
+        with pytest.raises(DriveClientError, match="at most 10"):
+            make_client(MagicMock()).set_tags("f1", [f"a{i}" for i in range(6)], [f"b{i}" for i in range(5)])
+
+    def test_retries_on_rate_limit_then_succeeds(self, monkeypatch):
+        sleeps: list[float] = []
+        monkeypatch.setattr(drive_client_module, "_sleep", sleeps.append)
+        err = http_error(403, b'{"error": {"errors": [{"reason": "rateLimitExceeded"}]}}')
+        service = self._service(side_effect=[err, err, {"id": "f1", "properties": {"privacyfence-tag.a": "1"}}])
+
+        result = make_client(service).set_tags("f1", ["a"], [])
+
+        assert result["tags"] == ["a"]
+        assert sleeps == [1, 2]
+
+    def test_gives_up_after_three_retries(self, monkeypatch):
+        sleeps: list[float] = []
+        monkeypatch.setattr(drive_client_module, "_sleep", sleeps.append)
+        err = http_error(429, b'{"error": "userRateLimitExceeded"}')
+        service = self._service(side_effect=err)
+
+        with pytest.raises(DriveClientError, match="set_tags"):
+            make_client(service).set_tags("f1", ["a"], [])
+
+        assert sleeps == [1, 2, 4]
+        assert service.files.return_value.update.return_value.execute.call_count == 4
+
+    def test_insufficient_permissions_is_mapped(self):
+        err = http_error(403, b'{"error": {"errors": [{"reason": "insufficientFilePermissions"}]}}')
+        with pytest.raises(DriveClientError, match="You need edit access to this file to change its tags."):
+            make_client(self._service(side_effect=err)).set_tags("f1", ["a"], [])
+
+    def test_other_error_is_wrapped_without_retry(self, monkeypatch):
+        monkeypatch.setattr(drive_client_module, "_sleep", lambda _s: pytest.fail("must not sleep"))
+        service = self._service(side_effect=http_error(404))
+        with pytest.raises(DriveClientError, match=r"set_tags\(f1\) failed"):
+            make_client(service).set_tags("f1", ["a"], [])
+
+
+# ---------------------------------------------------------------------------- #
+# walk_folder_files
+# ---------------------------------------------------------------------------- #
+
+FOLDER = "application/vnd.google-apps.folder"
+SHORTCUT = "application/vnd.google-apps.shortcut"
+
+
+def _fid(n: int) -> str:
+    return f"id{n:010d}"
+
+
+def _walk_service(pages_by_call: list[dict]) -> MagicMock:
+    service = MagicMock()
+    service.files.return_value.list.return_value.execute.side_effect = pages_by_call
+    return service
+
+
+def _queries(service: MagicMock) -> list[str]:
+    return [c.kwargs["q"] for c in service.files.return_value.list.call_args_list]
+
+
+class TestWalkFolderFiles:
+    def test_collects_files_across_levels_skipping_shortcuts(self):
+        root, sub = _fid(1), _fid(2)
+        service = _walk_service([
+            {"files": [
+                {"id": sub, "name": "sub", "mimeType": FOLDER},
+                {"id": "f1", "name": "a", "mimeType": "text/plain",
+                 "properties": {"privacyfence-tag.x": "1"}},
+                {"id": "s1", "name": "link", "mimeType": SHORTCUT},
+            ]},
+            {"files": [{"id": "f2", "name": "b", "mimeType": "text/plain"}]},
+        ])
+
+        walk = make_client(service).walk_folder_files(root)
+
+        assert isinstance(walk, FolderWalk)
+        assert [f.id for f in walk.files] == ["f1", "f2"]
+        assert walk.files[0].tags == ["x"]
+        assert walk.folders_seen == 2
+        assert walk.truncated is False
+        queries = _queries(service)
+        assert queries == [
+            f"('{root}' in parents) and trashed = false",
+            f"('{sub}' in parents) and trashed = false",
+        ]
+        kwargs = service.files.return_value.list.call_args.kwargs
+        assert kwargs["fields"] == "nextPageToken,files(id,name,mimeType,parents,properties)"
+        assert kwargs["pageSize"] == 1000
+        assert kwargs["supportsAllDrives"] is True
+
+    def test_batches_forty_folders_per_query(self):
+        root = _fid(0)
+        children = [{"id": _fid(i), "name": f"d{i}", "mimeType": FOLDER} for i in range(1, 46)]
+        service = _walk_service([{"files": children}, {"files": []}, {"files": []}])
+
+        walk = make_client(service).walk_folder_files(root)
+
+        queries = _queries(service)
+        assert len(queries) == 3
+        assert queries[1].count(" in parents") == 40
+        assert queries[2].count(" in parents") == 5
+        assert " or " in queries[1]
+        assert walk.folders_seen == 46
+        assert walk.truncated is False
+
+    def test_follows_pagination(self):
+        service = _walk_service([
+            {"files": [{"id": "f1", "mimeType": "text/plain"}], "nextPageToken": "t1"},
+            {"files": [{"id": "f2", "mimeType": "text/plain"}]},
+        ])
+        walk = make_client(service).walk_folder_files(_fid(1))
+        assert [f.id for f in walk.files] == ["f1", "f2"]
+        assert service.files.return_value.list.call_args_list[1].kwargs["pageToken"] == "t1"
+
+    def test_truncated_when_page_budget_exhausted(self):
+        pages = [{"files": [], "nextPageToken": "t"}] * drive_client_module.MAX_PAGES
+        walk = make_client(_walk_service(pages)).walk_folder_files(_fid(1))
+        assert walk.truncated is True
+
+    def test_truncated_when_more_than_max_items_files(self):
+        files = [{"id": f"f{i}", "mimeType": "text/plain"} for i in range(5)]
+        walk = make_client(_walk_service([{"files": files}])).walk_folder_files(_fid(1), max_items=3)
+        assert walk.truncated is True
+        assert len(walk.files) == 3
+
+    def test_exactly_max_items_is_not_truncated(self):
+        files = [{"id": f"f{i}", "mimeType": "text/plain"} for i in range(3)]
+        walk = make_client(_walk_service([{"files": files}])).walk_folder_files(_fid(1), max_items=3)
+        assert walk.truncated is False
+        assert len(walk.files) == 3
+
+    def test_truncated_when_folders_remain_below_max_depth(self):
+        service = _walk_service([{"files": [{"id": _fid(2), "mimeType": FOLDER}]}])
+        walk = make_client(service).walk_folder_files(_fid(1), max_depth=1)
+        assert walk.truncated is True
+        assert walk.folders_seen == 1
+        assert len(_queries(service)) == 1
+
+    def test_depth_exactly_reached_is_not_truncated(self):
+        service = _walk_service([{"files": [{"id": "f1", "mimeType": "text/plain"}]}])
+        walk = make_client(service).walk_folder_files(_fid(1), max_depth=1)
+        assert walk.truncated is False
+
+    def test_invalid_root_id_is_never_queried(self):
+        service = MagicMock()
+        for bad in ["", "short", "a' in parents or '1", "x" * 101]:
+            with pytest.raises(DriveClientError, match="valid folder_id"):
+                make_client(service).walk_folder_files(bad)
+        service.files.assert_not_called()
+
+    def test_invalid_child_folder_id_is_skipped(self):
+        service = _walk_service([{"files": [{"id": "bad'id", "mimeType": FOLDER}]}])
+        walk = make_client(service).walk_folder_files(_fid(1))
+        assert len(_queries(service)) == 1
+        assert walk.truncated is False
+
+    def test_http_error_is_wrapped(self):
+        service = MagicMock()
+        service.files.return_value.list.return_value.execute.side_effect = http_error(500)
+        with pytest.raises(DriveClientError, match="walk_folder_files failed"):
+            make_client(service).walk_folder_files(_fid(1))

@@ -1,4 +1,4 @@
-# ADR 0320: The OIDC provider sends no group membership
+# ADR 0323: The OIDC provider sends no group membership
 
 ## Status
 
@@ -36,7 +36,7 @@ Issue [#1148](https://github.com/privacyfence/privacyfence/issues/1148).
 3. **A leftover setting refuses the start.** If `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS` or
    `…_GROUPS_ALLOWED` has any non-empty value (`false` included), `clients_from_env` raises
    `ConfigurationError`:
-   `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS and PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS_ALLOWED were removed: the OIDC provider no longer sends a groups claim (ADR 0320). Turn off the app's group-to-team mapping first (in Forgejo, --group-team-map-removal), then remove both variables.`
+   `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS and PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS_ALLOWED were removed: the OIDC provider no longer sends a groups claim (ADR 0323). Turn off the app's group-to-team mapping first (in Forgejo, --group-team-map-removal), then remove both variables.`
    Unset or empty is fine.
 4. **ADR 0298 and ADR 0299 stay**, for scoped tokens (n8n) only. Nobody has to keep the group map current for
    people any more.

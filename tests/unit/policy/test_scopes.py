@@ -766,3 +766,36 @@ class TestUpstreamApprovedTool:
     ])
     def test_selector_refuses_a_malformed_value(self, value):
         assert self._matches(value) is False
+
+
+class TestDriveTag:
+    selector = NEW_SCOPE_SELECTORS["drive.tag"]
+
+    @staticmethod
+    def _ctx(tags):
+        return make_ctx(connector="drive", raw_data={"file": SimpleNamespace(id="f1", tags=tags)})
+
+    def test_selector_shape(self):
+        assert (self.selector.scope_type, self.selector.kind, self.selector.resolves_from) == (
+            "drive.tag", ScopeKind.ATTRIBUTE, ResolvesFrom.FETCHED,
+        )
+
+    def test_matches_a_file_carrying_the_tag(self):
+        assert self.selector.matches(["client-a"], self._ctx(["client-a", "x"])) is True
+
+    def test_any_of_several_values_matches(self):
+        assert self.selector.matches(["other", "x"], self._ctx(["client-a", "x"])) is True
+
+    def test_does_not_match_a_file_without_the_tag(self):
+        assert self.selector.matches(["client-b"], self._ctx(["client-a"])) is False
+
+    def test_empty_value_never_matches(self):
+        for value in (None, [], ""):
+            assert self.selector.matches(value, self._ctx(["client-a"])) is False
+
+    def test_file_with_no_tags_never_matches(self):
+        assert self.selector.matches(["client-a"], self._ctx([])) is False
+        assert self.selector.matches(["client-a"], make_ctx(raw_data=None)) is False
+
+    def test_rule_value_is_compared_case_insensitively(self):
+        assert self.selector.matches(["Client-A"], self._ctx(["client-a"])) is True

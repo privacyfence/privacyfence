@@ -121,7 +121,7 @@ class TestRemovedGroupsSettings:
         stem = "PRIVACYFENCE_OIDC_CLIENT_PEEK_"
         assert str(err.value) == (
             f"{stem}GROUPS and {stem}GROUPS_ALLOWED were removed: the OIDC provider no longer sends a groups "
-            "claim (ADR 0320). Turn off the app's group-to-team mapping first (in Forgejo, "
+            "claim (ADR 0323). Turn off the app's group-to-team mapping first (in Forgejo, "
             "--group-team-map-removal), then remove both variables."
         )
 
