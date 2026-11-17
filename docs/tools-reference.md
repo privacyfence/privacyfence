@@ -100,7 +100,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Google Calendar](#google-calendar) | 14 | 6 | 1 | 7 |
 | [Google Contacts](#google-contacts) | 7 | 3 | 0 | 4 |
 | [Google Tasks](#google-tasks) | 8 | 3 | 0 | 5 |
-| [Apps Script](#apps-script) | 4 | 1 | 2 | 1 |
+| [Apps Script](#apps-script) | 5 | 2 | 2 | 1 |
 | [Slack](#slack) | 12 | 7 | 3 | 2 |
 | [Telegram](#telegram) | 5 | 2 | 2 | 1 |
 | [Salesforce](#salesforce) | 9 | 1 | 4 | 4 |
@@ -111,7 +111,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Peek](#peek) | 12 | 2 | 3 | 7 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
 | [group membership sync](#privacyfence-administration) | 1 | 1 | 0 | 0 |
-| **Total** | **174** | **60** | **39** | **75** |
+| **Total** | **175** | **61** | **39** | **75** |
 
 ## Gmail
 
@@ -219,6 +219,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 
 | Tool | Direction | Gate | What it does |
 |---|---|---|---|
+| `apps_script_create_project` | write | `auto` | Create a new, empty standalone Google Apps Script project. |
 | `apps_script_list_projects` | read | `auto` | List standalone Google Apps Script projects visible to the user (id, name, last-modified time). |
 | `apps_script_get_content` | read | `review` | Fetch the full source of a Google Apps Script project -- every file (.gs/.html) plus the appsscript.json manifest. |
 | `apps_script_get_execution_log` | read | `review` | Read the result of the most recent run(s) of a script that the user triggered themselves outside PrivacyFence (status, duration, which function ran) -- not a live console.log transcript. |

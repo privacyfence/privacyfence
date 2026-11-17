@@ -14,7 +14,10 @@ own triggers), under their own Google account, through Apps Script's own
 separate one-time consent screen -- untouched by PrivacyFence.
 
 ``apps_script_list_projects`` is auto-approved metadata only (id/name/
-modified time), mirroring drive_list_shared_drives. ``apps_script_get_content``
+modified time), mirroring drive_list_shared_drives. ``apps_script_create_project``
+is auto-approved too: it creates an empty standalone project and discloses
+nothing, mirroring drive_create_blank_file; its code still goes through the
+popup-gated write. ``apps_script_get_content``
 and ``apps_script_get_execution_log`` are review-gated reads (script source
 can embed sensitive constants/URLs; execution results came from a run the
 user triggered, not from Claude). ``apps_script_write_content`` is a
@@ -117,6 +120,21 @@ class AppsScriptConnector(Connector):
                 read_only=True,
             ),
             ToolSpec(
+                name="apps_script_create_project",
+                description=(
+                    "Create a new, empty standalone Google Apps Script project. Returns "
+                    "{id, name, created_time, modified_time} of the new project, the same "
+                    "shape apps_script_list_projects returns. It has no code yet: add files "
+                    "with apps_script_write_content, which needs your approval. PrivacyFence "
+                    "never runs the script. Auto-approved."
+                ),
+                params=[
+                    ToolParam("title", "str",
+                              description="Name of the new project, as shown in Drive and the Apps Script editor."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+            ),
+            ToolSpec(
                 name="apps_script_get_content",
                 description=(
                     "Fetch the full source of a Google Apps Script project -- "
@@ -195,6 +213,8 @@ class AppsScriptConnector(Connector):
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
         if tool == "apps_script_list_projects":
             return await self._list_projects(**args)
+        if tool == "apps_script_create_project":
+            return await self._create_project(**args)
         if tool == "apps_script_get_content":
             return await self._get_content(**args)
         if tool == "apps_script_write_content":
@@ -215,6 +235,15 @@ class AppsScriptConnector(Connector):
             f"List projects (max {max_results})", f"{len(projects)} project(s)", t0,
         )
         return [asdict(p) for p in projects]
+
+    async def _create_project(self, title: str) -> Any:
+        t0 = time.time()
+        project = await self._fetch(self._apps_script.create_project, title)
+        self._auto_audit(
+            "apps_script_create_project", "Create Apps Script Project",
+            f"Create project: {project.name}", f"id={project.id}", t0,
+        )
+        return asdict(project)
 
     # ------------------------------------------------------------------ #
     # Review gate (reads)
