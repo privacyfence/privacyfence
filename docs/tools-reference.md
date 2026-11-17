@@ -96,7 +96,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | Connector | Tools | `auto` | `review` | `popup` |
 |---|---:|---:|---:|---:|
 | [Gmail](#gmail) | 20 | 5 | 3 | 12 |
-| [Google Drive](#google-drive-including-sheets-and-docs) | 27 | 8 | 4 | 15 |
+| [Google Drive](#google-drive-including-sheets-and-docs) | 28 | 8 | 4 | 16 |
 | [Google Calendar](#google-calendar) | 14 | 6 | 1 | 7 |
 | [Google Contacts](#google-contacts) | 7 | 3 | 0 | 4 |
 | [Google Tasks](#google-tasks) | 8 | 3 | 0 | 5 |
@@ -111,7 +111,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | [Peek](#peek) | 12 | 2 | 3 | 7 |
 | [Miro](#miro) | 10 | 3 | 3 | 4 |
 | [group membership sync](#privacyfence-administration) | 1 | 1 | 0 | 0 |
-| **Total** | **173** | **60** | **39** | **74** |
+| **Total** | **174** | **60** | **39** | **75** |
 
 ## Gmail
 
@@ -166,6 +166,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `drive_sheets_insert_dimensions` | write | `popup` | Insert blank rows or columns into a sheet tab, shifting existing content after the insertion point. |
 | `drive_sheets_rename_sheet` | write | `popup` | Rename an existing tab in a spreadsheet. |
 | `drive_sheets_write_range` | write | `popup` | Write values and/or formulas into a range of an existing spreadsheet. |
+| `drive_tag_folder_tree` | write | `popup` | Add (or with remove=true, remove) one tag on every file under a folder, including all subfolders, in one approved call. |
 | `drive_upload_file` | write | `popup` | Upload any file (e.g. a PDF or image) to Drive as a new file — use this instead of drive_write_file_content for any binary file, since that tool only writes UTF-8 text. |
 | `drive_write_doc_content` | write | `popup` | Write Markdown content to a Google Doc with rich formatting. |
 | `drive_write_file_content` | write | `popup` | Write content to an existing Drive file. |

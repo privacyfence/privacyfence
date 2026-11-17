@@ -64,3 +64,12 @@ def test_no_scope_derives_drive_set_file_tags_with_the_real_registry():
             assert "drive.set_file_tags" not in propose.operations_for(scope, verb)
         for extra in catalogue.EXTRA_SCOPES.values():
             assert "drive.set_file_tags" not in catalogue.extra_operations_for(extra, verb)
+
+
+def test_no_scope_derives_drive_tag_folder_tree_with_the_real_registry():
+    assert registry.TOOL_REGISTRY["drive_tag_folder_tree"].operation == "drive.tag_folder_tree"
+    for verb in Verb:
+        for scope in propose.PROPOSABLE_SCOPES:
+            assert "drive.tag_folder_tree" not in propose.operations_for(scope, verb)
+        for extra in catalogue.EXTRA_SCOPES.values():
+            assert "drive.tag_folder_tree" not in catalogue.extra_operations_for(extra, verb)

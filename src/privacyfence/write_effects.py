@@ -99,6 +99,7 @@ EFFECT_BY_TOOL: dict[str, str] = {
         "The file's contents are replaced. The previous version stays in Drive's version history.",
     "drive_move_file": "The file moves to another folder. It is not copied and not deleted.",
     "drive_set_file_tags": "The file's tags change. Its content is not touched.",
+    "drive_tag_folder_tree": "Every listed file gains or loses the tag. File content is not touched.",
     "drive_copy_file": "A copy of the file is created in the destination folder. The original is not moved or changed.",
     "drive_add_comment": "A comment is added, visible to everyone with access to the file.",
     "drive_sheets_write_range":

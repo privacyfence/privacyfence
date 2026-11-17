@@ -42,6 +42,7 @@ from privacyfence.connectors.drive import DriveConnector
 from privacyfence.drive_client import (
     DriveClient,
     DriveClientError,
+    FolderWalk,
     DriveFile,
     DriveFileContent,
     DriveRevision,
@@ -1264,6 +1265,106 @@ class TestWriteToolsGateAndPreview:
 
         assert "f1" not in connector.session_created_ids
         assert "f1" not in connector.own_write_revisions
+
+    # --- drive_tag_folder_tree ---
+
+    @staticmethod
+    def _folder():
+        return make_file(id="d1", name="Docs", mime_type="application/vnd.google-apps.folder")
+
+    @staticmethod
+    def _walk(files, truncated=False):
+        from privacyfence.drive_client import FolderWalk
+        return FolderWalk(files=files, folders_seen=1, truncated=truncated)
+
+    async def test_tag_folder_tree_one_popup_and_updates_exactly_the_snapshot(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = self._folder()
+        files = [make_file(id=f"f{i}", name=f"File {i}") for i in range(55)]
+        files.append(make_file(id="done", name="Done", tags=["client-a"]))
+        client.walk_folder_files.return_value = self._walk(files)
+
+        result = await connector.call("drive_tag_folder_tree", {"folder_id": "d1", "tag": "Client-A"})
+
+        assert result == {
+            "folder_id": "d1", "tag": "client-a", "action": "add",
+            "updated": 55, "skipped": 1, "failed": [],
+        }
+        assert len(gated_call_spy) == 1
+        kwargs = gated_call_spy[0]
+        assert kwargs["gate"] == "popup"
+        assert kwargs["tool"] == "drive_tag_folder_tree"
+        assert kwargs["preview"] == {
+            "Folder": "Docs", "Action": "Add tag", "Tag": "client-a",
+            "Files to change": "55", "Already in that state": "1",
+        }
+        lines = kwargs["details_text"].split("\n")
+        assert len(lines) == 51
+        assert lines[0] == "- File 0 (f0)"
+        assert lines[-1] == "…and 5 more"
+        assert kwargs["args"] == {"folder_id": "d1", "tag": "client-a", "remove": False}
+        client.walk_folder_files.assert_called_once()
+        assert client.set_tags.call_count == 55
+        client.set_tags.assert_any_call("f54", ["client-a"], [])
+
+    async def test_tag_folder_tree_failure_on_one_file_does_not_stop_the_rest(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = self._folder()
+        client.walk_folder_files.return_value = self._walk(
+            [make_file(id="a", name="A"), make_file(id="b", name="B"), make_file(id="c", name="C")]
+        )
+        client.set_tags.side_effect = [{}, DriveClientError("x" * 300), {}]
+
+        result = await connector.call("drive_tag_folder_tree", {"folder_id": "d1", "tag": "t"})
+
+        assert result["updated"] == 2
+        assert result["failed"] == [{"file_id": "b", "error": "x" * 200}]
+        assert client.set_tags.call_count == 3
+
+    async def test_tag_folder_tree_truncated_raises_without_popup_or_write(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = self._folder()
+        client.walk_folder_files.return_value = self._walk([make_file()], truncated=True)
+
+        with pytest.raises(ValueError, match="Nothing was changed"):
+            await connector.call("drive_tag_folder_tree", {"folder_id": "d1", "tag": "t"})
+
+        assert gated_call_spy == []
+        client.set_tags.assert_not_called()
+
+    async def test_tag_folder_tree_already_tagged_returns_zero_without_popup(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = self._folder()
+        client.walk_folder_files.return_value = self._walk([make_file(id="a", tags=["t"])])
+
+        result = await connector.call("drive_tag_folder_tree", {"folder_id": "d1", "tag": "t"})
+
+        assert result["updated"] == 0 and result["skipped"] == 1
+        assert gated_call_spy == []
+        client.set_tags.assert_not_called()
+
+    async def test_tag_folder_tree_remove_touches_only_tagged_files(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = self._folder()
+        client.walk_folder_files.return_value = self._walk(
+            [make_file(id="a", name="A", tags=["t"]), make_file(id="b", name="B")]
+        )
+
+        result = await connector.call("drive_tag_folder_tree", {"folder_id": "d1", "tag": "t", "remove": True})
+
+        assert result["action"] == "remove" and result["updated"] == 1 and result["skipped"] == 1
+        assert gated_call_spy[0]["preview"]["Action"] == "Remove tag"
+        client.set_tags.assert_called_once_with("a", [], ["t"])
+
+    async def test_tag_folder_tree_refuses_a_non_folder(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_file_metadata.return_value = make_file()
+
+        with pytest.raises(ValueError, match="needs a folder id"):
+            await connector.call("drive_tag_folder_tree", {"folder_id": "f1", "tag": "t"})
+
+        assert gated_call_spy == []
+        client.walk_folder_files.assert_not_called()
 
     async def test_add_comment_gate_popup(self, gated_call_spy):
         connector, client = make_connector()
@@ -2505,7 +2606,9 @@ class TestEveryToolIsAudited:
         # result (no bytes fetched pre-gate) and formats it with ":," -- a bare
         # MagicMock has no meaningful __format__ for that spec, so it needs a
         # real DriveFile back.
-        client.get_file_metadata.return_value = make_file()
+        folder = make_file(id="folder1", name="Docs", mime_type="application/vnd.google-apps.folder")
+        client.get_file_metadata.side_effect = lambda file_id, *a: folder if file_id == "folder1" else make_file()
+        client.walk_folder_files.return_value = FolderWalk(files=[make_file()])
         client.download_file_bytes.return_value = {
             "data": b"x" * 100, "name": "f.txt", "mime_type": "text/plain", "size_bytes": 100,
         }
@@ -2524,6 +2627,8 @@ class TestEveryToolIsAudited:
                 "drive_sheets_format_range": {"range_a1": "A1:B2"},
                 # at least one tag must be given -- validated before gating.
                 "drive_set_file_tags": {"add_tags": "client-a"},
+                # the folder must be a folder and the tag a valid name -- validated before gating.
+                "drive_tag_folder_tree": {"folder_id": "folder1", "tag": "client-a"},
                 # dimension must be 'ROWS' or 'COLUMNS' -- validated before gating.
                 "drive_sheets_insert_dimensions": {"dimension": "ROWS"},
                 "drive_sheets_delete_dimensions": {"dimension": "ROWS"},
