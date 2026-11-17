@@ -10,6 +10,8 @@ Amends [ADR 0273](0273-privacyfence-is-an-oidc-provider-for-apps-the-operator-na
 Relates to [ADR 0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md).
 Issue [#1133](https://github.com/privacyfence/privacyfence/issues/1133).
 
+**Superseded by [ADR 0320](0320-the-oidc-provider-sends-no-group-membership.md), 2026-11-17.**
+
 ## Context
 
 Forgejo team membership has to follow the Workspace groups. PrivacyFence already holds that membership for

@@ -2024,41 +2024,6 @@ class TestMaybeStartWebServerOrgMode:
         path.write_text(json.dumps(document), encoding="utf-8")
         return path
 
-    def _groups_start(self, monkeypatch, tmp_path, *, upstream: bool):
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        monkeypatch.setattr("privacyfence.paths.org_dir", lambda: tmp_path)
-        self._oidc_env(monkeypatch, tmp_path)
-        monkeypatch.setenv("PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS", "true")
-        if upstream:
-            monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", str(self._upstream_file(tmp_path)))
-        return daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
-            unattended_sessions_enabled=False, org_config=self._single_user_config(),
-        )
-
-    def test_oidc_provider_gets_the_approved_groups_lookup(self, monkeypatch, tmp_path):
-        from privacyfence import upstream_mcp_runtime
-
-        self._no_bind(monkeypatch, tmp_path)
-        monkeypatch.setattr(daemon_main, "org_dir", lambda: tmp_path)
-        self._oidc_env(monkeypatch, tmp_path)
-        result = daemon_main._maybe_start_web_server(
-            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
-            unattended_sessions_enabled=False, org_config=self._single_user_config(),
-        )
-        assert result.org.oidc._member_groups is upstream_mcp_runtime.approved_groups_for_email
-
-    def test_groups_client_without_an_upstream_refuses_the_start(self, monkeypatch, tmp_path):
-        with pytest.raises(org_mode.ConfigurationError, match="PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS needs"):
-            self._groups_start(monkeypatch, tmp_path, upstream=False)
-
-    def test_groups_client_without_an_allowlist_warns(self, monkeypatch, tmp_path, caplog):
-        with caplog.at_level(logging.WARNING, logger=daemon_main.logger.name):
-            self._groups_start(monkeypatch, tmp_path, upstream=True)
-        assert "OIDC client peek receives every mapped group" in caplog.text
-        assert "PRIVACYFENCE_OIDC_CLIENT_PEEK_GROUPS_ALLOWED" in caplog.text
-
     def test_upstream_mcp_is_configured_in_organization_mode(self, monkeypatch, tmp_path, caplog):
         from privacyfence import upstream_mcp_runtime
 

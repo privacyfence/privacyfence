@@ -34,10 +34,10 @@ def test_discovery_document_exactly(tmp_path):
         "userinfo_endpoint": f"{iss}/userinfo", "jwks_uri": f"{iss}/jwks",
         "response_types_supported": ["code"], "grant_types_supported": ["authorization_code"],
         "subject_types_supported": ["public"], "id_token_signing_alg_values_supported": ["RS256"],
-        "scopes_supported": ["openid", "email", "profile", "groups"],
+        "scopes_supported": ["openid", "email", "profile"],
         "token_endpoint_auth_methods_supported": ["client_secret_basic", "client_secret_post"],
         "code_challenge_methods_supported": ["S256"],
-        "claims_supported": ["sub", "email", "email_verified", "name", "groups"],
+        "claims_supported": ["sub", "email", "email_verified", "name"],
     }
 
 
@@ -96,8 +96,7 @@ class _Clock:
 
 
 class _Env:
-    def __init__(self, tmp_path, *, email_verified=True, principal=ANN, signed_in=True, clients=None,
-                 member_groups=None):
+    def __init__(self, tmp_path, *, email_verified=True, principal=ANN, signed_in=True, clients=None):
         self.clock = _Clock()
         self.key = oidc_provider.load_or_create_signing_key(tmp_path / "key.pem")
         if clients is None:
@@ -106,7 +105,7 @@ class _Env:
                 "grist": oidc_provider.OidcClient("grist", (GRIST_CB,), GRIST_SECRET),
             }
         self.provider = oidc_provider.OidcProvider(
-            issuer=ISS, clients=clients, key=self.key, clock=self.clock, member_groups=member_groups
+            issuer=ISS, clients=clients, key=self.key, clock=self.clock
         )
         self.sessions = OrgSessionStore()
         app = Starlette(routes=routes_oidc.build_routes(self.provider, sessions=self.sessions))
@@ -300,27 +299,13 @@ def test_full_flow_basic_auth(tmp_path, caplog):
         assert secret not in caplog.text
 
 
-def _groups_clients():
-    return {"peek": oidc_provider.OidcClient("peek", (PEEK_CB,), PEEK_SECRET, groups=True)}
-
-
-def test_full_flow_userinfo_carries_groups_for_an_opted_in_client(tmp_path):
-    env = _Env(tmp_path, clients=_groups_clients(), member_groups=lambda email, verified: ["kh-hr@x.example"])
+def test_full_flow_tokens_carry_no_groups(tmp_path):
+    env = _Env(tmp_path)
     body = env.token(env.code()).json()
-    assert _verify_id_token(env, body["id_token"])["groups"] == ["kh-hr@x.example"]
+    assert "groups" not in _verify_id_token(env, body["id_token"])
     userinfo = env.http.get("/oidc/userinfo", headers={"Authorization": f"Bearer {body['access_token']}"})
     assert userinfo.status_code == 200
-    assert userinfo.json()["groups"] == ["kh-hr@x.example"]
-
-
-def test_token_answers_503_when_the_groups_lookup_fails(tmp_path):
-    def boom(email, verified):
-        raise RuntimeError("down")
-
-    env = _Env(tmp_path, clients=_groups_clients(), member_groups=boom)
-    response = env.token(env.code())
-    assert response.status_code == 503
-    assert response.json() == {"error": "temporarily_unavailable"}
+    assert "groups" not in userinfo.json()
 
 
 def test_full_flow_post_auth(tmp_path):

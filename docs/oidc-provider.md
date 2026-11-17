@@ -28,8 +28,6 @@ PRIVACYFENCE_OIDC_CLIENT_GRIST_SECRET_FILE=/run/secrets/grist_oidc_client_secret
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REDIRECT_URIS` | The addresses the app may be sent back to, comma-separated, at least one. `<NAME>` is the app's name in capitals with `-` written as `_`. Each address is `https://`, or `http://` for `localhost`, `127.0.0.1` or `::1`, with no user name and no fragment. Addresses are compared exactly. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET_FILE` | The path of a file that holds the app's client secret (a Docker secret). |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_SECRET` | The secret itself. Set this or the file, never both. |
-| `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS` | `true` or `false` (exact, lower case), default `false`. With `true` the app's ID token and userinfo carry `groups` ([Groups](#groups)). Needs an upstream MCP declaration. |
-| `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS_ALLOWED` | Comma-separated group names that may be sent, each an exact name or a prefix ending in `*` such as `kh-*`; at most 50. Empty sends every mapped group. Needs `…_GROUPS=true`. |
 | `PRIVACYFENCE_OIDC_CLIENT_<NAME>_REQUIRE_PKCE` | `true` or `false` (exact, lower case), default `true`. With `false` the app may sign in without PKCE, for an app that cannot send it, such as Forgejo. An app that sends PKCE anyway is still checked. The daemon warns at start. |
 
 A secret must be at least 32 characters after surrounding spaces are removed; `openssl rand -hex 32`
@@ -50,7 +48,7 @@ needs only the issuer: it finds the rest in the discovery document.
 | `<issuer>/.well-known/openid-configuration` | The discovery document. |
 | `<issuer>/authorize` | Where the app sends the person's browser. |
 | `<issuer>/token` | Where the app swaps the code for an ID token. |
-| `<issuer>/userinfo` | The person's `sub`, `email`, `email_verified` and `name`, and `groups` for apps that opt in. |
+| `<issuer>/userinfo` | The person's `sub`, `email`, `email_verified` and `name`. |
 | `<issuer>/jwks` | The public key that signs ID tokens (RS256). |
 
 The flow is the authorization code flow with PKCE (`S256`). PKCE
@@ -90,41 +88,6 @@ PrivacyFence reports `email_verified` as true when:
 
 Peek and Grist refuse a sign-in whose email is not verified, the same bar as automatic accounts
 ([Peek](peek-setup.md#automatic-accounts), [Grist](grist-setup.md)).
-
-## Groups
-
-An app that opts in with `PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS=true` receives a `groups` list in its ID
-token and in the userinfo response, for example so Forgejo can put a person in the teams their
-Workspace groups name.
-
-- **What is sent.** The Workspace groups the person belongs to whose additions an administrator has
-  approved where an approval applies, from the same membership PrivacyFence uses for audiences
-  ([upstream-mcp.md](upstream-mcp.md)). A pending addition is never sent. A removal applies at the
-  person's next sign-in. A person with no approved membership gets `groups: []`.
-- **Allowlist.** `…_GROUPS_ALLOWED` limits what an app sees, by exact name or by prefix (`kh-*`). Names
-  are lower-cased. Set it: empty sends every group an upstream maps, and the daemon warns at start.
-- **Whatever the scope.** `groups` is sent whether or not the app requested a `groups` scope, because
-  an app that omits it would otherwise send nothing and could remove everyone from their teams. The
-  per-app opt-in is the gate. The discovery document lists the `groups` scope and claim for every app.
-- **Only mapped groups.** A group reaches an app only if some upstream maps it in the `upstream_mcp` key
-  of `admin_config.json`. To make additions to a group wait for an administrator, map it to a
-  restricted audience named `forgejo-<team>` and used for nothing else; approving that audience on
-  Admin → Group membership also grants the team, and the same audience name in a hub claim would unlock
-  hub data too. Map a group to `[]` only for a team that a stolen sync token may grant: an addition to a
-  group with no restricted audience applies at once (up to `membership.max_additions` per 24 hours).
-  Mapping a group to `all` also grants the hub's unrestricted audience, which is rarely wanted. Moving a
-  group from a restricted audience to `[]` makes every stored member count at once. With a `static`
-  membership file there are no approvals, so every listed member's group is sent.
-- **A groups app needs an upstream.** A client with `…_GROUPS=true` while no upstream MCP is declared
-  refuses the start, because the groups would always be empty and the app would remove everyone from
-  their teams.
-- **A failing lookup fails the sign-in.** If the membership lookup breaks, the token request answers
-  `503 temporarily_unavailable` and the app retries; PrivacyFence never sends `[]` in its place.
-- **Sign-in only.** The app reads `groups` when the person signs in, so a removal takes effect at their
-  next sign-in, and the app's session lifetime bounds the delay. Set a short session lifetime in the
-  app.
-
-The decision is [ADR 0311](adr/0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md).
 
 ## The signing key
 
@@ -172,6 +135,8 @@ or fragment: <uri>`** — fix the address; only `localhost`, `127.0.0.1` and `::
 not logged, in case it quotes the secret.
 
 **`…SECRET must be at least 32 characters`** — use a longer secret.
+
+**`PRIVACYFENCE_OIDC_CLIENT_<NAME>_GROUPS and …_GROUPS_ALLOWED were removed: …`** — the app still sets a groups variable. Turn off the app's group-to-team mapping, then remove both variables ([ADR 0320](adr/0320-the-oidc-provider-sends-no-group-membership.md)).
 
 **`…REQUIRE_PKCE must be true or false`** — write exactly `true` or `false`, in lower case, or leave it unset.
 
