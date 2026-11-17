@@ -250,3 +250,10 @@ class TestConfirmationText:
         text = describe.confirmation_text(proposal, widenings)
         assert "Covers 14 tools:" in text
         assert "delete" in text
+
+
+def test_a_tag_rule_sentence_names_the_tag_value():
+    rule = PolicyRule(id="r", predicate="drive.tag", value=["client-a"],
+                      operations=frozenset({"drive.read_content"}))
+    sentence = describe.rule_sentence(rule)
+    assert "tag" in sentence and "client-a" in sentence
