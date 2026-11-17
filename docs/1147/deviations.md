@@ -51,7 +51,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - final: p3-exempt-operations: propose.proposals_for (policy/propose.py:600) never checks RULE_EXEMPT_OPERATIONS, so both tag tools offer an Always-allow button the engine never applies and the generated always-allow reference lists them; fix: return [] for an exempt operation, regenerate the reference, add a test.
 - final: Second final review (after fix-1): approve. Non-blocking, not fixed: the gmail.query comment in policy/scopes.py sits above the drive.tag entry (p2); the folder-tree approval digest covers counts and the first 50 names only, so a same-count swap of files beyond those 50 would reuse an earlier approval after a retry (p5); the CHANGELOG entry links none of ADRs 0320 to 0322 (p7).
+- scope: scope: docs/always-allow-rules-reference.md (fix-1: regenerated after proposals_for skips exempt operations)
+- scope: scope: scripts/generate_always_allow_reference.py (fix-1: exempt-operation guard in _scope_candidates)
 
 ## Finishing
 
-- pending
+- review: Scope disposition: every recorded out-of-scope path was accepted (docs and website regenerated or count-bumped by p4, p5 and fix-1; scripts/generate_always_allow_reference.py; tests/unit/policy/test_scope_rows.py). DoD gate: coverage run 20332 passed and the coverage floor held; ruff, bandit, mypy and the strict-modules check pass. qa-record-fixture.yml was dispatched for drive on main with branch=; both jobs succeeded and no fixture commit was added to the branch. The live lifecycle tag round t
