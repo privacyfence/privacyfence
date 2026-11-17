@@ -23,6 +23,7 @@ import mimetypes
 import os
 import re as _re
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -34,10 +35,21 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 from .google_http import authorized_http
+from .drive_tags import MAX_TAGS_PER_CALL, TAG_VALUE, tag_property_key, tags_from_properties
 from .secure_files import atomic_write_text
 from .text_extraction import EXTRACTABLE_MIME_TYPES
 
 logger = logging.getLogger(__name__)
+
+# Indirection so tests can replace the retry back-off sleep.
+_sleep = time.sleep
+
+_FOLDER_MIME = "application/vnd.google-apps.folder"
+_SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+_FOLDER_ID_RE = _re.compile(r"[A-Za-z0-9_-]{10,100}")
+_WALK_FOLDERS_PER_QUERY = 40
+_RATE_LIMIT_MARKERS = ("rateLimitExceeded", "userRateLimitExceeded", "429")
+_SET_TAGS_RETRY_DELAYS = (1, 2, 4)
 
 # Full Drive scope: read + write + create + move + comment.
 SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -67,7 +79,7 @@ _GOOGLE_DOC_MIME_TYPE = "application/vnd.google-apps.document"
 # fetching it is much cheaper than downloading the full file just to preview it.
 _FILE_FIELDS = (
     "id, name, mimeType, size, createdTime, modifiedTime, "
-    "owners(emailAddress), shared, webViewLink, parents, driveId, thumbnailLink"
+    "owners(emailAddress), shared, webViewLink, parents, driveId, thumbnailLink, properties"
 )
 
 # Fields requested for a file's saved versions (revisions.list).
@@ -1136,6 +1148,15 @@ class DriveClientError(Exception):
 
 
 @dataclass
+class FolderWalk:
+    """Result of ``DriveClient.walk_folder_files``."""
+
+    files: list[DriveFile] = field(default_factory=list)
+    folders_seen: int = 0
+    truncated: bool = False
+
+
+@dataclass
 class DriveFile:
     """A normalized Drive file (metadata only)."""
 
@@ -1151,6 +1172,7 @@ class DriveFile:
     parent_ids: list[str] = field(default_factory=list)
     drive_id: str = ""  # non-empty when the file lives in a Shared Drive
     thumbnail_link: str = ""  # signed URL to a Drive-generated preview image, if any
+    tags: list[str] = field(default_factory=list)  # PrivacyFence tags (see drive_tags)
 
     def short_summary(self) -> str:
         """Human-readable one-liner for the review UI / logs."""
@@ -2282,6 +2304,114 @@ class DriveClient:
         logger.info("move_file: file_id=%s dest=%s", file_id, destination_folder_id)
         return {"file_id": file_id, "new_parent": destination_folder_id}
 
+    def set_tags(self, file_id: str, add: list[str], remove: list[str]) -> dict:
+        """Add and/or remove PrivacyFence tags on one file.
+
+        Retries (1, 2, 4 seconds) on a rate-limit error. Returns the file's tags
+        afterwards.
+        """
+        if not file_id:
+            raise DriveClientError("set_tags requires a non-empty file_id")
+        if not add and not remove:
+            raise DriveClientError("set_tags requires at least one tag to add or remove")
+        overlap = sorted(set(add) & set(remove))
+        if overlap:
+            raise DriveClientError(f"set_tags cannot add and remove the same tag: {', '.join(overlap)}")
+        if len(set(add) | set(remove)) > MAX_TAGS_PER_CALL:
+            raise DriveClientError(f"set_tags accepts at most {MAX_TAGS_PER_CALL} tags per call")
+        properties: dict[str, str | None] = {tag_property_key(n): TAG_VALUE for n in add}
+        properties.update({tag_property_key(n): None for n in remove})
+        service = self._get_service()
+        attempt = 0
+        while True:
+            try:
+                result = service.files().update(
+                    fileId=file_id,
+                    body={"properties": properties},
+                    fields="id,properties",
+                    supportsAllDrives=True,
+                ).execute()
+                break
+            except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+                content = getattr(exc, "content", b"")
+                text = str(exc) + (
+                    content.decode("utf-8", "replace") if isinstance(content, bytes) else str(content)
+                )
+                if attempt < len(_SET_TAGS_RETRY_DELAYS) and any(m in text for m in _RATE_LIMIT_MARKERS):
+                    _sleep(_SET_TAGS_RETRY_DELAYS[attempt])
+                    attempt += 1
+                    continue
+                if "insufficientFilePermissions" in text:
+                    raise DriveClientError("You need edit access to this file to change its tags.") from exc
+                raise DriveClientError(f"set_tags({file_id}) failed: {exc}") from exc
+        tags = tags_from_properties(result.get("properties"))
+        logger.info("set_tags: file_id=%s add=%d remove=%d", file_id, len(add), len(remove))
+        return {"file_id": file_id, "tags": tags}
+
+    def walk_folder_files(self, folder_id: str, max_depth: int = 10, max_items: int = 200) -> FolderWalk:
+        """List the files under a folder, breadth-first, up to ``max_depth`` levels.
+
+        Folders feed the next level, shortcuts are skipped, everything else is a
+        file. ``truncated`` is set when more than ``max_items`` files exist or
+        folders remain below ``max_depth``.
+        """
+        if not _FOLDER_ID_RE.fullmatch(folder_id or ""):
+            raise DriveClientError("walk_folder_files requires a valid folder_id")
+        service = self._get_service()
+        walk = FolderWalk()
+        level = [folder_id]
+        for _ in range(max_depth):
+            if not level:
+                break
+            next_level: list[str] = []
+            for start in range(0, len(level), _WALK_FOLDERS_PER_QUERY):
+                batch = level[start:start + _WALK_FOLDERS_PER_QUERY]
+                query = "(" + " or ".join(f"'{i}' in parents" for i in batch) + ") and trashed = false"
+                page_token: str | None = None
+                for _page in range(MAX_PAGES):
+                    kwargs: dict = {
+                        "q": query,
+                        "pageSize": 1000,
+                        "fields": "nextPageToken,files(id,name,mimeType,parents,properties)",
+                        "supportsAllDrives": True,
+                        "includeItemsFromAllDrives": True,
+                    }
+                    if page_token:
+                        kwargs["pageToken"] = page_token
+                    try:
+                        response = service.files().list(**kwargs).execute()
+                    except Exception as exc:  # noqa: BLE001 -- see DriveClientError's docstring
+                        raise DriveClientError(f"walk_folder_files failed: {exc}") from exc
+                    for raw in response.get("files", []):
+                        mime = raw.get("mimeType", "")
+                        if mime == _SHORTCUT_MIME:
+                            continue
+                        if mime == _FOLDER_MIME:
+                            child_id = raw.get("id", "")
+                            if _FOLDER_ID_RE.fullmatch(child_id):
+                                next_level.append(child_id)
+                            else:
+                                logger.warning("walk_folder_files: skipping folder with unexpected id")
+                            continue
+                        if len(walk.files) >= max_items:
+                            walk.truncated = True
+                            return walk
+                        walk.files.append(self._parse_file(raw))
+                    page_token = response.get("nextPageToken")
+                    if not page_token:
+                        break
+                else:
+                    walk.truncated = True
+            walk.folders_seen += len(level)
+            level = next_level
+        if level:
+            walk.truncated = True
+        logger.info(
+            "walk_folder_files %s: files=%d folders=%d truncated=%s",
+            folder_id, len(walk.files), walk.folders_seen, walk.truncated,
+        )
+        return walk
+
     def copy_file(self, file_id: str, destination_folder_id: str, name: str = "") -> dict:
         """Copy a file into a folder; the original is left where it is."""
         if not file_id or not destination_folder_id:
@@ -2885,4 +3015,5 @@ class DriveClient:
             parent_ids=list(raw.get("parents", []) or []),
             drive_id=raw.get("driveId", ""),
             thumbnail_link=raw.get("thumbnailLink", ""),
+            tags=tags_from_properties(raw.get("properties")),
         )
