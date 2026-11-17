@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
 from ..auto_accept import ReviewContext, temp_accept_key
-from . import conditions, scopes
+from . import conditions, registry, scopes
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,8 @@ def find_matching_rule(
     which is exactly why a caller resolving a decision to "one rule row" should get ``None`` here
     for it, not a pseudo-rule.
     """
+    if operation_key in registry.RULE_EXEMPT_OPERATIONS:
+        return None
     for rule in rules:
         if operation_key not in rule.operations:
             continue
@@ -132,6 +134,8 @@ def preflight(
     set. Returns ``(verdict, matched_rule_id, reason)`` with ``verdict`` one of
     ``"auto_accept"``, ``"requires_review"``, ``"unknown"``.
     """
+    if operation_key in registry.RULE_EXEMPT_OPERATIONS:
+        return "requires_review", "", "No auto-accept rule can cover this operation."
     ctx = ReviewContext(connector="", tool="", args=args or {}, raw_data=None, my_email=my_email)
 
     file_key = temp_accept_key(operation_key, ctx)
