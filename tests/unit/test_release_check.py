@@ -8,6 +8,7 @@ only the invalid-version test runs the real scripts.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,16 @@ class FakeRun:
     @property
     def scripts(self) -> list[str]:
         return [Path(call[1]).name for call in self.calls]
+
+
+@pytest.fixture(autouse=True)
+def release_root(tmp_path_factory, monkeypatch):
+    # Not under `tmp_path`: test_no_summary_is_written_when_the_variable_is_unset asserts it stays empty.
+    root = tmp_path_factory.mktemp("release-root") / "repo"
+    (root / ".tld").mkdir(parents=True)
+    (root / ".tld" / "release-version").write_text("7.1.0\n", encoding="utf-8")
+    monkeypatch.setattr(release_check, "ROOT", root)
+    return root
 
 
 @pytest.fixture
@@ -116,3 +127,30 @@ def test_never_passes_allow_unreleased(fake):
 def test_an_invalid_version_fails_at_the_channel_step(capsys):
     assert release_check.main(["nope"]) == 1
     assert "release check failed: release channel (exit 1)" in capsys.readouterr().err
+
+
+def test_a_stable_version_must_match_the_version_file(fake, release_root, capsys):
+    (release_root / ".tld" / "release-version").write_text("7.0.2\n", encoding="utf-8")
+    assert release_check.main(["7.1.0"]) == 1
+    assert "release check failed: release version file" in capsys.readouterr().err
+    assert fake.scripts == ["r2_release.py"]
+
+
+def test_a_missing_version_file_fails_a_stable_release(fake, release_root, capsys):
+    (release_root / ".tld" / "release-version").unlink()
+    assert release_check.main(["7.1.0"]) == 1
+    assert "release check failed: release version file" in capsys.readouterr().err
+    assert fake.scripts == ["r2_release.py"]
+
+
+def test_a_prerelease_ignores_the_version_file(release_root, monkeypatch):
+    (release_root / ".tld" / "release-version").write_text("7.0.2\n", encoding="utf-8")
+    runner = FakeRun(channel="beta")
+    monkeypatch.setattr(release_check.subprocess, "run", runner)
+    assert release_check.main(["7.1.0a1"]) == 0
+    assert runner.scripts == ["r2_release.py", "tag_release.py"]
+
+
+def test_the_repository_version_file_is_a_stable_version():
+    text = (_SCRIPT_PATH.parents[1] / ".tld" / "release-version").read_text(encoding="utf-8")
+    assert re.fullmatch(r"\d+\.\d+\.\d+\n", text)
