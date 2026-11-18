@@ -16,7 +16,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-runtime
 
-- pending
+- worker: Also updated one expected status() row in tests/unit/web/test_mcp_dispatch.py for the new audiences_source key.
+- scope: tests/unit/web/test_mcp_dispatch.py: one expected row gains audiences_source; accepted.
+- retry: Sent back once: two exact status() assertions in test_mcp_dispatch.py failed in the full unit suite; fixed on the phase branch.
 
 ## p4-admin-page-and-integration
 
