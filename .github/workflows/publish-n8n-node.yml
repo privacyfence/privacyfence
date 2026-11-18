@@ -1,6 +1,6 @@
 name: Publish n8n node to npm
 
-# Publishes n8n/ (n8n-nodes-privacyfence) to npm with provenance on every stable tag, on the same
+# Publishes n8n/ (@privacyfence/n8n-nodes-privacyfence) to npm with provenance on every stable tag, on the same
 # `v*` tag push as the other release workflows. Pre-release tags publish nothing.
 # The first publish needs the environment secret NPM_TOKEN in the `npm` environment, because a
 # package must exist on npm before a trusted publisher can be added to it. After that, add the
@@ -224,9 +224,10 @@ jobs:
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
-          if [ "$(npm view n8n-nodes-privacyfence@"$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+          NAME="$(node -p "require('./package.json').name")"
+          if [ "$(npm view "${NAME}@${VERSION}" version 2>/dev/null)" = "$VERSION" ]; then
             echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::n8n-nodes-privacyfence@${VERSION} is already on npm; skipping the publish."
+            echo "::notice::${NAME}@${VERSION} is already on npm; skipping the publish."
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
           fi

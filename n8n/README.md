@@ -1,4 +1,4 @@
-# n8n-nodes-privacyfence
+# @privacyfence/n8n-nodes-privacyfence
 
 An [n8n](https://n8n.io) community node for [PrivacyFence](https://github.com/privacyfence/privacyfence).
 The **PrivacyFence** node calls a tool your PrivacyFence server lets a workflow use. The address comes
@@ -8,8 +8,8 @@ becomes an error item when **Continue On Fail** is on. The node can also be used
 
 ## Install
 
-In n8n, open **Settings → Community nodes → Install** and enter `n8n-nodes-privacyfence`. On a
-self-hosted n8n you can instead run `npm install n8n-nodes-privacyfence` in `~/.n8n/nodes` and restart.
+In n8n, open **Settings → Community nodes → Install** and enter `@privacyfence/n8n-nodes-privacyfence`. On a
+self-hosted n8n you can instead run `npm install @privacyfence/n8n-nodes-privacyfence` in `~/.n8n/nodes` and restart.
 
 ## Credential
 

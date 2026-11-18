@@ -4,6 +4,7 @@
 
 Accepted — 2026-11-14. Implemented.
 Relates to [ADR 0278](0278-a-scoped-token-can-be-delivered-into-an-agent-runtime-n8n-first.md).
+Amended by [ADR 0328](0328-the-n8n-node-is-published-under-the-privacyfence-npm-scope.md) (the package name).
 
 ## Context
 

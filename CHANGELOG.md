@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The n8n node's npm package is now `@privacyfence/n8n-nodes-privacyfence`.** Install it in n8n under that name; the node's type is `@privacyfence/n8n-nodes-privacyfence.privacyFence`. It was never published under the old name `n8n-nodes-privacyfence` ([ADR 0328](docs/adr/0328-the-n8n-node-is-published-under-the-privacyfence-npm-scope.md)).
+
 ## [8.0.0] - 2026-11-18
 
 ### Added

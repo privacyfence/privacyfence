@@ -4,7 +4,7 @@ The **PrivacyFence** node lets an n8n workflow call a tool your PrivacyFence ser
 address comes from the credential, the tool picker lists only what the token may call, the `reason` is a
 field of its own, and the result is the tool's JSON. The same node can be handed to an AI Agent as a tool.
 
-It is the community node `n8n-nodes-privacyfence`, published on npm. It talks to PrivacyFence's `/mcp`
+It is the community node `@privacyfence/n8n-nodes-privacyfence`, published on npm. It talks to PrivacyFence's `/mcp`
 address with a [scoped token](approvals-and-policy.md), so every call goes through the same gate as any other
 client's.
 
@@ -18,8 +18,8 @@ client's.
 
 ## Install
 
-In n8n open **Settings → Community nodes → Install** and enter `n8n-nodes-privacyfence`. On a self-hosted n8n
-you can instead run `npm install n8n-nodes-privacyfence` in `~/.n8n/nodes` and restart n8n. The editor's
+In n8n open **Settings → Community nodes → Install** and enter `@privacyfence/n8n-nodes-privacyfence`. On a self-hosted n8n
+you can instead run `npm install @privacyfence/n8n-nodes-privacyfence` in `~/.n8n/nodes` and restart n8n. The editor's
 node picker then lists **PrivacyFence**.
 
 ## The credential
@@ -118,4 +118,4 @@ token.
 | `The PrivacyFence credential needs an address and a token.` | A field of the credential is empty. |
 | `The arguments must be a JSON object.` | **Arguments** is not a JSON object such as `{}`. |
 | `The PrivacyFence node failed unexpectedly.` | An error the node does not describe, on purpose, so that nothing sensitive reaches the item. Run the node again and check the PrivacyFence audit log. |
-| `n8n does not know the PrivacyFence credential type. Ask the n8n administrator to install the community node n8n-nodes-privacyfence, then try again.` (`NODE_NOT_INSTALLED`) | Shown by PrivacyFence to the person or AI client when delivery is set to the PrivacyFence node and n8n has no such credential type. Install the community node in that n8n, restart it if it asks, and try again. No token was created. |
+| `n8n does not know the PrivacyFence credential type. Ask the n8n administrator to install the community node @privacyfence/n8n-nodes-privacyfence, then try again.` (`NODE_NOT_INSTALLED`) | Shown by PrivacyFence to the person or AI client when delivery is set to the PrivacyFence node and n8n has no such credential type. Install the community node in that n8n, restart it if it asks, and try again. No token was created. |

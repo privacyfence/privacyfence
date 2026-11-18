@@ -353,7 +353,7 @@ class TestDeliverNodeCheck:
         )
         assert rc.NODE_NOT_INSTALLED == (
             "n8n does not know the PrivacyFence credential type. "
-            "Ask the n8n administrator to install the community node n8n-nodes-privacyfence, then try again."
+            "Ask the n8n administrator to install the community node @privacyfence/n8n-nodes-privacyfence, then try again."
         )
         assert tokens.tokens_for(ALICE) == [] and rc.get_store().all() == [] and api.created == []
         (entry,) = _entries(tmp_path)
@@ -567,7 +567,7 @@ class TestStatusFor:
         assert answer == {
             "state": "delivered", "runtime": "n8n", "credential_id": outcome.record.credential_id,
             "credential_name": "PrivacyFence Sales sync", "credential_type": "privacyFenceApi",
-            "node": "n8n-nodes-privacyfence.privacyFence", "mcp_url": "https://pf/mcp",
+            "node": "@privacyfence/n8n-nodes-privacyfence.privacyFence", "mcp_url": "https://pf/mcp",
             "token_expires_at": datetime.fromtimestamp(outcome.token.expires_at, timezone.utc).isoformat(),
         }
 

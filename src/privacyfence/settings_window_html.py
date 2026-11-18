@@ -549,7 +549,7 @@ _JS = r"""
   // no data-action, so this control can only ever ask for more.
   var CREDENTIAL_TYPE_OPTIONS = [
     ['httpBearerAuth', 'MCP Client node (n8n\u2019s built-in bearer credential)'],
-    ['privacyFenceApi', 'PrivacyFence node (community node n8n-nodes-privacyfence)'],
+    ['privacyFenceApi', 'PrivacyFence node (community node @privacyfence/n8n-nodes-privacyfence)'],
   ];
   var STEP_UP_SCOPE_LABELS = [
     ['writes', 'Writes only'],
@@ -2521,7 +2521,7 @@ _JS = r"""
       textFieldRow('PrivacyFence MCP address for n8n', lockedDesc('Leave empty to use this server\u2019s address.', lockMcp),
         'mcp_url', lockMcp ? lockMcp.value : (r.mcp_url || ''), undefined, undefined, !!lockMcp),
       selectFieldRow('Credential type in n8n', 'credential_type', CREDENTIAL_TYPE_OPTIONS, r.credential_type || 'httpBearerAuth',
-        'Credential type in n8n', 'The PrivacyFence node needs the community node n8n-nodes-privacyfence installed in n8n and a ' +
+        'Credential type in n8n', 'The PrivacyFence node needs the community node @privacyfence/n8n-nodes-privacyfence installed in n8n and a ' +
         'PrivacyFence MCP address above. The setting is server-wide: with it, an AI Agent in n8n uses one PrivacyFence node per call ' +
         'instead of the MCP Client Tool.'),
       rowHtml('n8n address', esc(urlText), ''),

@@ -102,11 +102,11 @@ class TestCredentialType:
         assert ar.delivery_message("httpBearerAuth") == ar.DELIVERY_MESSAGE
         text = ar.delivery_message("privacyFenceApi")
         assert text == ar.DELIVERY_MESSAGE_PRIVACYFENCE_NODE
-        assert "n8n-nodes-privacyfence" in text and "privacyFenceApi" in text
+        assert "community node @privacyfence/n8n-nodes-privacyfence," in text and "privacyFenceApi" in text
 
     def test_constants(self):
-        assert ar.N8N_NODE_PACKAGE == "n8n-nodes-privacyfence"
-        assert ar.N8N_NODE_TYPE == "n8n-nodes-privacyfence.privacyFence"
+        assert ar.N8N_NODE_PACKAGE == "@privacyfence/n8n-nodes-privacyfence"
+        assert ar.N8N_NODE_TYPE == "@privacyfence/n8n-nodes-privacyfence.privacyFence"
 
 
 class TestNormalizeUrl:
