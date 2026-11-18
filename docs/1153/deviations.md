@@ -31,8 +31,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- None.
 
 ## Finishing
 
-- pending
+- scope: Scope drift disposition: tests/unit/test_upstream_mcp_client.py (p2) and tests/unit/web/test_mcp_dispatch.py (p3) stay in the final diff, accepted.
