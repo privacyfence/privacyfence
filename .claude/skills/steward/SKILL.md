@@ -25,7 +25,7 @@ be an exception. Hence `qa-record-fixture.yml` and `connector-live-check.yml` in
   no real account identifier, tenant URL, token or private content may enter the repository.
 - **`.github/workflows/qa-record-fixture.yml`'s own header** documents the "workflow must already be on
   `main`" limit.
-- To cut a release tag, see `/cut-release`; cutting for real is the maintainer's decision.
+- To cut a release, see "Cutting a release" below; cutting for real is the maintainer's decision.
 
 ## Two things that look local-only but may not be, in this container
 
@@ -65,4 +65,16 @@ maintainer asks. A dependency bump is a supply-chain decision, and a fixture dif
   `claude/<generated-name>` branch it cannot rename; use it and put the `<type>` in the PR title.
 - **Pushing a release tag directly is not possible here** — the container can push branches but not
   `refs/tags/*`. A failed push can leave a local tag behind that makes `tag_release.py`'s later checks
-  lie. Use `/cut-release`, which dispatches `tld-release.yml` (dry run first).
+  lie. Cut releases as "Cutting a release" below says.
+
+## Cutting a release
+
+Stable releases (`X.Y.Z`) go through `/tld:release`; pre-releases (`X.Y.ZaN`, `bN`, `rcN`) do not, because `tld ops release-prepare` only knows `X.Y.Z`.
+
+**Stable.**
+1. Run `/tld:release`. It opens `chore/release-X-Y-Z` (the `## [X.Y.Z]` heading in `CHANGELOG.md` and `.tld/release-version`). `release-prepare` does not touch the link definitions at the bottom of `CHANGELOG.md`: in a second commit on that branch point `[Unreleased]` at `compare/vX.Y.Z...HEAD` and add `[X.Y.Z]: .../compare/v<previous stable>...vX.Y.Z`. Never edit the version files by hand.
+2. The maintainer merges it. Before the playbook's `start` question, run the pre-flight: fetch `origin/main`, dispatch `build.yml` (no inputs) on that exact commit, wait for `build-org-image (amd64)`, `build-org-image (arm64)` and `sbom` to finish, and report the run URL. Any red or missing job stops the release (fix it as an ordinary CI failure on `main`, then run the pre-flight again). `curl -fsSI https://oauth.privacyfence.eu/health` must return 200; a failure does not block the release, but say so. Never skip the pre-flight; `tld-release.yml`'s own dry run installs and builds nothing.
+3. Dispatch `tld-release.yml` on `main` with `version: X.Y.Z` and `dry_run`. Always pass `version`: with it empty the workflow raises the newest stable tag by a patch, which is the wrong version for a minor or major release. Never pass `skip_checks`. The owner approves the `tld-release` environment for every run. `release_check.py` fails the run when `.tld/release-version` differs from `version`; if a run was dispatched without `version` and failed that way, the playbook says never re-run, so tell the maintainer to dispatch again by hand with `version` set. `release-prepare` writes the changelog heading as `## [X.Y.Z] - <date>` with a hyphen; that is expected.
+4. After a real run, list the `build.yml` and `publish-pypi.yml` runs: a `push` run on the tagged commit must appear for each within 5 minutes. If none does, tell the maintainer at once (the tag exists and the release did not start) and never dispatch again for the same version. Report the tag and both run URLs.
+
+**Pre-release.** Run the pre-flight of step 2, then dispatch `tld-release.yml` on `main` with `version: <the pre-release>` and `dry_run: "true"` and report the run URL. The maintainer starts the real run in GitHub (Actions, tld-release, Run workflow). `.tld/release-version` and `CHANGELOG.md` stay as they are.

@@ -3,6 +3,7 @@
 ## Status
 
 Accepted — 2026-09-24.
+Amended by [ADR 0327](0327-stable-releases-go-through-tld-release-and-a-release-only-version-file.md).
 
 ## Context
 

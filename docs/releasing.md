@@ -6,7 +6,7 @@ every release still needs, see [`release-testing.md`](release-testing.md).
 
 ## Versioning
 
-There is no version string in the source tree and no version-bump commit. `pyproject.toml` declares
+No version string is built from the source tree and no version-bump commit exists. `pyproject.toml` declares
 `dynamic = ["version"]`; the real version is derived from git tags by `setuptools_scm`
 (`[tool.setuptools_scm]` in `pyproject.toml`), and `src/privacyfence/__init__.py` reads it back at
 import time via `importlib.metadata.version("privacyfence")`. This replaced the old two-file
@@ -16,7 +16,11 @@ parallel branches both claiming the same next version, one bump commit landing
 after another release already took that number (see `d929510`, "Revert version bump — will release
 together with other pending CRs", from back when that was still how it worked).
 
+One file records a version: `.tld/release-version` holds the last stable version (`X.Y.Z`). `/tld:release` bumps it in the release pull request (through `tld ops release-prepare`), and `scripts/release_check.py` refuses a stable release whose version differs from it. Nothing builds from it: `setuptools_scm` stays the only version source. See [ADR 0327](adr/0327-stable-releases-go-through-tld-release-and-a-release-only-version-file.md).
+
 ## Cutting a release
+
+**Stable releases: `/tld:release`.** It opens the release pull request (`chore/release-X-Y-Z`: the `## [X.Y.Z]` heading in `CHANGELOG.md` and `.tld/release-version`); you merge it, and a session then runs the pre-flight below and dispatches `tld-release.yml` with `version` set. The steps a session follows are in `.claude/skills/steward/SKILL.md` ("Cutting a release"). **Pre-releases** (`aN`, `bN`, `rcN`) are cut by hand from the Actions tab as described next; `.tld/release-version` and the changelog stay as they are.
 
 **Cutting a release is a tag, not a commit.** Once `main` is at the commit you want to release,
 dispatch `tld-release.yml` on `main` (below) with `version` and `dry_run`. Versions are PEP 440 short
@@ -38,7 +42,7 @@ no gaps) — see its own docstring.
 the commit is green (every check run on `main`'s tip must be finished and green, so a red, queued or
 still-running run blocks — including a `build.yml` pre-flight that is still running, a scheduled run,
 and the self-hosted `deploy-qa-server` job when that runner is offline); run
-`scripts/release_check.py`, which runs `r2_release.py channel`, `changelog_section.py` (stable
+`scripts/release_check.py`, which runs `r2_release.py channel`, the `.tld/release-version` check (stable channel only), `changelog_section.py` (stable
 channel only, with the body that will ship written to the run summary) and
 `tag_release.py --no-fetch --check-only`; show GitHub's generated notes, which do not ship; and, on a
 real run, create the tag. `dry_run` **defaults to true**: the default dispatch runs every check and

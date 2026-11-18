@@ -5,9 +5,11 @@ Runs, in order, and stops at the first failure:
 
   1. `scripts/r2_release.py channel <version>` -- classifies the version as stable or pre-release
      (and rejects a malformed one).
-  2. `scripts/changelog_section.py <version>` -- stable releases only; the CHANGELOG section that
+  2. `.tld/release-version` -- stable releases only; it must hold the version (the release pull
+     request writes it).
+  3. `scripts/changelog_section.py <version>` -- stable releases only; the CHANGELOG section that
      will ship must exist and be released, never `--allow-unreleased`.
-  3. `scripts/tag_release.py <version> --no-fetch --check-only` -- on top of an unmoved `main`,
+  4. `scripts/tag_release.py <version> --no-fetch --check-only` -- on top of an unmoved `main`,
      no tag on HEAD, valid and sequential version. `--no-fetch` because the workflow has just
      fetched `origin/main` into a clone that holds no credentials (docs/releasing.md, ADR 0312).
 
@@ -16,7 +18,7 @@ no `pip install`, so this runs under whatever `python3` the runner has.
 
 Example:
     python3 scripts/release_check.py 4.2.0
-        -> channel: stable -> release notes -> tag checks -> release check passed for v4.2.0 (stable)
+        -> channel: stable -> release version file -> release notes -> tag checks -> release check passed for v4.2.0 (stable)
 """
 from __future__ import annotations
 
@@ -27,6 +29,23 @@ import sys
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+ROOT = SCRIPTS.parent
+VERSION_FILE = ".tld/release-version"
+
+
+def check_release_version(version: str, root: Path | None = None) -> str | None:
+    """Returns None when the version file holds exactly `version`, else a message."""
+    path = (root if root is not None else ROOT) / VERSION_FILE
+    try:
+        recorded = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return f"cannot read {VERSION_FILE}: {exc.strerror}"
+    if recorded == version:
+        return None
+    return (
+        f"{VERSION_FILE} says {recorded or 'nothing'}, not {version}: "
+        "the release pull request writes the version there"
+    )
 
 
 def run_step(name: str, argv: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -64,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"channel: {channel}")
 
     if channel == "stable":
+        print("==> release version file", flush=True)
+        problem = check_release_version(version)
+        if problem is not None:
+            print(f"release check failed: release version file: {problem}", file=sys.stderr)
+            return 1
+
         result = run_step("release notes", [str(SCRIPTS / "changelog_section.py"), version], capture=True)
         if result.returncode != 0:
             return _fail("release notes", result)
