@@ -27,7 +27,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-retire
 
-- pending
+- None.
 
 ## Final review
 
