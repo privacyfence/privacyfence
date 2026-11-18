@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
+import logging
 import os
 from types import SimpleNamespace
 
@@ -16,7 +17,9 @@ from privacyfence.agent_identity import AgentIdentity, AgentSource
 from privacyfence.identity_claim import CallerNotAllowedError, ClaimSigner
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.upstream_claim_keys import KeySet
-from privacyfence.upstream_mcp_client import UpstreamMcpClientError
+from privacyfence.audit_log import current_week, init_audit_logger
+from privacyfence.upstream_audiences import UpstreamAudienceSource
+from privacyfence.upstream_mcp_client import CallResult, UpstreamMcpClientError
 from privacyfence import group_membership
 from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 
@@ -81,6 +84,70 @@ def configured(tmp_path, upstreams):
         resolver=group_membership.StaticFileResolver(members),
     )
     return upstreams
+
+
+_SOURCE_FILE = {
+    **_FILE,
+    "upstreams": [{**_FILE["upstreams"][0], "audiences_tool": "list_audiences"}, _FILE["upstreams"][1]],
+}
+
+
+def _table(**audiences: list[str]) -> dict:
+    return {"version": 1, "audiences": audiences}
+
+
+class _AudiencesClient:
+    """Answers the audiences tool from a script of tables or errors, and records each call."""
+
+    def __init__(self, *answers) -> None:
+        self.answers = list(answers)
+        self.calls: list[tuple] = []
+
+    async def call_tool(self, tool, arguments, caller):
+        self.calls.append((tool, arguments, caller))
+        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        if isinstance(answer, Exception):
+            raise answer
+        if isinstance(answer, str):
+            return CallResult(text=answer, structured=None, dropped_blocks=0, jti="jti-1")
+        return CallResult(text=json.dumps(answer), structured=answer, dropped_blocks=0, jti="jti-1")
+
+
+@pytest.fixture
+def configured_with_source(tmp_path):
+    path = tmp_path / "admin_config.json"
+    path.write_text(json.dumps(_GROUPS), encoding="utf-8")
+    members = tmp_path / "members.json"
+    members.write_text(json.dumps(_MEMBERS), encoding="utf-8")
+    upstreams = parse_upstreams(_SOURCE_FILE, source="test")
+    upstream_mcp_runtime.configure(
+        upstreams=upstreams, signer=_signer(tmp_path), groups=GroupMapStore(path, frozenset({"kh", "wiki"})),
+        resolver=group_membership.StaticFileResolver(members),
+    )
+    return upstreams
+
+
+@pytest.fixture
+def audit_dir(tmp_path):
+    directory = tmp_path / "audit"
+    directory.mkdir()
+    init_audit_logger(str(directory))
+    return directory
+
+
+def _audit_rows(audit_dir):
+    path = audit_dir / f"{current_week()}.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _entry(upstream_id="kh"):
+    return upstream_mcp_runtime._runtime.entries[upstream_id]
+
+
+def _refresh(upstream_id="kh"):
+    return asyncio.run(upstream_mcp_runtime.refresh_audiences(upstream_id))
 
 
 def _caller(upstream, principal, scope=None):
@@ -339,8 +406,13 @@ class TestStatus:
     def test_waiting_until_the_tool_list_arrives(self, configured):
         assert upstream_mcp_runtime.status()[0] == {
             "id": "kh", "label": "Knowledge hub", "tools_exposed": 0, "state": "waiting_for_tool_list",
-            "missing_tools": [],
+            "missing_tools": [], "audiences_source": "groups",
         }
+
+    def test_an_upstream_source_shows_its_state(self, configured_with_source):
+        rows = upstream_mcp_runtime.status()
+        assert rows[0]["audiences_source"] == "upstream" and rows[0]["audiences_state"] == "waiting"
+        assert rows[1]["audiences_source"] == "groups" and "audiences_state" not in rows[1]
 
     def test_ready_names_the_declared_tools_the_upstream_lacks(self, configured):
         entry = upstream_mcp_runtime._runtime.entries["kh"]
@@ -348,7 +420,7 @@ class TestStatus:
         entry.listed = True
         assert upstream_mcp_runtime.status()[0] == {
             "id": "kh", "label": "Knowledge hub", "tools_exposed": 1, "state": "ready",
-            "missing_tools": ["kh_get_doc"],
+            "missing_tools": ["kh_get_doc"], "audiences_source": "groups",
         }
 
 
@@ -372,6 +444,30 @@ class TestAdminRows:
             {"name": "kh_search", "gate": "auto", "verb": "search", "effect": "", "state": "exposed"},
             {"name": "kh_get_doc", "gate": "auto", "verb": "read", "effect": "", "state": "missing"},
         ]
+
+    def test_a_groups_upstream_shows_the_map_and_no_source(self, configured):
+        row = upstream_mcp_runtime.admin_rows()[0]
+        assert (row["audiences_source"], row["audiences_tool"], row["audiences_refresh_seconds"]) == (
+            "groups", None, None,
+        )
+        assert row["audiences"] is None and row["groups_ignored"] == 0 and row["groups"]
+
+    def test_an_upstream_source_shows_its_summary_and_the_ignored_groups(self, configured_with_source, audit_dir):
+        _entry().client = _AudiencesClient(_table(mgmt=["ann@hr.example", "bad\u00e9@x.example"]))
+        _refresh()
+        row = upstream_mcp_runtime.admin_rows()[0]
+        assert (row["audiences_source"], row["audiences_tool"], row["audiences_refresh_seconds"]) == (
+            "upstream", "list_audiences", 300,
+        )
+        summary = dict(row["audiences"])
+        assert summary.pop("fetched_at") is not None
+        assert summary == {
+            "state": "ready", "audience_count": 1, "people_count": 1, "dropped": 1, "last_error": "",
+        }
+        assert row["groups"] == [] and row["groups_ignored"] == 3
+        assert "@" not in json.dumps(row["audiences"])
+        other = upstream_mcp_runtime.admin_rows()[1]
+        assert other["audiences_source"] == "groups" and other["groups_ignored"] == 0
 
     def test_groups_are_the_map_in_force_sorted(self, tmp_path, configured):
         expected = [
@@ -483,6 +579,205 @@ class TestLifespan:
         asyncio.run(upstream_mcp_runtime._fetch_tool_list(entry, lambda: None))
         assert entry.listed is True
         assert entry.catalog.missing() == ["kh_get_doc"]
+
+
+class TestAudiencesFromUpstream:
+    def test_a_person_holds_the_audiences_the_upstream_lists(self, configured_with_source, audit_dir):
+        _entry().client = _AudiencesClient(_table(mgmt=["Ann@HR.example"], finance=["bob@x.example"]))
+        assert _refresh() is True
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == {"mgmt"}
+        claim = _caller(configured_with_source[0], Principal(id="u1", email="ann@hr.example", email_verified=True))
+        assert claim.audiences == ("mgmt",)
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", False) == frozenset()
+        held = upstream_mcp_runtime.held_audiences(Principal(id="u1", email="bob@x.example"), True)
+        assert held == {"kh": frozenset({"finance"}), "wiki": frozenset()}
+
+    def test_nobody_holds_an_audience_before_the_first_answer(self, configured_with_source):
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == frozenset()
+
+    def test_a_stale_snapshot_gives_no_audience(self, configured_with_source, audit_dir):
+        now = [1000.0]
+        _entry().audiences = UpstreamAudienceSource(300, clock=lambda: now[0])
+        _entry().client = _AudiencesClient(_table(mgmt=["ann@hr.example"]))
+        assert _refresh() is True
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == {"mgmt"}
+        now[0] += 901
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == frozenset()
+        assert upstream_mcp_runtime.status()[0]["audiences_state"] == "stale"
+
+    def test_a_failed_refresh_keeps_the_last_snapshot(self, configured_with_source, audit_dir):
+        _entry().client = _AudiencesClient(_table(mgmt=["ann@hr.example"]), UpstreamMcpClientError("unreachable"))
+        assert _refresh() is True
+        assert _refresh() is False
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == {"mgmt"}
+        assert _entry().audiences.summary()["last_error"] == "unreachable"
+
+    def test_the_group_map_is_not_used_for_an_upstream_source(self, configured_with_source):
+        # _GROUPS would give ann general, hr and finance on kh; with a source she holds nothing yet.
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == frozenset()
+        assert _caller(configured_with_source[0], Principal(id="u1", email="ann@hr.example", email_verified=True)).audiences == ()
+
+    def test_all_group_audiences_skips_an_upstream_source(self, configured_with_source):
+        assert upstream_mcp_runtime.all_group_audiences() == {}
+
+    def test_an_upstream_table_never_reaches_another_upstream(self, configured_with_source, audit_dir):
+        wiki_before = upstream_mcp_runtime.held_audiences(Principal(id="u1", email="ann@hr.example"), True)["wiki"]
+        _entry().client = _AudiencesClient(_table(mgmt=["ann@hr.example"], wiki=["ann@hr.example"]))
+        _refresh()
+        principal = Principal(id="u1", email="ann@hr.example", email_verified=True)
+        assert _caller(configured_with_source[1], principal).audiences == ()
+        held = upstream_mcp_runtime.held_audiences(principal, True)
+        assert held["wiki"] == wiki_before == frozenset()
+        assert held["kh"] == {"mgmt", "wiki"}
+
+    def test_a_scoped_token_holds_the_intersection_with_the_upstream_source(self, configured_with_source, audit_dir):
+        _entry().client = _AudiencesClient(_table(mgmt=["ann@hr.example"], finance=["ann@hr.example"]))
+        _refresh()
+        scope = _scope(principal_email_verified=True, upstream_audiences={"kh": frozenset({"mgmt", "legal"})})
+        claim = _caller(configured_with_source[0], Principal(id="u1", email="ann@hr.example", email_verified=True), scope)
+        assert claim.audiences == ("mgmt",)
+
+    def test_the_service_claim_names_only_the_audiences_tool(self, configured_with_source, audit_dir):
+        client = _AudiencesClient(_table())
+        _entry().client = client
+        _refresh()
+        (tool, arguments, caller), = client.calls
+        assert (tool, arguments) == ("list_audiences", {})
+        assert (caller.sub, caller.principal_type, caller.tools) == ("privacyfence", "service", ("list_audiences",))
+
+    @pytest.mark.parametrize("answer", [
+        "not json", {"version": 2, "audiences": {}}, UpstreamMcpClientError("tool_error"),
+    ])
+    def test_a_failed_answer_is_recorded(self, configured_with_source, audit_dir, answer):
+        _entry().client = _AudiencesClient(answer)
+        assert _refresh() is False
+        expected = "tool_error" if isinstance(answer, Exception) else "invalid"
+        assert _entry().audiences.summary()["last_error"] == expected
+
+    def test_an_invalid_answer_is_recorded_as_invalid(self, configured_with_source, audit_dir, caplog):
+        _entry().client = _AudiencesClient({"version": 1})
+        with caplog.at_level(logging.WARNING):
+            assert _refresh() is False
+        assert _entry().audiences.summary()["last_error"] == "invalid"
+        assert "unusable result: the answer must hold exactly version and audiences" in caplog.text
+
+    def test_an_unexpected_error_is_recorded_as_invalid(self, configured_with_source, audit_dir):
+        _entry().client = _AudiencesClient(RuntimeError("boom"))
+        assert _refresh() is False
+        assert _entry().audiences.summary()["last_error"] == "invalid"
+
+    def test_an_older_attempt_that_finishes_last_changes_nothing(self, configured_with_source, audit_dir):
+        source = _entry().audiences
+        older = source.begin()
+
+        class _Racing(_AudiencesClient):
+            async def call_tool(self, tool, arguments, caller):
+                source.apply(upstream_mcp_runtime.upstream_audiences.parse_result(_table(mgmt=["a@x.example"]), ""), 99)
+                return await super().call_tool(tool, arguments, caller)
+
+        assert older == 1
+        _entry().client = _Racing(_table(finance=["b@x.example"]))
+        assert _refresh() is False  # seq 2 is below the applied 99
+        _entry().client = _Racing(UpstreamMcpClientError("unreachable"))
+        assert _refresh() is False
+        assert _entry().audiences_failing is False
+        assert _audit_rows(audit_dir) == []
+
+    def test_audit_entries_on_first_success_change_failure_and_recovery(self, configured_with_source, audit_dir):
+        client = _AudiencesClient(
+            _table(mgmt=["ann@hr.example"]),
+            _table(mgmt=["ann@hr.example"]),  # unchanged
+            _table(mgmt=["bob@x.example"]),   # a swap with equal counts
+            UpstreamMcpClientError("unreachable"),
+            UpstreamMcpClientError("unreachable"),  # still failing: no second entry
+            _table(mgmt=["bob@x.example"]),   # recovery with the same table
+        )
+        _entry().client = client
+        outcomes = [_refresh() for _ in range(6)]
+        assert outcomes == [True, True, True, False, False, True]
+        rows = _audit_rows(audit_dir)
+        assert [row["decision"] for row in rows] == [
+            "upstream_audiences_applied", "upstream_audiences_applied",
+            "upstream_audiences_failed", "upstream_audiences_applied",
+        ]
+        assert rows[0]["summary"] == "Audiences from kh applied: 1 audience(s), 1 people, 0 address(es) dropped"
+        assert rows[2]["summary"] == "Audiences from kh not refreshed: unreachable"
+        for row in rows:
+            assert "@" not in row["summary"]
+            assert (row["connector"], row["tool"], row["tool_name"], row["sender"]) == (
+                "kh", "list_audiences", "Read audiences", "privacyfence",
+            )
+        assert rows[0]["claim_jti"] == "jti-1"
+
+    def test_an_audit_failure_never_changes_the_outcome(self, configured_with_source, monkeypatch, caplog):
+        def broken():
+            raise OSError("disk full")
+
+        monkeypatch.setattr(upstream_mcp_runtime, "get_audit_logger", broken)
+        _entry().client = _AudiencesClient(_table(mgmt=["ann@hr.example"]))
+        with caplog.at_level(logging.WARNING):
+            assert _refresh() is True
+        assert "Audit log write failed" in caplog.text
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == {"mgmt"}
+
+    def test_the_ignored_group_map_is_logged_once(self, tmp_path, caplog):
+        path = tmp_path / "admin_config.json"
+        path.write_text(json.dumps(_GROUPS), encoding="utf-8")
+        upstreams = parse_upstreams(_SOURCE_FILE, source="test")
+        with caplog.at_level(logging.WARNING):
+            upstream_mcp_runtime.configure(
+                upstreams=upstreams, signer=_signer(tmp_path),
+                groups=GroupMapStore(path, frozenset({"kh", "wiki"})),
+                resolver=group_membership.StaticFileResolver(tmp_path / "none.json"),
+            )
+        messages = [r.getMessage() for r in caplog.records if "is ignored" in r.getMessage()]
+        assert messages == [
+            "admin_config.json: upstream_mcp.kh.groups is ignored: kh takes its audiences from its audiences tool",
+        ]
+
+
+class TestAudiencesLoop:
+    def test_the_audiences_loop_sleeps_the_interval_after_success_and_backs_off_after_failure(
+        self, configured_with_source, audit_dir, monkeypatch,
+    ):
+        delays: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            delays.append(delay)
+            if len(delays) == 4:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(upstream_mcp_runtime, "_audiences_sleep", fake_sleep)
+        entry = _entry()
+        entry.client = _AudiencesClient(
+            UpstreamMcpClientError("unreachable"), UpstreamMcpClientError("unreachable"), _table(mgmt=["a@x.example"]),
+        )
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(upstream_mcp_runtime._refresh_audiences_loop(entry))
+        assert delays == [5.0, 10.0, 300, 300]
+
+    def test_the_audiences_loop_does_not_wait_for_the_tool_list(self, configured_with_source, audit_dir, monkeypatch):
+        async def never(delay: float) -> None:
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(upstream_mcp_runtime, "_audiences_sleep", never)
+        monkeypatch.setattr(upstream_mcp_runtime, "_sleep", never)
+        entries = upstream_mcp_runtime._runtime.entries
+        entries["kh"].client = _AudiencesClient(_table(mgmt=["ann@hr.example"]))
+        entries["wiki"].client = _FlakyClient(10**6, [])
+
+        async def run() -> None:
+            async with upstream_mcp_runtime.lifespan(lambda: None):
+                for _ in range(50):
+                    await asyncio.sleep(0)
+                    if entries["kh"].audiences.state() == "ready":
+                        break
+                else:
+                    raise AssertionError("the audiences never arrived")
+
+        asyncio.run(run())
+        assert entries["kh"].listed is False
+        assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == {"mgmt"}
 
 
 class TestOrgModeLookups:

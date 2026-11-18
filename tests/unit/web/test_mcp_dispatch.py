@@ -1055,7 +1055,7 @@ class TestStatus:
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
         assert dispatcher.status("checking")["upstreams"] == [{
             "id": "kh", "label": "Knowledge hub", "tools_exposed": 0, "state": "waiting_for_tool_list",
-            "missing_tools": [],
+            "missing_tools": [], "audiences_source": "groups",
         }]
 
     def test_audits_status_checked_when_un_onboarded(self):
