@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-11-18
+
 ### Added
 
 - An upstream MCP server can now be the source of its own audiences: declare `audiences_tool` and PrivacyFence reads who holds each audience from that tool at startup and every five minutes (`audiences_refresh_seconds`), with no group map and no approvals for that upstream (#1153).
