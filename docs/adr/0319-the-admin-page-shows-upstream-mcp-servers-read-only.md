@@ -5,6 +5,7 @@
 Accepted — 2026-11-16. Implemented: `src/privacyfence/upstream_mcp_runtime.py` (`admin_rows`), `src/privacyfence/web/routes_admin.py`, `src/privacyfence/settings_window_html.py`.
 Amends [ADR 0258](0258-administration-is-a-separate-admin-page.md): the Admin page gains an Upstream MCP servers section.
 Relates to [ADR 0285](0285-upstream-mcp-servers-are-declared-connectors.md).
+Amended by [ADR 0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md), 2026-11-18.
 
 ## Context
 

@@ -70,7 +70,7 @@ mistake in the declaration refuses the start; the message names the path of the 
 
 | Rule | Detail |
 |---|---|
-| Keys | `version` must be `1`. Only `version`, `upstreams`, `claim` and `membership` at the top; only `id`, `label`, `url`, `audience`, `tools`, `identity_claim`, `claim_lifetime_seconds`, `allowed_principal_types` and `email_for_visibility` in an upstream (an old `grants` key is refused with `grants were replaced by groups`); only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
+| Keys | `version` must be `1`. Only `version`, `upstreams`, `claim` and `membership` at the top; only `id`, `label`, `url`, `audience`, `tools`, `identity_claim`, `claim_lifetime_seconds`, `allowed_principal_types`, `email_for_visibility`, `audiences_tool` and `audiences_refresh_seconds` in an upstream (an old `grants` key is refused with `grants were replaced by groups`); only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
 | Size | At most 8 upstreams and 50 tools per upstream; the file or inline text is at most 256 KiB. |
 | Repeated key | A key that appears twice in one mapping or object is refused (`the file repeats a key.` or `the text repeats a key.`), so a repeated tool name cannot silently keep the last gate. |
 | Format | A YAML file is checked by the same rules as JSON; a wrong top level still reads `must be a JSON object`. |
@@ -82,6 +82,8 @@ mistake in the declaration refuses the start; the message names the path of the 
 | `claim_lifetime_seconds` | 5-60, default 60: how long a claim is valid. |
 | `allowed_principal_types` | A non-empty list from `claude_client` (a person's AI client) and `n8n_workflow` (any scoped token); default both. A caller of another type is refused before anything is sent. |
 | `email_for_visibility` | `true` or `false`, default `false`. With `true` the claim carries the person's verified, lower-cased email, for use in the upstream's own visibility rules (see [the contract](identity-claim.md#email-as-a-visibility-input-opt-in)). Refused with `identity_claim: off` and for any value that is not a boolean; a YAML file reads `yes` and `on` as `true`. |
+| `audiences_tool` | The name of a tool of the upstream that tells PrivacyFence who holds each audience (see [Audiences from the upstream](#audiences-from-the-upstream)). 1-48 letters, digits, underscores or hyphens; not also a key of the same upstream's `tools` (`is also declared under tools; the audiences tool is called by PrivacyFence only`); refused with `identity_claim: off` (`needs identity_claim required`). |
+| `audiences_refresh_seconds` | A whole number from 30 to 3600, default 300: how often PrivacyFence asks again. Only together with `audiences_tool` (`is only allowed with audiences_tool`); anything else reads `must be a whole number from 30 to 3600`. |
 | tool name | 1-48 letters, digits, underscores or hyphens; `<id>_<tool>` is at most 64 characters and must not collide with an existing tool. |
 | `gate` | `auto` (runs at once), `review` (runs, then the person sees the result before it is returned) or `popup` (the person approves before the call is sent). |
 | `verb` | One of the policy verbs. A **read verb** (`read`, `download`, `search`) takes `auto` or `review` and no `effect`. **Every other verb** takes `popup` and must carry an `effect`: 1-200 characters, ending in a full stop, shown on the card. |
@@ -93,7 +95,8 @@ So an ungated write cannot be declared, as long as the verb says it is a write.
 > `update` or `delete`.
 
 PrivacyFence asks the upstream for its tool list once, at startup, and retries with a growing delay until
-it answers. It never fetches the list again: **restart PrivacyFence to pick up a change in the upstream's
+it answers. It never fetches the list again, even when the upstream has an audiences tool (that tool is
+called on an interval, the list is not): **restart PrivacyFence to pick up a change in the upstream's
 tools or descriptions.** A declared tool the upstream does not list, or lists with a schema PrivacyFence
 cannot pass on (not an object schema, a `reason` property of its own, over 32 KB, or any `$ref`, `$defs`
 or `definitions`), is skipped and logged. Each exposed tool gets one extra required `reason` parameter,
@@ -138,6 +141,42 @@ the audiences of the Workspace groups they belong to. The map from groups to aud
   The single-user person is verified. An unverified or empty address gets no audiences, so the upstream
   returns no data for that person.
 - **Edits apply without a restart:** PrivacyFence re-reads the file when its modification time changes. **Admin → Upstream MCP servers** shows the map in force but cannot change it; it is a file edit. Do it while no one is saving on the Admin page.
+- **An upstream that declares `audiences_tool` does not use this map at all.** Its audiences come from that
+  tool, see below; a map written for it is ignored and logged once at start.
+
+### Audiences from the upstream
+
+An upstream that already knows who may see what, such as a knowledge hub with its own teams, can be the
+source of its own audiences ([ADR 0325](adr/0325-an-upstream-can-be-the-source-of-its-own-audiences.md)).
+The operator adds `audiences_tool: <tool name>` (and, if wanted, `audiences_refresh_seconds`) to that
+upstream in the operator file and restarts. PrivacyFence then calls that tool itself, at startup and every
+`audiences_refresh_seconds` (default 300, so every five minutes), with a service claim
+([contract](identity-claim.md#the-audiences-tool-opt-in)), with arguments `{}`. The upstream answers with a
+JSON object, as structured content or as the text of the result:
+
+```json
+{"version": 1, "audiences": {"mgmt": ["ann@example.com", "bob@example.com"], "finance": ["bob@example.com"]}}
+```
+
+Exactly the keys `version` (the number 1) and `audiences`; at most 200 audiences (names as above) and 20000
+addresses in all; the answer is at most 1 MB. An address PrivacyFence cannot use (not a plain ASCII address)
+is dropped and counted, never a reason to reject the answer. A person's audiences on that upstream are the
+audiences whose lists hold their verified email.
+
+- **No approvals.** The upstream decides who holds each audience, `all` included, and there is no cap on
+  additions and no parking. The group map in `admin_config.json` and **Admin → Group membership** are not
+  used for that upstream. Other upstreams are untouched, and an upstream's answer never reaches another
+  upstream's audiences.
+- **Refresh and stale rule.** A failed refresh keeps the last answer and is retried with a growing delay
+  (never longer than the refresh interval). An answer older than three refresh intervals gives nobody any
+  audience until the next success, and before the first success nobody holds one. So a removal at the
+  upstream reaches PrivacyFence within one interval normally, and within three intervals plus the 60 second
+  call timeout while the upstream is down (3 hours 1 minute at 3600 seconds).
+- A scoped token still holds only the audiences its creator holds now, narrowed by the ones ticked at
+  creation. A token made before the switch keeps its ticked names, which are now read against the new
+  source.
+- The tool list is still fetched once; the upstream should list its audiences tool, but PrivacyFence never
+  exposes it to AI clients.
 
 ### Operator keys
 
@@ -171,6 +210,8 @@ the groups it names. The tool answers `{"status": "applied" | "rejected", "added
   administrator opens **Admin → Group membership** and approves or declines them for that group and audience
   (one person, or everyone pending for that group and audience). An approval is only for that group and
   audience, and is forgotten when the person leaves the group.
+- **An upstream with `audiences_tool` is skipped:** its audiences come from its own tool, so the tool
+  stores no member of a group mapped only for it and **Admin → Group membership** shows no pending row for it.
 - **Groups no upstream's map names are ignored** and never stored; mapping a group later makes it appear in
   the next snapshot.
 - **Limits.** At most 500 groups and 20000 member entries per snapshot. A snapshot is rejected, and nothing
@@ -228,21 +269,32 @@ Every call PrivacyFence forwards to an upstream writes one `upstream_forwarded` 
 `jti`, `sub`, principal type, audiences and `req` and how the call ended (including a refusal or a signing
 failure), so your upstream's log can be matched to PrivacyFence's. The claim and the arguments are never logged.
 
+An upstream with an audiences tool adds two decisions, never with an address: `upstream_audiences_applied`
+(the first success, a success whose table differs from the last applied one, and the first success after a
+failure; its summary has the counts of audiences, people and dropped addresses) and
+`upstream_audiences_failed` (a failure when the previous attempt did not fail; its summary names the kind:
+`unreachable`, `too_large`, `tool_error`, `claim_failed` or `invalid`). Neither is an approval. The refresh
+writes no `upstream_forwarded` entry; the claim's `jti` of each success is logged at info level.
+
 ### On the Admin page
 
-**Admin → Upstream MCP servers** shows each declared upstream: whether its tool list has arrived, its address (only its scheme and host, then `/…` when it has a path or query), its claim audience and identity-claim settings, who may call it, each declared tool with its gate, verb and effect and whether it is exposed, and the groups mapped to its audiences. It is read-only: change the declaration and restart, or edit `admin_config.json`. It never shows the declaration file's path, the inline text or the upstream's own tool descriptions ([ADR 0319](adr/0319-the-admin-page-shows-upstream-mcp-servers-read-only.md)).
+**Admin → Upstream MCP servers** shows each declared upstream: whether its tool list has arrived, its address (only its scheme and host, then `/…` when it has a path or query), its claim audience and identity-claim settings, who may call it, each declared tool with its gate, verb and effect and whether it is exposed, and the groups mapped to its audiences. For an upstream with an audiences tool the third card is titled `<label>: audiences` and shows the source (tool and interval), its state (waiting, ready or stale, with the counts of audiences and people), the last refresh time, the last error and how many mapped groups are ignored, never an address. It is read-only: change the declaration and restart, or edit `admin_config.json`. It never shows the declaration file's path, the inline text or the upstream's own tool descriptions ([ADR 0319](adr/0319-the-admin-page-shows-upstream-mcp-servers-read-only.md)).
 
 ### `privacyfence_status`
 
 On a server with upstreams, `privacyfence_status` carries an `upstreams` list:
 
 ```json
-{"id": "kh", "label": "Knowledge hub", "tools_exposed": 4, "state": "ready", "missing_tools": []}
+{"id": "kh", "label": "Knowledge hub", "tools_exposed": 4, "state": "ready", "missing_tools": [],
+ "audiences_source": "upstream", "audiences_state": "ready"}
 ```
 
 `state` is `waiting_for_tool_list` until the first successful `tools/list` (`tools_exposed` is 0 and AI
 clients see no tools from that upstream until then), then `ready`. `missing_tools` names declared tools
-the upstream did not list or whose schema was skipped.
+the upstream did not list or whose schema was skipped. `audiences_source` is `groups` (the group map) or
+`upstream` (the upstream's audiences tool); only with `upstream` there is an `audiences_state`: `waiting`
+(no answer yet, nobody holds an audience), `ready` or `stale` (no answer for over three refresh intervals,
+nobody holds an audience).
 
 ### Errors and size
 
@@ -266,8 +318,8 @@ checklist and the versioning, is [identity-claim.md](identity-claim.md). The sho
   raw request body so it can check `req`.
 - **Only `sub`, `audiences` and `principal_type` may change what a query returns.** Everything else is for
   your own audit.
-- A request that is not a tool call carries no audiences. A service claim (PrivacyFence's startup tool list)
-  has none either: return the tool list for it and no data.
+- A request that is not a tool call carries no audiences. A service claim gets no
+  data, except on a `tools/call` of the audiences tool the operator declared (see the contract).
 - Filter by `audiences` inside the query, not afterwards, so ranking and pagination stay correct and a guessed
   document id is still refused. PrivacyFence never filters your results. A row-level security sketch is in
   [identity-claim.md](identity-claim.md#row-level-security-sketch-postgresql).
@@ -278,7 +330,9 @@ checklist and the versioning, is [identity-claim.md](identity-claim.md). The sho
 `scripts/upstream_mcp_reference_server.py` is a small upstream for trying all of this and for tests. It is
 not for production. It verifies claims with `pf_claim_verify.py` and serves `search`, `get_doc`,
 `list_proposals` and `propose_change` over four in-memory documents in the `general` (two), `hr` and `finance` audiences, returning
-only the caller's audiences; a service claim gets the tool list and no documents.
+only the caller's audiences; a service claim gets the tool list and no documents. It also lists
+`list_audiences`, which answers PrivacyFence's service claim (`sub` `privacyfence`) with the table it was built
+with and refuses everyone else; use it as `audiences_tool` to try [audiences from the upstream](#audiences-from-the-upstream).
 
 Run it against a PrivacyFence server (the Ed25519 keys come from its JWKS address):
 

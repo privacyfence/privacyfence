@@ -7,6 +7,7 @@ Implemented: `src/privacyfence/identity_claim.py`, `src/privacyfence/upstream_cl
 `web/routes_upstream_mcp.py`, `contrib/verifier/pf_claim_verify.py`. Issue
 [#1103](https://github.com/privacyfence/privacyfence/issues/1103).
 Amended by [ADR 0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md), 2026-11-15.
+Amended by [ADR 0326](0326-a-service-claim-may-call-the-declared-audiences-tool.md), 2026-11-18.
 
 ## Context
 

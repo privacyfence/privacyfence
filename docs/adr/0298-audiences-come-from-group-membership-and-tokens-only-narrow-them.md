@@ -7,6 +7,7 @@ and supersedes the seeding of grants from the operator file in
 [ADR 0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md).
 Implemented: `src/privacyfence/group_membership.py`, `upstream_mcp_config.py`, `upstream_mcp_runtime.py`,
 `scoped_tokens.py`. Issue [#1103](https://github.com/privacyfence/privacyfence/issues/1103).
+Amended by [ADR 0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md), 2026-11-18.
 
 ## Context
 

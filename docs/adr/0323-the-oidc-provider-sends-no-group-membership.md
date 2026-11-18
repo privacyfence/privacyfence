@@ -12,6 +12,7 @@ Implemented: `src/privacyfence/oidc_provider.py`, `src/privacyfence/web/routes_o
 `src/privacyfence/group_membership.py`, `src/privacyfence/upstream_mcp_runtime.py`,
 `src/privacyfence/daemon_main.py`.
 Issue [#1148](https://github.com/privacyfence/privacyfence/issues/1148).
+Amended by [ADR 0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md), 2026-11-18.
 
 ## Context
 
