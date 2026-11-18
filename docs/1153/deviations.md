@@ -5,7 +5,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-config-and-parser
 
-- pending
+- None.
+- review: A key set to null (audiences_tool: null) is read as absent rather than refused; accepted, non-blocking.
 
 ## p2-reference-upstream
 
