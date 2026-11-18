@@ -21,7 +21,7 @@ import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from privacyfence import auto_accept, scoped_tokens
+from privacyfence import audit_log, auto_accept, scoped_tokens
 from privacyfence import gate as gate_module
 from privacyfence import org_identity as oi
 from privacyfence import identity_claim, upstream_mcp_registry, upstream_mcp_runtime
@@ -155,6 +155,77 @@ def stack(tmp_path, monkeypatch):
             principal=Principal(id="u1", email="ann@example.com", email_verified=True),
         ).access_token
         yield issuer_url, token, counting
+    finally:
+        server.stop()
+        upstream_server.should_exit = True
+        upstream_thread.join(timeout=10)
+
+
+@pytest.fixture
+def audiences_stack(tmp_path, monkeypatch):
+    # Like ``stack``, but the reference upstream answers its own audiences tool and the group map is empty.
+    monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+    monkeypatch.setenv("no_proxy", "localhost,127.0.0.1")
+    monkeypatch.setattr("privacyfence.paths.data_dir", lambda: tmp_path)
+    monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
+    monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
+    org_port, ref_port = _free_port(), _free_port()
+    issuer_url = f"http://localhost:{org_port}"
+
+    (tmp_path / "admin_config.json").write_text(json.dumps({}), encoding="utf-8")
+    (tmp_path / "members.json").write_text(json.dumps({"version": 1, "groups": {}}), encoding="utf-8")
+    members = {"general": ["ann@example.com"]}
+    # The refresh runs as the local principal, whose audit log would otherwise be the real home directory's.
+    (tmp_path / "audit").mkdir()
+    audit_log.init_audit_logger(str(tmp_path / "audit"))
+    upstreams = parse_upstreams({
+        "version": 1,
+        "upstreams": [{
+            "id": "ref", "label": "Reference upstream", "url": f"http://localhost:{ref_port}/mcp",
+            "audience": _AUDIENCE,
+            "audiences_tool": "list_audiences",
+            # An hour: no background refresh posts during a test.
+            "audiences_refresh_seconds": 3600,
+            "tools": {
+                "search": {"gate": "auto", "verb": "search"},
+                "get_doc": {"gate": "auto", "verb": "read"},
+            },
+        }],
+    }, source="test")
+    upstream_mcp_registry.register(upstreams)
+    upstream_mcp_runtime.configure(
+        upstreams=upstreams, signer=identity_claim.load_signer(issuer_url, overlap_seconds=86400),
+        groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"ref"})),
+        resolver=StaticFileResolver(tmp_path / "members.json"),
+    )
+
+    app = reference.build_app(
+        audience=_AUDIENCE, issuer=issuer_url, jwks_url=f"{issuer_url}/upstream-mcp/jwks", audience_members=members,
+    )
+    upstream_server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=ref_port, log_level="warning"))
+    upstream_thread = threading.Thread(target=upstream_server.run, daemon=True)
+    upstream_thread.start()
+    _wait_until_connectable(ref_port)
+
+    provider = OrgOAuthProvider(_idp(), idp_callback_url=f"{issuer_url}/oauth/idp/callback")
+    registry = ConnectorRegistry(factory=lambda principal: upstream_mcp_runtime.connectors_for_principal())
+    dispatcher = McpDispatcher(lambda: registry.get(current_principal()).connectors)
+    org = OrgAuth(
+        provider=provider, sessions=OrgSessionStore(), idp=_idp(), issuer_url=issuer_url, connector_registry=registry,
+    )
+    server = WebServer(WebApprovalUI(), host="localhost", port=org_port, org=org, mcp_dispatcher=dispatcher)
+    server.start()
+    try:
+        _wait_until_connectable(org_port)
+        deadline = time.monotonic() + 15
+        while upstream_mcp_runtime.status()[0].get("audiences_state") != "ready":
+            assert time.monotonic() < deadline, "the upstream's audiences never arrived"
+            time.sleep(0.05)
+        token = provider._mint_tokens(
+            client_id="claude", scopes=[], resource=None,
+            principal=Principal(id="u1", email="ann@example.com", email_verified=True),
+        ).access_token
+        yield issuer_url, token, members
     finally:
         server.stop()
         upstream_server.should_exit = True
@@ -321,3 +392,36 @@ async def test_an_auto_only_token_behaves_as_before(token_stack):
     found = await _call(issuer_url, secret, "ref_search", {"query": "policy"})
     assert found.is_error is not True, found.content
     assert {doc["title"] for doc in json.loads(found.content[0].text)} == {"Policy overview", "Office policy"}
+
+
+async def _ref_search_titles(issuer_url: str, token: str) -> set[str]:
+    http, transport = await _session(issuer_url, token)
+    async with http, transport as (read, write), ClientSession(read, write) as session:
+        await session.initialize()
+        found = await session.call_tool("ref_search", {"query": "policy", "reason": "integration test"})
+        assert found.is_error is not True, found.content
+        return {doc["title"] for doc in json.loads(found.content[0].text)}
+
+
+async def test_audiences_from_the_upstream_let_a_person_read_that_audience(audiences_stack):
+    issuer_url, token, _members = audiences_stack
+    assert await _ref_search_titles(issuer_url, token) == {"Policy overview", "Office policy"}
+
+
+async def test_dropping_a_person_at_the_upstream_removes_access_after_a_refresh(audiences_stack):
+    issuer_url, token, members = audiences_stack
+    assert await _ref_search_titles(issuer_url, token)
+    members["general"] = []
+    assert await upstream_mcp_runtime.refresh_audiences("ref")
+    assert await _ref_search_titles(issuer_url, token) == set()
+
+
+async def test_the_audiences_refresh_writes_an_applied_audit_entry(audiences_stack, tmp_path):
+    _issuer_url, _token, members = audiences_stack
+    members["general"] = ["ann@example.com", "bob@example.com"]  # a changed answer is what gets audited
+    assert await upstream_mcp_runtime.refresh_audiences("ref")
+    rows = []
+    for path in tmp_path.rglob("*.jsonl"):
+        rows += [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(row.get("decision") == "upstream_audiences_applied" for row in rows)
+    assert not any("ann@" in str(row.get("summary", "")) for row in rows)
