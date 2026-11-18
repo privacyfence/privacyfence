@@ -12,6 +12,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - None.
 - retry: Worker sent back twice: it first skipped the dod table and report shape, then reported blocked on the one test the new tool broke; both fixed on the phase branch.
+- scope: tests/unit/test_upstream_mcp_client.py: one-line expectation of the reference upstream tool list updated for list_audiences; accepted.
 
 ## p3-runtime
 
