@@ -10,7 +10,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-reference-upstream
 
-- pending
+- None.
+- retry: Worker sent back twice: it first skipped the dod table and report shape, then reported blocked on the one test the new tool broke; both fixed on the phase branch.
 
 ## p3-runtime
 
