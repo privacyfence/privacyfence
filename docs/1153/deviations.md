@@ -22,7 +22,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-admin-page-and-integration
 
-- pending
+- None.
+- review: The Source row uses a typographic apostrophe (server’s) where the plan text has a straight one; accepted, display only.
 
 ## p5-retire
 
