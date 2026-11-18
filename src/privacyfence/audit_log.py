@@ -163,13 +163,16 @@ class AuditEntry:
                             # "upstream_forwarded" |
                             # "group_membership_applied" | "group_membership_rejected" |
                             # "group_membership_denied" | "group_membership_approved" |
-                            # "group_membership_declined"
+                            # "group_membership_declined" |
+                            # "upstream_audiences_applied" | "upstream_audiences_failed"
                             # (the runtime_credential_* decisions record a scoped token's delivery
                             #  into an agent runtime and its cleanup, ADR 0278 and ADR 0281; they
                             #  render as plain entries and none counts as an approval.
                             #  "upstream_forwarded" is the execution record of one call forwarded
                             #  to an upstream MCP server, ADR 0297, and carries the claim_* fields
-                            #  and upstream_status; the group_membership_* decisions record the
+                            #  and upstream_status; the upstream_audiences_* decisions record the
+                            #  refresh of an upstream's audiences tool, ADR 0325, and neither counts
+                            #  as an approval; the group_membership_* decisions record the
                             #  membership sync tool and the admin's approvals, ADR 0299; none of
                             #  them counts as an approval either)
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed":
