@@ -63,7 +63,7 @@ when the upstream declared `email_for_visibility: true`
 |---|---|---|
 | `claude_client` | A person's AI client acting for them. | The person's principal id. `email` is the verified address; `act` names the client. |
 | `n8n_workflow` | Any scoped token, whether delivered to n8n or not. | `n8n-token:<token id>`. No `email`: a workflow does not act live for a person, so it cannot match attendee-only rows. `approved_by` is the creator, for audit. |
-| `service` | PrivacyFence's own startup tool listing. | `privacyfence`, with `audiences: []`. Return the tool list and no data. |
+| `service` | PrivacyFence's own requests: the startup tool listing and, when the operator declared `audiences_tool`, the call of that tool. | `privacyfence`, with `audiences: []`. Return the tool list and no data, except for the audiences tool ([below](#the-audiences-tool-opt-in)). |
 | `human` | Reserved. PrivacyFence never mints it. | Refuse it unless you have a use for it. |
 
 An operator can limit an upstream to a subset of `claude_client` and `n8n_workflow`
@@ -78,6 +78,8 @@ so a creator who loses an audience takes it from the token on its next call.
 
 Filter by `audiences` inside your own query, not afterwards, so ranking and pagination stay correct and a
 guessed document id is still refused. An empty list matches no row.
+
+For an upstream that declared `audiences_tool`, a person's audiences come from that tool's answer instead of the groups.
 
 ## Email as a visibility input (opt-in)
 
@@ -107,6 +109,35 @@ What the upstream does:
 - An absent `email` matches nothing.
 
 An upstream that did not opt in must keep treating `email` as audit-only.
+
+## The audiences tool (opt-in)
+
+An operator can declare `audiences_tool: <name>` on an upstream ([upstream-mcp.md](upstream-mcp.md#audiences-from-the-upstream)),
+so that the upstream tells PrivacyFence who holds each of its audiences. PrivacyFence then sends `tools/call`
+of `<name>` with `{}` and a `service` claim, at startup and on an interval. The claim's `req` is bound to
+that call, as for any `tools/call`, and its `tools` is `["<name>"]` (information only, as everywhere: never
+decide on it). The upstream answers with the table **only** when all of these hold:
+
+- the claim verified, and `principal_type` is `service` and `sub` is `privacyfence`;
+- `req` matched the request body;
+- the tool name in `params.name` is its own audiences tool.
+
+Every other request with a service claim still gets no data. The answer, as structured content or as the
+text of the result, is a JSON object with exactly the keys `version` (the number 1) and `audiences` (an
+object of audience name to a list of addresses):
+
+```json
+{"version": 1, "audiences": {"mgmt": ["ann@example.com", "bob@example.com"], "finance": ["bob@example.com"]}}
+```
+
+It holds audience names and addresses only, never documents. Audience names are 1-63 characters (`a-z`,
+`0-9`, `_`, `-`, starting with a letter or digit), at most 200 of them, at most 20000 addresses in all, and
+the answer is at most 1 MB; anything else is refused as a whole, and the previous answer stays. Addresses
+should be the lower-cased form of the identity provider's verified address: PrivacyFence applies the same
+normaliser as for `email` (ASCII only) and drops, counts and ignores any address that does not pass. The
+name `all` is an ordinary name here: the upstream may list anyone under it, and there is no approval.
+A change to the shape of the answer bumps the answer's own `version`, not `claim_version`
+([ADR 0326](adr/0326-a-service-claim-may-call-the-declared-audiences-tool.md)).
 
 ## The request binding
 
@@ -258,7 +289,7 @@ that is not the table owner and has no `BYPASSRLS`.
 
 This document describes `claim_version` 1. Adding an optional claim keeps the version at 1, so ignore
 claims you do not know. An opt-in the operator declares per upstream, such as `email_for_visibility`,
-changes nothing for an upstream that does not opt in, so it keeps the version at 1. Once an upstream
+changes nothing for an upstream that does not opt in, so it keeps the version at 1. The audiences tool is such an opt-in too: it keeps the version at 1, and a later change to the shape of its result bumps the result's own `version`. Once an upstream
 has opted in, though, any change to how `email` is filled (its source, its normalisation, the cases
 where it is present) is a breaking contract change: it needs `claim_version` 2 and a new `typ`. Any other change (a changed meaning, a removed or newly required claim, another
 canonicalisation) is `claim_version` 2 and a new `typ`, so a verifier for version 1 refuses it by

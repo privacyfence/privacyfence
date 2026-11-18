@@ -389,9 +389,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md) | n8n delivery can be switched on from the server environment | Accepted; amends 0253, 0279, 0282; relates to 0165, 0257 |
 | [0295](0295-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 | Accepted |
 | [0296](0296-the-n8n-nodes-dev-tooling-advisories-wait-for-upstream-not-overrides.md) | The n8n node's dev-tooling advisories wait for upstream, not overrides | Accepted; relates to 0289 |
-| [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286; amended by 0310 |
-| [0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) | Audiences come from group membership, and scoped tokens only narrow them | Accepted; amends 0287; supersedes the grant seeding of 0288 |
-| [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298; amended by 0311 |
+| [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286; amended by 0310; amended by 0326 |
+| [0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) | Audiences come from group membership, and scoped tokens only narrow them | Accepted; amends 0287; supersedes the grant seeding of 0288; amended by 0325 |
+| [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298; amended by 0311; amended by 0325 |
 | [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285 |
 | [0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md) | Desktop mode and its installers are removed in 8.x | Accepted; supersedes 0002, 0003, 0261 |
 | [0302](0302-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262; amended by 0317 |
@@ -411,9 +411,11 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0316](0316-the-releases-integration-branch-convention-is-retired.md) | The `releases/*` integration-branch convention is retired | Accepted |
 | [0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md) | An org directory holding only admin_config.json is fresh | Accepted; amends 0302 |
 | [0318](0318-pkce-can-be-turned-off-for-one-named-oidc-app.md) | PKCE can be turned off for one named OIDC app | Accepted; amends 0273 |
-| [0319](0319-the-admin-page-shows-upstream-mcp-servers-read-only.md) | The Admin page shows upstream MCP servers read-only | Accepted; amends 0258; relates to 0285 |
+| [0319](0319-the-admin-page-shows-upstream-mcp-servers-read-only.md) | The Admin page shows upstream MCP servers read-only | Accepted; amends 0258; relates to 0285; amended by 0325 |
 | [0320](0320-drive-rules-match-on-file-tags-not-folder-ancestry.md) | Drive rules match on a file tag, not on folder ancestry | Accepted; relates to 0172, 0222, 0232 |
 | [0321](0321-drive-tags-are-plain-properties-and-collaborators-can-forge-them.md) | Drive tags are plain properties, and collaborators can forge them | Accepted; relates to 0320 |
 | [0322](0322-tag-writing-tools-are-popup-only-and-exempt-from-every-rule.md) | The tag-writing tools are popup-only and exempt from every rule | Accepted; relates to 0077, 0164, 0236 |
-| [0323](0323-the-oidc-provider-sends-no-group-membership.md) | The OIDC provider sends no group membership | Accepted; supersedes 0311; relates to 0273, 0298, 0299, 0310, 0318 |
+| [0323](0323-the-oidc-provider-sends-no-group-membership.md) | The OIDC provider sends no group membership | Accepted; supersedes 0311; relates to 0273, 0298, 0299, 0310, 0318; amended by 0325 |
 | [0324](0324-apps-script-can-create-an-empty-project-without-a-card.md) | Apps Script can create an empty project without a card | Accepted; amends 0075 |
+| [0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md) | An upstream can be the source of its own audiences | Accepted; amends 0298, 0299, 0319, 0323; relates to 0285, 0300, 0310 |
+| [0326](0326-a-service-claim-may-call-the-declared-audiences-tool.md) | A service claim may call the declared audiences tool | Accepted; amends 0297; relates to 0286, 0310, 0325 |
