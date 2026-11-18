@@ -1646,9 +1646,79 @@ class TestOrgAdminSections:
         page = _render_org("upstreams", state)
         for text in ("Ready: 1 of 2 declared tool(s) exposed.", "Runs at once; verb search.",
                      "A person approves each call first; verb add. Adds a proposal. Not exposed:", "mgmt@co.example",
-                     "Declared in PRIVACYFENCE_UPSTREAM_MCP_FILE.", "AI clients, Scoped tokens"):
+                     "Declared in PRIVACYFENCE_UPSTREAM_MCP_FILE.", "AI clients, Scoped tokens",
+                     "a change to the groups in admin_config.json applies without one, except for a server that takes its "
+                     "audiences from its own tool."):
             assert text in page, text
         assert "data-action" not in page
+
+    @staticmethod
+    def _audiences_state(summary, label="Knowledge hub", **extra):
+        row = {
+            "id": "kh", "label": label, "url": "https://kh.example", "audience": "kh-aud",
+            "state": "ready", "identity_claim": "required", "claim_lifetime_seconds": 60,
+            "allowed_principal_types": ["claude_client"], "email_for_visibility": True,
+            "tools": [], "groups": [], "audiences_source": "upstream", "audiences_tool": "list_audiences",
+            "audiences_refresh_seconds": 300, "audiences": summary, "groups_ignored": 0,
+        }
+        row.update(extra)
+        return _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP_FILE", "upstreams": [row]})
+
+    def test_upstreams_audiences_from_the_server_ready(self):
+        page = _render_org("upstreams", self._audiences_state({
+            "state": "ready", "fetched_at": 1700000000.0, "audience_count": 2, "people_count": 5, "dropped": 0, "last_error": "",
+        }))
+        for text in ("Knowledge hub: audiences", "From the server’s list_audiences tool, every 300 seconds. "
+                     "No approvals: the server decides who holds each audience.", "Ready: 2 audience(s), 5 people.",
+                     "2023-11-14 22:13:20 UTC", "except for a server that takes its audiences from its own tool."):
+            assert text in page, text
+        for text in ("groups and audiences", "No group is mapped.", "Last error", "unusable", "are ignored"):
+            assert text not in page, text
+        assert "@" not in page
+
+    def test_upstreams_audiences_waiting(self):
+        page = _render_org("upstreams", self._audiences_state({
+            "state": "waiting", "fetched_at": None, "audience_count": 0, "people_count": 0, "dropped": 0, "last_error": "",
+        }))
+        assert "Waiting for the first answer. Nobody holds an audience on this server yet." in page
+        assert "Never" in page and "No group is mapped." not in page and "@" not in page
+
+    def test_upstreams_audiences_stale_with_error(self):
+        page = _render_org("upstreams", self._audiences_state({
+            "state": "stale", "fetched_at": 1700000000.0, "audience_count": 1, "people_count": 1, "dropped": 0,
+            "last_error": "unreachable",
+        }))
+        for text in ("Stale: no answer for over three refresh intervals. Nobody holds an audience on this server until it answers.",
+                     "Last error", "The server could not be reached."):
+            assert text in page, text
+        assert "@" not in page
+        for kind, text in (("too_large", "The answer was larger than 1 MB."), ("tool_error", "The server answered with an error."),
+                           ("claim_failed", "The claim could not be signed."),
+                           ("invalid", "The answer did not have the expected shape.")):
+            again = _render_org("upstreams", self._audiences_state({
+                "state": "stale", "fetched_at": None, "audience_count": 0, "people_count": 0, "dropped": 0, "last_error": kind,
+            }))
+            assert text in again, kind
+
+    def test_upstreams_audiences_dropped_and_ignored_groups(self):
+        page = _render_org("upstreams", self._audiences_state({
+            "state": "ready", "fetched_at": 1700000000.0, "audience_count": 1, "people_count": 2, "dropped": 3, "last_error": "",
+        }, groups_ignored=2))
+        for text in ("Ready: 1 audience(s), 2 people. 3 address(es) were unusable and ignored.",
+                     "Groups in admin_config.json", "2 group(s) mapped for this server are ignored."):
+            assert text in page, text
+        assert "@" not in page
+
+    def test_upstreams_audiences_text_is_escaped(self):
+        page = _render_org("upstreams", self._audiences_state({
+            "state": "ready", "fetched_at": 1700000000.0, "audience_count": 1, "people_count": 1, "dropped": 0,
+            "last_error": "<i>x</i>",
+        }, label="<b>KH</b>", audiences_tool="<u>tool</u>"))
+        for raw in ("<b>KH</b>", "<i>x</i>", "<u>tool</u>"):
+            assert raw not in page, raw
+        for escaped in ("&lt;b&gt;KH&lt;/b&gt;: audiences", "&lt;i&gt;x&lt;/i&gt;", "&lt;u&gt;tool&lt;/u&gt;"):
+            assert escaped in page, escaped
+        assert "@" not in page
 
     def test_upstreams_waiting_and_claim_off(self):
         state = _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP", "upstreams": [{
