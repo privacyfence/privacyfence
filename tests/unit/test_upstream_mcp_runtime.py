@@ -460,7 +460,8 @@ class TestAdminRows:
             "upstream", "list_audiences", 300,
         )
         summary = dict(row["audiences"])
-        assert summary.pop("fetched_at") is not None
+        fetched_at = summary.pop("fetched_at")
+        assert fetched_at is not None
         assert summary == {
             "state": "ready", "audience_count": 1, "people_count": 1, "dropped": 1, "last_error": "",
         }
