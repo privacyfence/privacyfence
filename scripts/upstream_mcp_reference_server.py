@@ -6,7 +6,7 @@ an upstream has to do with the signed identity claim PrivacyFence sends on every
 ``typ`` ``pf-identity-claim+jwt``, ``aud``, ``iss``, ``exp``, a ``jti`` never seen before, and for a
 tool call the ``req`` hash of the exact call) and filter what it returns by the claim's ``audiences``.
 Only ``sub``, ``audiences`` and ``principal_type`` may change what a query returns; a service claim
-(the startup ``tools/list``) lists the tools and gets no documents. The verifier is the vendorable
+(the startup ``tools/list``) lists the tools, may call ``list_audiences`` and gets no documents. The verifier is the vendorable
 ``contrib/verifier/pf_claim_verify.py``.
 
 Run it::
@@ -73,7 +73,10 @@ def _text(payload: object, *, error: bool = False) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(payload))], is_error=error)
 
 
-def _build_server(documents: list[dict], proposals: list[dict] | None = None) -> MCPServer:
+def _build_server(
+    documents: list[dict], proposals: list[dict] | None = None,
+    audience_members: dict[str, list[str]] | None = None,
+) -> MCPServer:
     def allowed(items: list[dict] | None = None) -> list[dict]:
         claims = _claims.get()
         audiences = set(claims.get("audiences") or [])
@@ -96,6 +99,7 @@ def _build_server(documents: list[dict], proposals: list[dict] | None = None) ->
             tool("get_doc", "Fetch one document.", ["id"]),
             tool("propose_change", "Propose a change to a document.", ["id", "text"]),
             tool("list_proposals", "List change proposals.", []),
+            tool("list_audiences", "PrivacyFence only: who holds each audience.", []),
         ])
 
     async def call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
@@ -117,6 +121,20 @@ def _build_server(documents: list[dict], proposals: list[dict] | None = None) ->
                 content=[types.TextContent(type="text", text="1 proposal")],
                 structured_content={"proposals": allowed(PROPOSALS if proposals is None else proposals)},
             )
+        if params.name == "list_audiences":
+            claims = _claims.get()
+            if claims.get("principal_type") != "service" or claims.get("sub") != "privacyfence":
+                return types.CallToolResult(
+                    content=[types.TextContent(
+                        type="text", text="list_audiences answers only PrivacyFence's service claim",
+                    )],
+                    is_error=True,
+                )
+            # Read on every call, so the table can change between refreshes.
+            payload = {"version": 1, "audiences": audience_members or {}}
+            return types.CallToolResult(
+                content=[types.TextContent(type="text", text=json.dumps(payload))], structured_content=payload,
+            )
         return types.CallToolResult(
             content=[types.TextContent(type="text", text=f"unknown tool {params.name}")], is_error=True,
         )
@@ -127,12 +145,16 @@ def _build_server(documents: list[dict], proposals: list[dict] | None = None) ->
 def build_app(
     *, audience: str, issuer: str, jwks: dict | None = None, jwks_url: str | None = None,
     documents: list[dict] | None = None, clock: Callable[[], float] | None = None,
+    audience_members: dict[str, list[str]] | None = None,
 ) -> Starlette:
     # The issuer is PrivacyFence's issuer URL, with no suffix.
     verifier = pf_claim_verify.ClaimVerifier(
         issuer=issuer, audience=audience, jwks=jwks, jwks_url=jwks_url, **({"clock": clock} if clock else {}),
     )
-    server = _build_server(list(DEFAULT_DOCUMENTS if documents is None else documents))
+    # audience_members is passed by reference, never copied: a test may change it between refreshes.
+    server = _build_server(
+        list(DEFAULT_DOCUMENTS if documents is None else documents), audience_members=audience_members,
+    )
     # Stateless: every request is verified and handled on its own, so its claim is the one in force.
     manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=True)
 
