@@ -15,6 +15,9 @@ time changes, so an edit applies to the next call without a restart. Who is in a
 ``group_membership.MembershipResolver``, not by this module. The operator file also takes the top-level
 keys ``claim`` and ``membership`` (``parse_settings``).
 
+An upstream may also name an ``audiences_tool`` (with an optional ``audiences_refresh_seconds``) that
+PrivacyFence calls for the members of its audiences instead of the group map (ADR 0325).
+
 See ADR 0285 (upstream MCP servers as a connector) and ADR 0298 (audiences come from groups).
 """
 from __future__ import annotations
@@ -59,7 +62,7 @@ _VERBS = frozenset(verb.value for verb in Verb)
 _UPSTREAM_KEYS = frozenset({
     "id", "label", "url", "audience", "tools",
     "identity_claim", "claim_lifetime_seconds", "allowed_principal_types",
-    "email_for_visibility",
+    "email_for_visibility", "audiences_tool", "audiences_refresh_seconds",
 })
 _IDENTITY_CLAIM_MODES = ("required", "off")
 _PRINCIPAL_TYPES = ("claude_client", "n8n_workflow")
@@ -92,6 +95,8 @@ class UpstreamServer:
     claim_lifetime_seconds: int = 60  # 5..60
     allowed_principal_types: tuple[str, ...] = _PRINCIPAL_TYPES
     email_for_visibility: bool = False  # the claim carries the verified, lower-cased email (ADR 0310)
+    audiences_tool: str | None = None  # the tool PrivacyFence calls for audience members (ADR 0325)
+    audiences_refresh_seconds: int = 300  # 30..3600, only with audiences_tool
 
 
 def declaration_digest(upstream: UpstreamServer, tool: DeclaredTool) -> str:
@@ -334,11 +339,29 @@ def _parse_one(raw: object, base: str, seen: set[str], fail, source: str) -> Ups
         raise fail(f"{base}.email_for_visibility", "must be true or false")
     if email_for_visibility and claim_mode == "off":
         raise fail(f"{base}.email_for_visibility", "needs identity_claim required")
+    audiences_tool = raw.get("audiences_tool")
+    if audiences_tool is not None:
+        if not isinstance(audiences_tool, str) or not _TOOL_RE.fullmatch(audiences_tool):
+            raise fail(f"{base}.audiences_tool", "must be 1-48 letters, digits, underscores or hyphens")
+        if any(tool.name == audiences_tool for tool in tools):
+            raise fail(
+                f"{base}.audiences_tool",
+                "is also declared under tools; the audiences tool is called by PrivacyFence only",
+            )
+        if claim_mode == "off":
+            raise fail(f"{base}.audiences_tool", "needs identity_claim required")
+    refresh_seconds = raw.get("audiences_refresh_seconds", 300)
+    if "audiences_refresh_seconds" in raw:
+        if type(refresh_seconds) is not int or not 30 <= refresh_seconds <= 3600:
+            raise fail(f"{base}.audiences_refresh_seconds", "must be a whole number from 30 to 3600")
+        if audiences_tool is None:
+            raise fail(f"{base}.audiences_refresh_seconds", "is only allowed with audiences_tool")
     return UpstreamServer(
         id=upstream_id, label=label, url=url, audience=audience, tools=tools,
         identity_claim=claim_mode, claim_lifetime_seconds=lifetime,
         allowed_principal_types=tuple(sorted(set(types))),
         email_for_visibility=email_for_visibility,
+        audiences_tool=audiences_tool, audiences_refresh_seconds=refresh_seconds,
     )
 
 
