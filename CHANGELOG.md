@@ -16,7 +16,7 @@ HOW TO USE THIS FILE
 
 2. This file is NEVER a version source. setuptools_scm derives the version from the git tag and
    remains the only one -- see docs/releasing.md. Nothing may parse this file to
-   determine a version, and no version string lives in the source tree. The dependency runs the
+   determine a version, and no version string lives in the source tree (`.tld/release-version` records the last stable version for `/tld:release` only; nothing builds from it). The dependency runs the
    other way: scripts/changelog_section.py reads a version *out* of this file to produce the
    GitHub Release body for that tag (see .github/workflows/build.yml).
 

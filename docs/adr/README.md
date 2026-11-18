@@ -140,7 +140,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md) | A service-group member cannot take over another member's companion socket | Deprecated: ADR 0301 removed desktop mode |
 | [0028](0028-clients-without-the-shim-get-capability-urls.md) | Clients without the shim move files through single-use capability URLs | Accepted; amended by 0304 |
 | [0029](0029-the-layout-step-never-re-owns-a-socket.md) | The installers' layout step never re-owns a socket | Deprecated: ADR 0301 removed desktop mode |
-| [0030](0030-preflight-dispatches-build-yml-before-tagging.md) | Cutting a release first dispatches `build.yml` on the untagged commit | Accepted |
+| [0030](0030-preflight-dispatches-build-yml-before-tagging.md) | Cutting a release first dispatches `build.yml` on the untagged commit | Accepted; amended by 0327 |
 | [0031](0031-clicking-privacyfence-opens-approvals-through-the-companion.md) | Clicking PrivacyFence opens Approvals through the companion | Deprecated: ADR 0301 removed desktop mode |
 | [0032](0032-org-settings-share-locals-generic-action-dispatcher.md) | Org mode's settings writes route through local mode's generic action dispatcher | Accepted |
 | [0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md) | One route layer per surface (approvals, settings), with an auth adapter per mode, not a second module | Accepted |
@@ -404,7 +404,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0309](0309-the-organization-image-is-the-only-distribution.md) | The organization image is the only distribution | Accepted; amends 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255; relates to 0295 |
 | [0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md) | `email` is an opt-in visibility input of the identity claim | Accepted; amends 0297; relates to 0298 |
 | [0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md) | The OIDC provider sends approved group membership to apps that opt in | Superseded by 0323 |
-| [0312](0312-a-release-tag-is-created-only-by-tld-release-yml.md) | A release tag is created only by `tld-release.yml` | Accepted; supersedes 0185, amends 0021; relates to 0023, 0030 |
+| [0312](0312-a-release-tag-is-created-only-by-tld-release-yml.md) | A release tag is created only by `tld-release.yml` | Accepted; supersedes 0185, amends 0021; relates to 0023, 0030; amended by 0327 |
 | [0313](0313-workflow-commands-come-from-the-tld-plugin.md) | Workflow commands come from the tld plugin | Accepted; supersedes 0132 |
 | [0314](0314-plans-stay-on-main-as-the-record-of-their-change.md) | Plans stay on `main` as the record of their change | Accepted |
 | [0315](0315-rulesets-and-required-checks-live-in-the-admin-policy.md) | Rulesets and required checks live in the admin policy | Accepted |
@@ -419,3 +419,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0324](0324-apps-script-can-create-an-empty-project-without-a-card.md) | Apps Script can create an empty project without a card | Accepted; amends 0075 |
 | [0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md) | An upstream can be the source of its own audiences | Accepted; amends 0298, 0299, 0319, 0323; relates to 0285, 0300, 0310 |
 | [0326](0326-a-service-claim-may-call-the-declared-audiences-tool.md) | A service claim may call the declared audiences tool | Accepted; amends 0297; relates to 0286, 0310, 0325 |
+| [0327](0327-stable-releases-go-through-tld-release-and-a-release-only-version-file.md) | Stable releases go through `/tld:release` and a release-only version file | Accepted; amends 0312, 0030; relates to 0022, 0023 |

@@ -21,9 +21,7 @@ project facts they read are in `.tld/toolkit.yaml`; [ADR 0313](docs/adr/0313-wor
 - `.claude/skills/steward/SKILL.md` — PrivacyFence-specific steward policy, on top of the plugin's
   pr-steward policy. The workflows a session dispatches instead of running locally are
   `ci.dispatchable` in `.tld/toolkit.yaml`.
-- `/cut-release` (`.claude/commands/cut-release.md`) runs the `build.yml` pre-flight that
-  [`docs/releasing.md`](docs/releasing.md#cutting-a-release) requires, then dispatches
-  `tld-release.yml`.
+- `/tld:release` prepares and cuts a stable release; the steward skill's "Cutting a release" section adds what this repository requires ([`docs/releasing.md`](docs/releasing.md#cutting-a-release)).
 - `/qa-record` records a connector's live QA fixture on the self-hosted runner.
 - **Plans.** `/tld:make-plan` writes a plan to `docs/<issue>/plan.md` on its feature branch, and
   `/tld:implement` adds `docs/<issue>/deviations.md` and opens one PR to `main`, where both stay as the
