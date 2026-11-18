@@ -1668,7 +1668,7 @@ class TestOrgAdminSections:
         page = _render_org("upstreams", self._audiences_state({
             "state": "ready", "fetched_at": 1700000000.0, "audience_count": 2, "people_count": 5, "dropped": 0, "last_error": "",
         }))
-        for text in ("Knowledge hub: audiences", "From the server’s list_audiences tool, every 300 seconds. "
+        for text in ("Knowledge hub: audiences", "From the server&#39;s list_audiences tool, every 300 seconds. "
                      "No approvals: the server decides who holds each audience.", "Ready: 2 audience(s), 5 people.",
                      "2023-11-14 22:13:20 UTC", "except for a server that takes its audiences from its own tool."):
             assert text in page, text

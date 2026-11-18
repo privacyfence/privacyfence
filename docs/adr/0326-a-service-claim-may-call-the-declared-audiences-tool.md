@@ -57,7 +57,7 @@ generous would hand the table to any service claim.
 - `tests/unit/test_upstream_mcp_reference_server.py`:
   `test_list_audiences_answers_a_service_claim_with_the_table`, `test_list_audiences_refuses_a_person`,
   `test_list_audiences_refuses_a_scoped_token`, `test_list_audiences_reads_the_table_on_every_call`,
-  `test_initialize_claim_carries_no_audiences_and_lists_no_documents`.
+  `test_a_service_claim_still_gets_no_documents_from_search`.
 - `tests/unit/test_upstream_mcp_runtime.py::TestAudiencesFromUpstream::test_the_service_claim_names_only_the_audiences_tool`.
 
 ## Related

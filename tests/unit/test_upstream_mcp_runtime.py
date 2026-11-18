@@ -605,10 +605,13 @@ class TestAudiencesFromUpstream:
         assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == frozenset()
         assert upstream_mcp_runtime.status()[0]["audiences_state"] == "stale"
 
-    def test_a_failed_refresh_keeps_the_last_snapshot(self, configured_with_source, audit_dir):
+    def test_a_failed_refresh_keeps_the_last_snapshot(self, configured_with_source, audit_dir, caplog):
         _entry().client = _AudiencesClient(_table(mgmt=["ann@hr.example"]), UpstreamMcpClientError("unreachable"))
         assert _refresh() is True
-        assert _refresh() is False
+        with caplog.at_level("WARNING", logger=upstream_mcp_runtime.logger.name):
+            assert _refresh() is False
+        assert "Upstream kh audiences refresh failed: unreachable" in caplog.text
+        assert "@" not in caplog.text
         assert upstream_mcp_runtime.audiences_for_email("kh", "ann@hr.example", True) == {"mgmt"}
         assert _entry().audiences.summary()["last_error"] == "unreachable"
 

@@ -332,7 +332,7 @@ not for production. It verifies claims with `pf_claim_verify.py` and serves `sea
 `list_proposals` and `propose_change` over four in-memory documents in the `general` (two), `hr` and `finance` audiences, returning
 only the caller's audiences; a service claim gets the tool list and no documents. It also lists
 `list_audiences`, which answers PrivacyFence's service claim (`sub` `privacyfence`) with the table it was built
-with and refuses everyone else; use it as `audiences_tool` to try [audiences from the upstream](#audiences-from-the-upstream).
+with and refuses everyone else (`build_app(audience_members=...)` takes that table as a dict, kept by reference and read on every call, so a test can change it between refreshes); use it as `audiences_tool` to try [audiences from the upstream](#audiences-from-the-upstream).
 
 Run it against a PrivacyFence server (the Ed25519 keys come from its JWKS address):
 

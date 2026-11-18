@@ -36,3 +36,4 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## Finishing
 
 - scope: Scope drift disposition: tests/unit/test_upstream_mcp_client.py (p2) and tests/unit/web/test_mcp_dispatch.py (p3) stay in the final diff, accepted.
+- final: Non-blocking findings fixed after the final review: ADR 0326 now cites the p2 test; a failed audiences refresh logs one warning (upstream id and kind); audiences_tool null is refused; the Admin Source row uses a straight apostrophe; the reference-upstream docs and docstring say audience_members is kept by reference. The loop tests stay in TestAudiencesLoop (named by ADR 0325).

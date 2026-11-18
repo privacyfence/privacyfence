@@ -340,7 +340,7 @@ def _parse_one(raw: object, base: str, seen: set[str], fail, source: str) -> Ups
     if email_for_visibility and claim_mode == "off":
         raise fail(f"{base}.email_for_visibility", "needs identity_claim required")
     audiences_tool = raw.get("audiences_tool")
-    if audiences_tool is not None:
+    if "audiences_tool" in raw:
         if not isinstance(audiences_tool, str) or not _TOOL_RE.fullmatch(audiences_tool):
             raise fail(f"{base}.audiences_tool", "must be 1-48 letters, digits, underscores or hyphens")
         if any(tool.name == audiences_tool for tool in tools):

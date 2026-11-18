@@ -6,7 +6,8 @@ an upstream has to do with the signed identity claim PrivacyFence sends on every
 ``typ`` ``pf-identity-claim+jwt``, ``aud``, ``iss``, ``exp``, a ``jti`` never seen before, and for a
 tool call the ``req`` hash of the exact call) and filter what it returns by the claim's ``audiences``.
 Only ``sub``, ``audiences`` and ``principal_type`` may change what a query returns; a service claim
-(the startup ``tools/list``) lists the tools, may call ``list_audiences`` and gets no documents. The verifier is the vendorable
+(the startup ``tools/list``) lists the tools, may call ``list_audiences`` and gets no documents. ``build_app(audience_members=...)`` takes the table ``list_audiences`` answers with; it is kept
+by reference and read on every call, so a test can change it between refreshes. The verifier is the vendorable
 ``contrib/verifier/pf_claim_verify.py``.
 
 Run it::

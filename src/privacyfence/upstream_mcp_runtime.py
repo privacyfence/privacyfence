@@ -355,6 +355,7 @@ async def refresh_audiences(upstream_id: str) -> bool:
         snapshot = upstream_audiences.parse_result(result.structured, result.text)
     except UpstreamMcpClientError as exc:
         kind = exc.kind
+        logger.warning("Upstream %s audiences refresh failed: %s", upstream_id, kind)
     except AudiencesResultError as exc:
         kind = "invalid"
         logger.warning("Upstream %s answered its audiences tool with an unusable result: %s", upstream_id, exc.reason)

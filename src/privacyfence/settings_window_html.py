@@ -2565,7 +2565,7 @@ _JS = r"""
     } else {
       stateText = 'Waiting for the first answer. Nobody holds an audience on this server yet.';
     }
-    var rows = rowHtml('Source', esc('From the server’s ' + u.audiences_tool + ' tool, every ' + u.audiences_refresh_seconds +
+    var rows = rowHtml('Source', esc('From the server\'s ' + u.audiences_tool + ' tool, every ' + u.audiences_refresh_seconds +
         ' seconds. No approvals: the server decides who holds each audience.'), '') +
       rowHtml('State', esc(stateText), '') +
       rowHtml('Last refresh', esc(membershipTimeText(a.fetched_at)), '');

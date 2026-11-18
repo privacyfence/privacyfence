@@ -556,7 +556,7 @@ class TestOperatorClaimKeys:
         assert server.audiences_tool == "list_audiences"
         assert server.audiences_refresh_seconds == 300
 
-    @pytest.mark.parametrize("value", [5, "", "has space", "x" * 49, ["a"]])
+    @pytest.mark.parametrize("value", [5, "", "has space", "x" * 49, ["a"], None])
     def test_audiences_tool_refuses_a_bad_name(self, value):
         message = _refused(_doc(audiences_tool=value), "upstreams[0].audiences_tool")
         assert "must be 1-48 letters, digits, underscores or hyphens" in message
