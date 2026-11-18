@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-11-18
+
 ### Added
 
 - An upstream MCP server can now be the source of its own audiences: declare `audiences_tool` and PrivacyFence reads who holds each audience from that tool at startup and every five minutes (`audiences_refresh_seconds`), with no group map and no approvals for that upstream (#1153).
@@ -3659,7 +3661,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.2...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v8.0.0...HEAD
+[8.0.0]: https://github.com/privacyfence/privacyfence/compare/v7.0.2...v8.0.0
 [7.0.2]: https://github.com/privacyfence/privacyfence/compare/v7.0.1...v7.0.2
 [7.0.1]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...v7.0.0
