@@ -2532,7 +2532,8 @@ _JS = r"""
 
   // The upstream MCP servers the operator declared (upstream_mcp_runtime.admin_rows). Read-only: the
   // declaration is a file read at startup and the group map a file edit (ADR 0319), so nothing here
-  // changes either.
+  // changes either. The audiences come from the group map or, for an upstream that declared an
+  // audiences tool, from that tool of the server itself (ADR 0325).
   var UPSTREAM_GATE_TEXT = {
     auto: 'Runs at once', review: 'Runs; a person sees the result before it is returned', popup: 'A person approves each call first',
   };
@@ -2543,6 +2544,38 @@ _JS = r"""
     if (tool.effect) { text += ' ' + tool.effect; }
     if (tool.state === 'missing') { text += ' Not exposed: the server does not list it, or its schema cannot be passed on.'; }
     return rowHtml(tool.name, esc(text), '');
+  }
+
+  var UPSTREAM_AUDIENCES_ERROR_TEXT = {
+    unreachable: 'The server could not be reached.', too_large: 'The answer was larger than 1 MB.',
+    tool_error: 'The server answered with an error.', claim_failed: 'The claim could not be signed.',
+    invalid: 'The answer did not have the expected shape.',
+  };
+
+  // The third card of an upstream that takes its audiences from its own tool (ADR 0325). The summary
+  // carries counts only, never an address.
+  function upstreamAudiencesCardHtml(u) {
+    var a = u.audiences || {};
+    var stateText;
+    if (a.state === 'ready') {
+      stateText = 'Ready: ' + (a.audience_count || 0) + ' audience(s), ' + (a.people_count || 0) + ' people.' +
+        (a.dropped > 0 ? ' ' + a.dropped + ' address(es) were unusable and ignored.' : '');
+    } else if (a.state === 'stale') {
+      stateText = 'Stale: no answer for over three refresh intervals. Nobody holds an audience on this server until it answers.';
+    } else {
+      stateText = 'Waiting for the first answer. Nobody holds an audience on this server yet.';
+    }
+    var rows = rowHtml('Source', esc('From the server\'s ' + u.audiences_tool + ' tool, every ' + u.audiences_refresh_seconds +
+        ' seconds. No approvals: the server decides who holds each audience.'), '') +
+      rowHtml('State', esc(stateText), '') +
+      rowHtml('Last refresh', esc(membershipTimeText(a.fetched_at)), '');
+    if (a.last_error) {
+      rows += rowHtml('Last error', esc(UPSTREAM_AUDIENCES_ERROR_TEXT[a.last_error] || a.last_error), '');
+    }
+    if (u.groups_ignored > 0) {
+      rows += rowHtml('Groups in admin_config.json', esc(u.groups_ignored + ' group(s) mapped for this server are ignored.'), '');
+    }
+    return '<h2 class="pf-group-title">' + esc(u.label + ': audiences') + '</h2><div class="card pf-card">' + rows + '</div>';
   }
 
   function upstreamCardHtml(u) {
@@ -2562,6 +2595,10 @@ _JS = r"""
       rowHtml('Identity claim', esc(claimText), '') +
       rowHtml('Who may call it', esc(callers), '') + '</div>';
     var toolCard = '<div class="card pf-card">' + tools.map(upstreamToolRow).join('') + '</div>';
+    if (u.audiences_source === 'upstream') {
+      return '<h2 class="pf-group-title">' + esc(u.label) + '</h2>' + summary +
+        '<h2 class="pf-group-title">' + esc(u.label + ': tools') + '</h2>' + toolCard + upstreamAudiencesCardHtml(u);
+    }
     var groups = u.groups || [];
     var groupRows = groups.length ? groups.map(function (g) { return rowHtml(g.group, esc((g.audiences || []).join(', ')), ''); }).join('') :
       rowHtml('No group is mapped.', esc('Nobody holds an audience on this server. Map groups under upstream_mcp in admin_config.json.'), '');
@@ -2584,7 +2621,7 @@ _JS = r"""
         '</div></div>';
     }
     var intro = '<div class="muted">' + esc('Declared in ' + s.declared_by +
-      '. A change to the declaration needs a restart; a change to the groups in admin_config.json applies without one.') + '</div>';
+      '. A change to the declaration needs a restart; a change to the groups in admin_config.json applies without one, except for a server that takes its audiences from its own tool.') + '</div>';
     return '<div class="pf-page">' + title + intro + rows.map(upstreamCardHtml).join('') + '</div>';
   }
 

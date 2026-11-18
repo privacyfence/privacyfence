@@ -5,8 +5,9 @@ then calls ``configure``. From there this module is the one place that knows the
 set: the connector list for a principal, the caller claim for one dispatched call (the only code
 that reads the caller contextvars on behalf of an upstream call, so connector code never does),
 the audiences a person holds, the ``privacyfence_status`` rows and the Admin page's rows, and the lifespan that fetches each
-upstream's tool list once at startup, retrying with backoff until it succeeds. There is no periodic
-refresh: a description changing mid-session is a rug-pull vector.
+upstream's tool list once at startup, retrying with backoff until it succeeds. The tool list is never
+refreshed: a description changing mid-session is a rug-pull vector. An upstream that declares
+``audiences_tool`` has its audiences refreshed on an interval instead (ADR 0325).
 """
 from __future__ import annotations
 
@@ -14,20 +15,24 @@ import asyncio
 import contextlib
 import functools
 import logging
+import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 import httpx2
 
 from .agent_identity import current_agent, current_client_id
-from . import group_membership
+from . import group_membership, upstream_audiences
+from .audit_log import AuditEntry, current_week, get_audit_logger
 from .group_membership import MembershipResolver
 from .connectors.upstream_mcp import UpstreamMcpConnector
 from .principal import Principal, current_principal
 from .scoped_tokens import current_token_scope
 from .identity_claim import CallerNotAllowedError, ClaimSigner, IdentityCaller
-from .upstream_mcp_client import UpstreamMcpClient, UpstreamToolCatalog
+from .upstream_audiences import AudiencesResultError, UpstreamAudienceSource
+from .upstream_mcp_client import UpstreamMcpClient, UpstreamMcpClientError, UpstreamToolCatalog
 from .upstream_mcp_config import GroupMapStore, UpstreamServer
 
 logger = logging.getLogger(__name__)
@@ -36,6 +41,7 @@ BACKOFF_START_SECONDS = 5.0
 BACKOFF_MAX_SECONDS = 300.0
 
 _sleep = asyncio.sleep  # tests patch this, not asyncio.sleep
+_audiences_sleep = asyncio.sleep  # the audiences loop's own, so tests patch the two separately
 
 
 @dataclass
@@ -44,6 +50,9 @@ class _Entry:
     catalog: UpstreamToolCatalog
     client: UpstreamMcpClient
     listed: bool = False
+    audiences: UpstreamAudienceSource | None = None
+    audiences_failing: bool = False  # the last applied attempt failed
+    audiences_digest: str | None = None  # of the last applied table; only to see that it changed
 
 
 @dataclass
@@ -68,9 +77,18 @@ def configure(
     entries = {
         upstream.id: _Entry(
             upstream, UpstreamToolCatalog(upstream), UpstreamMcpClient(upstream, signer, transport=transport),
+            audiences=(
+                UpstreamAudienceSource(upstream.audiences_refresh_seconds) if upstream.audiences_tool else None
+            ),
         )
         for upstream in upstreams
     }
+    for upstream in upstreams:
+        if upstream.audiences_tool and groups.group_audiences(upstream.id):
+            logger.warning(
+                "admin_config.json: upstream_mcp.%s.groups is ignored: %s takes its audiences from its "
+                "audiences tool", upstream.id, upstream.id,
+            )
     _runtime = _Runtime(entries=entries, signer=signer, groups=groups, resolver=resolver,
                        membership_max_additions=membership_max_additions)
 
@@ -111,6 +129,9 @@ def audiences_for_email(upstream_id: str, email: str, verified: bool) -> frozens
     address = group_membership.lookup_email(email)
     if not verified or not address:
         return frozenset()
+    entry = _runtime.entries.get(upstream_id)
+    if entry is not None and entry.audiences is not None:
+        return entry.audiences.audiences_for(address)  # never the group map for this upstream (ADR 0325)
     return _runtime.resolver.audiences_for(address, _runtime.groups.group_audiences(upstream_id))
 
 
@@ -119,7 +140,9 @@ def all_group_audiences() -> dict[str, frozenset[str]]:
     if _runtime is None:
         return {}
     merged: dict[str, frozenset[str]] = {}
-    for upstream_id in _runtime.entries:
+    for upstream_id, entry in _runtime.entries.items():
+        if entry.audiences is not None:
+            continue  # the sync tool and the approvals never act on an upstream that has its own source
         for group, audiences in _runtime.groups.group_audiences(upstream_id).items():
             merged[group] = merged.get(group, frozenset()) | audiences
     return merged
@@ -207,13 +230,17 @@ def status() -> list[dict[str, object]]:
         return []
     rows: list[dict[str, object]] = []
     for entry in _runtime.entries.values():
-        rows.append({
+        row: dict[str, object] = {
             "id": entry.upstream.id,
             "label": entry.upstream.label,
             "tools_exposed": len(entry.catalog.specs()),
             "state": "ready" if entry.listed else "waiting_for_tool_list",
             "missing_tools": entry.catalog.missing() if entry.listed else [],
-        })
+            "audiences_source": "upstream" if entry.audiences is not None else "groups",
+        }
+        if entry.audiences is not None:
+            row["audiences_state"] = entry.audiences.state()
+        rows.append(row)
     return rows
 
 
@@ -236,6 +263,7 @@ def admin_rows() -> list[dict[str, object]]:
         upstream = entry.upstream
         exposed = {spec.name for spec in entry.catalog.specs()} if entry.listed else set()
         groups = _runtime.groups.group_audiences(upstream.id)
+        source = entry.audiences
         rows.append({
             "id": upstream.id,
             "label": upstream.label,
@@ -253,9 +281,14 @@ def admin_rows() -> list[dict[str, object]]:
                 }
                 for tool in upstream.tools
             ],
-            "groups": [
+            "groups": [] if source is not None else [
                 {"group": group, "audiences": sorted(audiences)} for group, audiences in sorted(groups.items())
             ],
+            "audiences_source": "upstream" if source is not None else "groups",
+            "audiences_tool": upstream.audiences_tool,
+            "audiences_refresh_seconds": upstream.audiences_refresh_seconds if source is not None else None,
+            "audiences": source.summary() if source is not None else None,
+            "groups_ignored": len(groups) if source is not None else 0,
         })
     return rows
 
@@ -282,12 +315,104 @@ async def _fetch_tool_list(entry: _Entry, notify_tools_changed: Callable[[], Non
         return
 
 
+def _audit_audiences(entry: _Entry, decision: str, summary: str, jti: str, latency: float) -> None:
+    """One audit entry about the audiences refresh; never an address, and a failed write changes nothing."""
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id="",
+            connector=entry.upstream.id,
+            tool=entry.upstream.audiences_tool or "",
+            tool_name="Read audiences",
+            summary=summary,
+            sender="privacyfence",
+            decision=decision,
+            auto_accept_rule="",
+            latency_seconds=latency,
+            claim_jti=jti,
+        ))
+    except Exception as exc:  # noqa: BLE001 -- an audit failure never changes the outcome
+        logger.warning("Audit log write failed: %s", exc)
+
+
+async def refresh_audiences(upstream_id: str) -> bool:
+    """One attempt to read ``upstream_id``'s audiences from its audiences tool (ADR 0325); True on success."""
+    assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
+    entry = _runtime.entries[upstream_id]
+    source = entry.audiences
+    tool = entry.upstream.audiences_tool
+    assert source is not None and tool is not None, "upstream has no audiences tool"  # nosec B101
+    seq = source.begin()
+    started = time.monotonic()
+    jti = ""
+    snapshot: upstream_audiences.AudienceSnapshot | None = None
+    kind = ""
+    try:
+        caller = IdentityCaller(sub="privacyfence", principal_type="service", tools=(tool,))
+        result = await entry.client.call_tool(tool, {}, caller)
+        jti = result.jti
+        snapshot = upstream_audiences.parse_result(result.structured, result.text)
+    except UpstreamMcpClientError as exc:
+        kind = exc.kind
+        logger.warning("Upstream %s audiences refresh failed: %s", upstream_id, kind)
+    except AudiencesResultError as exc:
+        kind = "invalid"
+        logger.warning("Upstream %s answered its audiences tool with an unusable result: %s", upstream_id, exc.reason)
+    except Exception:  # noqa: BLE001 -- the loop must never die silently
+        kind = "invalid"
+        logger.warning("Upstream %s audiences refresh failed unexpectedly", upstream_id, exc_info=True)
+    latency = time.monotonic() - started
+    if snapshot is None:
+        if not source.record_failure(kind, seq):
+            return False
+        if not entry.audiences_failing:
+            _audit_audiences(
+                entry, "upstream_audiences_failed", f"Audiences from {upstream_id} not refreshed: {kind}", jti, latency,
+            )
+        entry.audiences_failing = True
+        return False
+    if not source.apply(snapshot, seq):
+        return False
+    logger.info(
+        "Upstream %s audiences refreshed: %d audiences, %d people, %d dropped (jti %s)",
+        upstream_id, snapshot.audience_count, snapshot.people_count, snapshot.dropped, jti,
+    )
+    if entry.audiences_failing or entry.audiences_digest != snapshot.digest:
+        _audit_audiences(
+            entry, "upstream_audiences_applied",
+            f"Audiences from {upstream_id} applied: {snapshot.audience_count} audience(s), "
+            f"{snapshot.people_count} people, {snapshot.dropped} address(es) dropped",
+            jti, latency,
+        )
+    entry.audiences_failing = False
+    entry.audiences_digest = snapshot.digest
+    return True
+
+
+async def _refresh_audiences_loop(entry: _Entry) -> None:
+    refresh = entry.upstream.audiences_refresh_seconds
+    backoff = BACKOFF_START_SECONDS
+    while True:
+        if await refresh_audiences(entry.upstream.id):
+            backoff = BACKOFF_START_SECONDS
+            await _audiences_sleep(refresh)
+        else:
+            await _audiences_sleep(min(backoff, refresh))
+            backoff = min(backoff * 2, BACKOFF_MAX_SECONDS)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(notify_tools_changed: Callable[[], None]) -> AsyncIterator[None]:
-    """One fetch task per upstream while the server runs; cancelled on shutdown."""
+    """One fetch task per upstream, and one audiences loop per upstream with a source, while the server runs; cancelled on shutdown."""
     tasks = [
         asyncio.create_task(_fetch_tool_list(entry, notify_tools_changed))
         for entry in (_runtime.entries.values() if _runtime is not None else ())
+    ]
+    tasks += [
+        asyncio.create_task(_refresh_audiences_loop(entry))
+        for entry in (_runtime.entries.values() if _runtime is not None else ())
+        if entry.audiences is not None
     ]
     try:
         yield
