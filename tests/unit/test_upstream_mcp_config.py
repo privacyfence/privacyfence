@@ -546,6 +546,48 @@ class TestOperatorClaimKeys:
         )
         assert "needs identity_claim required" in message
 
+    def test_audiences_tool_defaults_to_none(self):
+        (server,) = _parse(_doc())
+        assert server.audiences_tool is None
+        assert server.audiences_refresh_seconds == 300
+
+    def test_audiences_tool_is_read_with_the_default_interval(self):
+        (server,) = _parse(_doc(audiences_tool="list_audiences"))
+        assert server.audiences_tool == "list_audiences"
+        assert server.audiences_refresh_seconds == 300
+
+    @pytest.mark.parametrize("value", [5, "", "has space", "x" * 49, ["a"]])
+    def test_audiences_tool_refuses_a_bad_name(self, value):
+        message = _refused(_doc(audiences_tool=value), "upstreams[0].audiences_tool")
+        assert "must be 1-48 letters, digits, underscores or hyphens" in message
+
+    def test_audiences_tool_refuses_a_declared_tool_name(self):
+        message = _refused(_doc(audiences_tool="search"), "upstreams[0].audiences_tool")
+        assert "is also declared under tools; the audiences tool is called by PrivacyFence only" in message
+
+    def test_audiences_tool_needs_the_claim_on(self):
+        message = _refused(
+            _doc(audiences_tool="list_audiences", identity_claim="off"), "upstreams[0].audiences_tool",
+        )
+        assert "needs identity_claim required" in message
+
+    @pytest.mark.parametrize("value", [29, 3601, True, "300", 30.0, None])
+    def test_audiences_refresh_seconds_bounds_refused(self, value):
+        message = _refused(
+            _doc(audiences_tool="list_audiences", audiences_refresh_seconds=value),
+            "upstreams[0].audiences_refresh_seconds",
+        )
+        assert "must be a whole number from 30 to 3600" in message
+
+    @pytest.mark.parametrize("value", [30, 3600])
+    def test_audiences_refresh_seconds_bounds(self, value):
+        (server,) = _parse(_doc(audiences_tool="list_audiences", audiences_refresh_seconds=value))
+        assert server.audiences_refresh_seconds == value
+
+    def test_audiences_refresh_seconds_needs_the_tool(self):
+        message = _refused(_doc(audiences_refresh_seconds=60), "upstreams[0].audiences_refresh_seconds")
+        assert "is only allowed with audiences_tool" in message
+
     def test_a_grants_key_is_refused_with_the_groups_message(self):
         message = _refused(_doc(grants=[{"match": "*", "domains": ["general"]}]), "upstreams[0].grants")
         assert "grants were replaced by groups" in message
@@ -666,6 +708,10 @@ class TestDeclarationDigest:
 
     def test_declaration_digest_ignores_email_for_visibility(self):
         assert self._digest(_doc(email_for_visibility=True)) == self._digest(_doc(email_for_visibility=False))
+
+    def test_declaration_digest_ignores_the_audiences_source(self):
+        plain = self._digest(_doc())
+        assert self._digest(_doc(audiences_tool="list_audiences", audiences_refresh_seconds=60)) == plain
 
     def test_declaration_digest_ignores_the_order_of_other_tools(self):
         reordered = _doc()
