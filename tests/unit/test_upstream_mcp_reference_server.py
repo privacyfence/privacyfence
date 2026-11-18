@@ -142,7 +142,54 @@ async def test_a_service_claim_lists_tools_and_gets_no_documents(signer):
     async with _session(_app(signer), signer, _caller("hr", principal_type="service")) as session:
         tools = await session.list_tools()
         result = await session.call_tool("search", {"query": "policy"})
-    assert {t.name for t in tools.tools} == {"search", "get_doc", "propose_change", "list_proposals"}
+    assert {t.name for t in tools.tools} == {"search", "get_doc", "propose_change", "list_proposals", "list_audiences"}
+    assert _titles(result) == []
+
+
+def _service() -> IdentityCaller:
+    return IdentityCaller(sub="privacyfence", principal_type="service")
+
+
+async def test_list_audiences_answers_a_service_claim_with_the_table(signer):
+    table = {"hr": ["a@b.example"], "general": []}
+    async with _session(_app(signer, audience_members=table), signer, _service()) as session:
+        result = await session.call_tool("list_audiences", {})
+    expected = {"version": 1, "audiences": table}
+    assert not result.is_error
+    assert result.structured_content == expected
+    assert json.loads(result.content[0].text) == expected
+
+
+async def test_list_audiences_refuses_a_person(signer):
+    async with _session(_app(signer, audience_members={"hr": ["a@b.example"]}), signer, _caller("hr")) as session:
+        result = await session.call_tool("list_audiences", {})
+    assert result.is_error
+    assert result.content[0].text == "list_audiences answers only PrivacyFence's service claim"
+    assert not result.structured_content
+
+
+async def test_list_audiences_refuses_a_scoped_token(signer):
+    token = IdentityCaller(sub="n8n-token:t1", principal_type="n8n_workflow", audiences=("hr",))
+    async with _session(_app(signer, audience_members={"hr": ["a@b.example"]}), signer, token) as session:
+        result = await session.call_tool("list_audiences", {})
+    assert result.is_error
+    assert result.content[0].text == "list_audiences answers only PrivacyFence's service claim"
+
+
+async def test_list_audiences_reads_the_table_on_every_call(signer):
+    table: dict[str, list[str]] = {"hr": ["a@b.example"]}
+    async with _session(_app(signer, audience_members=table), signer, _service()) as session:
+        first = await session.call_tool("list_audiences", {})
+        table["hr"] = []
+        table["finance"] = ["c@d.example"]
+        second = await session.call_tool("list_audiences", {})
+    assert first.structured_content["audiences"] == {"hr": ["a@b.example"]}
+    assert second.structured_content["audiences"] == {"hr": [], "finance": ["c@d.example"]}
+
+
+async def test_a_service_claim_still_gets_no_documents_from_search(signer):
+    async with _session(_app(signer, audience_members={"hr": ["a@b.example"]}), signer, _service()) as session:
+        result = await session.call_tool("search", {"query": "policy"})
     assert _titles(result) == []
 
 
