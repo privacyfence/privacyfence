@@ -115,7 +115,13 @@ ci:
         Inputs `version` (always explicit; never leave it empty), `dry_run` (default true); never pass `skip_checks`.
         Runs on `main` only; the owner approves the tld-release environment for every run. A real run from a
         session needs the owner's yes on the tld board, then `tld guard allow-release tld-release.yml` first and
-        `tld guard end-allow` after. Dispatch the dry run, report it, wait for the yes. /cut-release is the procedure.
+        `tld guard end-allow` after. Dispatch the dry run, report it, wait for the yes. The steps are in .claude/skills/steward/SKILL.md ("Cutting a release").
+
+release:
+  workflow: tld-release.yml
+  version_files:
+    - path: .tld/release-version
+      pattern: '^(\d+\.\d+\.\d+)$'
 
 stacks: [python]
 
