@@ -93,6 +93,8 @@ Your AI client sees the state of each connector through the `privacyfence_status
 reported as authenticated or not, with `no_org_config` (never configured), `not_authenticated`
 (never signed in, or the credentials expired) or a short reason.
 
+An organization server can also put hosted MCP servers (Canva or Framer, for example) behind PrivacyFence. A server the operator declared appears on the Connect page as one more row; **Connect** signs you in at the vendor with your own account. See [Upstream MCP servers](upstream-mcp.md).
+
 ## Provider guides
 
 The built-in apps need none of these. Each guide is for an organization that wants its own app

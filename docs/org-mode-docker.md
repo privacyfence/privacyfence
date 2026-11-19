@@ -425,6 +425,27 @@ and name `NAME` as `audit_forwarding.http.bearer_token_env` in `org/admin_config
 ([configuration reference](configuration-reference.md#admin-config-orgadmin_configjson)). Never put
 a token or a key in the Compose file.
 
+## Upstream MCP file
+
+To put hosted MCP servers such as Canva behind PrivacyFence, write `upstream_mcp.yaml` next to
+`compose.yaml`, mount it into the container and name it with `PRIVACYFENCE_UPSTREAM_MCP_FILE` in
+`compose.yaml`; or set the same text inline in `PRIVACYFENCE_UPSTREAM_MCP` (never both). A restart applies it.
+
+```yaml
+version: 2
+upstreams:
+  - id: canva
+    label: Canva
+    url: https://mcp.canva.com/mcp
+    oauth:
+      scopes: [design:content:read]
+```
+
+Each person then connects on `/connect` and an administrator reviews the tools on the Admin page
+([Upstream MCP servers](upstream-mcp.md)). If you declare an `oauth.client_id` with a secret, name the
+variable that holds it in `oauth.client_secret_env` and give the container that variable from your
+orchestrator's secret store, never from the declaration file or `privacyfence.env` in a repository.
+
 ## What stays in the data volume
 
 Besides each person's data, the volume holds, in `org/`, `admin_config.json` (everything set on the
