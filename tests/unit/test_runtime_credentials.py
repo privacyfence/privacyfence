@@ -109,18 +109,8 @@ def _deliver(tokens, api, proposal=None, on_abandoned=None, config=CONFIG):
     )
 
 
-class TestDeliverUpstreamDomains:
-    def test_a_delivered_token_cannot_carry_audiences_the_person_does_not_hold(self, tokens):
-        api = FakeApi()
-        bound = {**BOUND, "upstream_audiences": {"kh": ["hr"]}}
-        outcome = rc.deliver(
-            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=api, token_store=tokens,
-            policy=ENABLED, held_audiences={"kh": frozenset({"general"})}, principal_email_verified=True,
-        )
-        assert outcome.status == 400 and "audiences you have: hr" in outcome.error
-        assert api.created == [] and tokens.tokens_for(ALICE) == []
-
-    def test_the_audiences_and_the_verified_flag_reach_the_token_store(self, tokens, monkeypatch):
+class TestDeliverTokenFields:
+    def test_the_verified_flag_reaches_the_token_store(self, tokens, monkeypatch):
         seen = {}
 
         def create(principal, **kwargs):
@@ -128,14 +118,12 @@ class TestDeliverUpstreamDomains:
             raise ScopedTokenError("stop here")
 
         monkeypatch.setattr(tokens, "create", create)
-        bound = {**BOUND, "upstream_audiences": {"kh": ["hr"]}}
         rc.deliver(
-            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=FakeApi(), token_store=tokens,
-            policy=ENABLED, held_audiences={"kh": frozenset({"hr"})}, principal_email_verified=True,
+            principal=ALICE, bound=BOUND, proposal=_proposal(), config=CONFIG, api=FakeApi(), token_store=tokens,
+            policy=ENABLED, principal_email_verified=True,
         )
-        assert seen["upstream_audiences"] == {"kh": ["hr"]}
-        assert seen["held_audiences"] == {"kh": frozenset({"hr"})}
         assert seen["principal_email_verified"] is True
+        assert "upstream_audiences" not in seen and "held_audiences" not in seen
 
     def test_a_delivered_token_is_never_created_as_an_admin(self, tokens, monkeypatch):
         seen = {}
@@ -147,19 +135,9 @@ class TestDeliverUpstreamDomains:
         monkeypatch.setattr(tokens, "create", create)
         rc.deliver(
             principal=ALICE, bound=BOUND, proposal=_proposal(), config=CONFIG, api=FakeApi(), token_store=tokens,
-            policy=ENABLED, held_audiences={}, principal_email_verified=True,
+            policy=ENABLED, principal_email_verified=True,
         )
         assert seen["is_admin"] is False
-
-    def test_a_delivered_sync_token_is_refused(self, tokens):
-        api = FakeApi()
-        bound = {**BOUND, "tools": ["privacyfence_update_group_membership"]}
-        outcome = rc.deliver(
-            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=api, token_store=tokens,
-            policy=ENABLED, held_audiences={}, principal_email_verified=True,
-        )
-        assert outcome.status == 400 and "Only an administrator can create a token" in outcome.error
-        assert api.created == [] and tokens.tokens_for(ALICE) == []
 
 
 def _remove_the_record():

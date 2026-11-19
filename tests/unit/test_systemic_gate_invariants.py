@@ -48,7 +48,7 @@ import inspect
 import json
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -57,9 +57,8 @@ from privacyfence.auto_accept import TOOL_TO_GATE, ReviewContext
 from privacyfence.connector import ToolSpec
 from privacyfence.policy.conditions import CONDITION_SELECTORS
 
-from privacyfence.upstream_mcp_client import CallResult
 
-from ..helpers import assert_all_tools_leave_an_audit_trail, build_stub_args
+from ..helpers import build_stub_args
 
 # Source-scanning assertions over real code, no I/O -- unit per
 # testing-policy.md's seven-layer taxonomy.
@@ -195,6 +194,7 @@ TOKEN_WRITE_SITES: tuple[tuple[str, str | None, str], ...] = (
     ("salesforce_client", None, "_save_token_file"),
     ("slack_client", None, "save_token_record"),
     ("tasks_client", "TasksClient", "_save_token"),
+    ("upstream_oauth_tokens", None, "save_token"),
 )
 
 # scripts/sync_room_directory.py's own standalone _atomic_write_text -- see
@@ -230,68 +230,6 @@ class TestReasonParamOnEveryGatedTool:
         assert {"review", "popup"} & gates
 
 
-class TestUpstreamConnectorInvariants:
-    """Upstream tools are registered at startup rather than written in a connector, so the
-    parametrized checks above never see them; this builds one fake upstream and applies the same
-    reason-param and audit-trail invariants to it."""
-
-    @staticmethod
-    def _connector():
-        from mcp import types
-
-        from privacyfence import upstream_mcp_registry
-        from privacyfence.connectors.upstream_mcp import UpstreamMcpConnector
-        from privacyfence.upstream_mcp_client import UpstreamToolCatalog
-        from privacyfence.upstream_mcp_config import DeclaredTool, UpstreamServer
-
-        def tool(name: str, gate: str, verb: str, effect: str = "") -> DeclaredTool:
-            return DeclaredTool(
-                name=name, exposed_name=f"kh_{name}", operation=f"kh.{name}", gate=gate, verb=verb, effect=effect,
-            )
-
-        upstream = UpstreamServer(
-            id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
-            tools=(
-                tool("search", "auto", "search"),
-                tool("get_doc", "review", "read"),
-                tool("propose_change", "popup", "add", "Adds a change proposal to the knowledge hub."),
-            ),
-        )
-        upstream_mcp_registry.register([upstream])
-        catalog = UpstreamToolCatalog(upstream)
-        catalog.update([
-            types.Tool(
-                name=declared.name, description="A tool.",
-                input_schema={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
-            )
-            for declared in upstream.tools
-        ])
-        client = MagicMock()
-        client.call_tool = AsyncMock(return_value=CallResult(text="ok", structured=None, dropped_blocks=0))
-        return UpstreamMcpConnector(upstream, catalog, client, MagicMock)
-
-    def test_every_upstream_tool_declares_a_required_reason_param(self):
-        specs = self._connector().tool_specs()
-        assert {TOOL_TO_GATE[spec.name] for spec in specs} == {"auto", "review", "popup"}
-        for spec in specs:
-            reason_params = [p for p in spec.params if p.name == "reason"]
-            assert reason_params and reason_params[0].required, spec.name
-            assert spec.input_schema["properties"]["reason"]["type"] == "string"
-            assert "reason" in spec.input_schema["required"]
-
-    async def test_every_upstream_tool_leaves_an_audit_trail(self, monkeypatch, tmp_path):
-        from privacyfence.connectors import upstream_mcp as upstream_module
-
-        await assert_all_tools_leave_an_audit_trail(
-            self._connector(), upstream_module, monkeypatch, tmp_path,
-        )
-
-    def test_the_connector_module_never_reads_the_caller(self):
-        source = (SRC_ROOT / "connectors" / "upstream_mcp.py").read_text(encoding="utf-8")
-        for name in ("current_principal", "current_agent", "current_token_scope"):
-            assert name not in source
-
-
 class TestPiiScanTextOnEveryReviewGatedTool:
     @pytest.mark.parametrize("tool", sorted(_review_gated_call_sites()))
     def test_review_gated_call_passes_pii_scan_text(self, tool):
@@ -322,7 +260,7 @@ class TestTokenSitesUseTheSharedSecureWriteHelper:
         # above is itself worth catching, not just silently checking
         # whatever's currently listed -- see that tuple's own comment for
         # why the count is pinned.
-        assert len(TOKEN_WRITE_SITES) == 13
+        assert len(TOKEN_WRITE_SITES) == 14
 
     @pytest.mark.parametrize(
         "module_name, class_name, func_name", TOKEN_WRITE_SITES,

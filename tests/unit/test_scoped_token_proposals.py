@@ -347,22 +347,28 @@ class TestRecord:
 class TestUpstreamTools:
     @pytest.fixture(autouse=True)
     def _runtime(self, monkeypatch):
-        from privacyfence import upstream_mcp_runtime
+        from privacyfence import auto_accept
+        from privacyfence.policy import scopes
 
-        monkeypatch.setattr(upstream_mcp_runtime, "upstream_ids", lambda: frozenset({"kh"}))
+        monkeypatch.setitem(auto_accept.TOOL_TO_OPERATION, "kh_search", "kh.search")
+        monkeypatch.setitem(scopes.UPSTREAM_DECLARATIONS, "kh.search", "digest")
 
     def test_a_proposal_naming_an_upstream_tool_is_refused(self):
         with pytest.raises(stp.ProposalError, match="Upstream tools cannot be proposed; create the token in Settings."):
             _proposal(request=_request(tools=["gmail_list_messages", "kh_search"]))
 
-    def test_a_proposal_naming_the_sync_tool_is_refused(self):
-        with pytest.raises(stp.ProposalError, match="This tool cannot be proposed; create the token in Settings."):
-            _proposal(request=_request(tools=["gmail_list_messages", "privacyfence_update_group_membership"]))
+    def test_an_auto_tool_with_its_per_tool_rule_is_refused_too(self):
+        from privacyfence.upstream_mcp_registry import get_registry
+        from tests.unit.test_upstream_mcp_registry import saved_tool, upstream
+
+        get_registry().apply(upstream(), (saved_tool("fetch", "auto"),))
+        request = _request(
+            tools=["gmail_list_messages", "kh_fetch"],
+            rules=[{"kind": "new", "group": "upstream.always_allow/kh_fetch", "value": "", "verbs": ["read"]}],
+        )
+        with pytest.raises(stp.ProposalError) as err:
+            _proposal(request=request)
+        assert str(err.value) == stp.UPSTREAM_REFUSED_MESSAGE
 
     def test_a_proposal_of_built_in_tools_is_unaffected(self):
         assert _proposal().request["tools"] == ["drive_download_file", "gmail_list_messages"]
-
-    def test_the_review_cannot_add_a_domain(self):
-        proposed = _request()
-        assert stp.narrowing_error(proposed, {**proposed, "upstream_audiences": {}}) is None
-        assert stp.narrowing_error(proposed, {**proposed, "upstream_audiences": {"kh": ["hr"]}}) == stp.WIDENED_MESSAGE

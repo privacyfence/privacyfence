@@ -29,7 +29,10 @@ def _entry_matches_conditions(entry: propose.ProposableScope, rule: PolicyRule) 
 
 def missing_operations(rule: PolicyRule) -> frozenset[str]:
     """The operation keys ``rule``'s verbs imply today that it does not carry. Empty for a complete
-    rule and for a predicate no catalogue knows (a hand-written rule)."""
+    rule and for a predicate no catalogue knows (a hand-written rule). Always empty for a per-tool
+    upstream Always allow rule: it names one tool, and every other auto tool is not missing from it."""
+    if rule.predicate == "upstream.always_allow":
+        return frozenset()
     verbs = frozenset(describe.rule_verbs(rule))
     connectors = {propose.connector_of_operation(operation) for operation in rule.operations}
     expected: set[str] = set()

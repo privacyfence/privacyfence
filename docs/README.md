@@ -34,11 +34,9 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   organization, including claude.ai as a client.
 - [`org-mode-docker.md`](org-mode-docker.md) — run the organization deployment as containers: the
   published image, a tested Compose file with Caddy, upgrades, backups and verifying the image.
-- [`upstream-mcp.md`](upstream-mcp.md) — put your own MCP server behind PrivacyFence: declare its tools
-  and gates, map Workspace groups to audiences, keep membership current, and rotate the claim key.
-- [`identity-claim.md`](identity-claim.md) — the signed claim PrivacyFence sends an upstream MCP server:
-  its fields, how it is bound to one tool call and what an upstream must verify; read it when you write or
-  review an upstream's verifier.
+- [`upstream-mcp.md`](upstream-mcp.md) — put hosted MCP servers such as Canva or Framer behind PrivacyFence: the
+  operator's file, each person's own sign-in, the administrator's tool review and the gates.
+- [`identity-claim.md`](identity-claim.md) — removed; kept so links to it keep working.
 - [`n8n-node.md`](n8n-node.md) — the PrivacyFence node for n8n: install the community node, the
   credential, calling a tool from a workflow or an AI Agent, and the delivery switch.
 - [`oidc-provider.md`](oidc-provider.md) — let Peek and Grist (or other apps you name) sign people in

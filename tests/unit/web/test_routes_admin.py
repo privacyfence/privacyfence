@@ -19,17 +19,16 @@ from privacyfence import (
     admin_config,
     connector_configs,
     data_format,
-    group_membership,
     oauth_apps,
     paths,
     privacy_filter,
     relay_client,
-    upstream_mcp_runtime,
 )
 from privacyfence import webauthn_stepup as wa
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.step_up_config import StepUpConfig
+from privacyfence import upstream_mcp_runtime
 from privacyfence.web import org_session, org_stats, routes_admin
 from tests.connector_config_support import SENTINEL, public_bytes, sign
 
@@ -71,8 +70,8 @@ ACTION_BODIES = {
     "toggle_pii_category": {"category_key": "detect_ip_addresses"},
     "set_default_policy": {"group": "privacy", "policy": "redact"},
     "set_category_policy": {"group": "privacy", "category": "body", "policy": "block"},
-    "approve_group_membership": {"group": "mgmt@acme.com", "audience": "mgmt"},
-    "decline_group_membership": {"group": "mgmt@acme.com", "audience": "mgmt", "email": "a@acme.com"},
+    "save_upstream_tools": {"upstream_id": "acme", "gates": {"echo": "review"}, "fetched_at": 1700000000.123456},
+    "set_upstream_tool_gates": {"upstream_id": "acme", "gates": {"echo": "auto"}},
 }
 
 
@@ -137,15 +136,6 @@ def _passkey_post(world, action, body, csrf):
 def audit(monkeypatch):
     recorded = []
     monkeypatch.setattr(routes_admin, "_record_settings_audit", lambda p, s: recorded.append((p.id, s)))
-    return recorded
-
-
-@pytest.fixture
-def membership_audit(monkeypatch):
-    recorded = []
-    monkeypatch.setattr(
-        routes_admin, "_record_group_membership_audit", lambda p, d, s: recorded.append((p.id, d, s)),
-    )
     return recorded
 
 
@@ -465,7 +455,7 @@ class TestState:
         state = world.client.get("/api/admin/state").json()
         assert {"services", "rooms", "unattended_sessions", "download_delivery", "web_push", "authz",
                 "step_up", "scoped_tokens", "agent_runtimes", "agent_runtimes_status", "audit_forwarding",
-                "restart_needed", "relay_status", "upstream_servers"} <= set(state)
+                "restart_needed", "relay_status"} <= set(state)
         assert {"privacy", "stats"} <= set(state)
         assert state["restart_needed"] == []
 
@@ -690,166 +680,6 @@ class TestPrivacyAndStatsState:
         assert "stats" in r.json() and r.json()["privacy"]["default_policy"]["privacy"] == "redact"
 
 
-class TestUpstreamServers:
-    _ROW = {"id": "kh", "label": "Knowledge hub", "url": "https://kh.example/…", "state": "ready", "tools": [], "groups": []}
-
-    def test_nothing_declared(self):
-        world = World()
-        world.sign_in(ADMIN)
-        state = world.client.get("/api/admin/state").json()
-        assert state["upstream_servers"] == {"declared_by": "", "upstreams": []}
-
-    def test_declared_by_the_file_variable(self, monkeypatch):
-        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "admin_rows", lambda: [self._ROW])
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", "/srv/secret-place/upstreams.json")
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", '{"inline": "sentinel-inline"}')
-        world = World()
-        world.sign_in(ADMIN)
-        response = world.client.get("/api/admin/state")
-        assert response.json()["upstream_servers"] == {
-            "declared_by": "PRIVACYFENCE_UPSTREAM_MCP_FILE", "upstreams": [self._ROW],
-        }
-        assert "secret-place" not in response.text and "sentinel-inline" not in response.text
-
-    def test_declared_inline(self, monkeypatch):
-        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "admin_rows", lambda: [self._ROW])
-        monkeypatch.delenv("PRIVACYFENCE_UPSTREAM_MCP_FILE", raising=False)
-        monkeypatch.setenv("PRIVACYFENCE_UPSTREAM_MCP", '{"inline": "sentinel-inline"}')
-        world = World()
-        world.sign_in(ADMIN)
-        response = world.client.get("/api/admin/state")
-        assert response.json()["upstream_servers"]["declared_by"] == "PRIVACYFENCE_UPSTREAM_MCP"
-        assert "sentinel-inline" not in response.text
-
-
-class TestGroupMembership:
-    GROUP = "mgmt@acme.com"
-    MAP = {GROUP: frozenset({"mgmt", "all"})}
-
-    @pytest.fixture
-    def store(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(upstream_mcp_runtime, "all_group_audiences", lambda: dict(self.MAP))
-        monkeypatch.setattr(upstream_mcp_runtime, "membership_source", lambda: "snapshot")
-        store = group_membership.MembershipStore(tmp_path / "group_membership.json")
-        group_membership.set_store(store)
-        store.apply_snapshot({}, group_audiences=self.MAP, now=1.0, max_additions=20)  # bootstrap
-        store.apply_snapshot(
-            {self.GROUP: ["a@acme.com", "b@acme.com"]}, group_audiences=self.MAP, now=2.0, max_additions=20,
-        )
-        return store
-
-    def _signed_in(self):
-        world = World()
-        _enrol(ADMIN)
-        return world, world.sign_in(ADMIN)
-
-    def test_the_state_lists_the_pending_rows(self, store):
-        world, _ = self._signed_in()
-        gm = world.client.get("/api/admin/state").json()["group_membership"]
-        assert gm["source"] == "snapshot" and gm["last_rejected"] is None
-        assert gm["pending"] == [
-            {"group": self.GROUP, "audience": "mgmt", "count": 2, "emails": ["a@acme.com", "b@acme.com"]},
-        ]
-        assert gm["updated_at"] == 2.0
-
-    def test_the_state_lists_at_most_fifty_addresses_and_the_full_count(self, store):
-        store.apply_snapshot(
-            {self.GROUP: [f"p{i}@acme.com" for i in range(60)]}, group_audiences=self.MAP, now=3.0, max_additions=100,
-        )
-        world, _ = self._signed_in()
-        row = world.client.get("/api/admin/state").json()["group_membership"]["pending"][0]
-        assert row["count"] == 60 and len(row["emails"]) == 50
-
-    def test_a_static_source_is_read_only_with_nothing_pending(self, store, monkeypatch):
-        monkeypatch.setattr(upstream_mcp_runtime, "membership_source", lambda: "static")
-        world, _ = self._signed_in()
-        gm = world.client.get("/api/admin/state").json()["group_membership"]
-        assert gm == {"source": "static", "updated_at": None, "pending": [], "last_rejected": None}
-
-    def test_a_rejected_snapshot_is_reported(self, store):
-        store.apply_snapshot(
-            {self.GROUP: [f"q{i}@acme.com" for i in range(30)]}, group_audiences=self.MAP, now=3.0, max_additions=5,
-        )
-        world, _ = self._signed_in()
-        rejected = world.client.get("/api/admin/state").json()["group_membership"]["last_rejected"]
-        assert rejected == {"reason": "too_many_additions", "at": 3.0}
-
-    def test_both_actions_are_org_only_sensitive_and_declared(self):
-        for action in ("approve_group_membership", "decline_group_membership"):
-            spec = routes_admin.ADMIN_ACTIONS[action]
-            assert (spec.modes, spec.sensitive, spec.applies) == (frozenset({"org"}), True, "self")
-            assert routes_admin.ADMIN_PARAMS[action] == (
-                ("group", str, True), ("audience", str, True), ("email", str, False),
-            )
-
-    def test_first_call_needs_a_passkey_step_up(self, store):
-        world, csrf = self._signed_in()
-        r = world.post("approve_group_membership", {"group": self.GROUP, "audience": "mgmt"}, csrf)
-        assert r.status_code == 428
-        assert store.pending(self.MAP)[0].emails == ("a@acme.com", "b@acme.com")
-
-    def test_access_csrf_and_origin_are_checked(self, store):
-        body = {"group": self.GROUP, "audience": "mgmt"}
-        world = World()
-        assert world.client.post("/api/admin/approve_group_membership", json=body).status_code == 401
-        csrf = world.sign_in(ALICE)
-        assert world.post("approve_group_membership", body, csrf).status_code == 403
-        world = World()
-        csrf = world.sign_in(ADMIN)
-        assert world.post("approve_group_membership", body, "wrong").status_code == 401
-        r = world.post("decline_group_membership", body, csrf, headers={"Origin": "https://evil.example"})
-        assert r.status_code == 403
-
-    def test_approving_makes_the_resolver_grant_the_audience(self, store, audit, membership_audit):
-        resolver = group_membership.SnapshotResolver(store)
-        assert "mgmt" not in resolver.audiences_for("a@acme.com", self.MAP)
-        world, csrf = self._signed_in()
-        r = _passkey_post(world, "approve_group_membership", {"group": self.GROUP, "audience": "mgmt"}, csrf)
-        assert r.status_code == 200, r.text
-        assert "mgmt" in resolver.audiences_for("a@acme.com", self.MAP)
-        assert "mgmt" in resolver.audiences_for("b@acme.com", self.MAP)
-        assert r.json()["group_membership"]["pending"] == []
-        assert membership_audit == [(
-            "carol", "group_membership_approved",
-            f"Approved membership for 2 person(s) in {self.GROUP} for audience mgmt (admin=carol)",
-        )]
-        assert "@acme.com" not in membership_audit[-1][2].replace(self.GROUP, "")
-        assert not any("Approved membership" in summary for _, summary in audit)
-
-    def test_a_failed_membership_write_is_500(self, store, monkeypatch, audit, membership_audit):
-        def boom(*args, **kwargs):
-            raise OSError("read-only")
-
-        monkeypatch.setattr(routes_admin, "_decide_group_membership", boom)
-        world, csrf = self._signed_in()
-        r = _passkey_post(world, "approve_group_membership", {"group": self.GROUP, "audience": "mgmt"}, csrf)
-        assert (r.status_code, r.json()) == (500, {"error": "Could not save the group membership."})
-        assert membership_audit == []
-
-    def test_approving_one_email_leaves_the_other_pending(self, store):
-        world, csrf = self._signed_in()
-        body = {"group": self.GROUP, "audience": "mgmt", "email": "a@acme.com"}
-        r = _passkey_post(world, "approve_group_membership", body, csrf)
-        assert r.status_code == 200
-        assert [p["emails"] for p in r.json()["group_membership"]["pending"]] == [["b@acme.com"]]
-
-    def test_declining_removes_the_pending_row_and_grants_nothing(self, store, audit, membership_audit):
-        world, csrf = self._signed_in()
-        r = _passkey_post(world, "decline_group_membership", {"group": self.GROUP, "audience": "mgmt", "email": ""}, csrf)
-        assert r.status_code == 200, r.text
-        assert r.json()["group_membership"]["pending"] == []
-        assert "mgmt" not in group_membership.SnapshotResolver(store).audiences_for("a@acme.com", self.MAP)
-        assert membership_audit[-1][1] == "group_membership_declined"
-        assert membership_audit[-1][2].startswith(f"Declined membership for 2 person(s) in {self.GROUP} for audience mgmt")
-        assert "@acme.com" not in membership_audit[-1][2].replace(self.GROUP, "")
-
-    def test_nothing_waiting_is_a_409(self, store):
-        world, csrf = self._signed_in()
-        body = {"group": "other@acme.com", "audience": "mgmt"}
-        r = _passkey_post(world, "approve_group_membership", body, csrf)
-        assert (r.status_code, r.json()) == (409, {"error": "Nothing is waiting for that approval."})
-
-
 class TestRouteClassification:
     def test_the_dispatcher_is_classified(self):
         assert routes_admin.ROUTE_CLASSIFICATION["/api/admin/{action}"] == "action-dispatcher"
@@ -866,6 +696,211 @@ class TestRouteClassification:
 
     def test_the_registry_type_is_the_real_one(self):
         assert hasattr(ConnectorRegistry, "evict_all")
+
+
+# --------------------------------------------------------------------------- #
+# The three upstream-tool actions
+# --------------------------------------------------------------------------- #
+
+FETCHED_AT = 1700000000.123456
+
+
+class FakeUpstream:
+    """Stands in for upstream_mcp_runtime: it records the calls and refuses like the real one."""
+
+    def __init__(self, monkeypatch):
+        self.calls = []
+        self.refresh_error = None
+        self.rows = [{"id": "acme", "label": "Acme", "tools": [], "pending": None}]
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "refresh", self.refresh)
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "save", self.save)
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "set_gates", self.set_gates)
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "admin_rows", self.admin_rows)
+
+    def _known(self, upstream_id):
+        if upstream_id != "acme":
+            raise upstream_mcp_runtime.UpstreamAdminError("Unknown upstream.")
+
+    async def refresh(self, upstream_id, principal):
+        self._known(upstream_id)
+        self.calls.append(("refresh", upstream_id, principal.id))
+        if self.refresh_error is not None:
+            raise self.refresh_error
+        return {}
+
+    def save(self, upstream_id, gates, fetched_at):
+        self._known(upstream_id)
+        if any(g not in ("review", "popup", "auto") for g in gates.values()):
+            raise upstream_mcp_runtime.UpstreamAdminError("Gate must be review, popup or auto.")
+        if "nothing" in gates:
+            raise upstream_mcp_runtime.UpstreamAdminError("Refresh the tool list first.", 409)
+        if fetched_at != FETCHED_AT:
+            raise upstream_mcp_runtime.UpstreamAdminError(
+                "The tool list changed since you refreshed it. Refresh again.", 409,
+            )
+        self.calls.append(("save", upstream_id, dict(gates), fetched_at))
+
+    def set_gates(self, upstream_id, gates):
+        self._known(upstream_id)
+        if any(g not in ("review", "popup", "auto") for g in gates.values()):
+            raise upstream_mcp_runtime.UpstreamAdminError("Gate must be review, popup or auto.")
+        if "ghost" in gates:
+            raise upstream_mcp_runtime.UpstreamAdminError("That tool is not in the saved list.")
+        self.calls.append(("set_gates", upstream_id, dict(gates)))
+
+    def admin_rows(self, principal=None):
+        self.calls.append(("admin_rows", principal.id if principal else None))
+        return self.rows
+
+
+@pytest.fixture
+def upstream(monkeypatch):
+    return FakeUpstream(monkeypatch)
+
+
+class TestUpstreamActions:
+    def test_refresh_needs_no_passkey_and_passes_the_admin(self, upstream):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.post("refresh_upstream_tools", {"upstream_id": "acme"}, csrf)
+        assert r.status_code == 200
+        assert ("refresh", "acme", "carol") in upstream.calls
+        assert r.json()["upstream_servers"] == upstream.rows
+
+    def test_save_needs_the_step_up_then_saves(self, upstream, audit):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = ACTION_BODIES["save_upstream_tools"]
+        r = _passkey_post(world, "save_upstream_tools", body, csrf)
+        assert r.status_code == 200, r.text
+        assert ("save", "acme", {"echo": "review"}, FETCHED_AT) in upstream.calls
+        # The runtime writes the audit row; the route adds none for these actions.
+        assert not [s for _, s in audit if "upstream" in s.lower() and "Step-up" not in s]
+
+    def test_a_json_float_fetched_at_arrives_unchanged(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {**ACTION_BODIES["save_upstream_tools"], "fetched_at": FETCHED_AT}
+        assert _passkey_post(world, "save_upstream_tools", body, csrf).status_code == 200
+        saved = [c for c in upstream.calls if c[0] == "save"][0]
+        assert saved[3] == FETCHED_AT and isinstance(saved[3], float)
+
+    def test_set_gates_needs_the_step_up_then_applies(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_upstream_tool_gates", ACTION_BODIES["set_upstream_tool_gates"], csrf)
+        assert r.status_code == 200
+        assert ("set_gates", "acme", {"echo": "auto"}) in upstream.calls
+
+    @pytest.mark.parametrize("action", ["refresh_upstream_tools", "save_upstream_tools", "set_upstream_tool_gates"])
+    def test_a_non_admin_is_403(self, upstream, action):
+        world = World()
+        csrf = world.sign_in(ALICE)
+        r = world.post(action, {"upstream_id": "acme", "gates": {}, "fetched_at": 1.0}, csrf)
+        assert r.status_code == 403
+        assert upstream.calls == []
+
+    def test_an_unknown_upstream_is_400(self, upstream):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.post("refresh_upstream_tools", {"upstream_id": "nope"}, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "Unknown upstream."})
+
+    def test_a_bad_gate_is_400_with_the_exact_text(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {"upstream_id": "acme", "gates": {"echo": "yolo"}}
+        r = _passkey_post(world, "set_upstream_tool_gates", body, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "Gate must be review, popup or auto."})
+
+    def test_a_tool_that_is_not_saved_is_400(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_upstream_tool_gates", {"upstream_id": "acme", "gates": {"ghost": "auto"}}, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "That tool is not in the saved list."})
+
+    def test_save_without_a_pending_list_is_409(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {"upstream_id": "acme", "gates": {"nothing": "review"}, "fetched_at": FETCHED_AT}
+        r = _passkey_post(world, "save_upstream_tools", body, csrf)
+        assert (r.status_code, r.json()) == (409, {"error": "Refresh the tool list first."})
+
+    def test_save_with_a_stale_fetched_at_is_409(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {"upstream_id": "acme", "gates": {}, "fetched_at": FETCHED_AT + 1}
+        r = _passkey_post(world, "save_upstream_tools", body, csrf)
+        assert (r.status_code, r.json()) == (
+            409, {"error": "The tool list changed since you refreshed it. Refresh again."},
+        )
+
+    def test_the_refresh_error_text_and_status_pass_through(self, upstream):
+        upstream.refresh_error = upstream_mcp_runtime.UpstreamRefreshError(
+            "Connect Acme on the Connect page (/connect) first, then refresh.", 409,
+        )
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.post("refresh_upstream_tools", {"upstream_id": "acme"}, csrf)
+        assert (r.status_code, r.json()) == (
+            409, {"error": "Connect Acme on the Connect page (/connect) first, then refresh."},
+        )
+        upstream.refresh_error = upstream_mcp_runtime.UpstreamRefreshError("The Acme server could not be reached.", 502)
+        assert world.post("refresh_upstream_tools", {"upstream_id": "acme"}, csrf).status_code == 502
+
+    @pytest.mark.parametrize("gates", [[], "x", {"echo": 5}, {f"t{i}": "auto" for i in range(51)}])
+    def test_gates_must_be_a_small_object_of_strings(self, upstream, gates):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = world.post("set_upstream_tool_gates", {"upstream_id": "acme", "gates": gates}, csrf)
+        assert r.status_code == 400 and r.json()["error"].startswith("gates:")
+
+    @pytest.mark.parametrize("value", ["1.5", True, None, [1]])
+    def test_fetched_at_must_be_a_number(self, upstream, value):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        _enrol(ADMIN)
+        r = world.post("save_upstream_tools", {"upstream_id": "acme", "gates": {}, "fetched_at": value}, csrf)
+        assert r.status_code == 400 and r.json()["error"].startswith("fetched_at:")
+
+    def test_an_integer_fetched_at_is_accepted_as_a_float(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {"upstream_id": "acme", "gates": {}, "fetched_at": 5}
+        r = _passkey_post(world, "save_upstream_tools", body, csrf)
+        assert r.status_code == 409  # 5.0 is not the pending list's stamp
+
+    def test_a_failed_write_is_500(self, upstream, monkeypatch):
+        def boom(*args):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "set_gates", boom)
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_upstream_tool_gates", ACTION_BODIES["set_upstream_tool_gates"], csrf)
+        assert (r.status_code, r.json()) == (500, {"error": "Could not save the upstream tool list."})
+
+    def test_the_state_carries_upstream_servers(self, upstream):
+        world = World()
+        world.sign_in(ADMIN)
+        assert world.client.get("/api/admin/state").json()["upstream_servers"] == upstream.rows
+        assert ("admin_rows", "carol") in upstream.calls
+
+    def test_the_state_has_an_empty_list_when_nothing_is_configured(self):
+        upstream_mcp_runtime.reset()
+        world = World()
+        world.sign_in(ADMIN)
+        assert world.client.get("/api/admin/state").json()["upstream_servers"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -1463,40 +1498,3 @@ class TestAdminPage:
         assert '"restart_needed"' in r.text and '"relay_status"' in r.text
         initial = r.text.split("window.__pfInitialState = ")[1].split(";</script>")[0]
         assert not {"connectors", "telegram_auth", "peek_auth"} & set(json.loads(initial))
-
-
-class TestRecordGroupMembershipAudit:
-    """The real ``_record_group_membership_audit`` (the route tests replace it with a stand-in)."""
-
-    SUMMARY = "Approved membership for 2 person(s) in staff for audience https://x.example (admin=alice)"
-
-    def test_records_the_decision_as_its_own_audit_entry(self, monkeypatch):
-        entries = []
-
-        class FakeLogger:
-            def record(self, entry):
-                entries.append(entry)
-
-        monkeypatch.setattr(routes_admin, "get_audit_logger", lambda: FakeLogger())
-        principal = Principal(id="alice")
-        for decision in ("group_membership_approved", "group_membership_declined"):
-            routes_admin._record_group_membership_audit(principal, decision, self.SUMMARY)
-
-        assert [e.decision for e in entries] == ["group_membership_approved", "group_membership_declined"]
-        for entry in entries:
-            assert entry.sender == principal.id
-            assert entry.connector == "privacyfence"
-            assert entry.summary == self.SUMMARY
-            assert "@" not in entry.summary
-
-    def test_an_audit_failure_is_logged_not_raised(self, monkeypatch, caplog):
-        class BrokenLogger:
-            def record(self, entry):
-                raise OSError("disk full")
-
-        monkeypatch.setattr(routes_admin, "get_audit_logger", lambda: BrokenLogger())
-        with caplog.at_level(logging.WARNING):
-            routes_admin._record_group_membership_audit(
-                Principal(id="alice"), "group_membership_approved", self.SUMMARY,
-            )
-        assert "Audit log write failed for a group membership decision" in caplog.text

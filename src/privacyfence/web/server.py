@@ -274,8 +274,10 @@ def scoped_token_page_data(
         }
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
-        if gate.is_gated_upstream_tool(name):
-            continue  # Offered only as an administrator's approval below (ADR 0300).
+        if gate.is_gated_upstream_tool(name) and name not in policy_scopes.UPSTREAM_AUTO_TOOLS:
+            # Offered only as an administrator's approval below (ADR 0300). A tool at the `auto`
+            # ceiling stays here: a person's own per-tool rule can cover it (ADR 0331).
+            continue
         connector = _tool_connector(name, connector_names)
         if connector is not None:
             by_connector.setdefault(connector, []).append(name)
@@ -298,7 +300,6 @@ def scoped_token_page_data(
             "tools": sorted(token.tools),
             "allow_personal_data": token.allow_personal_data,
             "allow_personal_data_reads": token.allow_personal_data_reads,
-            "upstream_audiences": {uid: sorted(doms) for uid, doms in sorted(token.upstream_audiences.items())},
             "last_used_at": seen.last_used_at, "last_denied_at": seen.last_denied_at,
             "last_denied_tool": seen.last_denied_tool,
             "runtime_credential": (
@@ -331,13 +332,11 @@ def scoped_token_page_data(
     from .. import upstream_mcp_runtime  # function-local, as in _build_org_app
 
     if upstream_mcp_runtime.configured():
-        # The audiences a token may narrow are the ones the person holds themselves.
-        held = upstream_mcp_runtime.held_audiences(principal, principal.email_verified)
         page["upstreams"] = [
             {
                 "id": row["id"], "label": row["label"], "tools": by_connector.get(str(row["id"]), []),
-                "audiences": sorted(held.get(str(row["id"]), frozenset())),
                 "gated_tools": _gated_tools(str(row["id"])) if principal.is_admin else [],
+                "connection_note": True,
             }
             for row in upstream_mcp_runtime.status()
         ]
@@ -692,8 +691,8 @@ def _build_org_app(
 
     from ..org_mode import AuthzPolicyConfig
     from . import (
-        routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security, routes_upstream_mcp,
-        routes_whats_new, single_user_auth,
+        routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security,
+        routes_upstream_oauth, routes_whats_new, single_user_auth,
     )
     from .. import upstream_mcp_runtime
     from .routes_settings import build_org_routes
@@ -705,6 +704,15 @@ def _build_org_app(
     extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
+        def _upstream_tools_changed() -> None:
+            # A host built while the saved list was empty has no upstream connector and nothing
+            # else rebuilds it, so drop every person's host (idle caches only; approvals live
+            # elsewhere) before telling connected clients to re-list.
+            if org.connector_registry is not None:
+                org.connector_registry.evict_all()
+            mcp_dispatcher.notify_tools_changed()
+
+        upstream_mcp_runtime.set_tools_changed_callback(_upstream_tools_changed)
         mcp_route, session_manager = mount_mcp(
             mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), org.provider),
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
@@ -725,13 +733,6 @@ def _build_org_app(
     extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url, sessions=org.sessions))
     if org.oidc is not None:
         extra_routes.extend(routes_oidc.build_routes(org.oidc, sessions=org.sessions))
-    claim_signer = upstream_mcp_runtime.signer()
-    if upstream_mcp_runtime.configured() and claim_signer is not None:
-        # ADR 0286: the key set an upstream verifies claims against; the lifespan fetches each
-        # upstream's tool list once the server runs.
-        extra_routes.extend(routes_upstream_mcp.build_routes(claim_signer))
-        if mcp_dispatcher is not None:
-            lifespans.append(upstream_mcp_runtime.lifespan(mcp_dispatcher.notify_tools_changed))
     # Mounted unconditionally here (every _build_org_app call is already
     # org mode) -- needs nothing from org.connector_registry, only
     # org.sessions, same reasoning /approvals'/security's own unconditional
@@ -751,6 +752,10 @@ def _build_org_app(
             sessions=org.sessions, connector_registry=org.connector_registry,
             org_config=org.org_config, issuer_url=org.issuer_url,
         ))
+        if upstream_mcp_runtime.configured():
+            extra_routes.extend(routes_upstream_oauth.build_routes(
+                sessions=org.sessions, connector_registry=org.connector_registry, issuer_url=org.issuer_url,
+            ))
         default_next_path = "/connect"
     issuer_host = urlparse(org.issuer_url).hostname or ""
     step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)

@@ -697,8 +697,21 @@ def _gmail_query_matches(value: Any, ctx: ReviewContext) -> bool:
 TOKEN_ONLY_PREDICATES: frozenset[str] = frozenset({"upstream.approved_tool"})
 
 # Operation key ("<id>.<tool>") to the digest of the operator's declaration of it; filled by
-# `upstream_mcp_registry.register`, cleared by `unregister_all`. Empty until an upstream is registered.
+# `upstream_mcp_registry.UpstreamRegistry.apply`, cleared by `clear`. Empty until an upstream is registered.
 UPSTREAM_DECLARATIONS: dict[str, str] = {}
+
+# Exposed names of the upstream tools whose configured gate is `auto` (ADR 0331): the ceiling up to
+# which a person may make an Always allow rule. `auto` is never enforced as a gate; the selector below
+# checks this set at match time, so a rule for a tool that was later lowered stays stored and matches
+# nothing. Filled and cleared by `UpstreamRegistry`.
+UPSTREAM_AUTO_TOOLS: set[str] = set()
+
+
+def _upstream_always_allow_matches(value: Any, ctx: ReviewContext) -> bool:
+    """True when ``value`` is the exposed name of a tool still at the ``auto`` ceiling and the call
+    is for that tool. The policy preflight builds the context with an empty tool, and the rule's own
+    operations already confine it to one tool."""
+    return isinstance(value, str) and value in UPSTREAM_AUTO_TOOLS and ctx.tool in ("", value)
 
 
 def _upstream_approved_tool_matches(value: Any, _ctx: ReviewContext) -> bool:
@@ -743,6 +756,11 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         predicate="upstream.approved_tool", scope_type="upstream.approved_tool",
         kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.ARGS,
         matches=_upstream_approved_tool_matches,
+    ),
+    "upstream.always_allow": ScopeSelector(
+        predicate="upstream.always_allow", scope_type="upstream.always_allow",
+        kind=ScopeKind.ATTRIBUTE, resolves_from=ResolvesFrom.ARGS,
+        matches=_upstream_always_allow_matches,
     ),
     "gmail.anything": ScopeSelector(
         predicate="gmail.anything", scope_type="gmail.anything", kind=ScopeKind.ATTRIBUTE,

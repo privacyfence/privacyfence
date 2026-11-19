@@ -34,7 +34,6 @@ from privacyfence import (
     daemon_main,
     data_format,
     download_staging,
-    group_membership,
     gate,
     grist_auth,
     grist_provisioning,
@@ -146,7 +145,6 @@ def _reset() -> None:
     audit_log.set_released_request_id("")
     # The scoped-token store is a process-wide singleton over the data dir (ADR 0164).
     scoped_tokens.set_store(None)
-    group_membership.set_store(None)
     scoped_token_proposals.set_registry(None)
     runtime_credentials.set_store(None)
     runtime_credential_sweeper.stop()
@@ -210,14 +208,12 @@ def _reset_singletons():
 
 
 @pytest.fixture(autouse=True)
-def _restore_upstream_tool_tables():
-    # upstream_mcp_registry.register writes the process-wide policy tables; a test that registers
-    # upstream tools must not leak them into the next one.
+def _reset_upstream_mcp_registry():
     yield
     from privacyfence import upstream_mcp_registry, upstream_mcp_runtime
 
-    upstream_mcp_registry.unregister_all()
     upstream_mcp_runtime.reset()
+    upstream_mcp_registry.reset()
 
 
 @pytest.fixture(autouse=True)

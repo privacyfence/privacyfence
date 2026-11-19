@@ -58,7 +58,6 @@ CONNECTOR_TITLES: dict[str, str] = {
     "peek": "Peek",
     "miro": "Miro",
     "upstream_mcp": "Upstream MCP servers",
-    "privacyfence": "PrivacyFence administration",
 }
 
 # Short names for the summary table, same keys.
@@ -79,7 +78,6 @@ CONNECTOR_SHORT: dict[str, str] = {
     "peek": "Peek",
     "miro": "Miro",
     "upstream_mcp": "Upstream MCP",
-    "privacyfence": "group membership sync",
 }
 
 GATE_ORDER: tuple[str, ...] = ("auto", "review", "popup")
@@ -232,7 +230,7 @@ PII detection, the privacy filter and passkey step-up all act within these gates
 [Always allow reference](always-allow-rules-reference.md).
 
 Tools of an upstream MCP server (declared by an operator, see [Upstream MCP servers](upstream-mcp.md)) are
-not listed here. Their gate is the one the operator declared, and an administrator can approve a
+not listed here. Their gate is set by an administrator on the Admin page; a tool the administrator set to auto still asks until you make an Always allow rule for it. An administrator can also approve a
 `review` or `popup` one for a scoped token ([ADR 0300](adr/0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md)).
 
 **Direction** is what the tool itself declares: `read` tools change nothing in the connected

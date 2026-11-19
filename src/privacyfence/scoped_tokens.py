@@ -85,9 +85,8 @@ class ScopedToken:
     tools: frozenset[str]
     allow_personal_data: bool = False  # ADR 0173: exports, downloads and page uploads may carry personal data
     allow_personal_data_reads: bool = False  # Gmail message/thread and Slack reads may carry personal data
-    # Upstream MCP servers: the audiences the token may see per upstream id, and whether
-    # the owner's email was verified when it was made. Read by ``upstream_mcp_runtime.caller_for``.
-    upstream_audiences: Mapping[str, frozenset[str]] = field(default_factory=dict, hash=False)
+    # Whether the owner's email was verified when the token was made (the ``email_verified`` of the
+    # caller identity in ``web/mcp_auth.py``).
     principal_email_verified: bool = False
     # The token's own rules (ADR 0236), in the auto_accept: row format.
     rules: tuple["ScopeRow", ...] = field(default=(), hash=False)
@@ -231,16 +230,13 @@ def normalise_create_request(payload: dict[str, Any]) -> dict[str, Any] | None:
     allow_personal_data_reads = payload.get("allow_personal_data_reads", False)
     if not isinstance(allow_personal_data_reads, bool):
         return None
-    upstream_audiences = _normalise_upstream_audiences(payload.get("upstream_audiences"))
-    if upstream_audiences is None:
-        return None
     upstream_approvals = _normalise_upstream_approvals(payload.get("upstream_approvals", []))
     if upstream_approvals is None:
         return None
     return {
         "label": label, "days": days, "rules": rules, "tools": sorted(tools),
         "allow_personal_data": allow_personal_data, "allow_personal_data_reads": allow_personal_data_reads,
-        "upstream_audiences": upstream_audiences, "upstream_approvals": upstream_approvals,
+        "upstream_approvals": upstream_approvals,
     }
 
 
@@ -257,24 +253,6 @@ def _normalise_upstream_approvals(raw: Any) -> list[dict[str, str]] | None:
             return None
         found.add((item["tool"], item["digest"]))
     return [{"tool": tool, "digest": digest} for tool, digest in sorted(found)]
-
-
-def _normalise_upstream_audiences(raw: Any) -> dict[str, list[str]] | None:
-    """``{upstream id: sorted, de-duplicated audience list}``, or ``None`` for a malformed value.
-    An upstream with no audience is left out, so the step-up fingerprint is the same either way."""
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        return None
-    out: dict[str, list[str]] = {}
-    for upstream_id, domains in raw.items():
-        if not isinstance(upstream_id, str) or not isinstance(domains, list):
-            return None
-        if not all(isinstance(domain, str) for domain in domains):
-            return None
-        if domains:
-            out[upstream_id] = sorted(set(domains))
-    return dict(sorted(out.items()))
 
 
 def _to_json(token: ScopedToken) -> dict[str, Any]:
@@ -297,8 +275,6 @@ def _to_json(token: ScopedToken) -> dict[str, Any]:
         data["allow_personal_data"] = True
     if token.allow_personal_data_reads:
         data["allow_personal_data_reads"] = True
-    if token.upstream_audiences:
-        data["upstream_audiences"] = {uid: sorted(doms) for uid, doms in sorted(token.upstream_audiences.items())}
     if token.principal_email_verified:
         data["principal_email_verified"] = True
     data["rules"] = [scope_rows.row_to_dict(row) for row in token.rules]
@@ -329,16 +305,6 @@ def _limits_from_json(raw: Any) -> dict[str, frozenset[tuple[str, str]]]:
             parsed.add((pair[0], pair[1]))
         limits[rid] = frozenset(parsed)
     return limits
-
-
-def _upstream_audiences_from_json(raw: Any) -> dict[str, frozenset[str]]:
-    """Lenient read: anything malformed is dropped, which only narrows the token."""
-    if not isinstance(raw, dict):
-        return {}
-    return {
-        uid: frozenset(d for d in doms if isinstance(d, str))
-        for uid, doms in raw.items() if isinstance(uid, str) and isinstance(doms, list)
-    }
 
 
 def _valid_approval_row(row: ScopeRow) -> bool:
@@ -387,7 +353,6 @@ def _from_json(principal_id: str, raw: Any) -> ScopedToken:
         tools=frozenset(str(t) for t in raw["tools"]),
         allow_personal_data=raw.get("allow_personal_data", False) is True,
         allow_personal_data_reads=raw.get("allow_personal_data_reads", False) is True,
-        upstream_audiences=_upstream_audiences_from_json(raw.get("upstream_audiences")),
         principal_email_verified=raw.get("principal_email_verified", False) is True,
         rules=tuple(rows),
         legacy_raw=legacy_raw,
@@ -599,11 +564,20 @@ def normalise_rule_requests(raw: Any) -> list[dict[str, Any]] | None:
 
 
 def _checked_upstream_approvals(
-    tool_set: frozenset[str], approvals: Sequence[Mapping[str, str]], *, is_admin: bool,
+    tool_set: frozenset[str],
+    approvals: Sequence[Mapping[str, str]],
+    rows: Iterable[Any],
+    *,
+    is_admin: bool,
 ) -> list[tuple[str, str]]:
-    """The ``(tool, digest)`` approvals of a create request after plan 3.4's three rules, in order:
-    only an administrator approves; a gated upstream tool needs an approval; an approval must name a
-    listed gated upstream tool and the operator's current digest."""
+    """The ``(tool, digest)`` approvals of a create request after the rules of ADR 0300 and 0331, in
+    order: only an administrator sends an approval; a listed gated upstream tool is covered by an
+    approval or by one of the token's own rules (``rows``: the compiled rules of the request, so a
+    row a copy or duplicate request resolves later does not count); an approval must name a listed
+    gated upstream tool and the server's current digest.
+
+    A covering rule has the predicate ``upstream.always_allow``, the tool's exposed name as its value,
+    the tool's operation among its operations, and the tool still at the ``auto`` ceiling."""
     from . import gate  # function-local: the module is import-cycle sensitive
     from .policy import scopes as policy_scopes
 
@@ -611,11 +585,18 @@ def _checked_upstream_approvals(
     if pairs and not is_admin:
         raise ScopedTokenError(f"Only an administrator can create a token for {pairs[0][0]}.")
     approved = {tool for tool, _ in pairs}
+    ruled = {
+        row.value
+        for row in rows
+        if row.predicate == "upstream.always_allow" and isinstance(row.value, str)
+        and auto_accept.TOOL_TO_OPERATION.get(row.value) in row.operations
+        and row.value in policy_scopes.UPSTREAM_AUTO_TOOLS
+    }
     for name in sorted(tool_set):
-        if gate.is_gated_upstream_tool(name) and name not in approved:
+        if gate.is_gated_upstream_tool(name) and name not in approved and name not in ruled:
             raise ScopedTokenError(
                 f"{name} changes data or releases results unseen; an administrator must approve it "
-                "on the New token form."
+                "on the New token form, or the token needs an Always allow rule for it."
             )
     for tool, digest in pairs:
         operation = auto_accept.TOOL_TO_OPERATION.get(tool)
@@ -734,8 +715,6 @@ class ScopedTokenStore:
         policy: ScopedTokenPolicy,
         allow_personal_data: bool = False,
         allow_personal_data_reads: bool = False,
-        upstream_audiences: Mapping[str, Iterable[str]] | None = None,
-        held_audiences: Mapping[str, frozenset[str]] | None = None,
         principal_email_verified: bool = False,
         is_admin: bool = False,
         upstream_approvals: Sequence[Mapping[str, str]] = (),
@@ -746,25 +725,17 @@ class ScopedTokenStore:
         output): a ``new`` rule, a ``copy`` of one of the person's Auto-accept rows, or a
         ``duplicate`` of a row of one of their tokens (ADR 0236). A caller that must record the id
         before the token exists passes ``token_id`` (``new_token_id()``); it must be unused by the person."""
-        from .connectors.group_membership import TOOL_NAME as GROUP_MEMBERSHIP_TOOL  # function-local: import cycle
         from .policy import scope_rows
 
         if token_id is not None and not TOKEN_ID_RE.match(token_id):
             raise ScopedTokenError("That token id is already in use.")
 
         tool_set = frozenset(tools)
-        if GROUP_MEMBERSHIP_TOOL in tool_set and not is_admin:
-            # The sync tool changes who holds which audience, so only an administrator may mint it (plan 3.8).
-            raise ScopedTokenError(f"Only an administrator can create a token for {GROUP_MEMBERSHIP_TOOL}.")
-        approvals = _checked_upstream_approvals(tool_set, upstream_approvals, is_admin=is_admin)
-        chosen_audiences = {uid: frozenset(doms) for uid, doms in (upstream_audiences or {}).items() if doms}
-        held = held_audiences or {}
-        for uid, doms in sorted(chosen_audiences.items()):
-            for audience in sorted(doms - held.get(uid, frozenset())):
-                raise ScopedTokenError(f"You can only give a token audiences you have: {audience}")
         new_rules, own_rows = self._prepare(
-            label=label, rules=rules, policy=policy, approvals=len(approvals),
+            label=label, rules=rules, policy=policy,
+            approvals=len({(a["tool"], a["digest"]) for a in upstream_approvals}),
         )
+        approvals = _checked_upstream_approvals(tool_set, upstream_approvals, new_rules, is_admin=is_admin)
         with self._lock:
             self._refresh(principal)
             existing = self._tokens[principal.id]
@@ -790,7 +761,6 @@ class ScopedTokenStore:
                 tools=tool_set,
                 allow_personal_data=allow_personal_data,
                 allow_personal_data_reads=allow_personal_data_reads,
-                upstream_audiences=chosen_audiences,
                 principal_email_verified=principal_email_verified,
                 rules=tuple(token_rows),
             )

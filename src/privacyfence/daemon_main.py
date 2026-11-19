@@ -94,8 +94,6 @@ from . import (
     connector_configs,
     data_format,
     grist_provisioning,
-    group_membership,
-    identity_claim,
     oauth_apps,
     oidc_provider,
     org_bundle_signing,
@@ -108,8 +106,8 @@ from . import (
     scoped_tokens,
     step_up_config,
     upstream_mcp_config,
-    upstream_mcp_registry,
     upstream_mcp_runtime,
+    upstream_tools,
 )
 from .policy import store as policy_store
 
@@ -158,7 +156,6 @@ from .connectors.contacts import ContactsConnector
 from .connectors.drive import DriveConnector
 from .connectors.gmail import GmailConnector
 from .connectors.grist import GristConnector
-from .connectors.group_membership import GroupMembershipConnector
 from .connectors.jira import JiraConnector
 from .connectors.miro import MiroConnector
 from .connectors.salesforce import SalesforceConnector
@@ -1196,7 +1193,7 @@ def _start_org_web_server(
 
     _flush_deferred_warnings()
 
-    _configure_upstream_mcp(server_config.issuer_url)
+    _configure_upstream_mcp()
 
     oidc_clients = oidc_provider.clients_from_env()
     oidc = None
@@ -1359,29 +1356,25 @@ def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
     return value
 
 
-def _configure_upstream_mcp(issuer_url: str) -> None:
-    """Organization mode with ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` or ``PRIVACYFENCE_UPSTREAM_MCP`` set
-    (ADR 0285, 0298): load the declaration, register the declared tools into the policy tables, build the group maps
-    and the membership resolver, and configure the runtime. Raises
-    ``org_mode.ConfigurationError`` (the start is refused) on any problem."""
+def _configure_upstream_mcp() -> None:
+    """Configure the hosted upstream MCP servers declared by ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` or
+    ``PRIVACYFENCE_UPSTREAM_MCP`` (ADR 0329): log what the removed claim-based feature left on disk,
+    then load the declaration and hand it to the runtime, which registers each saved tool list with no
+    network call. The leftovers are logged first, so a server whose variable was removed or still names
+    a version 1 file (refused below) logs them too. Raises ``org_mode.ConfigurationError`` on any problem."""
+    try:
+        stored = admin_config.load()
+    except admin_config.AdminConfigError:
+        stored = None  # the admin config reports its own problem; the leftover hint is best effort
+    for leftover in upstream_mcp_config.leftovers(stored):
+        logger.warning("%s", leftover)
     upstreams = upstream_mcp_config.load_declared()
     if upstreams is None:
         return
-    claim_settings, membership = upstream_mcp_config.load_settings()
-    upstream_mcp_registry.register(upstreams)
-    groups = upstream_mcp_config.GroupMapStore(
-        admin_config.admin_config_path(), frozenset(upstream.id for upstream in upstreams),
-    )
-    resolver: group_membership.MembershipResolver
-    if membership.source == "static":
-        resolver = group_membership.StaticFileResolver(Path(membership.file or ""))
-    else:
-        resolver = group_membership.SnapshotResolver(group_membership.get_store())
     upstream_mcp_runtime.configure(
-        upstreams=upstreams, signer=identity_claim.load_signer(
-            issuer_url, overlap_seconds=claim_settings.key_overlap_hours * 3600,
-        ),
-        groups=groups, resolver=resolver, membership_max_additions=membership.max_additions,
+        upstreams=upstreams,
+        tool_store=upstream_tools.ToolStore(org_dir() / "upstream_tools"),
+        registrations_dir=org_dir() / "upstream_oauth",
     )
     logger.info("Upstream MCP server(s): %s", ", ".join(upstream.id for upstream in upstreams))
 
@@ -1764,8 +1757,6 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
     if upstream_mcp_runtime.configured():
         connectors.extend(upstream_mcp_runtime.connectors_for_principal())
 
-    connectors.append(GroupMembershipConnector())
-
     return connectors, failures
 
 
@@ -1987,64 +1978,6 @@ def run_revoke_scoped_tokens(principal_id: str) -> int:
     revoked = store.revoke_all(principal_id)
     print(f"Revoked {revoked} scoped token(s) for {principal_id}.")
     print("A running PrivacyFence server deletes these tokens' n8n credentials within 5 minutes.")
-    return 0
-
-
-# ---------------------------------------------------------------------------- #
-# --rotate-upstream-claim-key / --revoke-upstream-claim-key
-# ---------------------------------------------------------------------------- #
-
-def _upstream_claim_keyset() -> Any:
-    """The claim key set with the operator file's overlap, so the command's prune keeps what the server publishes."""
-    from . import upstream_claim_keys, upstream_mcp_config
-
-    claim_settings, _ = upstream_mcp_config.load_settings()
-    return upstream_claim_keys.KeySet(
-        org_dir() / upstream_claim_keys.FILENAME, overlap_seconds=claim_settings.key_overlap_hours * 3600,
-    )
-
-
-def run_rotate_upstream_claim_key() -> int:
-    """Add a new Ed25519 key to the upstream identity-claim key set.
-
-    The new key is published in the JWKS at once and starts signing five minutes
-    later, so verifiers' cached key sets already hold it; the previous key stays
-    published for the overlap. Run it as the account that owns the data; a running
-    server re-reads the file on its next call.
-    """
-
-    try:
-        keys = _upstream_claim_keyset()
-    except org_mode.ConfigurationError as exc:
-        return _refuse_to_start(f"Configuration error: {exc}")
-    keys.ensure()
-    new = keys.rotate()
-    starts = datetime.fromtimestamp(new.signs_from, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print(
-        f"Rotated: new key {new.kid} starts signing at {starts}; "
-        "the previous key stays published for the configured overlap."
-    )
-    return 0
-
-
-def run_revoke_upstream_claim_key(kid: str) -> int:
-    """Remove one key from the upstream identity-claim key set and its JWKS at once."""
-    from . import upstream_claim_keys
-
-    try:
-        keys = _upstream_claim_keyset()
-    except org_mode.ConfigurationError as exc:
-        return _refuse_to_start(f"Configuration error: {exc}")
-    keys.ensure()
-    try:
-        removed = keys.revoke(kid)
-    except upstream_claim_keys.KeySetError as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-    if not removed:
-        print("No such key.", file=sys.stderr)
-        return 1
-    print(f"Revoked key {kid}.")
     return 0
 
 
@@ -2329,20 +2262,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # is the human's privacy policy, not the agent's own operational data.
     default_config = str(authority_root(Path(PROJECT_ROOT)) / "config" / "settings.yaml")
     parser.add_argument("--config", default=default_config)
-    parser.add_argument(
-        "--rotate-upstream-claim-key", action="store_true",
-        help=(
-            "Add a new key to the upstream identity-claim key set and exit. It is published at once and "
-            "starts signing five minutes later. Run it as the account the daemon runs as."
-        ),
-    )
-    parser.add_argument(
-        "--revoke-upstream-claim-key", metavar="KID", default=None,
-        help=(
-            "Remove the key KID from the upstream identity-claim key set and its JWKS at once, and exit. "
-            "Refused for the only key that can sign. Run it as the account the daemon runs as."
-        ),
-    )
     # ADR 0165: an administrator takes back all of one person's scoped tokens.
     parser.add_argument(
         "--revoke-scoped-tokens", metavar="PRINCIPAL_ID", default=None,
@@ -2439,10 +2358,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.revoke_scoped_tokens is not None:
         return run_revoke_scoped_tokens(args.revoke_scoped_tokens)
-    if args.rotate_upstream_claim_key:
-        return run_rotate_upstream_claim_key()
-    if args.revoke_upstream_claim_key is not None:
-        return run_revoke_upstream_claim_key(args.revoke_upstream_claim_key)
     if args.relay_dns_records:
         return run_relay_dns_records()
     if args.print_env_from_bundle:

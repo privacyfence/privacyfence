@@ -8,6 +8,8 @@ Amends [ADR 0164](0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-den
 [ADR 0285](0285-upstream-mcp-servers-are-declared-connectors.md).
 Issue [#1121](https://github.com/privacyfence/privacyfence/issues/1121).
 
+**Amended by [ADR 0331](0331-the-administrator-manages-each-upstream-servers-tools.md), 2026-11-19.**
+
 ## Context
 
 An unattended n8n workflow could not call any upstream write tool. Every upstream write has to be declared

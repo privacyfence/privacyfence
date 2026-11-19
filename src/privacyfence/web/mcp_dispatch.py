@@ -691,16 +691,14 @@ class McpDispatcher:
         connector rows, not this method deciding it's worth a nag (open
         question #4 in the issue: whether partial setup deserves a nudge on
         every call was left to a later pass)."""
+        from .. import upstream_mcp_runtime  # function-local, as elsewhere in this module
+
         connectors = self._status_connector_rows()
         setup_complete = any(c["authenticated"] for c in connectors)
         result: dict[str, Any] = {
             # Always "org" (ADR 0301): kept on the wire for clients that read it.
             "mode": "org", "setup_complete": setup_complete, "connectors": connectors,
         }
-
-        # ADR 0285: only when the operator configured upstream MCP servers.
-        from .. import upstream_mcp_runtime
-
         if upstream_mcp_runtime.configured():
             result["upstreams"] = upstream_mcp_runtime.status()
 

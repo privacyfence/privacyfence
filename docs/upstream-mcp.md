@@ -1,389 +1,122 @@
 # Upstream MCP servers behind PrivacyFence
 
-An organization server can put another MCP server (an "upstream", for example a knowledge hub) behind
-PrivacyFence. The operator declares which of its tools exist and how each is gated; PrivacyFence
-enforces that tool policy with cards, scoped tokens and the audit log, like a built-in connector.
-Every call PrivacyFence forwards carries a short signed claim, bound to that one call, that names the
-person, the audiences they hold and what is calling; the upstream filters its own queries by it.
-
-Why it is built this way: [ADR 0285](adr/0285-upstream-mcp-servers-are-declared-connectors.md),
-[ADR 0297](adr/0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md),
-[ADR 0298](adr/0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) and
-[ADR 0299](adr/0299-group-membership-is-updated-through-a-scoped-token-tool.md).
-
-- **Operators:** [write the file](#the-operator-file), [map groups to audiences](#groups-and-audiences),
-  [keep membership current](#group-membership), restart.
-- **Upstream implementers:** [verify the claim and filter by `audiences`](#for-upstream-implementers).
-- **Try it:** [the reference upstream](#reference-upstream).
+An operator declares a hosted MCP server (Canva, Framer and similar) in a small file. Each person signs in there with their own account on the Connect page, and an administrator reviews the server's tools once on the Admin page. After that the tools reach AI clients as `<id>_<tool>`, behind PrivacyFence's approval gates.
+This is organization mode only. The earlier claim-based upstream feature of 8.0.0 is removed ([ADR 0329](adr/0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md)); [Leftovers of the removed feature](#leftovers-of-the-removed-feature) says how to clean up.
 
 ## For operators
 
-Organization servers only. In single-user mode a non-empty
-`PRIVACYFENCE_UPSTREAM_MCP_FILE` or `PRIVACYFENCE_UPSTREAM_MCP` refuses the start. On a Docker install
-see [Upstream MCP file](org-mode-docker.md#upstream-mcp-file).
-
-### The operator file
-
-Set `PRIVACYFENCE_UPSTREAM_MCP_FILE` to the path of a YAML or JSON file (see the
-[configuration reference](configuration-reference.md)). A name ending in `.yaml` or `.yml` is read as
-YAML, any other name as JSON. Or put the same text in `PRIVACYFENCE_UPSTREAM_MCP` (always read as YAML,
-so one-line JSON works too). Set one of the two, never both: both refuse the start. The declaration is
-read once, at startup; **a change to it needs a restart**.
-
-```json
-{
-  "version": 1,
-  "upstreams": [
-    {
-      "id": "kh",
-      "label": "Knowledge hub",
-      "url": "https://kh.example.internal/mcp",
-      "audience": "https://kh.example.internal",
-      "tools": {
-        "search":         {"gate": "auto",  "verb": "search"},
-        "get_doc":        {"gate": "auto",  "verb": "read"},
-        "propose_change": {"gate": "popup", "verb": "add",    "effect": "Adds a change proposal to the knowledge hub."},
-        "write_derived":  {"gate": "popup", "verb": "update", "effect": "Writes a derived document to the knowledge hub."}
-      }
-    }
-  ]
-}
-```
-
-The same declaration in YAML (quote an `id` or tool name that YAML reads as a boolean, such as `"no"` or `"on"`):
+Declare the servers in a file named by `PRIVACYFENCE_UPSTREAM_MCP_FILE` (YAML for `.yaml` or `.yml`, any other name as JSON), or inline in `PRIVACYFENCE_UPSTREAM_MCP`. Set one, never both; the text is at most 256 KiB and a repeated key is refused. Both are read once at start, so a change needs a restart. The [Docker guide](org-mode-docker.md#upstream-mcp-file) shows where the file goes.
 
 ```yaml
-version: 1
+version: 2
 upstreams:
-  - id: kh
-    label: Knowledge hub
-    url: https://kh.example.internal/mcp
-    audience: https://kh.example.internal
-    tools:
-      search: {gate: auto, verb: search}
-      propose_change: {gate: popup, verb: add, effect: Adds a change proposal to the knowledge hub.}
+  - id: canva
+    label: Canva
+    url: https://mcp.canva.com/mcp
+    oauth:
+      scopes: [design:content:read, design:meta:read]
+  - id: framer
+    label: Framer
+    url: https://mcp.framer.com/mcp
+    allowed_principal_types: [claude_client]
 ```
 
-The AI client sees each declared tool as `<id>_<tool>`, here `kh_search` and `kh_propose_change`. Any
-mistake in the declaration refuses the start; the message names the path of the bad value
-(`PRIVACYFENCE_UPSTREAM_MCP_FILE: upstreams[0].tools.search.gate: ...`) and never quotes the value.
+The file holds `version: 2` and `upstreams` (at most 8). A file with another version, including a version 1 file written for the removed feature, refuses the start. An error reads `<source>: upstreams[<i>].<key>: <problem>`; any other key, `tools` and `audience` included, is `is not a known key`.
 
-| Rule | Detail |
+| Key | Rule |
 |---|---|
-| Keys | `version` must be `1`. Only `version`, `upstreams`, `claim` and `membership` at the top; only `id`, `label`, `url`, `audience`, `tools`, `identity_claim`, `claim_lifetime_seconds`, `allowed_principal_types`, `email_for_visibility`, `audiences_tool` and `audiences_refresh_seconds` in an upstream (an old `grants` key is refused with `grants were replaced by groups`); only `gate`, `verb`, `effect` in a tool. Anything else is refused. |
-| Size | At most 8 upstreams and 50 tools per upstream; the file or inline text is at most 256 KiB. |
-| Repeated key | A key that appears twice in one mapping or object is refused (`the file repeats a key.` or `the text repeats a key.`), so a repeated tool name cannot silently keep the last gate. |
-| Format | A YAML file is checked by the same rules as JSON; a wrong top level still reads `must be a JSON object`. |
-| `id` | 2-16 characters, lowercase letters and digits, starting with a letter; unique. It may not collide with a built-in connector name (such as `gmail`, `drive`, `privacyfence`): `upstream id "<id>" collides with the built-in connector "<name>"`. |
-| `label` | 1-60 characters, no control characters. It names the server on cards and in the tool descriptions. |
-| `url` | `https://` with any host, or `http://` only for `localhost`, a loopback address or a single-word host name (a container on the same Docker network, such as `http://knowledge-hub:8080/mcp`). No user name, no fragment. |
-| `audience` | Required, 1-200 characters, no whitespace. It becomes the `aud` of every claim; the upstream accepts only claims with its own audience. Not to be confused with the *audiences* a person holds. |
-| `identity_claim` | `required` (the default) signs every call; `off` sends no claim and resolves no caller. |
-| `claim_lifetime_seconds` | 5-60, default 60: how long a claim is valid. |
-| `allowed_principal_types` | A non-empty list from `claude_client` (a person's AI client) and `n8n_workflow` (any scoped token); default both. A caller of another type is refused before anything is sent. |
-| `email_for_visibility` | `true` or `false`, default `false`. With `true` the claim carries the person's verified, lower-cased email, for use in the upstream's own visibility rules (see [the contract](identity-claim.md#email-as-a-visibility-input-opt-in)). Refused with `identity_claim: off` and for any value that is not a boolean; a YAML file reads `yes` and `on` as `true`. |
-| `audiences_tool` | The name of a tool of the upstream that tells PrivacyFence who holds each audience (see [Audiences from the upstream](#audiences-from-the-upstream)). 1-48 letters, digits, underscores or hyphens; not also a key of the same upstream's `tools` (`is also declared under tools; the audiences tool is called by PrivacyFence only`); refused with `identity_claim: off` (`needs identity_claim required`). |
-| `audiences_refresh_seconds` | A whole number from 30 to 3600, default 300: how often PrivacyFence asks again. Only together with `audiences_tool` (`is only allowed with audiences_tool`); anything else reads `must be a whole number from 30 to 3600`. |
-| tool name | 1-48 letters, digits, underscores or hyphens; `<id>_<tool>` is at most 64 characters and must not collide with an existing tool. |
-| `gate` | `auto` (runs at once), `review` (runs, then the person sees the result before it is returned) or `popup` (the person approves before the call is sent). |
-| `verb` | One of the policy verbs. A **read verb** (`read`, `download`, `search`) takes `auto` or `review` and no `effect`. **Every other verb** takes `popup` and must carry an `effect`: 1-200 characters, ending in a full stop, shown on the card. |
+| `id` | Required. A lower-case letter then 1-15 lower-case letters or digits, unique. It may not be a built-in connector name, nor `docs` or `sheets`. It prefixes every tool: `canva_<tool>`. |
+| `label` | Required. 1-60 characters, no control character. Shown to people. |
+| `url` | Required. The server's MCP address: `https://`, or `http://` only for `localhost` or a loopback address; no user name or fragment. |
+| `allowed_principal_types` | Optional. A non-empty list from `claude_client` and `n8n_workflow`. Default: both. Checked on every call. |
+| `oauth.scopes` | Optional. 1-20 scopes, each 1-100 characters with no whitespace. See [Cautions](#cautions). |
+| `oauth.client_id` | Optional. Use an app you registered with the vendor instead of registering dynamically. 1-200 characters, no whitespace. |
+| `oauth.client_secret_env` | Optional, only with `client_id`. The *name* of an environment variable that holds the secret (capital letters, digits, underscores). A variable that is not set or is empty refuses the start. |
+| `oauth.issuer` | Optional. Pins the authorization server: an `https://` address the server's metadata must list. |
 
-So an ungated write cannot be declared, as long as the verb says it is a write.
+PrivacyFence finds the vendor's sign-in endpoints from the server address itself (RFC 9728 and RFC 8414 metadata), and registers itself as a client on the first Connect (RFC 7591) unless you declared a `client_id`. It requires S256 PKCE. Addresses in that metadata must be `https://` and public, or loopback when the server itself is. The redirect address is `<server address>/upstream-mcp/<id>/callback`; a vendor that refuses it needs a declared client ([ADR 0330](adr/0330-oauth-upstreams-discover-their-server-register-a-client-and-keep-tokens-per-person.md)).
 
-> **Declaring a writing tool with a read verb skips the approval card.** PrivacyFence cannot see what an
-> upstream tool does, only what you declared. A tool that changes data must carry a verb such as `add`,
-> `update` or `delete`.
+A declared client with a secret keeps working after a restart: the sign-in method that worked at Connect is read back from the stored token.
 
-PrivacyFence asks the upstream for its tool list once, at startup, and retries with a growing delay until
-it answers. It never fetches the list again, even when the upstream has an audiences tool (that tool is
-called on an interval, the list is not): **restart PrivacyFence to pick up a change in the upstream's
-tools or descriptions.** A declared tool the upstream does not list, or lists with a schema PrivacyFence
-cannot pass on (not an object schema, a `reason` property of its own, over 32 KB, or any `$ref`, `$defs`
-or `definitions`), is skipped and logged. Each exposed tool gets one extra required `reason` parameter,
-like every PrivacyFence tool. The schemas the upstream sends are passed to AI clients as they are, so
-whether a given client accepts a nested type or an `enum` is the operator's responsibility to check.
+What the server keeps, in the data directory: each person's tokens in `users/<id>/credentials/upstream_mcp/<id>.json` (plaintext at mode 0600, like every other third-party token; [ADR 0330](adr/0330-oauth-upstreams-discover-their-server-register-a-client-and-keep-tokens-per-person.md) says why they are not encrypted), the dynamic registrations in `org/upstream_oauth/` and the saved tool lists in `org/upstream_tools/`. Back them up with the rest of the data.
 
-Approval cards show the server, the tool and the argument names, never the argument values. A popup
-tool's card also offers the arguments' text for review. Upstream tools have no "Always allow" button and no
-auto-accept rules yet.
+## For administrators
 
-### Groups and audiences
+Nothing is exposed until an administrator has reviewed the tools. Connect first on `/connect`, then open **Admin → Upstream MCP servers**. One card per server shows its address, the sign-in (`OAuth at <host>, <n> person(s) connected, client declared|dynamic`) and its tools.
 
-An *audience* is the upstream's own label for a slice of its data (`all`, `mgmt`, `finance`). A person holds
-the audiences of the Workspace groups they belong to. The map from groups to audiences is set in
-`admin_config.json` under `upstream_mcp` (on an organization server, `org/admin_config.json`; see the
-[configuration reference](configuration-reference.md#admin-config-orgadmin_configjson)):
+1. **Refresh tools** lists the server's tools with *your own* connection and shows them as a pending list. Without a connection the button is off and says to connect first. Nothing changes for anyone yet.
+2. Review each tool. The default gate is `review` when the server says the tool is read-only and not destructive, and `popup` for everything else. A tool that is new or whose description or schema changed is marked `new` or `changed` and `Not exposed until you save.`
+3. **Save** (with your passkey) makes the pending list the saved list. It takes effect at once, even for people who are already connected, and AI clients are told the tool list changed. **Save gates** changes gates on the saved tools without a refresh.
 
-```json
-"upstream_mcp": {
-  "kh": {"groups": {
-    "everyone@company.example": ["all"],
-    "mgmt@company.example":     ["mgmt"],
-    "ceo-staff@company.example": ["mgmt", "finance"]
-  }}
-}
-```
+**Hold until Save.** Until you save, AI clients keep seeing the previous saved list, whatever the server now lists or says in its descriptions. A server cannot add a tool or rewrite one behind your back. A `changed` tool comes back at its default gate, not its saved one, and its people's Always allow rules stop matching until you choose `auto` again. A tool the server lists that PrivacyFence cannot carry (an unusual name or schema, more than 50 tools) is marked unsupported with the reason and never saved. If another administrator refreshes while you review, Save answers `The tool list changed since you refreshed it. Refresh again.`
 
-- The file may be written before the first start, for example by a deployment tool. It must hold `"version": 1`. A file that holds only some sections is filled with the defaults, and `PRIVACYFENCE_ALLOWED_DOMAINS` does not seed the allowed domains: set them on **Admin → Sign-in**.
-- A group name is lower case and email-shaped; an audience is 1-63 characters (`a-z`, `0-9`, `_`, `-`,
-  starting with a letter or digit). At most 200 groups per upstream. A person's audiences are the union over
-  every group they belong to.
-- `all` is the one unrestricted audience: an addition to it applies at once. Every other audience is
-  restricted and needs an administrator's approval for each person ([below](#group-membership)).
-- **Grants were replaced by groups.** A `grants` key in the declaration is refused at
-  start with this message; nothing is seeded from the declaration any more, and `admin_config.json` holds `groups`.
-- A group map for an id the declaration does not declare is logged once and ignored. An invalid section is
-  reported as `admin_config.json: upstream_mcp.<id>.groups: <problem>`; at startup it refuses the start, and
-  in a running server the last good map stays in force and the error is logged.
-- **"Verified" matters.** Audiences come only from an email address PrivacyFence treats as verified: the
-  identity provider said the address is verified, or the identity provider's `trust_unverified_email` is on
-  and the address is in an allowed domain (see [Who may sign in](org-mode-setup-guide.md#who-may-sign-in)).
-  The single-user person is verified. An unverified or empty address gets no audiences, so the upstream
-  returns no data for that person.
-- **Edits apply without a restart:** PrivacyFence re-reads the file when its modification time changes. **Admin → Upstream MCP servers** shows the map in force but cannot change it; it is a file edit. Do it while no one is saving on the Admin page.
-- **An upstream that declares `audiences_tool` does not use this map at all.** Its audiences come from that
-  tool, see below; a map written for it is ignored and logged once at start.
+**Annotations are only a default.** `readOnlyHint` and `destructiveHint` come from the server, which PrivacyFence does not trust. They seed the default and the verb (`read`, `update` or `delete`) that scoped-token scopes use, and you decide. A `review` call runs *before* the person sees the result, so the list warns `Runs before the person sees anything.` on a `review` tool that is not read-only. See [Cautions](#cautions).
 
-### Audiences from the upstream
+**Gates.**
 
-An upstream that already knows who may see what, such as a knowledge hub with its own teams, can be the
-source of its own audiences ([ADR 0325](adr/0325-an-upstream-can-be-the-source-of-its-own-audiences.md)).
-The operator adds `audiences_tool: <tool name>` (and, if wanted, `audiences_refresh_seconds`) to that
-upstream in the operator file and restarts. PrivacyFence then calls that tool itself, at startup and every
-`audiences_refresh_seconds` (default 300, so every five minutes), with a service claim
-([contract](identity-claim.md#the-audiences-tool-opt-in)), with arguments `{}`. The upstream answers with a
-JSON object, as structured content or as the text of the result:
-
-```json
-{"version": 1, "audiences": {"mgmt": ["ann@example.com", "bob@example.com"], "finance": ["bob@example.com"]}}
-```
-
-Exactly the keys `version` (the number 1) and `audiences`; at most 200 audiences (names as above) and 20000
-addresses in all; the answer is at most 1 MB. An address PrivacyFence cannot use (not a plain ASCII address)
-is dropped and counted, never a reason to reject the answer. A person's audiences on that upstream are the
-audiences whose lists hold their verified email.
-
-- **No approvals.** The upstream decides who holds each audience, `all` included, and there is no cap on
-  additions and no parking. The group map in `admin_config.json` and **Admin → Group membership** are not
-  used for that upstream. Other upstreams are untouched, and an upstream's answer never reaches another
-  upstream's audiences.
-- **Refresh and stale rule.** A failed refresh keeps the last answer and is retried with a growing delay
-  (never longer than the refresh interval). An answer older than three refresh intervals gives nobody any
-  audience until the next success, and before the first success nobody holds one. So a removal at the
-  upstream reaches PrivacyFence within one interval normally, and within three intervals plus the 60 second
-  call timeout while the upstream is down (3 hours 1 minute at 3600 seconds).
-- A scoped token still holds only the audiences its creator holds now, narrowed by the ones ticked at
-  creation. A token made before the switch keeps its ticked names, which are now read against the new
-  source.
-- The tool list is still fetched once; the upstream should list its audiences tool, but PrivacyFence never
-  exposes it to AI clients.
-
-### Operator keys
-
-Besides the per-upstream keys in the table above, the operator file has two top-level objects:
-
-| Key | Meaning |
+| Gate | What a person meets |
 |---|---|
-| `claim.key_overlap_hours` | 1-720, default 24: how long a rotated key stays in the key set after it stops signing. |
-| `membership.source` | `snapshot` (the default: membership comes from the [sync tool](#group-membership)) or `static`. |
-| `membership.file` | With `static` only: the path of a JSON file `{"version": 1, "groups": {"mgmt@company.example": ["a@company.example"]}}`, re-read when it changes. No approvals; for a first try and for tests. |
-| `membership.max_additions` | 1-1000, default 20: how many additions one snapshot and the last 24 hours together may hold before the snapshot is rejected. |
+| `review` | The call runs, then the person sees the result and may deny its release. |
+| `popup` | The person approves the call first. |
+| `auto` | A ceiling, not a gate: the tool keeps asking as `review` or `popup` until a person makes an **Always allow** rule for that one tool. |
 
-`identity_claim`, `claim_lifetime_seconds`, `allowed_principal_types` and `email_for_visibility` are described in the table of rules
-above. A change to any of these needs a restart.
+Every tool has its own Always allow rule, shown on the approval card; one rule never covers another tool of the same server. Lowering a tool later leaves the stored rule in place but matching nothing.
 
-### Group membership
+**Scoped tokens.** A token acts through its creator's connection to the server. A scoped token that lists a gated upstream tool needs either your tick on the New token form ([ADR 0300](adr/0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md), pinned to the tool's description, schema, gate, verb and server address) or its own Always allow rule for that tool, which only an `auto` tool offers. The form names the connection the token uses. Details: [ADR 0331](adr/0331-the-administrator-manages-each-upstream-servers-tools.md).
 
-PrivacyFence does not read your directory. A job of yours (an n8n workflow that lists the Workspace groups)
-tells it who is in each group by calling the tool **`privacyfence_update_group_membership`** with
-`{"groups": {"mgmt@company.example": ["a@company.example", "b@company.example"]}}`. Each call is a snapshot of
-the groups it names. The tool answers `{"status": "applied" | "rejected", "added", "removed", "parked",
-"ignored_groups", "reason"}`.
+The Admin actions answer with these errors: `Unknown upstream.` (400), `Gate must be review, popup or auto.` (400), `That tool is not in the saved list.` (400), `Refresh the tool list first.` (409), `The tool list changed since you refreshed it. Refresh again.` (409), and a 502 with the connection message when the refresh fails (below).
 
-- **Only a scoped token can call it, and only an administrator can create that token.** In Settings → Scoped
-  tokens → New token an administrator ticks `privacyfence_update_group_membership` under "Tools that need no
-  rule". An AI client cannot call the tool or propose a token for it. Keep the secret in the job's credential
-  store, never in a chat.
-- **Removals apply at once.** A person who is absent from a group in the snapshot loses that group's audiences
-  at the next call.
-- **Additions to `all` apply at once; additions to any other audience wait.** The person is *parked* until an
-  administrator opens **Admin → Group membership** and approves or declines them for that group and audience
-  (one person, or everyone pending for that group and audience). An approval is only for that group and
-  audience, and is forgotten when the person leaves the group.
-- **An upstream with `audiences_tool` is skipped:** its audiences come from its own tool, so the tool
-  stores no member of a group mapped only for it and **Admin → Group membership** shows no pending row for it.
-- **Groups no upstream's map names are ignored** and never stored; mapping a group later makes it appear in
-  the next snapshot.
-- **Limits.** At most 500 groups and 20000 member entries per snapshot. A snapshot is rejected, and nothing
-  is applied, when its additions together with those of the last 24 hours exceed `membership.max_additions`
-  (the very first snapshot is exempt), or when more than 500 approvals would be pending. A rejection is an
-  audit entry, a log line and a row on the Admin page.
-- Every call, approval and decline is in the audit log with counts and group names, never addresses.
+## For people
 
-The tool is also listed in the [tools reference](tools-reference.md).
+Open `/connect`. Each declared server has a row. **Connect** sends you to the vendor to sign in and approve; you return to `/connect` with `<label> connected.` The badge then reads `Connected` and the link `Reconnect`, which signs in again. A declined or failed sign-in reads `Could not connect <label> -- sign-in was declined, or the server could not be reached.` Rows are listed in sorted id order. There is no Disconnect button: remove the grant on the vendor's side.
 
-### What a person and a scoped token see
+Calls the AI client makes read as:
 
-- **A person** (through an AI client) gets the audiences their groups give them, with `principal_type`
-  `claude_client`.
-- **A scoped token** gets only the audiences its creator ticked, and never more than the creator holds. In
-  Settings → Scoped tokens → New token, tick an upstream tool and a fieldset `Audiences for <label>` appears
-  with one box per audience you hold, none ticked. A token made without ticking any sees no audience. A token
-  only narrows: if the person later loses an audience, the token loses it too. Its claim has `principal_type`
-  `n8n_workflow` and no email.
-- An AI client cannot propose a scoped token that includes an upstream tool: the proposal is refused with
-  `Upstream tools cannot be proposed; create the token in Settings.`
+- `<label> is not connected. Connect <label> on the Connect page (/connect).`
+- `The <label> sign-in has expired or was revoked. Connect <label> on the Connect page (/connect) to sign in again.`
+- `<label> needs more access than PrivacyFence was granted. Connect <label> again on the Connect page (/connect).`
+- `The <label> server could not be reached.`
+- `The <label> result is larger than 1 MB; ask for less.`
+- `The <label> server returned an error: <text>` (the vendor's own text, cut to 500 characters). The tool list comes from the administrator's account, so a person whose account lacks a tool gets the vendor's error for it.
+- `PrivacyFence does not allow this caller to use the <label> server.` (`allowed_principal_types`).
 
-### Letting a token call a gated upstream tool
+## What `privacyfence_status` reports
 
-An upstream tool declared `popup` or `review` needs a person's card, and a scoped token has nobody to answer
-one. An administrator can approve such a tool for one token instead
-([ADR 0300](adr/0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md)):
+An `upstreams` row per declared server: `id`, `label`, `tools_exposed`, `state` (`waiting_for_admin` while no list is saved, with `admin_hint` `An administrator has to refresh the tool list on the Admin page.`; else `ready`), `connected` for the caller and, when not connected, `connect_hint`. A person with no connection to a server sees none of its tools.
 
-- In Settings → Scoped tokens → New token, an administrator ticks the tool under "Upstream tools that change
-  data or release results unseen". Nobody else sees that group, and a local server never does.
-- The tick approves the tool for every call of that token, with no card. The tool's effect text is shown next
-  to the tick, with "writes data" for a `popup` tool and "result not reviewed by a person" for a `review` one.
-- If the operator changes the tool's declaration (gate, verb, effect, url, audience or identity claim mode),
-  the approval stops working and the call is refused before it reaches the upstream.
-- A `review` result goes to the token without a person seeing it, but personal data in it still blocks the
-  call.
-- An AI client cannot propose such a token.
-- An administrator who later loses the role keeps the token until it expires or is revoked.
-- In the audit log look for `upstream_forwarded` with `metadata.gate` (`auto`, `review` or `popup`), and for
-  `auto_accepted` whose rule is the token's approval row.
+## Errors and size
 
-### Rotating the claim key
+A tool result over 1,000,000 characters is refused (`too_large`). A tool's description is cut to 700 characters for the AI client, and every tool gains a required `reason` argument that the approval card shows. No token, code, secret or response body is logged or shown in an error.
 
-Claims are signed with an Ed25519 key kept in `upstream_claim_keys.json` in the org directory and published at
-`<PrivacyFence address>/upstream-mcp/jwks`. To rotate it, run `privacyfence-app --rotate-upstream-claim-key` as
-the account the daemon runs as. The new key is published at once and starts signing five minutes later, so an
-upstream that caches the key set for five minutes has it first; the old key stays published for
-`claim.key_overlap_hours`. `--revoke-upstream-claim-key KID` removes a key from the key set at once (for a
-leaked key) and refuses the only signing key. See the
-[configuration reference](configuration-reference.md#command-line-options).
+## Audit
 
-### Audit
+Each forwarded call writes `upstream_forwarded` (the server id, the gate, `auth: oauth` and the result kind; never an argument, a token or server text). Admin actions write `upstream_tools_refreshed`, `upstream_tools_saved` and `upstream_tool_gates_changed`, with the server id and counts only.
 
-Every call PrivacyFence forwards to an upstream writes one `upstream_forwarded` audit entry with the claim's
-`jti`, `sub`, principal type, audiences and `req` and how the call ended (including a refusal or a signing
-failure), so your upstream's log can be matched to PrivacyFence's. The claim and the arguments are never logged.
+## Cautions
 
-An upstream with an audiences tool adds two decisions, never with an address: `upstream_audiences_applied`
-(the first success, a success whose table differs from the last applied one, and the first success after a
-failure; its summary has the counts of audiences, people and dropped addresses) and
-`upstream_audiences_failed` (a failure when the previous attempt did not fail; its summary names the kind:
-`unreachable`, `too_large`, `tool_error`, `claim_failed` or `invalid`). Neither is an approval. The refresh
-writes no `upstream_forwarded` entry; the claim's `jti` of each success is logged at info level.
+- **Declare `oauth.scopes`.** Without them PrivacyFence asks for every scope the server lists, and logs `Upstream <id> declares no oauth.scopes; it will ask for every scope the server lists.` at start. Ask for the least that the tools you want need.
+- **A reverse proxy that logs the callback query** keeps the one-time sign-in code. PKCE bounds the damage, but turn that logging off for `/upstream-mcp/*/callback`.
+- **The client secret variable.** Anything that can read the daemon's environment can read `oauth.client_secret_env`. Use your orchestrator's secret store, never the declaration file, and never put it in chat.
+- **A server that marks a write tool read-only** gets that tool the `review` default, and `review` forwards the call before anyone sees it. Read each default before you save, and set such a tool to `popup`.
+- **One shared tool list.** Refresh reads a server-wide list with the refreshing administrator's account; it changes nothing at the vendor.
+- **Token acts as its creator.** A scoped token calls the vendor as the person who made it.
 
-### On the Admin page
+## Leftovers of the removed feature
 
-**Admin → Upstream MCP servers** shows each declared upstream: whether its tool list has arrived, its address (only its scheme and host, then `/…` when it has a path or query), its claim audience and identity-claim settings, who may call it, each declared tool with its gate, verb and effect and whether it is exposed, and the groups mapped to its audiences. For an upstream with an audiences tool the third card is titled `<label>: audiences` and shows the source (tool and interval), its state (waiting, ready or stale, with the counts of audiences and people), the last refresh time, the last error and how many mapped groups are ignored, never an address. It is read-only: change the declaration and restart, or edit `admin_config.json`. It never shows the declaration file's path, the inline text or the upstream's own tool descriptions ([ADR 0319](adr/0319-the-admin-page-shows-upstream-mcp-servers-read-only.md)).
+PrivacyFence never reads or deletes these, and logs one warning each at start. On every server that used the claim-based feature:
 
-### `privacyfence_status`
+1. Delete `org/upstream_claim_keys.json`, `org/upstream_claim_keys.lock` and `org/group_membership.json` from the data directory.
+2. Remove `PRIVACYFENCE_UPSTREAM_MCP_FILE` or `PRIVACYFENCE_UPSTREAM_MCP`, or replace the file with a version 2 one.
+3. Remove the `upstream_mcp` section from `org/admin_config.json`.
 
-On a server with upstreams, `privacyfence_status` carries an `upstreams` list:
+Tools that depended on it, such as the `kh_*` tools, stop working, and an existing scoped-token approval of an upstream tool is void until an administrator ticks it again. Old audit lines keep reading.
 
-```json
-{"id": "kh", "label": "Knowledge hub", "tools_exposed": 4, "state": "ready", "missing_tools": [],
- "audiences_source": "upstream", "audiences_state": "ready"}
-```
+## The reference server for development
 
-`state` is `waiting_for_tool_list` until the first successful `tools/list` (`tools_exposed` is 0 and AI
-clients see no tools from that upstream until then), then `ready`. `missing_tools` names declared tools
-the upstream did not list or whose schema was skipped. `audiences_source` is `groups` (the group map) or
-`upstream` (the upstream's audiences tool); only with `upstream` there is an `audiences_state`: `waiting`
-(no answer yet, nobody holds an audience), `ready` or `stale` (no answer for over three refresh intervals,
-nobody holds an audience).
-
-### Errors and size
-
-If the upstream cannot be reached, the AI client gets `The <label> server could not be reached.` A result
-over 1 MB is refused (`ask for less`). If the upstream answers with an error, its text reaches the AI
-client, with control characters removed and cut to 500 characters, like its results do: do not put
-secrets in an upstream's error messages. Each call opens one short MCP session to the upstream.
-
-## For upstream implementers
-
-PrivacyFence sends the header `X-PrivacyFence-Claim: <jwt>` on **every HTTP request** to your MCP endpoint, a
-new claim each time. It never sets `Authorization`; that stays free for your own use. Treat the claim as the
-only proof of who is asking; PrivacyFence holds the approvals and the audit trail, you hold the data.
-
-The full contract, with the claim fields, the `req` binding of a claim to one tool call, the verification
-checklist and the versioning, is [identity-claim.md](identity-claim.md). The short form:
-
-- Verify with `contrib/verifier/pf_claim_verify.py`, one file you can vendor (Python, with `PyJWT` and
-  `cryptography`). Give it your `audience`, PrivacyFence's issuer address and the JWKS address
-  `<PrivacyFence address>/upstream-mcp/jwks` (Ed25519 keys, cache five minutes, honor the `kid`). Pass it the
-  raw request body so it can check `req`.
-- **Only `sub`, `audiences` and `principal_type` may change what a query returns.** Everything else is for
-  your own audit.
-- A request that is not a tool call carries no audiences. A service claim gets no
-  data, except on a `tools/call` of the audiences tool the operator declared (see the contract).
-- Filter by `audiences` inside the query, not afterwards, so ranking and pagination stay correct and a guessed
-  document id is still refused. PrivacyFence never filters your results. A row-level security sketch is in
-  [identity-claim.md](identity-claim.md#row-level-security-sketch-postgresql).
-- Answer `401` for any failure, with no detail.
-
-## Reference upstream
-
-`scripts/upstream_mcp_reference_server.py` is a small upstream for trying all of this and for tests. It is
-not for production. It verifies claims with `pf_claim_verify.py` and serves `search`, `get_doc`,
-`list_proposals` and `propose_change` over four in-memory documents in the `general` (two), `hr` and `finance` audiences, returning
-only the caller's audiences; a service claim gets the tool list and no documents. It also lists
-`list_audiences`, which answers PrivacyFence's service claim (`sub` `privacyfence`) with the table it was built
-with and refuses everyone else (`build_app(audience_members=...)` takes that table as a dict, kept by reference and read on every call, so a test can change it between refreshes); use it as `audiences_tool` to try [audiences from the upstream](#audiences-from-the-upstream).
-
-Run it against a PrivacyFence server (the Ed25519 keys come from its JWKS address):
+`scripts/upstream_mcp_oauth_reference_server.py` plays the vendor's side with no real accounts. It approves every sign-in at once, keeps all state in memory and is not for production:
 
 ```
-python3 scripts/upstream_mcp_reference_server.py --host 127.0.0.1 --port 8099 \
-    --audience ref-upstream --issuer https://privacyfence.example.org \
-    --jwks-url https://privacyfence.example.org/upstream-mcp/jwks
+python3 scripts/upstream_mcp_oauth_reference_server.py --base-url http://127.0.0.1:8098 --port 8098
 ```
 
-Use `--jwks-file <file>` (a saved copy of the JWKS) instead of `--jwks-url` when the upstream cannot reach
-PrivacyFence. The `--issuer` is your PrivacyFence address with no suffix.
-
-The operator file the manual check uses (`ref`, tools exposed as `ref_search`, `ref_get_doc`,
-`ref_list_proposals`, `ref_propose_change`), with a static membership file so no sync job is needed:
-
-```json
-{
-  "version": 1,
-  "membership": {"source": "static", "file": "/etc/privacyfence/membership.json"},
-  "upstreams": [
-    {
-      "id": "ref",
-      "label": "Reference upstream",
-      "url": "http://refup:8099/mcp",
-      "audience": "ref-upstream",
-      "tools": {
-        "search":         {"gate": "auto",  "verb": "search"},
-        "get_doc":        {"gate": "auto",  "verb": "read"},
-        "list_proposals": {"gate": "review", "verb": "read"},
-        "propose_change": {"gate": "popup", "verb": "add", "effect": "Adds a change proposal to the reference upstream."}
-      }
-    }
-  ]
-}
-```
-
-The static membership file says who is in which group:
-
-```json
-{"version": 1, "groups": {"everyone@example.org": ["admin@privacyfence.localhost"],
-                          "finance@example.org":  ["admin@privacyfence.localhost"]}}
-```
-
-Map the groups to audiences in `admin_config.json` under `upstream_mcp.ref.groups`
-(`"everyone@example.org": ["general"]`, `"finance@example.org": ["finance"]`); the file is re-read when it
-changes, so the next `ref_search` returns the `general` and `finance` documents with no restart. Remove the
-person from the `finance` group in the membership file and the next call returns `general` only. Do this only
-while no one is editing the Admin page: the server also writes `admin_config.json`.
-
-## Testing
-
-An upstream has no live provider to sign in to and nothing external to drift, so it has no live QA fixture
-([testing policy](testing-policy.md#layer-5-live-connector)). The reference server stands in for it: unit
-tests drive it in process, and an integration test runs it on loopback against a real organization server.
+Declare `url: http://127.0.0.1:8098/mcp` (loopback is allowed over `http://`), then Connect, Refresh and Save as above. It serves the tools `whoami`, `echo` (read-only), `rename_thing` (unannotated) and `wipe_thing` (destructive), and `?login_hint=<name>` on its sign-in picks the account.

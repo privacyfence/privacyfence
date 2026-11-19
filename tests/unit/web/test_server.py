@@ -6,6 +6,7 @@ instead.
 """
 from __future__ import annotations
 
+import dataclasses
 import sys
 
 import pytest
@@ -532,6 +533,30 @@ class TestWebServerConstruction:
         )
         assert server.mcp_url == f"{ISSUER}/mcp"
 
+    def test_a_saved_upstream_list_evicts_every_connector_host_and_tells_clients(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        calls: list[str] = []
+
+        class _Registry:
+            def evict_all(self):
+                calls.append("evict_all")
+
+        class _Dispatcher(McpDispatcher):
+            def notify_tools_changed(self):
+                calls.append("notify")
+
+        org = _org_auth(tmp_path, monkeypatch)
+        org = dataclasses.replace(org, connector_registry=_Registry())
+        upstream_mcp_runtime.reset()
+        try:
+            build_app(WebApprovalUI(), org=org, mcp_dispatcher=_Dispatcher(lambda: {}))
+            upstream_mcp_runtime._tools_changed()  # what a save fires
+        finally:
+            upstream_mcp_runtime.reset()
+        # Hosts first, so a client that re-lists on the notification sees the rebuilt ones.
+        assert calls == ["evict_all", "notify"]
+
     def test_the_event_loop_is_never_exposed(self, tmp_path, monkeypatch):
         server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch))
         assert server.wait_until_ready() is None
@@ -786,61 +811,6 @@ def test_scoped_rule_title_says_except_for_an_exclusion_scope():
     assert "my conversations" in title and "except" not in title
 
 
-def test_scoped_token_page_data_lists_upstreams_with_the_audiences_the_person_holds(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, scoped_tokens, upstream_mcp_runtime
-    from privacyfence.web.server import scoped_token_page_data
-
-    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    (tmp_path / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
-    alice = Principal(id="alice", email="alice@example.com", email_verified=True)
-    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
-    scoped_tokens.set_store(store)
-    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-    monkeypatch.setitem(auto_accept.TOOL_TO_GATE, "kh_search", "auto")
-    monkeypatch.setattr(upstream_mcp_runtime, "configured", lambda: True)
-    monkeypatch.setattr(
-        upstream_mcp_runtime, "status",
-        lambda: [{"id": "kh", "label": "Knowledge hub", "tools_exposed": 1, "state": "ready", "missing_tools": []}],
-    )
-    seen = []
-
-    def held(principal, email_verified):
-        seen.append((principal.id, email_verified))
-        return {"kh": frozenset({"hr", "general"})}
-
-    monkeypatch.setattr(upstream_mcp_runtime, "held_audiences", held)
-    store.create(
-        alice, label="kh", days=30, rules=[], tools=["kh_search"], policy=policy,
-        upstream_audiences={"kh": ["hr"]}, held_audiences={"kh": frozenset({"hr"})},
-    )
-    with principal_scope(alice):
-        auto_accept.init_config_path(str(tmp_path / "settings.yaml"))
-        data = scoped_token_page_data(alice, policy=policy, connector_names={"drive", "kh"})
-
-    assert data["upstreams"] == [
-        {"id": "kh", "label": "Knowledge hub", "tools": ["kh_search"], "audiences": ["general", "hr"],
-         "gated_tools": []},
-    ]
-    assert seen == [("alice", True)]
-    assert data["tokens"][0]["upstream_audiences"] == {"kh": ["hr"]}
-
-
-def test_scoped_token_page_data_has_no_upstreams_key_when_none_is_configured(tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, scoped_tokens
-    from privacyfence.web.server import scoped_token_page_data
-
-    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    (tmp_path / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
-    alice = Principal(id="alice", email="alice@example.com")
-    scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
-    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-    with principal_scope(alice):
-        auto_accept.init_config_path(str(tmp_path / "settings.yaml"))
-        data = scoped_token_page_data(alice, policy=policy, connector_names={"drive"})
-
-    assert "upstreams" not in data
-
-
 def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_token(tmp_path, monkeypatch):
     from privacyfence import auto_accept, paths, runtime_credentials, scoped_tokens
     from privacyfence.web.server import scoped_token_page_data
@@ -881,111 +851,241 @@ def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_to
     assert tokens["pending"]["runtime_credential"] is None
 
 
-class TestScopedTokenPageData:
-    """The New token form's gated upstream tools and the token list's approvals (ADR 0300)."""
+def _configured_upstream(tmp_path):
+    from datetime import datetime, timezone
 
-    @staticmethod
-    def _setup(tmp_path, monkeypatch, *, is_admin):
-        from privacyfence import auto_accept, paths, scoped_tokens, upstream_mcp_registry
+    from privacyfence import upstream_mcp_runtime
+    from privacyfence.upstream_mcp_config import UpstreamOAuthSettings, UpstreamServer
+    from privacyfence.upstream_tools import SavedTool, ToolEntry, ToolStore, classify, tool_digest
+
+    url = "https://mcp.example.com/mcp"
+
+    def saved(name, gate_):
+        entry = ToolEntry(name, f"{name} tool", {"type": "object", "properties": {}}, True, None)
+        return SavedTool(
+            name=name, description=entry.description, input_schema=entry.input_schema, read_only=True,
+            destructive=None, gate=gate_, verb=classify(True, None)[1], digest=tool_digest(entry),
+        )
+
+    store = ToolStore(tmp_path / "org" / "upstream_tools")
+    store.save("kh", url, (saved("fetch", "auto"), saved("search", "review")), datetime.now(timezone.utc))
+    upstream_mcp_runtime.configure(
+        upstreams=[UpstreamServer(id="kh", label="Knowledge Hub", url=url, oauth=UpstreamOAuthSettings())],
+        tool_store=store, registrations_dir=tmp_path / "org" / "upstream_oauth",
+    )
+
+
+@pytest.fixture
+def _upstream_runtime(tmp_path, monkeypatch):
+    from privacyfence import paths, upstream_mcp_registry, upstream_mcp_runtime
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    _configured_upstream(tmp_path)
+    yield
+    upstream_mcp_registry.reset()
+    upstream_mcp_runtime.reset()
+
+
+def _upstream_page(tmp_path, monkeypatch, *, admin):
+    from privacyfence import auto_accept, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    person = Principal(id="alice", email="alice@example.com", is_admin=admin)
+    scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [person]))
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(person):
+        auto_accept.init_config_path(str(config_path))
+        return scoped_token_page_data(person, policy=policy, connector_names={"kh"})
+
+
+def test_the_token_page_carries_the_upstream_entry_with_gated_tools_for_an_admin(
+    tmp_path, monkeypatch, _upstream_runtime,
+):
+    data = _upstream_page(tmp_path, monkeypatch, admin=True)
+
+    (entry,) = data["upstreams"]
+    assert (entry["id"], entry["label"], entry["connection_note"]) == ("kh", "Knowledge Hub", True)
+    assert "kh_search" in [t["name"] for t in entry["gated_tools"]]
+    assert entry["tools"] == ["kh_fetch"]
+
+
+def test_the_token_page_gives_a_non_admin_no_gated_tools(tmp_path, monkeypatch, _upstream_runtime):
+    data = _upstream_page(tmp_path, monkeypatch, admin=False)
+
+    (entry,) = data["upstreams"]
+    assert entry["gated_tools"] == []
+    assert entry["tools"] == ["kh_fetch"]
+
+
+def test_an_auto_tool_is_in_the_main_tool_list_and_a_review_tool_only_in_the_tick_list(
+    tmp_path, monkeypatch, _upstream_runtime,
+):
+    data = _upstream_page(tmp_path, monkeypatch, admin=True)
+
+    listed = [name for group in data["tools"] for name in group["tools"]]
+    assert "kh_fetch" in listed
+    assert "kh_search" not in listed
+    assert "kh_search" in [t["name"] for t in data["upstreams"][0]["gated_tools"]]
+
+
+def test_the_token_page_has_no_upstreams_key_when_none_is_configured(tmp_path, monkeypatch):
+    data = _page_data(tmp_path, monkeypatch, {"drive"})
+
+    assert "upstreams" not in data
+
+
+def _apply_upstreams(*pairs):
+    """Register ``(upstream_id, [SavedTool, ...])`` pairs through the live registration helper."""
+    from privacyfence.upstream_mcp_registry import get_registry
+    from tests.unit.test_upstream_mcp_registry import upstream
+
+    for upstream_id, tools in pairs:
+        get_registry().apply(upstream(upstream_id, upstream_id.upper()), tuple(tools))
+
+
+def test_gated_tools_leave_out_another_upstream_whose_id_starts_with_this_one():
+    from privacyfence.web.server import _gated_tools
+    from tests.unit.test_upstream_mcp_registry import saved_tool
+
+    _apply_upstreams(
+        ("kh", [saved_tool("search")]), ("kh_two", [saved_tool("lookup")]),
+    )
+
+    assert [t["name"] for t in _gated_tools("kh")] == ["kh_search"]
+    assert [t["name"] for t in _gated_tools("kh_two")] == ["kh_two_lookup"]
+
+
+def _token_with_approval(tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, scoped_tokens
+    from privacyfence.policy import scopes
+    from tests.unit.test_upstream_mcp_registry import saved_tool
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    _apply_upstreams(("kh", [saved_tool("fetch", "auto")]))
+    admin = Principal(id="alice", email="alice@example.com", is_admin=True)
+    store = scoped_tokens.ScopedTokenStore(lambda: [admin])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(admin):
+        auto_accept.init_config_path(str(config_path))
+        store.create(
+            admin, label="sync", days=30, rules=[], tools=["kh_fetch"], policy=policy, is_admin=True,
+            upstream_approvals=[{"tool": "kh_fetch", "digest": scopes.UPSTREAM_DECLARATIONS["kh.fetch"]}],
+        )
+    return admin, policy
+
+
+def test_the_token_list_names_the_tools_a_tokens_approvals_cover(tmp_path, monkeypatch):
+    from privacyfence.web.server import scoped_token_page_data
+
+    admin, policy = _token_with_approval(tmp_path, monkeypatch)
+
+    with principal_scope(admin):
+        data = scoped_token_page_data(admin, policy=policy, connector_names={"kh"})
+
+    (approved,) = data["tokens"][0]["approved_upstream_tools"]
+    assert (approved["name"], approved["gate"]) == ("kh_fetch", "review")
+
+
+def test_an_approval_for_a_tool_the_upstream_no_longer_lists_is_left_out_of_the_token_list(tmp_path, monkeypatch):
+    from privacyfence.web.server import scoped_token_page_data
+
+    admin, policy = _token_with_approval(tmp_path, monkeypatch)
+    _apply_upstreams(("kh", []))
+
+    with principal_scope(admin):
+        data = scoped_token_page_data(admin, policy=policy, connector_names={"kh"})
+
+    assert data["tokens"][0]["approved_upstream_tools"] == []
+
+
+class TestOrgModeWiring:
+    def test_a_saved_upstream_list_still_tells_clients_without_a_connector_registry(self, tmp_path, monkeypatch):
         from privacyfence import upstream_mcp_runtime
-        from privacyfence.policy import scopes as policy_scopes
-        from privacyfence.upstream_mcp_config import parse_upstreams
 
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        (tmp_path / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
-        upstream_mcp_registry.register(parse_upstreams({
-            "version": 1,
-            "upstreams": [{
-                "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
-                "tools": {
-                    "propose_change": {"gate": "popup", "verb": "update", "effect": "Proposes a change."},
-                    "search": {"gate": "review", "verb": "search"},
-                    "list_topics": {"gate": "auto", "verb": "read"},
-                },
-            }],
-        }, source="test"))
-        alice = Principal(id="alice", email="alice@example.com", email_verified=True, is_admin=is_admin)
-        store = scoped_tokens.ScopedTokenStore(lambda: [alice])
-        scoped_tokens.set_store(store)
-        policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
-        monkeypatch.setattr(upstream_mcp_runtime, "configured", lambda: True)
-        monkeypatch.setattr(upstream_mcp_runtime, "status", lambda: [
-            {"id": "kh", "label": "Knowledge hub", "tools_exposed": 3, "state": "ready", "missing_tools": []},
-        ])
-        monkeypatch.setattr(upstream_mcp_runtime, "held_audiences", lambda p, v: {"kh": frozenset({"hr"})})
-        return alice, store, policy, policy_scopes, auto_accept
+        calls: list[str] = []
 
-    @staticmethod
-    def _page(alice, policy, auto_accept, tmp_path):
-        from privacyfence.web.server import scoped_token_page_data
+        class _Dispatcher(McpDispatcher):
+            def notify_tools_changed(self):
+                calls.append("notify")
+
+        upstream_mcp_runtime.reset()
+        try:
+            build_app(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), mcp_dispatcher=_Dispatcher(lambda: {}))
+            upstream_mcp_runtime._tools_changed()
+        finally:
+            upstream_mcp_runtime.reset()
+        assert calls == ["notify"]
+
+    def test_the_settings_token_page_lists_the_dispatchers_connectors(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept, scoped_tokens
+        from privacyfence.web import routes_settings
+
+        captured: dict = {}
+        real = routes_settings.build_org_routes
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(routes_settings, "build_org_routes", spy)
+        org = _org_auth(tmp_path, monkeypatch)
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+        build_app(WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {"drive": object()}))
+        alice = Principal(id="alice", email="alice@example.com")
+        scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
 
         with principal_scope(alice):
-            auto_accept.init_config_path(str(tmp_path / "settings.yaml"))
-            return scoped_token_page_data(alice, policy=policy, connector_names={"drive", "kh"})
+            auto_accept.init_config_path(str(config_path))
+            data = captured["scoped_token_page_data"](alice)
 
-    def test_an_administrator_page_lists_gated_tools_with_effect_and_digest(self, tmp_path, monkeypatch):
-        alice, _store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
-        data = self._page(alice, policy, auto_accept, tmp_path)
-        (upstream,) = data["upstreams"]
-        assert upstream["gated_tools"] == [
-            {"name": "kh_propose_change", "gate": "popup", "verb": "update", "effect": "Proposes a change.",
-             "digest": scopes.UPSTREAM_DECLARATIONS["kh.propose_change"]},
-            {"name": "kh_search", "gate": "review", "verb": "search",
-             "effect": "The result goes to the token without a person seeing it. Personal data in it still blocks the call.",
-             "digest": scopes.UPSTREAM_DECLARATIONS["kh.search"]},
-        ]
+        assert {g["connector"] for g in data["scope_groups"]} == {"drive"}
 
-    def test_a_non_administrator_page_lists_no_gated_tool(self, tmp_path, monkeypatch):
-        alice, _store, policy, _scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=False)
-        data = self._page(alice, policy, auto_accept, tmp_path)
-        assert data["upstreams"][0]["gated_tools"] == []
 
-    def test_gated_tools_are_not_in_tools_or_auto_tools(self, tmp_path, monkeypatch):
-        alice, _store, policy, _scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
-        data = self._page(alice, policy, auto_accept, tmp_path)
-        listed = {name for group in data["tools"] for name in group["tools"]}
-        assert "kh_list_topics" in listed and "kh_list_topics" in data["auto_tools"]
-        assert not {"kh_propose_change", "kh_search"} & (listed | set(data["auto_tools"]))
-        assert data["upstreams"][0]["tools"] == ["kh_list_topics"]
+class TestStopWithAStuckThread:
+    class _Thread:
+        def __init__(self, survives_forced_exit):
+            self.survives_forced_exit = survives_forced_exit
+            self.joins = 0
 
-    def test_a_tool_whose_operation_belongs_to_another_upstream_is_not_offered(self, tmp_path, monkeypatch):
-        alice, _store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
-        # Named with this upstream's prefix, but declared for another operation: never offered for kh.
-        monkeypatch.setitem(auto_accept.TOOL_TO_GATE, "kh_shadow", "popup")
-        monkeypatch.setitem(auto_accept.TOOL_TO_OPERATION, "kh_shadow", "wiki.shadow")
-        monkeypatch.setitem(scopes.UPSTREAM_DECLARATIONS, "wiki.shadow", "d")
-        data = self._page(alice, policy, auto_accept, tmp_path)
-        assert [t["name"] for t in data["upstreams"][0]["gated_tools"]] == ["kh_propose_change", "kh_search"]
+        def join(self, timeout=None):
+            self.joins += 1
 
-    def test_an_approval_of_a_tool_no_longer_declared_lists_nothing(self, tmp_path, monkeypatch):
-        from privacyfence import upstream_mcp_registry
+        def is_alive(self):
+            return self.joins < 2 or self.survives_forced_exit
 
-        alice, store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
-        store.create(
-            alice, label="kh", days=30, rules=[], tools=["kh_propose_change"], policy=policy, is_admin=True,
-            upstream_approvals=[
-                {"tool": "kh_propose_change", "digest": scopes.UPSTREAM_DECLARATIONS["kh.propose_change"]},
-            ],
-        )
-        upstream_mcp_registry.unregister_all()
-        (token,) = self._page(alice, policy, auto_accept, tmp_path)["tokens"]
-        assert token["rules"] == []
-        assert token["approved_upstream_tools"] == []
+    def _stuck_server(self, tmp_path, monkeypatch, *, survives_forced_exit):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=0)
+        server._thread = self._Thread(survives_forced_exit)  # type: ignore[assignment]
+        return server
 
-    def test_approval_rows_are_left_out_of_a_tokens_rules(self, tmp_path, monkeypatch):
-        alice, store, policy, scopes, auto_accept = self._setup(tmp_path, monkeypatch, is_admin=True)
-        store.create(
-            alice, label="kh", days=30, rules=[], tools=["kh_propose_change", "kh_search"], policy=policy,
-            is_admin=True,
-            upstream_approvals=[
-                {"tool": "kh_propose_change", "digest": scopes.UPSTREAM_DECLARATIONS["kh.propose_change"]},
-                {"tool": "kh_search", "digest": scopes.UPSTREAM_DECLARATIONS["kh.search"]},
-            ],
-        )
-        (token,) = self._page(alice, policy, auto_accept, tmp_path)["tokens"]
-        assert token["rules"] == []
-        assert token["approved_upstream_tools"] == [
-            {"name": "kh_propose_change", "gate": "popup", "effect": "Proposes a change."},
-            {"name": "kh_search", "gate": "review",
-             "effect": "The result goes to the token without a person seeing it. Personal data in it still blocks the call."},
-        ]
+    def test_a_thread_that_outlives_the_grace_period_is_forced_to_exit(self, tmp_path, monkeypatch, caplog):
+        server = self._stuck_server(tmp_path, monkeypatch, survives_forced_exit=False)
+
+        with caplog.at_level("WARNING", logger="privacyfence.web.server"):
+            server.stop()
+
+        assert server._server.should_exit and server._server.force_exit
+        assert server._thread.joins == 2
+        assert "still running after stop()" not in caplog.text
+
+    def test_a_thread_that_survives_the_forced_exit_is_reported(self, tmp_path, monkeypatch, caplog):
+        server = self._stuck_server(tmp_path, monkeypatch, survives_forced_exit=True)
+
+        with caplog.at_level("WARNING", logger="privacyfence.web.server"):
+            server.stop()
+
+        assert server._server.force_exit
+        assert "The web server thread is still running after stop()" in caplog.text
+
+    def test_stopping_a_server_that_never_started_asks_it_to_exit_and_returns(self, tmp_path, monkeypatch):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=0)
+
+        server.stop()
+
+        assert server._server.should_exit and server.stopped

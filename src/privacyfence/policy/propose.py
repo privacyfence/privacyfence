@@ -273,6 +273,7 @@ class ProposableScope:
     excludes: frozenset[str] = frozenset()
     condition: tuple[str, Any] | None = None
     widenable: bool = True
+    fixed_value: Any = NO_VALUE
 
 
 def _scope(
@@ -306,7 +307,7 @@ def _scope(
 # Declaration order is proposal order within a connector, and it is deliberately **identity scopes
 # before attribute scopes before condition scopes** -- narrowest first, so the popup never offers
 # "every file you own" ahead of "this one folder".
-PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
+_STATIC_SCOPES: tuple[ProposableScope, ...] = (
     # ── Drive (with Sheets/Docs, which address a Drive file) ───────────────────────────────────
     #
     # One scope type, four predicate names, because the old rule model named the same folder check
@@ -432,6 +433,11 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
 )
 
 
+# The static scopes plus one per-tool Always allow scope for every upstream tool at the `auto` ceiling
+# (``set_upstream_scopes``). Readers must go through the module attribute: it is rebound.
+PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = _STATIC_SCOPES
+
+
 def _by_group(entries: tuple[ProposableScope, ...]) -> dict[str, tuple[ProposableScope, ...]]:
     grouped: dict[str, list[ProposableScope]] = {}
     for entry in entries:
@@ -445,6 +451,18 @@ _SCOPES_BY_GROUP: dict[str, tuple[ProposableScope, ...]] = _by_group(PROPOSABLE_
 # entry per widening group, the same grouping `rules_for_scope_group` itself keys on), rather than
 # re-deriving the grouping from `PROPOSABLE_SCOPES` a second time.
 SCOPES_BY_GROUP: dict[str, tuple[ProposableScope, ...]] = _SCOPES_BY_GROUP
+
+
+def set_upstream_scopes(scopes_: Iterable[ProposableScope]) -> None:
+    """Replace the upstream part of ``PROPOSABLE_SCOPES``: the static scopes plus ``scopes_``.
+    ``_SCOPES_BY_GROUP`` (the object ``SCOPES_BY_GROUP`` aliases) is updated in place, new keys first
+    and stale keys deleted after, so a concurrent reader never sees it empty."""
+    global PROPOSABLE_SCOPES
+    PROPOSABLE_SCOPES = (*_STATIC_SCOPES, *scopes_)
+    new = _by_group(PROPOSABLE_SCOPES)
+    _SCOPES_BY_GROUP.update(new)
+    for stale in [group for group in _SCOPES_BY_GROUP if group not in new]:
+        _SCOPES_BY_GROUP.pop(stale, None)
 
 # Risk order, so a widening list reads narrowest-first and a destructive or send widening is never
 # the one a hurried click lands on.
@@ -465,7 +483,7 @@ def scope_needs_value(scope: ProposableScope) -> bool:
     Settings page uses this to decide whether its "add a rule" form shows a value field for a given
     scope group -- a group is homogeneous on this (every member of one widening group shares a
     value shape), so checking the group's first entry is enough."""
-    return scope.value_of is not _no_value_needed
+    return scope.fixed_value is NO_VALUE and scope.value_of is not _no_value_needed
 
 
 def operations_for(scope: ProposableScope, verb: Verb) -> frozenset[str]:
@@ -553,7 +571,9 @@ def _candidate_value(scope: ProposableScope, ctx: ReviewContext) -> Any:
             if selector is None or not selector.holds(scope.condition[1], ctx):
                 return NO_VALUE
             return value
-        scope_selector = scopes.SCOPE_SELECTORS.get(scope.predicate)
+        scope_selector = (
+            scopes.SCOPE_SELECTORS.get(scope.predicate) or scopes.NEW_SCOPE_SELECTORS.get(scope.predicate)
+        )
         if scope_selector is None or not scope_selector.matches(value, ctx):
             return NO_VALUE
     except Exception:
@@ -596,7 +616,7 @@ def proposals_for(tool: str, ctx: ReviewContext) -> list[RuleProposal]:
         return []  # no rule can cover it (ADR 0322): offering "Always allow" would write a dead rule
     connector = connector_of_operation(entry.operation)
     proposals: list[RuleProposal] = []
-    for scope in PROPOSABLE_SCOPES:
+    for scope in PROPOSABLE_SCOPES:  # the module attribute: set_upstream_scopes rebinds it
         if scope.connector != connector or entry.verb not in scope.verbs:
             continue
         if entry.operation in scope.excludes:
@@ -676,7 +696,8 @@ def rules_for_scope_group(group: str, value: Any, verbs: Iterable[Verb]) -> list
         for operation in operations_for(entry, verb)
     }
     conditions_of = {entry.predicate: (entry.condition,) for entry in entries if entry.condition is not None}
-    return _rules_from_pairs(pairs, value, conditions_of)
+    fixed = next((entry.fixed_value for entry in entries if entry.fixed_value is not NO_VALUE), NO_VALUE)
+    return _rules_from_pairs(pairs, value if fixed is NO_VALUE else fixed, conditions_of)
 
 
 __all__ = [
@@ -684,6 +705,7 @@ __all__ = [
     "NO_VALUE",
     "PROPOSABLE_SCOPES",
     "SCOPES_BY_GROUP",
+    "set_upstream_scopes",
     "ProposableScope",
     "RuleProposal",
     "Widening",

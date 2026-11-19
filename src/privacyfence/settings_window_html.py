@@ -340,7 +340,7 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
-    stLabel: '', stDays: null, stRules: {}, stTools: {}, stGated: {}, stPersonalData: false, stPersonalDataReads: false, stAudiences: {}, stDuplicateOf: null,
+    stLabel: '', stDays: null, stRules: {}, stTools: {}, stGated: {}, stPersonalData: false, stPersonalDataReads: false, stDuplicateOf: null,
     stNewGroup: null, stNewValue: '', stNewVerbs: {}, stNewRules: [], stDupRules: {},
     // Review panel for an AI-proposed token (window.__pfScopedProposal); spLabel === null until first drawn.
     spLabel: null, spDays: null, spRules: {}, spVerbs: {}, spTools: {}, spPersonalData: false, spPersonalDataReads: false, spTyped: '',
@@ -1217,10 +1217,6 @@ _JS = r"""
     t.tools.forEach(function (name) { if (listed[name]) { ui.stTools[name] = true; } });
     ui.stPersonalData = !!t.allow_personal_data;
     ui.stPersonalDataReads = !!t.allow_personal_data_reads;
-    ui.stAudiences = {};
-    Object.keys(t.upstream_audiences || {}).forEach(function (id) {
-      t.upstream_audiences[id].forEach(function (d) { ui.stAudiences[id + '\u0000' + d] = true; });
-    });
     render(pyState);
     var form = document.querySelector('.pf-st-form');
     if (form && form.scrollIntoView) { form.scrollIntoView({block: 'start'}); }
@@ -1237,7 +1233,6 @@ _JS = r"""
     ui.stGated = {};
     ui.stPersonalData = false;
     ui.stPersonalDataReads = false;
-    ui.stAudiences = {};
     ui.stNewGroup = null;
     ui.stNewValue = '';
     ui.stNewVerbs = {};
@@ -1283,6 +1278,14 @@ _JS = r"""
     return html;
   }
 
+  // Under the tools of each upstream with a ticked tool: whose connection the token uses (ADR 0329).
+  function scopedConnectionNotesHtml() {
+    return scopedUpstreamsWithTools().map(function (u) {
+      return '<div class="pf-hint" data-st-connection-for="' + esc(u.id) + '">This token acts through your own ' + esc(u.label) +
+        ' connection: it can do what your account there can do.</div>';
+    }).join('');
+  }
+
   function scopedUpstreamApprovals() {
     var out = [];
     (SCOPED.upstreams || []).forEach(function (u) {
@@ -1291,35 +1294,6 @@ _JS = r"""
       });
     });
     return out.sort(function (a, b) { return a.tool < b.tool ? -1 : (a.tool > b.tool ? 1 : 0); });
-  }
-
-  function scopedAudiencesHtml() {
-    var html = '';
-    scopedUpstreamsWithTools().forEach(function (u) {
-      html += '<fieldset class="pf-st-audiences" data-st-audiences-for="' + esc(u.id) + '"><legend class="pf-row-title">Audiences for ' + esc(u.label) + '</legend>';
-      if (!u.audiences.length) {
-        html += '<div class="pf-hint">You hold no data domain on this server, so the token sees none.</div>';
-      } else {
-        html += '<div class="pf-chips pf-caps-row">';
-        u.audiences.forEach(function (d) {
-          var on = !!ui.stAudiences[u.id + '\u0000' + d];
-          html += '<div class="pf-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
-            '" tabindex="0" aria-label="' + esc(u.label + ' audience ' + d) + '" data-st-audience="' + esc(d) + '" data-st-audience-upstream="' + esc(u.id) + '">' + esc(d) + '</div>';
-        });
-        html += '</div>';
-      }
-      html += '<div class="pf-hint">The token sees only the audiences you tick, and never more than you can see yourself.</div></fieldset>';
-    });
-    return html;
-  }
-
-  function scopedChosenAudiences() {
-    var out = {};
-    scopedUpstreamsWithTools().forEach(function (u) {
-      var picked = u.audiences.filter(function (d) { return !!ui.stAudiences[u.id + '\u0000' + d]; });
-      if (picked.length) { out[u.id] = picked; }
-    });
-    return out;
   }
 
   function renderScopedTokens() {
@@ -1462,7 +1436,7 @@ _JS = r"""
         (uncovered.length === 1 ? 'it' : 'them') + ', or untick ' + (uncovered.length === 1 ? 'it' : 'them') + '.</div>';
     }
     html += scopedGatedHtml();
-    html += scopedAudiencesHtml();
+    html += scopedConnectionNotesHtml();
     var stPdOn = !!ui.stPersonalData;
     var stPdLabel = 'Let exports, downloads and page uploads carry personal data';
     html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (stPdOn ? ' on' : '') + '" role="checkbox" aria-checked="' +
@@ -1982,7 +1956,7 @@ _JS = r"""
       });
     }
     var tools = Object.keys(ui.stTools).filter(function (k) { return ui.stTools[k]; });
-    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rules: rules, tools: tools, allow_personal_data: !!ui.stPersonalData, allow_personal_data_reads: !!ui.stPersonalDataReads, upstream_audiences: scopedChosenAudiences(), upstream_approvals: scopedUpstreamApprovals() });
+    post('create_scoped_token', { label: ui.stLabel, days: parseInt(ui.stDays, 10) || SCOPED.default_days, rules: rules, tools: tools, allow_personal_data: !!ui.stPersonalData, allow_personal_data_reads: !!ui.stPersonalDataReads, upstream_approvals: scopedUpstreamApprovals() });
   }
 
   // -------------------------------------------------------------------- //
@@ -2028,7 +2002,7 @@ _JS = r"""
   var ADMIN_NAV_ITEMS = [
     ['services', 'Services'], ['features', 'Features'],
     ['delivery', 'File delivery'], ['access', 'Sign-in'], ['step_up', 'Step-up'],
-    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['upstreams', 'Upstream MCP servers'], ['membership', 'Group membership'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
+    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['upstreams', 'Upstream MCP servers'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
   ];
 
   // The provider setup doc for each service on the website: the doc's file name without .md.
@@ -2530,135 +2504,103 @@ _JS = r"""
     return '<div class="pf-page"><h1 class="pf-page-title">Agent runtimes</h1>' + formCardHtml('runtimes', rows, 'agent runtimes') + '</div>';
   }
 
-  // The upstream MCP servers the operator declared (upstream_mcp_runtime.admin_rows). Read-only: the
-  // declaration is a file read at startup and the group map a file edit (ADR 0319), so nothing here
-  // changes either. The audiences come from the group map or, for an upstream that declared an
-  // audiences tool, from that tool of the server itself (ADR 0325).
-  var UPSTREAM_GATE_TEXT = {
-    auto: 'Runs at once', review: 'Runs; a person sees the result before it is returned', popup: 'A person approves each call first',
-  };
-  var UPSTREAM_CALLER_TEXT = { claude_client: 'AI clients', n8n_workflow: 'Scoped tokens' };
+  // The Upstream MCP servers page (ADR 0331). Everything a server supplied (its label, tool names,
+  // descriptions, reasons) goes through esc(); the rows already cut the descriptions.
+  var UPSTREAM_GATES = ['review', 'popup', 'auto'];
+  var UPSTREAM_CLASS = { read: 'read', update: 'write', 'delete': 'destructive' };
 
-  function upstreamToolRow(tool) {
-    var text = (UPSTREAM_GATE_TEXT[tool.gate] || tool.gate) + '; verb ' + tool.verb + '.';
-    if (tool.effect) { text += ' ' + tool.effect; }
-    if (tool.state === 'missing') { text += ' Not exposed: the server does not list it, or its schema cannot be passed on.'; }
-    return rowHtml(tool.name, esc(text), '');
+  function upstreamGateSelect(upId, t, gate) {
+    var html = '<select class="field" data-up-tool="' + esc(t.name) + '" data-up-for="' + esc(upId) + '" data-up-verb="' + esc(t.verb) +
+      '" aria-label="Gate for ' + esc(t.exposed_name) + '">';
+    UPSTREAM_GATES.forEach(function (g) {
+      html += '<option value="' + g + '"' + (g === gate ? ' selected' : '') + '>' + g + (g === t.default_gate ? ' (default)' : '') + '</option>';
+    });
+    return html + '</select>';
   }
 
-  var UPSTREAM_AUDIENCES_ERROR_TEXT = {
-    unreachable: 'The server could not be reached.', too_large: 'The answer was larger than 1 MB.',
-    tool_error: 'The server answered with an error.', claim_failed: 'The claim could not be signed.',
-    invalid: 'The answer did not have the expected shape.',
-  };
+  function upstreamWarnHtml(t, gate) {
+    var show = t.verb !== 'read' && gate === 'review';
+    return '<div class="pf-hint" data-up-warn="1"' + (show ? '' : ' hidden') + '>Runs before the person sees anything.</div>';
+  }
 
-  // The third card of an upstream that takes its audiences from its own tool (ADR 0325). The summary
-  // carries counts only, never an address.
-  function upstreamAudiencesCardHtml(u) {
-    var a = u.audiences || {};
-    var stateText;
-    if (a.state === 'ready') {
-      stateText = 'Ready: ' + (a.audience_count || 0) + ' audience(s), ' + (a.people_count || 0) + ' people.' +
-        (a.dropped > 0 ? ' ' + a.dropped + ' address(es) were unusable and ignored.' : '');
-    } else if (a.state === 'stale') {
-      stateText = 'Stale: no answer for over three refresh intervals. Nobody holds an audience on this server until it answers.';
-    } else {
-      stateText = 'Waiting for the first answer. Nobody holds an audience on this server yet.';
-    }
-    var rows = rowHtml('Source', esc('From the server\'s ' + u.audiences_tool + ' tool, every ' + u.audiences_refresh_seconds +
-        ' seconds. No approvals: the server decides who holds each audience.'), '') +
-      rowHtml('State', esc(stateText), '') +
-      rowHtml('Last refresh', esc(membershipTimeText(a.fetched_at)), '');
-    if (a.last_error) {
-      rows += rowHtml('Last error', esc(UPSTREAM_AUDIENCES_ERROR_TEXT[a.last_error] || a.last_error), '');
-    }
-    if (u.groups_ignored > 0) {
-      rows += rowHtml('Groups in admin_config.json', esc(u.groups_ignored + ' group(s) mapped for this server are ignored.'), '');
-    }
-    return '<h2 class="pf-group-title">' + esc(u.label + ': audiences') + '</h2><div class="card pf-card">' + rows + '</div>';
+  function upstreamToolRow(upId, t, pending) {
+    var gate = t.gate;
+    var held = pending && (t.state === 'new' || t.state === 'changed');
+    if (held && t.state === 'changed') { gate = t.default_gate; }
+    var html = '<div class="pf-row" data-up-row="' + esc(t.name) + '"><div class="pf-row-text"><div class="pf-row-title">' + esc(t.exposed_name) +
+      ' <span class="pf-st-meta" data-up-class="1">' + esc(UPSTREAM_CLASS[t.verb] || t.verb) + '</span>';
+    if (held) { html += ' <span class="pf-st-meta" data-up-state="' + esc(t.state) + '">' + esc(t.state) + '</span>'; }
+    html += '</div>';
+    if (t.description) { html += '<div class="pf-hint">' + esc(t.description) + '</div>'; }
+    if (held) { html += '<div class="pf-hint">Not exposed until you save.</div>'; }
+    if (held && t.state === 'changed') { html += '<div class="pf-hint">Its gate was reset; choose auto again if you want it.</div>'; }
+    html += upstreamWarnHtml(t, gate) + '</div><div class="pf-row-controls">' + upstreamGateSelect(upId, t, gate) + '</div></div>';
+    return html;
   }
 
   function upstreamCardHtml(u) {
+    var pending = u.pending || null;
+    var html = '<h2 class="pf-group-title">' + esc(u.label) + '</h2><div class="card pf-card" data-upstream="' + esc(u.id) + '">';
+    html += '<div class="pf-hint">' + esc(u.url) + '</div>';
+    var n = u.connected_people;
+    html += '<div class="pf-hint">Sign-in: OAuth at ' + esc(u.issuer_host) + ', ' + esc(n) + ' ' + (n === 1 ? 'person' : 'people') +
+      ' connected, client ' + esc(u.registration) + '.</div>';
     var tools = u.tools || [];
-    var exposed = tools.filter(function (t) { return t.state === 'exposed'; }).length;
-    var stateText = u.state === 'ready' ? 'Ready: ' + exposed + ' of ' + tools.length + ' declared tool(s) exposed.' :
-      'Waiting for the server’s tool list. AI clients see none of its tools until it answers.';
-    var claimText = u.identity_claim === 'off' ? 'Off: calls carry no claim.' :
-      'Required, valid for ' + u.claim_lifetime_seconds + ' seconds' +
-      (u.email_for_visibility ? ', with the person’s verified email.' : '.');
-    var callers = (u.allowed_principal_types || []).map(function (p) { return UPSTREAM_CALLER_TEXT[p] || p; }).join(', ');
-    var summary = '<div class="card pf-card">' +
-      rowHtml('State', esc(stateText), '') +
-      rowHtml('Tool prefix', esc(u.id + '_'), '') +
-      rowHtml('Address', esc(u.url), '') +
-      rowHtml('Claim audience', esc(u.audience), '') +
-      rowHtml('Identity claim', esc(claimText), '') +
-      rowHtml('Who may call it', esc(callers), '') + '</div>';
-    var toolCard = '<div class="card pf-card">' + tools.map(upstreamToolRow).join('') + '</div>';
-    if (u.audiences_source === 'upstream') {
-      return '<h2 class="pf-group-title">' + esc(u.label) + '</h2>' + summary +
-        '<h2 class="pf-group-title">' + esc(u.label + ': tools') + '</h2>' + toolCard + upstreamAudiencesCardHtml(u);
+    if (!tools.length && !pending) {
+      html += '<div class="pf-hint" data-up-state-line="waiting">Waiting for an administrator to refresh the tools. ' +
+        'AI clients see none of its tools until you save a list.</div>';
     }
-    var groups = u.groups || [];
-    var groupRows = groups.length ? groups.map(function (g) { return rowHtml(g.group, esc((g.audiences || []).join(', ')), ''); }).join('') :
-      rowHtml('No group is mapped.', esc('Nobody holds an audience on this server. Map groups under upstream_mcp in admin_config.json.'), '');
-    return '<h2 class="pf-group-title">' + esc(u.label) + '</h2>' + summary +
-      '<h2 class="pf-group-title">' + esc(u.label + ': tools') + '</h2>' + toolCard +
-      '<h2 class="pf-group-title">' + esc(u.label + ': groups and audiences') + '</h2>' +
-      '<div class="card pf-card">' + groupRows + '</div>';
+    var refreshLabel = 'Refresh tools for ' + u.label;
+    if (u.admin_connected) {
+      html += '<div><div class="button" role="button" tabindex="0" aria-label="' + esc(refreshLabel) + '" ' +
+        dataAttr('refresh_upstream_tools', { upstream_id: u.id }) + '>Refresh tools</div></div>';
+    } else {
+      html += '<div><div class="button" role="button" aria-disabled="true" aria-label="' + esc(refreshLabel) + '">Refresh tools</div></div>' +
+        '<div class="pf-hint">Connect ' + esc(u.label) + ' on the Connect page first.</div>';
+    }
+    var shown = pending
+      ? pending.tools.filter(function (t) { return t.state !== 'unsupported'; })
+          .sort(function (a, b) { return (b.state === 'new' || b.state === 'changed' ? 1 : 0) - (a.state === 'new' || a.state === 'changed' ? 1 : 0); })
+      : tools;
+    if (shown.length) {
+      html += '<div data-up-table="' + esc(u.id) + '">';
+      shown.forEach(function (t) { html += upstreamToolRow(u.id, t, !!pending); });
+      html += '</div>';
+    }
+    if (pending && pending.removed.length) {
+      html += '<div class="pf-hint" data-up-removed="1">Removed by the server: ' + esc(pending.removed.join(', ')) + '</div>';
+    }
+    if (pending && pending.unsupported.length) {
+      html += '<div class="pf-hint" data-up-unsupported="1">Not offered: ' + pending.unsupported.map(function (x) {
+        return esc(x.name) + ' (' + esc(x.reason) + ')';
+      }).join('; ') + '</div>';
+    }
+    if (shown.length) {
+      html += '<div class="pf-hint">auto lets each person create an Always allow rule for the tool; until they do, it still asks (review or popup as shown).</div>';
+      var base = pending ? { upstream_id: u.id, fetched_at: pending.fetched_at } : { upstream_id: u.id };
+      html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Save ' + esc(u.label) + ' tools" data-upstream-save="' + esc(u.id) +
+        '" data-pending="' + (pending ? '1' : '0') + '" data-payload=\'' + JSON.stringify(base).replace(/'/g, '&#39;') + '\'>Save</div></div>';
+    }
+    return html + '</div>';
   }
 
   function renderUpstreams(state) {
-    var s = state.upstream_servers || {};
-    var rows = s.upstreams || [];
-    var title = '<h1 class="pf-page-title">Upstream MCP servers</h1>';
-    if (!rows.length) {
-      var doc = '<div><a class="pf-doc-link" href="https://privacyfence.eu/docs/upstream-mcp/" target="_blank" rel="noopener">' +
-        'How to declare an upstream MCP server</a></div>';
-      return '<div class="pf-page">' + title + '<div class="card pf-card">' +
-        rowHtml('No upstream MCP servers are declared.',
-          esc('Name a file in PRIVACYFENCE_UPSTREAM_MCP_FILE, or put the declaration in PRIVACYFENCE_UPSTREAM_MCP, and restart.') + doc, '') +
-        '</div></div>';
-    }
-    var intro = '<div class="muted">' + esc('Declared in ' + s.declared_by +
-      '. A change to the declaration needs a restart; a change to the groups in admin_config.json applies without one, except for a server that takes its audiences from its own tool.') + '</div>';
-    return '<div class="pf-page">' + title + intro + rows.map(upstreamCardHtml).join('') + '</div>';
+    var html = '<div class="pf-page"><h1 class="pf-page-title">Upstream MCP servers</h1>';
+    (state.upstream_servers || []).forEach(function (u) { html += upstreamCardHtml(u); });
+    return html + '</div>';
   }
 
-  // Who is waiting to join a group's restricted audience (src/privacyfence/group_membership.py). Each
-  // card covers one (group, audience) and its buttons act on that row alone, never across groups.
-  function membershipTimeText(at) {
-    if (typeof at !== 'number' || !isFinite(at)) { return 'Never'; }
-    return new Date(at * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
-  }
-
-  function membershipPendingCardHtml(row, readOnly) {
-    var emails = (row.emails || []).slice(0, 5).map(esc).join(', ');
-    var more = row.count > 5 ? ' and ' + (row.count - 5) + ' more' : '';
-    var payload = { group: row.group, audience: row.audience };
-    var confirmText = 'Give ' + row.count + ' person(s) in ' + row.group + ' access to the ' + row.audience + ' audience?';
-    var controls = readOnly ? '' : '<div class="pf-row-controls">' +
-      '<div class="button primary" role="button" tabindex="0" aria-label="Approve all for ' + esc(row.group) + ' and ' + esc(row.audience) + '" ' +
-      dataAttr('approve_group_membership', payload) + ' data-confirm="' + esc(confirmText) + '">Approve all</div>' +
-      '<div class="button danger" role="button" tabindex="0" aria-label="Decline all for ' + esc(row.group) + ' and ' + esc(row.audience) + '" ' +
-      dataAttr('decline_group_membership', payload) + '>Decline all</div></div>';
-    return '<div class="card pf-card pf-membership-pending">' +
-      rowHtml(row.group + ' → ' + row.audience, esc(row.count + ' waiting: ' + emails + more), controls) + '</div>';
-  }
-
-  function renderMembership(state) {
-    var m = state.group_membership || {};
-    var isStatic = m.source === 'static';
-    var rejected = m.last_rejected;
-    var rejectedText = rejected ? (rejected.reason || 'Rejected') + ' (' + membershipTimeText(rejected.at) + ')' : 'None';
-    var status = '<div class="card pf-card">' +
-      rowHtml('Source', esc(isStatic ? 'static (a file on the server; read-only)' : 'snapshot'), '') +
-      rowHtml('Last update', esc(membershipTimeText(m.updated_at)), '') +
-      rowHtml('Last rejected snapshot', esc(rejectedText), '') + '</div>';
-    var pending = m.pending || [];
-    var body = pending.length ? pending.map(function (row) { return membershipPendingCardHtml(row, isStatic); }).join('') :
-      '<div class="card pf-card">' + rowHtml('Nothing is waiting for approval.', '', '') + '</div>';
-    return '<div class="pf-page"><h1 class="pf-page-title">Group membership</h1>' + status + body + '</div>';
+  // Save: the gates come from the selects of that card at click time.
+  function saveUpstream(el) {
+    var upId = el.getAttribute('data-upstream-save');
+    var base = {};
+    try { base = JSON.parse(el.getAttribute('data-payload') || '{}'); } catch (err) { base = {}; }
+    var gates = {};
+    Array.prototype.forEach.call(document.querySelectorAll('select[data-up-tool]'), function (sel) {
+      if (sel.getAttribute('data-up-for') === upId) { gates[sel.getAttribute('data-up-tool')] = sel.value; }
+    });
+    base.gates = gates;
+    post(el.getAttribute('data-pending') === '1' ? 'save_upstream_tools' : 'set_upstream_tool_gates', base);
   }
 
   // The bearer token's variable name is shown, never an input: the server sends that variable's
@@ -2712,7 +2654,6 @@ _JS = r"""
       case 'tokens': return renderTokens(state);
       case 'runtimes': return renderRuntimes(state);
       case 'upstreams': return renderUpstreams(state);
-      case 'membership': return renderMembership(state);
       case 'audit': return renderAuditForwarding(state);
       case 'privacy': return renderAdminPrivacy(state);
       case 'stats': return renderStats(state);
@@ -2936,11 +2877,6 @@ _JS = r"""
       var gn = stGatedEl.getAttribute('data-st-gated-tool');
       ui.stGated[gn] = !ui.stGated[gn]; ui.stTools[gn] = ui.stGated[gn]; render(pyState); return;
     }
-    var stAudienceEl = e.target.closest('[data-st-audience]');
-    if (stAudienceEl) {
-      var dk = stAudienceEl.getAttribute('data-st-audience-upstream') + '\u0000' + stAudienceEl.getAttribute('data-st-audience');
-      ui.stAudiences[dk] = !ui.stAudiences[dk]; render(pyState); return;
-    }
     if (e.target.closest('[data-st-personal-data]')) { ui.stPersonalData = !ui.stPersonalData; render(pyState); return; }
     if (e.target.closest('[data-st-personal-data-reads]')) { ui.stPersonalDataReads = !ui.stPersonalDataReads; render(pyState); return; }
     var stDupEl = e.target.closest('[data-st-duplicate]');
@@ -2984,6 +2920,9 @@ _JS = r"""
       }
       return;
     }
+
+    var upSave = e.target.closest('[data-upstream-save]');
+    if (upSave) { saveUpstream(upSave); return; }
 
     var actionEl = e.target.closest('[data-action]');
     if (actionEl) {
@@ -3066,6 +3005,11 @@ _JS = r"""
 
   function onChange(e) {
     var el = e.target;
+    if (el.tagName === 'SELECT' && el.hasAttribute('data-up-tool')) {
+      var warn = el.closest('[data-up-row]').querySelector('[data-up-warn]');
+      if (warn) { warn.hidden = !(el.getAttribute('data-up-verb') !== 'read' && el.value === 'review'); }
+      return;
+    }
     // A scope change resets the value/verb selections below it -- a different scope's value has a
     // different shape (a Drive folder id isn't a Jira project key) and its own, generally different,
     // set of governable verbs, so carrying either over would at best be meaningless and at worst
@@ -3226,7 +3170,7 @@ def _admin_capabilities(*, is_admin: bool) -> dict[str, Any]:
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
         "sections": dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "membership", "audit", "privacy", "stats"), is_admin,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "audit", "privacy", "stats"), is_admin,
         ),
         "not_applicable_actions": [],
         "defaults": _admin_section_defaults() if is_admin else {},

@@ -621,19 +621,6 @@ class TestScopedTokensSection:
         assert "upstream_approvals: scopedUpstreamApprovals()" in html
         assert "'results unseen'" in html and "a.gate === 'popup' ? 'writes data'" in html
 
-    def test_the_form_offers_an_audience_fieldset_for_an_upstream_with_a_ticked_tool(self):
-        html = build_html(_make_state(), scoped_tokens={
-            **self.DATA, "delivery": "once",
-            "upstreams": [{"id": "kh", "label": "Knowledge </script><b>hub", "tools": ["kh_search"], "audiences": ["general", "hr"]}],
-        })
-        assert "Audiences for ' + esc(u.label)" in html
-        assert "The token sees only the audiences you tick, and never more than you can see yourself." in html
-        assert "data-st-audience=" in html and "data-st-audience-upstream=" in html
-        assert "upstream_audiences: scopedChosenAudiences()" in html
-        assert "scopedUpstreamsWithTools()" in html
-        # The label rides in the JSON data, which cannot close the script element.
-        assert "</script><b>hub" not in html
-
     def test_the_form_offers_the_personal_data_checkbox_and_the_list_shows_its_badge(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "Let exports, downloads and page uploads carry personal data" in html
@@ -989,7 +976,7 @@ class TestAdminSurfaceCapabilities:
     def test_an_org_admin_gets_every_section_and_nothing_is_suppressed(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin", is_admin=True))
         assert caps["sections"] == dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "membership", "audit", "privacy", "stats"), True,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "audit", "privacy", "stats"), True,
         )
         assert caps["not_applicable_actions"] == []
 
@@ -1033,7 +1020,6 @@ class TestAdminSurfaceCapabilities:
             ("services", "Services"), ("features", "Features"),
             ("delivery", "File delivery"), ("access", "Sign-in"), ("step_up", "Step-up"),
             ("tokens", "Scoped tokens"), ("runtimes", "Agent runtimes"), ("upstreams", "Upstream MCP servers"),
-            ("membership", "Group membership"),
             ("audit", "Audit forwarding"),
             ("privacy", "Privacy Filter"), ("stats", "Stats"),
         ]
@@ -1089,7 +1075,7 @@ class TestServicesSection:
     def test_the_nav_shows_only_the_sections_the_capabilities_include(self):
         org = _render_admin(_admin_state(_row("google", "Google")))
         assert re.findall(r'aria-label="([^"]+)" data-nav', org) == [
-            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Upstream MCP servers", "Group membership",
+            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Upstream MCP servers",
             "Audit forwarding", "Privacy Filter", "Stats",
         ]
         assert 'aria-selected="true"' in org
@@ -1564,9 +1550,9 @@ class TestOrgAdminSections:
     def test_the_org_admin_surface_has_all_of_the_org_sections(self):
         caps = _admin_caps(build_html(_org_state(), surface="admin", is_admin=True))
         keys = [k for k, v in caps["sections"].items() if v]
-        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "membership", "audit", "privacy", "stats"]
+        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "audit", "privacy", "stats"]
         page = _render_org("services")
-        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Upstream MCP servers", "Group membership", "Audit forwarding", "Privacy Filter", "Stats"):
+        for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Upstream MCP servers", "Audit forwarding", "Privacy Filter", "Stats"):
             assert f'aria-label="{label}"' in page
 
 
@@ -1624,153 +1610,6 @@ class TestOrgAdminSections:
         assert "Credential type in n8n" in page
         assert '<option value="httpBearerAuth" selected>' in page and '<option value="privacyFenceApi"' in page
         assert "n8n.internal.example\" " not in page and re.search(r'value="https://n8n', page) is None
-
-    def test_upstreams_empty_state(self):
-        page = _render_org("upstreams", _org_state(upstream_servers={"declared_by": "", "upstreams": []}))
-        for text in ("Upstream MCP servers", "No upstream MCP servers are declared.", "PRIVACYFENCE_UPSTREAM_MCP_FILE",
-                     "https://privacyfence.eu/docs/upstream-mcp/"):
-            assert text in page, text
-        assert "data-action" not in page
-
-    def test_upstreams_ready_lists_tools_and_groups(self):
-        state = _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP_FILE", "upstreams": [{
-            "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/…", "audience": "kh-aud",
-            "state": "ready", "identity_claim": "required", "claim_lifetime_seconds": 60,
-            "allowed_principal_types": ["claude_client", "n8n_workflow"], "email_for_visibility": False,
-            "tools": [
-                {"name": "kh_search", "gate": "auto", "verb": "search", "effect": "", "state": "exposed"},
-                {"name": "kh_propose_change", "gate": "popup", "verb": "add", "effect": "Adds a proposal.", "state": "missing"},
-            ],
-            "groups": [{"group": "mgmt@co.example", "audiences": ["mgmt"]}],
-        }]})
-        page = _render_org("upstreams", state)
-        for text in ("Ready: 1 of 2 declared tool(s) exposed.", "Runs at once; verb search.",
-                     "A person approves each call first; verb add. Adds a proposal. Not exposed:", "mgmt@co.example",
-                     "Declared in PRIVACYFENCE_UPSTREAM_MCP_FILE.", "AI clients, Scoped tokens",
-                     "a change to the groups in admin_config.json applies without one, except for a server that takes its "
-                     "audiences from its own tool."):
-            assert text in page, text
-        assert "data-action" not in page
-
-    @staticmethod
-    def _audiences_state(summary, label="Knowledge hub", **extra):
-        row = {
-            "id": "kh", "label": label, "url": "https://kh.example", "audience": "kh-aud",
-            "state": "ready", "identity_claim": "required", "claim_lifetime_seconds": 60,
-            "allowed_principal_types": ["claude_client"], "email_for_visibility": True,
-            "tools": [], "groups": [], "audiences_source": "upstream", "audiences_tool": "list_audiences",
-            "audiences_refresh_seconds": 300, "audiences": summary, "groups_ignored": 0,
-        }
-        row.update(extra)
-        return _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP_FILE", "upstreams": [row]})
-
-    def test_upstreams_audiences_from_the_server_ready(self):
-        page = _render_org("upstreams", self._audiences_state({
-            "state": "ready", "fetched_at": 1700000000.0, "audience_count": 2, "people_count": 5, "dropped": 0, "last_error": "",
-        }))
-        for text in ("Knowledge hub: audiences", "From the server&#39;s list_audiences tool, every 300 seconds. "
-                     "No approvals: the server decides who holds each audience.", "Ready: 2 audience(s), 5 people.",
-                     "2023-11-14 22:13:20 UTC", "except for a server that takes its audiences from its own tool."):
-            assert text in page, text
-        for text in ("groups and audiences", "No group is mapped.", "Last error", "unusable", "are ignored"):
-            assert text not in page, text
-        assert "@" not in page
-
-    def test_upstreams_audiences_waiting(self):
-        page = _render_org("upstreams", self._audiences_state({
-            "state": "waiting", "fetched_at": None, "audience_count": 0, "people_count": 0, "dropped": 0, "last_error": "",
-        }))
-        assert "Waiting for the first answer. Nobody holds an audience on this server yet." in page
-        assert "Never" in page and "No group is mapped." not in page and "@" not in page
-
-    def test_upstreams_audiences_stale_with_error(self):
-        page = _render_org("upstreams", self._audiences_state({
-            "state": "stale", "fetched_at": 1700000000.0, "audience_count": 1, "people_count": 1, "dropped": 0,
-            "last_error": "unreachable",
-        }))
-        for text in ("Stale: no answer for over three refresh intervals. Nobody holds an audience on this server until it answers.",
-                     "Last error", "The server could not be reached."):
-            assert text in page, text
-        assert "@" not in page
-        for kind, text in (("too_large", "The answer was larger than 1 MB."), ("tool_error", "The server answered with an error."),
-                           ("claim_failed", "The claim could not be signed."),
-                           ("invalid", "The answer did not have the expected shape.")):
-            again = _render_org("upstreams", self._audiences_state({
-                "state": "stale", "fetched_at": None, "audience_count": 0, "people_count": 0, "dropped": 0, "last_error": kind,
-            }))
-            assert text in again, kind
-
-    def test_upstreams_audiences_dropped_and_ignored_groups(self):
-        page = _render_org("upstreams", self._audiences_state({
-            "state": "ready", "fetched_at": 1700000000.0, "audience_count": 1, "people_count": 2, "dropped": 3, "last_error": "",
-        }, groups_ignored=2))
-        for text in ("Ready: 1 audience(s), 2 people. 3 address(es) were unusable and ignored.",
-                     "Groups in admin_config.json", "2 group(s) mapped for this server are ignored."):
-            assert text in page, text
-        assert "@" not in page
-
-    def test_upstreams_audiences_text_is_escaped(self):
-        page = _render_org("upstreams", self._audiences_state({
-            "state": "ready", "fetched_at": 1700000000.0, "audience_count": 1, "people_count": 1, "dropped": 0,
-            "last_error": "<i>x</i>",
-        }, label="<b>KH</b>", audiences_tool="<u>tool</u>"))
-        for raw in ("<b>KH</b>", "<i>x</i>", "<u>tool</u>"):
-            assert raw not in page, raw
-        for escaped in ("&lt;b&gt;KH&lt;/b&gt;: audiences", "&lt;i&gt;x&lt;/i&gt;", "&lt;u&gt;tool&lt;/u&gt;"):
-            assert escaped in page, escaped
-        assert "@" not in page
-
-    def test_upstreams_waiting_and_claim_off(self):
-        state = _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP", "upstreams": [{
-            "id": "kh", "label": "Knowledge hub", "url": "https://kh.example", "audience": "kh-aud",
-            "state": "waiting_for_tool_list", "identity_claim": "off", "claim_lifetime_seconds": 60,
-            "allowed_principal_types": ["claude_client"], "email_for_visibility": False,
-            "tools": [{"name": "kh_search", "gate": "auto", "verb": "search", "effect": "", "state": "waiting"}],
-            "groups": [],
-        }]})
-        page = _render_org("upstreams", state)
-        for text in ("Waiting for the server", "Off: calls carry no claim.", "No group is mapped."):
-            assert text in page, text
-
-    def test_upstream_text_is_escaped(self):
-        state = _org_state(upstream_servers={"declared_by": "PRIVACYFENCE_UPSTREAM_MCP", "upstreams": [{
-            "id": "kh", "label": "<b>KH</b>", "url": "https://kh.example", "audience": "a",
-            "state": "ready", "identity_claim": "off", "claim_lifetime_seconds": 60,
-            "allowed_principal_types": [], "email_for_visibility": False, "tools": [], "groups": [],
-        }]})
-        page = _render_org("upstreams", state)
-        assert "&lt;b&gt;KH&lt;/b&gt;" in page and "<b>KH</b>" not in page
-
-    def test_group_membership_empty_state(self):
-        state = _org_state(group_membership={"source": "snapshot", "updated_at": None, "pending": [], "last_rejected": None})
-        page = _render_org("membership", state)
-        for text in ("Group membership", "Source", "Last update", "Last rejected snapshot", "Nothing is waiting for approval."):
-            assert text in page, text
-        assert "approve_group_membership" not in page
-
-    def test_group_membership_pending_row_has_both_buttons_and_the_confirm_text(self):
-        state = _org_state(group_membership={
-            "source": "snapshot", "updated_at": 1700000000.0,
-            "pending": [{"group": "mgmt@acme.com", "audience": "mgmt", "count": 7,
-                         "emails": [f"p{i}@acme.com" for i in range(7)]}],
-            "last_rejected": {"reason": "too_many_additions", "at": 1700000100.0},
-        })
-        page = _render_org("membership", state)
-        assert "Approve all" in page and "Decline all" in page
-        assert 'data-action="approve_group_membership"' in page and 'data-action="decline_group_membership"' in page
-        assert "&quot;group&quot;:&quot;mgmt@acme.com&quot;" in page or '"group":"mgmt@acme.com"' in page
-        assert "Give 7 person(s) in mgmt@acme.com access to the mgmt audience?" in page
-        assert "p0@acme.com" in page and "and 2 more" in page
-        assert "too_many_additions" in page
-        assert "Nothing is waiting for approval." not in page
-
-    def test_group_membership_static_source_is_read_only(self):
-        state = _org_state(group_membership={
-            "source": "static", "updated_at": None, "pending": [], "last_rejected": None,
-        })
-        page = _render_org("membership", state)
-        assert "static" in page and "approve_group_membership" not in page
-        assert "Nothing is waiting for approval." in page
 
     def test_unset_address_and_key_say_which_variable_to_set(self):
         state = _org_state(agent_runtimes_status={"n8n": {
@@ -1980,3 +1819,129 @@ class TestProvisioningKeyVariableName:
         page = _render_admin(_admin_state(row), is_admin=True)
         assert "Automatic accounts: on, but ACME_PEEK_KEY is not set on the server." in page
         assert "PRIVACYFENCE_PEEK_PROVISIONING_KEY" not in page
+
+
+def _up_tool(name, verb="read", gate=None, default="review", description="Reads.", state=None, uid="canva"):
+    row = {
+        "name": name, "exposed_name": f"{uid}_{name}", "verb": verb, "read_only": verb == "read",
+        "default_gate": default, "gate": gate or default, "description": description,
+    }
+    if state:
+        row["state"] = state
+    return row
+
+
+def _up_row(**over):
+    row = {
+        "id": "canva", "label": "Canva", "url": "https://mcp.canva.com/…", "issuer_host": "auth.canva.com",
+        "registration": "dynamic", "scopes": [], "connected_people": 2, "admin_connected": True,
+        "allowed_principal_types": ["claude_client"], "saved_at": None, "tools": [], "pending": None,
+    }
+    row.update(over)
+    return row
+
+
+def _up_page(*rows):
+    return _render_org("upstreams", _org_state(upstream_servers=list(rows)))
+
+
+def _payload(page, marker):
+    m = re.search(marker + r"[^>]*data-payload='([^']*)'", page)
+    assert m, marker
+    return json.loads(m.group(1).replace("&#39;", "'"))
+
+
+@needs_node
+class TestUpstreamsSection:
+    def test_a_waiting_upstream_says_so_and_offers_refresh_but_no_save(self):
+        page = _up_page(_up_row())
+        assert "Sign-in: OAuth at auth.canva.com, 2 people connected, client dynamic." in page
+        assert "Waiting for an administrator to refresh the tools. AI clients see none of its tools until you save a list." in page
+        assert _payload(page, 'aria-label="Refresh tools for Canva" data-action="refresh_upstream_tools"') == {"upstream_id": "canva"}
+        assert "data-upstream-save" not in page
+
+    def test_refresh_is_disabled_with_its_hint_when_the_admin_is_not_connected(self):
+        page = _up_page(_up_row(admin_connected=False))
+        assert "Connect Canva on the Connect page first." in page
+        assert 'aria-disabled="true" aria-label="Refresh tools for Canva"' in page
+        assert "refresh_upstream_tools" not in page
+
+    def test_a_ready_upstream_lists_saved_tools_with_class_default_and_selected_gate(self):
+        tools = [
+            _up_tool("get_design"),
+            _up_tool("set_title", verb="update", gate="auto", default="popup"),
+            _up_tool("wipe", verb="delete", default="popup"),
+        ]
+        page = _up_page(_up_row(tools=tools))
+        assert "Waiting for an administrator" not in page
+        assert page.count("data-up-class=") == 3
+        for word in ("read", "write", "destructive"):
+            assert f'data-up-class="1">{word}<' in page
+        sel = re.search(r'data-up-tool="set_title".*?</select>', page, re.DOTALL).group(0)
+        assert '<option value="auto" selected>auto</option>' in sel
+        assert '<option value="popup">popup (default)</option>' in sel
+        assert "auto lets each person create an Always allow rule for the tool; until they do, it still asks (review or popup as shown)." in page
+        assert "Not exposed until you save." not in page
+        assert _payload(page, 'data-upstream-save="canva" data-pending="0"') == {"upstream_id": "canva"}
+        assert "Save</div>" in page
+
+    def test_review_on_a_non_read_tool_shows_the_warning(self):
+        page = _up_page(_up_row(tools=[
+            _up_tool("a", verb="update", gate="review", default="popup"), _up_tool("b", verb="read", gate="review"),
+            _up_tool("c", verb="update", gate="popup", default="popup"),
+        ]))
+        warns = re.findall(r'data-up-warn="1"( hidden)?>Runs before the person sees anything\.', page)
+        assert warns == ["", " hidden", " hidden"]
+
+    def test_a_pending_list_shows_new_changed_removed_and_unsupported(self):
+        pending = {
+            "fetched_at": 1234.5, "new": ["fresh"], "changed": ["edited"], "removed": ["gone", "old"],
+            "unsupported": [{"name": "odd", "reason": "its name is not 1-48 letters, digits, underscores or hyphens"}],
+            "tools": [
+                _up_tool("known", state="unchanged", gate="auto"),
+                _up_tool("edited", state="changed", gate="auto", default="review"),
+                _up_tool("fresh", verb="update", state="new", default="popup"),
+                {"name": "odd", "exposed_name": "canva_odd", "state": "unsupported", "verb": "read",
+                 "default_gate": "review", "gate": "review", "description": "", "reason": "its name is not 1-48 letters, digits, underscores or hyphens"},
+            ],
+        }
+        page = _up_page(_up_row(tools=[_up_tool("known", gate="auto")], pending=pending))
+        order = [m for m in re.findall(r'data-up-row="(\w+)"', page)]
+        assert order == ["edited", "fresh", "known"]
+        assert 'data-up-state="new"' in page and 'data-up-state="changed"' in page
+        assert page.count("Not exposed until you save.") == 2
+        assert page.count("Its gate was reset; choose auto again if you want it.") == 1
+        edited = re.search(r'data-up-tool="edited".*?</select>', page, re.DOTALL).group(0)
+        assert '<option value="review" selected>review (default)</option>' in edited
+        known = re.search(r'data-up-tool="known".*?</select>', page, re.DOTALL).group(0)
+        assert '<option value="auto" selected>auto</option>' in known
+        assert "Removed by the server: gone, old" in page
+        assert "odd (its name is not 1-48 letters" in page
+        assert "data-up-tool=\"odd\"" not in page
+        assert _payload(page, 'data-upstream-save="canva" data-pending="1"') == {"upstream_id": "canva", "fetched_at": 1234.5}
+
+    def test_the_save_handler_builds_each_payload_from_the_selects(self):
+        html = build_html(_org_state(), surface="admin", is_admin=True)
+        assert "select[data-up-tool]" in html
+        assert "base.gates = gates;" in html
+        assert "'save_upstream_tools' : 'set_upstream_tool_gates'" in html
+        assert "var upSave = e.target.closest('[data-upstream-save]');" in html
+        assert "warn.hidden = " in html
+
+    def test_hostile_server_text_is_escaped(self):
+        evil = "<img src=x onerror=alert(1)>"
+        pending = {
+            "fetched_at": 1.0, "new": [evil], "changed": [], "removed": [evil], "unsupported": [{"name": evil, "reason": evil}],
+            "tools": [_up_tool(evil, state="new", description=evil)],
+        }
+        page = _up_page(_up_row(label=evil, issuer_host=evil, url=evil, pending=pending, tools=[_up_tool(evil, description=evil)]))
+        assert "<img" not in page
+        assert "&lt;img src=x onerror=alert(1)&gt;" in page
+
+    def test_the_token_form_notes_the_connection_only_for_an_upstream_with_a_ticked_tool(self):
+        html = build_html(_make_state(), scoped_tokens={**TestScopedTokensSection.DATA, "upstreams": [
+            {"id": "canva", "label": "<b>Canva</b>", "tools": ["canva_get"], "gated_tools": [], "connection_note": True}]})
+        assert "function scopedConnectionNotesHtml()" in html
+        assert "data-st-connection-for=\"' + esc(u.id) + '\"" in html
+        assert "This token acts through your own ' + esc(u.label) +\n        ' connection: it can do what your account there can do." in html
+        assert "html += scopedConnectionNotesHtml();" in html

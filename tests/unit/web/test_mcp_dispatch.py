@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from privacyfence import agent_runtimes, auto_accept, local_files, scoped_tokens, upstream_mcp_registry
+from privacyfence import agent_runtimes, local_files, scoped_tokens
 from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -29,10 +29,7 @@ from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedb
 from privacyfence import gate
 from privacyfence.gate import GateDeniedError, is_unattended
 from privacyfence.principal import Principal, principal_scope
-from privacyfence.policy import scope_rows
-from privacyfence.policy.registry import Verb
 from privacyfence.scoped_tokens import ScopedToken
-from privacyfence.upstream_mcp_config import DeclaredTool, UpstreamServer, declaration_digest
 from privacyfence.web import mcp_dispatch
 from privacyfence.web.mcp_dispatch import McpDispatcher
 
@@ -563,6 +560,53 @@ class TestCall:
 # check_policy -- ported from TestCheckPolicyDispatch
 # --------------------------------------------------------------------------- #
 
+class TestScopedUpstreamApproval:
+    """The dispatcher refuses a scoped call of a gated upstream tool before it reaches the connector
+    unless the token's own rules cover it (ADR 0300, ADR 0331)."""
+
+    @staticmethod
+    def _setup(tool_gate="review"):
+        from privacyfence.policy import scope_rows
+        from privacyfence.policy.engine import PolicyRule
+        from privacyfence.upstream_mcp_registry import get_registry
+        from tests.unit.test_upstream_mcp_registry import saved_tool, upstream
+
+        get_registry().apply(upstream(), (saved_tool("fetch", tool_gate),))
+        connector = FakeConnector("kh", result="r")
+        rule = PolicyRule(
+            id="r", predicate="upstream.always_allow", value="kh_fetch", operations=frozenset({"kh.fetch"}),
+        )
+        covered = dataclasses.replace(_SCOPE, tools=frozenset({"kh_fetch"}), rules=tuple(scope_rows.rows_for_rules([rule], "r-1")))
+        bare = dataclasses.replace(_SCOPE, tools=frozenset({"kh_fetch"}))
+        return connector, covered, bare
+
+    async def test_a_token_without_a_covering_rule_never_reaches_the_connector(self):
+        connector, _covered, bare = self._setup("auto")
+        dispatcher = _dispatcher({"kh": connector})
+        with scoped_tokens.token_scope(bare), pytest.raises(GateDeniedError, match="no administrator approval"):
+            await dispatcher.call("s1", "kh", "kh_fetch", {})
+        assert connector.calls == []
+
+    async def test_a_token_with_the_per_tool_rule_reaches_the_connector(self):
+        connector, covered, _bare = self._setup("auto")
+        dispatcher = _dispatcher({"kh": connector})
+        with scoped_tokens.token_scope(covered):
+            assert await dispatcher.call("s1", "kh", "kh_fetch", {}) == "r"
+        assert connector.calls == [("kh_fetch", {})]
+
+    async def test_a_rule_for_a_tool_below_the_ceiling_does_not_count(self):
+        connector, covered, _bare = self._setup("review")
+        dispatcher = _dispatcher({"kh": connector})
+        with scoped_tokens.token_scope(covered), pytest.raises(GateDeniedError):
+            await dispatcher.call("s1", "kh", "kh_fetch", {})
+        assert connector.calls == []
+
+    async def test_an_unscoped_call_is_left_to_the_gate(self):
+        connector, _covered, _bare = self._setup("review")
+        dispatcher = _dispatcher({"kh": connector})
+        assert await dispatcher.call("s1", "kh", "kh_fetch", {}) == "r"
+
+
 class TestCheckPolicy:
     @pytest.fixture(autouse=True)
     def _audit_dir(self, tmp_path):
@@ -1030,33 +1074,18 @@ class TestStatus:
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=True)])
         assert "upstreams" not in dispatcher.status("checking")
 
-    @pytest.mark.parametrize("authenticated", [False, True])
-    def test_status_lists_the_upstreams_when_configured(self, tmp_path, authenticated):
+    def test_status_carries_the_upstream_rows_when_the_runtime_is_configured(self, monkeypatch):
         from privacyfence import upstream_mcp_runtime
-        from privacyfence.identity_claim import ClaimSigner
-        from privacyfence.upstream_claim_keys import KeySet
-        from privacyfence.group_membership import StaticFileResolver
-        from privacyfence.upstream_mcp_config import GroupMapStore, parse_upstreams
 
-        upstreams = parse_upstreams({
-            "version": 1,
-            "upstreams": [{
-                "id": "kh", "label": "Knowledge hub", "url": "https://kh.example/mcp", "audience": "kh-aud",
-                "tools": {"search": {"gate": "auto", "verb": "search"}},
-            }],
-        }, source="test")
-        upstream_mcp_runtime.configure(
-            upstreams=upstreams,
-            signer=ClaimSigner(issuer="https://pf.example", keys=KeySet(tmp_path / "keys.json")),
-            groups=GroupMapStore(tmp_path / "admin_config.json", frozenset({"kh"})),
-            resolver=StaticFileResolver(tmp_path / "members.json"),
-        )
+        rows = [{"id": "oauthref", "state": "waiting_for_admin", "tools_exposed": 0}]
+        monkeypatch.setattr(upstream_mcp_runtime, "configured", lambda: True)
+        monkeypatch.setattr(upstream_mcp_runtime, "status", lambda: rows)
         dispatcher = _dispatcher({})
-        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=authenticated)])
-        assert dispatcher.status("checking")["upstreams"] == [{
-            "id": "kh", "label": "Knowledge hub", "tools_exposed": 0, "state": "waiting_for_tool_list",
-            "missing_tools": [], "audiences_source": "groups",
-        }]
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=True)])
+        assert dispatcher.status("checking")["upstreams"] == rows
+        # Also on the not-set-up path, which returns from a different branch.
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        assert dispatcher.status("checking")["upstreams"] == rows
 
     def test_audits_status_checked_when_un_onboarded(self):
         dispatcher = _dispatcher({})
@@ -1795,54 +1824,3 @@ class TestRuntimeCredentialStatus(_DeliveryBase):
 
         monkeypatch.setattr(mcp_dispatch, "get_audit_logger", broken)
         assert self._status(self._dispatcher()) == {"state": "not_delivered"}
-
-
-class TestScopedUpstreamApproval:
-    """A token call of a gated upstream tool nothing covers never reaches the connector (plan 3.5)."""
-
-    @pytest.fixture(autouse=True)
-    def _upstream(self, tmp_path):
-        init_audit_logger(str(tmp_path))
-        self.declared = DeclaredTool(
-            name="propose_change", exposed_name="kh_propose_change", operation="kh.propose_change",
-            gate="popup", verb="update", effect="Proposes a change.",
-        )
-        self.server = UpstreamServer(
-            id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
-            tools=(self.declared,),
-        )
-        upstream_mcp_registry.register([self.server])
-        auto_accept.set_policy_v2_store_rules([])
-        yield
-        auto_accept.set_policy_v2_store_rules([])
-
-    def _token(self, *, approved: bool) -> ScopedToken:
-        rows = ()
-        if approved:
-            rows = (scope_rows.ScopeRow(
-                id="r-approval", scope=None,
-                value=f"{self.declared.operation}@{declaration_digest(self.server, self.declared)}",
-                verbs=frozenset({Verb("update")}), operations=frozenset({self.declared.operation}),
-                predicate="upstream.approved_tool",
-            ),)
-        return dataclasses.replace(_SCOPE, tools=frozenset({"kh_propose_change"}), rules=rows)
-
-    async def test_an_uncovered_token_call_never_reaches_the_connector(self):
-        connector = ScopeAwareConnector("kh", allow_scoped=True)
-        dispatcher = _dispatcher({"kh": connector})
-        with scoped_tokens.token_scope(self._token(approved=False)), pytest.raises(GateDeniedError):
-            await dispatcher.call("s1", "kh", "kh_propose_change", {})
-        assert connector.seen_scopes == []
-
-    async def test_a_covered_token_call_reaches_the_connector(self):
-        connector = ScopeAwareConnector("kh", allow_scoped=True)
-        dispatcher = _dispatcher({"kh": connector})
-        with scoped_tokens.token_scope(self._token(approved=True)):
-            assert await dispatcher.call("s1", "kh", "kh_propose_change", {}) == "scoped result"
-        assert connector.seen_scopes == [_SCOPE.id]
-
-    async def test_an_unscoped_call_is_unaffected(self):
-        connector = ScopeAwareConnector("kh", allow_scoped=True)
-        dispatcher = _dispatcher({"kh": connector})
-        assert await dispatcher.call("s1", "kh", "kh_propose_change", {}) == "full-token result"
-        assert connector.seen_scopes == [None]

@@ -756,6 +756,23 @@ For each representative read, list, search, create, update, send or upload tool:
 - Deny prevents execution or release of the content;
 - the audit entry records the right connector, tool, decision, rule and principal.
 
+### Upstream MCP server checks
+
+Two manual checks against real vendors on the [QA server](#the-qa-server), with accounts that hold
+nothing real. Declare the server as in [Upstream MCP servers](upstream-mcp.md) (`id: canva`, `label:
+Canva`, `url: https://mcp.canva.com/mcp`; for Framer `id: framer`, `label: Framer`, `url:
+https://mcp.framer.com/mcp`), restart, and check:
+
+- `privacyfence_status` shows the server as `waiting_for_admin`.
+- **Connect** on `/connect` reaches the vendor's sign-in and returns with `<label> connected.` If the
+  vendor refuses the redirect address, register an app with it and declare `oauth.client_id` and
+  `oauth.client_secret_env`; the secret goes in the server's `privacyfence.env`, never in chat. Framer
+  may ask for administrator approval of MCP connections; note it.
+- **Refresh tools** on the Admin page lists the tools as new, read-only ones on `review` and the rest
+  on `popup`. Set one read tool to `auto`, **Save** with the passkey.
+- From an AI client: the `auto` tool shows a card with an **Always allow** button, and after one press
+  the next call runs without a card; a `popup` tool asks first and offers no Always allow.
+
 ### Gmail checks
 
 - **Read and deny.** `gmail_get_message` prompts for review; Deny returns an error, not data. Use a

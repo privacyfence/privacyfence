@@ -6,6 +6,8 @@ Accepted — 2026-11-14. Amends [ADR 0036](0036-card-copy-names-the-caller-throu
 Implemented: `src/privacyfence/upstream_claims.py`, `web/routes_upstream_mcp.py`.
 Amended by [ADR 0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md).
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 An upstream MCP server (ADR 0285) must filter its own data by who is asking: ranking and pagination stay

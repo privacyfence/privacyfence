@@ -1,19 +1,18 @@
-"""The client for an operator-declared upstream MCP server, and its tool catalog.
+"""The client for a hosted upstream MCP server, and its tool catalog.
 
-``UpstreamMcpClient`` opens a fresh Streamable HTTP session for every call, signed with a claim
-minted for that one request (``identity_claim.IdentityClaimAuth``), so a connection is never shared across
-calls or principals. ``UpstreamToolCatalog`` turns the tools an upstream listed at startup into
-``ToolSpec`` values for the declared tools only, and skips any whose schema this release cannot pass
-through safely.
+``UpstreamMcpClient`` opens a fresh Streamable HTTP session for every call and authenticates it with the
+calling person's OAuth bearer token (``BearerAuth``), so a connection is never shared across calls or
+people. The bearer goes only to the declared server's origin and PrivacyFence sends no claim of its own.
+``UpstreamToolCatalog`` turns an administrator's saved tool list into ``ToolSpec`` values.
 
-See ADR 0285 (upstream MCP servers as a connector) and ADR 0286 and 0297 (the signed caller claim).
+See ADR 0329 (hosted MCP servers with per-person OAuth) and ADR 0331 (the administrator's saved list).
 """
 from __future__ import annotations
 
 import copy
-import json
 import logging
 import unicodedata
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,20 +21,32 @@ from mcp import ClientSession, types
 from mcp.client.streamable_http import streamable_http_client
 
 from .connector import ToolParam, ToolSpec
-from .identity_claim import ClaimSigner, ClaimSigningError, IdentityCaller, IdentityClaimAuth
-from .upstream_mcp_config import READ_VERBS, DeclaredTool, UpstreamServer
+from .upstream_mcp_config import UpstreamServer
+from .upstream_oauth_tokens import UpstreamOAuthError, origin_of
+from .upstream_tools import SavedTool, classify, person_gate
 
 logger = logging.getLogger(__name__)
 
 MAX_RESULT_CHARS = 1_000_000
 MAX_DESCRIPTION_CHARS = 700
-MAX_SCHEMA_BYTES = 32 * 1024
 _REASON_DESCRIPTION = "One sentence: why are you calling this tool right now?"
-_REF_KEYS = frozenset({"$ref", "$defs", "definitions"})
+_OAUTH_KINDS = frozenset({"not_connected", "auth_expired", "insufficient_scope"})
+
+# ``force_refresh`` in, a bearer token out; raises ``UpstreamOAuthError``.
+BearerSource = Callable[[bool], Awaitable[str]]
+
+
+class CallerNotAllowedError(Exception):
+    """The caller's principal type may not use this upstream (raised by the runtime, caught by the connector)."""
+
+    def __init__(self, principal_type: str) -> None:
+        super().__init__(principal_type)
+        self.principal_type = principal_type
 
 
 class UpstreamMcpClientError(Exception):
-    """A call to the upstream failed. ``kind`` is ``unreachable``, ``too_large``, ``tool_error`` or ``claim_failed``."""
+    """A call to the upstream failed. ``kind`` is ``not_connected``, ``auth_expired``, ``insufficient_scope``,
+    ``unreachable``, ``too_large`` or ``tool_error``."""
 
     def __init__(self, kind: str, detail: str = "") -> None:
         super().__init__(kind)
@@ -48,70 +59,83 @@ class CallResult:
     text: str
     structured: dict | None
     dropped_blocks: int
-    jti: str = ""
-    req: str = ""
 
 
-class _FailureRecorder:
-    """Wraps the signer so a signing failure is known even when the transport reports it as something else."""
+class BearerAuth(httpx2.Auth):
+    """Adds ``Authorization: Bearer <token>`` to a request for ``origin`` and to no other.
 
-    def __init__(self, signer: ClaimSigner) -> None:
-        self._signer = signer
-        self.failed = False
+    After each response it records the first error status it saw (``status``, else the last status)
+    and whether a 403 asked for more scope (``insufficient_scope``), so the client can tell an expired
+    token from a missing scope even when the SDK reports both as a failed request."""
 
-    def mint(self, **kwargs: Any) -> Any:
-        try:
-            return self._signer.mint(**kwargs)
-        except ClaimSigningError:
-            self.failed = True
-            raise
+    def __init__(self, token: str, origin: str) -> None:
+        self._token = token
+        self._origin = origin
+        self.status: int | None = None
+        self.insufficient_scope = False
+
+    def auth_flow(self, request: httpx2.Request) -> Any:
+        if origin_of(str(request.url)) == self._origin:
+            request.headers["Authorization"] = f"Bearer {self._token}"
+        response = yield request
+        if self.status is None or self.status < 400:
+            self.status = response.status_code
+        if response.status_code == 403 and "insufficient_scope" in response.headers.get("www-authenticate", ""):
+            self.insufficient_scope = True
 
 
 class UpstreamMcpClient:
-    def __init__(
-        self, upstream: UpstreamServer, signer: ClaimSigner, *, transport: httpx2.AsyncBaseTransport | None = None,
-    ) -> None:
+    def __init__(self, upstream: UpstreamServer, *, transport: httpx2.AsyncBaseTransport | None = None) -> None:
         self._upstream = upstream
-        self._signer = signer
         self._transport = transport
 
-    async def _run(self, caller: IdentityCaller, action: Any) -> tuple[Any, IdentityClaimAuth | None]:
-        """Open a session, run ``action(session)`` once, close. Any transport failure is ``unreachable``.
-
-        Returns the action's result and the auth that signed it (``None`` when ``identity_claim`` is off)."""
-        upstream = self._upstream
-        auth: IdentityClaimAuth | None = None
-        recorder: _FailureRecorder | None = None
-        if upstream.identity_claim == "required":
-            recorder = _FailureRecorder(self._signer)
-            auth = IdentityClaimAuth(recorder, upstream.audience, caller, upstream.claim_lifetime_seconds)  # type: ignore[arg-type]
+    async def _token(self, bearer: BearerSource, force_refresh: bool) -> str:
         try:
-            async with httpx2.AsyncClient(
-                auth=auth, timeout=httpx2.Timeout(60.0, connect=10.0), transport=self._transport,
-            ) as http:
-                async with streamable_http_client(upstream.url, http_client=http) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        return await action(session), auth
-        except Exception:
-            if (recorder is not None and recorder.failed) or (auth is not None and auth.request_unhashable):
-                logger.warning("Upstream %s call was not sent: the claim could not be signed", upstream.id)
-                raise UpstreamMcpClientError("claim_failed") from None  # noqa: BLE001 -- the cause may quote the upstream; the caller gets a fixed message
-            logger.warning("Upstream %s could not be reached", self._upstream.id, exc_info=True)
-            raise UpstreamMcpClientError("unreachable") from None
+            return await bearer(force_refresh)
+        except UpstreamOAuthError as exc:
+            raise UpstreamMcpClientError(exc.kind if exc.kind in _OAUTH_KINDS else "unreachable") from None
 
-    async def list_tools(self) -> list[types.Tool]:
+    async def _run(self, bearer: BearerSource, action: Callable[[ClientSession], Awaitable[Any]]) -> Any:
+        """Open a session, run ``action(session)`` once, close.
+
+        A 401 while the session is being initialised is retried once with a refreshed token on a fresh
+        session; a 401 after that point is ``auth_expired`` and the call is never sent again."""
+        upstream = self._upstream
+        origin = origin_of(upstream.url)
+        for attempt in (0, 1):
+            auth = BearerAuth(await self._token(bearer, attempt == 1), origin)
+            initialized = False
+            try:
+                async with httpx2.AsyncClient(
+                    auth=auth, timeout=httpx2.Timeout(60.0, connect=10.0), transport=self._transport,
+                ) as http:
+                    async with streamable_http_client(upstream.url, http_client=http) as (read, write):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            initialized = True
+                            return await action(session)
+            except Exception:  # noqa: BLE001 -- the cause may quote the upstream; the caller gets a fixed kind
+                if auth.insufficient_scope:
+                    raise UpstreamMcpClientError("insufficient_scope") from None
+                if auth.status == 401:
+                    if not initialized and attempt == 0:
+                        continue
+                    raise UpstreamMcpClientError("auth_expired") from None
+                logger.warning("Upstream %s could not be reached", upstream.id)
+                raise UpstreamMcpClientError("unreachable") from None
+        raise AssertionError("unreachable")  # pragma: no cover -- the second attempt always returns or raises
+
+    async def list_tools(self, *, bearer: BearerSource) -> list[types.Tool]:
         async def action(session: ClientSession) -> list[types.Tool]:
             return list((await session.list_tools()).tools)
 
-        tools, _auth = await self._run(IdentityCaller(sub="privacyfence", principal_type="service"), action)
-        return tools
+        return await self._run(bearer, action)  # type: ignore[no-any-return]
 
-    async def call_tool(self, tool: str, arguments: dict[str, Any], caller: IdentityCaller | None) -> CallResult:
+    async def call_tool(self, tool: str, arguments: dict[str, Any], *, bearer: BearerSource) -> CallResult:
         async def action(session: ClientSession) -> types.CallToolResult:
             return await session.call_tool(tool, arguments)
 
-        result, auth = await self._run(caller or IdentityCaller(sub="", principal_type="claude_client"), action)
+        result = await self._run(bearer, action)
         texts: list[str] = []
         dropped = 0
         for block in result.content:
@@ -127,8 +151,6 @@ class UpstreamMcpClient:
         structured = result.structured_content
         return CallResult(
             text=text, structured=structured if isinstance(structured, dict) else None, dropped_blocks=dropped,
-            jti=(auth.last_call_jti or "") if auth is not None else "",
-            req=(auth.last_call_req or "") if auth is not None else "",
         )
 
 
@@ -136,82 +158,47 @@ def _clean(text: str) -> str:
     return "".join(char for char in text if not unicodedata.category(char).startswith("C"))
 
 
-def _has_ref(node: object) -> bool:
-    if isinstance(node, dict):
-        return any(key in _REF_KEYS or _has_ref(value) for key, value in node.items())
-    if isinstance(node, list):
-        return any(_has_ref(item) for item in node)
-    return False
+def person_gate_of(tool: SavedTool) -> str:
+    """The gate a person meets for ``tool``: ``review`` or ``popup``, never ``auto`` (ADR 0331)."""
+    return person_gate(tool.gate, classify(tool.read_only, tool.destructive)[0])
 
 
-def _skip_reason(schema: object) -> str | None:
-    if not isinstance(schema, dict) or schema.get("type") != "object":
-        return "its input schema is not an object schema"
-    properties = schema.get("properties", {})
-    if not isinstance(properties, dict) or not isinstance(schema.get("required", []), list):
-        return "its input schema is not an object schema"
-    if "reason" in properties:
-        return "its input schema already has a reason property"
-    if len(json.dumps(schema)) > MAX_SCHEMA_BYTES:
-        return "its input schema is larger than 32 KB"
-    if _has_ref(schema):
-        return "its input schema uses $ref, $defs or definitions"
-    return None
-
-
-def _gate_sentence(upstream: UpstreamServer, gate: str) -> str:
-    if gate == "auto":
-        return f" Auto-approved: the {upstream.label} server decides which data the caller may see."
+def _gate_sentence(gate: str) -> str:
     if gate == "review":
         return " Requires user approval: PrivacyFence shows the result to the person before it is returned."
     return " Requires user approval: PrivacyFence asks the person before the call is sent."
 
 
 class UpstreamToolCatalog:
-    def __init__(self, upstream: UpstreamServer) -> None:
+    def __init__(self, upstream: UpstreamServer, saved: tuple[SavedTool, ...] = ()) -> None:
         self._upstream = upstream
-        self._tools: list[types.Tool] = []
+        self._saved = tuple(saved)
 
-    def update(self, tools: list[types.Tool]) -> None:
-        self._tools = list(tools)
+    def update(self, saved: tuple[SavedTool, ...]) -> None:
+        self._saved = tuple(saved)
 
-    def _build(self) -> tuple[list[ToolSpec], list[str]]:
-        by_name = {tool.name: tool for tool in self._tools}
-        specs: list[ToolSpec] = []
-        missing: list[str] = []
-        declared: dict[str, DeclaredTool] = {d.name: d for d in self._upstream.tools}
-        for name, tool in declared.items():
-            listed = by_name.get(name)
-            if listed is None:
-                missing.append(tool.exposed_name)
-                continue
-            reason = _skip_reason(listed.input_schema)
-            if reason is not None:
-                logger.warning("Upstream tool %s is skipped: %s", tool.exposed_name, reason)
-                missing.append(tool.exposed_name)
-                continue
-            specs.append(self._spec(tool, listed))
-        return specs, missing
+    def saved_tool(self, exposed_name: str) -> SavedTool | None:
+        for tool in self._saved:
+            if f"{self._upstream.id}_{tool.name}" == exposed_name:
+                return tool
+        return None
 
-    def _spec(self, declared: DeclaredTool, listed: types.Tool) -> ToolSpec:
+    def _spec(self, tool: SavedTool) -> ToolSpec:
         label = self._upstream.label
-        description = _clean(listed.description or "")[:MAX_DESCRIPTION_CHARS]
-        description += f" Returns what the {label} server answers." + _gate_sentence(self._upstream, declared.gate)
-        schema = copy.deepcopy(listed.input_schema)
+        description = _clean(tool.description or "")[:MAX_DESCRIPTION_CHARS]
+        description += f" Returns what the {label} server answers." + _gate_sentence(person_gate_of(tool))
+        schema = copy.deepcopy(tool.input_schema)
         properties = schema.setdefault("properties", {})
         properties["reason"] = {"type": "string", "description": _REASON_DESCRIPTION}
         schema["required"] = [*schema.get("required", []), "reason"]
         return ToolSpec(
-            name=declared.exposed_name,
+            name=f"{self._upstream.id}_{tool.name}",
             description=description,
             params=[ToolParam("reason", "str", required=True, description=_REASON_DESCRIPTION)],
-            read_only=declared.verb in READ_VERBS,
-            destructive=declared.verb == "delete",
+            read_only=tool.verb == "read",
+            destructive=tool.verb == "delete",
             input_schema=schema,
         )
 
     def specs(self) -> list[ToolSpec]:
-        return self._build()[0]
-
-    def missing(self) -> list[str]:
-        return self._build()[1]
+        return [self._spec(tool) for tool in self._saved]

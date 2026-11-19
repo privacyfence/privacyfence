@@ -1,24 +1,22 @@
-"""Upstream MCP connector: the declared tools of one operator-configured upstream MCP server.
+"""Upstream MCP connector: the saved tools of one hosted, OAuth-authenticated upstream MCP server.
 
-One ``UpstreamMcpConnector`` fronts one ``UpstreamServer`` (ADR 0285). Its tools are the declared
-tools the upstream listed at startup (``UpstreamToolCatalog``); each is handled by the gate the
-operator declared for it:
+One ``UpstreamMcpConnector`` fronts one ``UpstreamServer`` for one person (ADR 0329). Its tools are the
+administrator's saved list (``UpstreamToolCatalog``, ADR 0331). Every call goes through ``gated_call``
+with the person gate of the tool, which is ``review`` or ``popup``, never ``auto``: a stored Always allow
+rule is what lets a call run without a card.
 
-* ``auto``: the call goes to the upstream at once and an ``auto_accepted`` audit row is written.
-  The upstream decides which data the caller may see, from the signed claim.
-* ``review``: the call goes to the upstream, then ``gated_call`` shows the result to the person
-  (and runs the PII scan on it) before it is returned.
+* ``review``: the call goes to the upstream, then ``gated_call`` shows the result to the person (and
+  runs the PII scan on it) before it is returned.
 * ``popup``: ``gated_call`` asks the person first, with the arguments they would send; only an
   approval reaches the upstream. A denial raises before the client is touched.
 
-Connector code never reads the caller (ADR 0036, amended by ADR 0286). Who is calling, and which
-audiences they hold, is resolved beside the transport: the ``caller`` callable this connector is
-given (supplied by ``upstream_mcp_runtime``) returns the ``IdentityCaller`` that ``UpstreamMcpClient``
-signs onto the request (not called at all when the upstream's ``identity_claim`` is ``off``). This module imports no caller context.
+Connector code never reads the caller (ADR 0036). Who may call is decided by the ``admit`` callable and the
+person's token by the ``bearer`` callable, both supplied by ``upstream_mcp_runtime``. PrivacyFence sends no
+claim of its own to the upstream.
 
 Approval previews name the arguments but never their values. An upstream's error text reaches the AI
-client (cut to 500 characters, control characters removed), like its results; the two error types
-below are named ``RuntimeError`` subclasses (three here), so ``safe_errors.public_message`` passes them.
+client (cut to 500 characters, control characters removed), like its results; the error types below are
+named ``RuntimeError`` subclasses, so ``safe_errors.public_message`` passes them.
 """
 from __future__ import annotations
 
@@ -32,9 +30,17 @@ from typing import Any, Callable
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolSpec
 from ..gate import current_reason, gated_call
-from ..identity_claim import CallerNotAllowedError, IdentityCaller
-from ..upstream_mcp_client import CallResult, UpstreamMcpClient, UpstreamMcpClientError, UpstreamToolCatalog
-from ..upstream_mcp_config import DeclaredTool, UpstreamServer
+from ..upstream_mcp_client import (
+    BearerSource,
+    CallerNotAllowedError,
+    CallResult,
+    UpstreamMcpClient,
+    UpstreamMcpClientError,
+    UpstreamToolCatalog,
+    person_gate_of,
+)
+from ..upstream_mcp_config import UpstreamServer
+from ..upstream_tools import SavedTool
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +48,7 @@ MAX_ERROR_DETAIL_CHARS = 500
 
 
 class UpstreamUnavailableError(RuntimeError):
-    """The upstream could not be reached, or its result was too large. Text is written here."""
+    """The upstream could not be used (not connected, expired sign-in, unreachable, too large). Text is written here."""
 
 
 class UpstreamCallRefusedError(RuntimeError):
@@ -63,13 +69,16 @@ class UpstreamMcpConnector(Connector):
         upstream: UpstreamServer | None = None,
         catalog: UpstreamToolCatalog | None = None,
         client: UpstreamMcpClient | None = None,
-        caller: Callable[[], IdentityCaller] | None = None,
+        *,
+        admit: Callable[[], None] | None = None,
+        bearer: BearerSource | None = None,
     ) -> None:
         # Only stores its arguments: the tool catalog builds ``cls(None)`` and ``cls(MagicMock())``.
         self._upstream = upstream
         self._catalog = catalog
         self._client = client
-        self._caller = caller
+        self._admit = admit
+        self._bearer = bearer
 
     @property
     def name(self) -> str:
@@ -79,69 +88,64 @@ class UpstreamMcpConnector(Connector):
         return self._catalog.specs() if isinstance(self._catalog, UpstreamToolCatalog) else []
 
     async def call(self, tool: str, args: dict[str, Any]) -> Any:
-        declared = self._declared(tool)
-        if declared is None:
+        saved = self._catalog.saved_tool(tool) if isinstance(self._catalog, UpstreamToolCatalog) else None
+        if saved is None:
             raise ValueError(f"Unknown upstream tool: {tool!r}")
-        if declared.gate == "auto":
-            return await self._auto(declared, args)
-        if declared.gate == "review":
-            return await self._review(declared, args)
-        return await self._popup(declared, args)
-
-    def _declared(self, tool: str) -> DeclaredTool | None:
-        if not isinstance(self._upstream, UpstreamServer):
-            return None
-        for declared in self._upstream.tools:
-            if declared.exposed_name == tool:
-                return declared
-        return None
+        upstream = self._require_upstream()
+        if self._admit is None:
+            raise RuntimeError("This upstream connector is not configured.")
+        gate = person_gate_of(saved)
+        try:
+            self._admit()
+        except CallerNotAllowedError:
+            logger.warning("Upstream %s call to %s refused: caller type not allowed", upstream.id, saved.name)
+            self._forward_audit(saved, gate, "refused", 0.0)
+            raise UpstreamCallRefusedError(
+                f"PrivacyFence does not allow this caller to use the {upstream.label} server."
+            ) from None
+        if gate == "review":
+            return await self._review(saved, gate, args)
+        return await self._popup(saved, gate, args)
 
     # ------------------------------------------------------------------ #
     # Gates
     # ------------------------------------------------------------------ #
 
-    async def _auto(self, declared: DeclaredTool, args: dict[str, Any]) -> Any:
-        t0 = time.time()
-        result = await self._forward(declared, args)
-        self._auto_audit(declared, args, t0)
-        return _value(result)
-
-    async def _review(self, declared: DeclaredTool, args: dict[str, Any]) -> Any:
-        result = await self._forward(declared, args)
+    async def _review(self, saved: SavedTool, gate: str, args: dict[str, Any]) -> Any:
+        result = await self._forward(saved, gate, args)
         value = _value(result)
-        text = _text(result)
         return await gated_call(
-            **self._gate_fields(declared, args),
+            **self._gate_fields(saved, args),
             raw_data=value,
             filtered_data=value,
             gate="review",
             pii_scan_text=_scanned(result),
-            details_text=text,
+            details_text=_text(result),
         )
 
-    async def _popup(self, declared: DeclaredTool, args: dict[str, Any]) -> Any:
+    async def _popup(self, saved: SavedTool, gate: str, args: dict[str, Any]) -> Any:
         shown = json.dumps(args, indent=2, sort_keys=True, default=str)
         await gated_call(
-            **self._gate_fields(declared, args),
+            **self._gate_fields(saved, args),
             raw_data=args,
             filtered_data=None,
             gate="popup",
             details_text=shown,
             write_content_scan_text=shown,
         )
-        return _value(await self._forward(declared, args))
+        return _value(await self._forward(saved, gate, args))
 
-    def _gate_fields(self, declared: DeclaredTool, args: dict[str, Any]) -> dict[str, Any]:
+    def _gate_fields(self, saved: SavedTool, args: dict[str, Any]) -> dict[str, Any]:
         upstream = self._require_upstream()
         return {
             "connector": self.name,
-            "tool": declared.exposed_name,
-            "tool_name": f"{upstream.label}: {declared.name}",
-            "summary": f"{declared.verb.capitalize()} on {upstream.label}",
+            "tool": f"{upstream.id}_{saved.name}",
+            "tool_name": f"{upstream.label}: {saved.name}",
+            "summary": f"{saved.verb.capitalize()} on {upstream.label}",
             "sender": upstream.label,
             "preview": {
                 "Server": upstream.label,
-                "Tool": declared.name,
+                "Tool": saved.name,
                 "Arguments": ", ".join(sorted(args)) or "none",
             },
             "args": args,
@@ -156,114 +160,64 @@ class UpstreamMcpConnector(Connector):
     # Helpers
     # ------------------------------------------------------------------ #
 
-    async def _forward(self, declared: DeclaredTool, args: dict[str, Any]) -> CallResult:
+    async def _forward(self, saved: SavedTool, gate: str, args: dict[str, Any]) -> CallResult:
         """Send the call and write the one ``upstream_forwarded`` execution record, whatever the outcome."""
         upstream = self._require_upstream()
-        if self._client is None or self._caller is None:
+        if self._client is None or self._bearer is None:
             raise RuntimeError("This upstream connector is not configured.")
+        label = upstream.label
         started = time.time()
-        caller: IdentityCaller | None = None
-        result: CallResult | None = None
         status = "ok"
         try:
-            if upstream.identity_claim == "required":
-                try:
-                    caller = self._caller()
-                except CallerNotAllowedError:
-                    status = "refused"
-                    logger.warning("Upstream %s call to %s refused: caller type not allowed", upstream.id, declared.name)
-                    raise UpstreamCallRefusedError(
-                        f"PrivacyFence does not allow this caller to use the {upstream.label} server."
-                    ) from None
             try:
-                result = await self._client.call_tool(declared.name, args, caller)
-                return result
+                return await self._client.call_tool(saved.name, args, bearer=self._bearer)
             except UpstreamMcpClientError as exc:
-                logger.warning("Upstream %s call to %s failed: %s", upstream.id, declared.name, exc.kind)
-                if exc.kind == "too_large":
-                    status = "too_large"
-                    raise UpstreamUnavailableError(
-                        f"The {upstream.label} result is larger than 1 MB; ask for less."
-                    ) from None
-                if exc.kind == "claim_failed":
-                    status = "claim_failed"
-                    raise UpstreamUnavailableError(
-                        f"The {upstream.label} call was not sent: PrivacyFence could not sign the caller claim."
-                    ) from None
+                status = exc.kind
+                logger.warning("Upstream %s call to %s failed: %s", upstream.id, saved.name, exc.kind)
                 if exc.kind == "tool_error":
-                    status = "tool_error"
                     detail = _clean(exc.detail)[:MAX_ERROR_DETAIL_CHARS]
-                    raise UpstreamToolError(f"The {upstream.label} server returned an error: {detail}") from None
-                status = "unreachable"
-                raise UpstreamUnavailableError(f"The {upstream.label} server could not be reached.") from None
+                    raise UpstreamToolError(f"The {label} server returned an error: {detail}") from None
+                raise UpstreamUnavailableError(_UNAVAILABLE[exc.kind].format(label=label)) from None
         finally:
-            self._forward_audit(declared, caller, result, status, time.time() - started)
+            self._forward_audit(saved, gate, status, time.time() - started)
 
-    def _forward_audit(
-        self,
-        declared: DeclaredTool,
-        caller: IdentityCaller | None,
-        result: CallResult | None,
-        status: str,
-        latency: float,
-    ) -> None:
+    def _forward_audit(self, saved: SavedTool, gate: str, status: str, latency: float) -> None:
         """One execution record per forwarded call. Holds no token, argument value or upstream text."""
         upstream = self._require_upstream()
         try:
-            metadata = {
-                "upstream": upstream.id,
-                "claim_version": "1",
-                "identity_claim": upstream.identity_claim,
-                "gate": declared.gate,
-            }
-            if caller is not None and caller.token_id:
-                metadata["token_id"] = caller.token_id
-            if caller is not None and caller.approved_by:
-                metadata["approved_by"] = caller.approved_by
             get_audit_logger().record(AuditEntry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 week=current_week(),
                 request_id="",
                 connector=self.name,
-                tool=declared.exposed_name,
-                tool_name=f"{upstream.label}: {declared.name}",
-                summary=f"Forwarded {declared.name} to {upstream.label}",
+                tool=f"{upstream.id}_{saved.name}",
+                tool_name=f"{upstream.label}: {saved.name}",
+                summary=f"Forwarded {saved.name} to {upstream.label}",
                 sender=upstream.label,
                 decision="upstream_forwarded",
                 auto_accept_rule="",
                 latency_seconds=latency,
                 claude_reason=current_reason(),
-                claim_jti=result.jti if result is not None else "",
-                claim_sub=caller.sub if caller is not None else "",
-                claim_principal_type=caller.principal_type if caller is not None else "",
-                claim_audiences=list(caller.audiences) if caller is not None else [],
-                claim_act=dict(caller.act or {}) if caller is not None else {},
-                claim_req=result.req if result is not None else "",
                 upstream_status=status,
-                metadata=metadata,
+                metadata={"upstream": upstream.id, "gate": gate, "auth": "oauth"},
             ))
         except Exception as exc:  # noqa: BLE001 -- an audit failure never changes the call outcome
             logger.warning("Audit log write failed: %s", exc)
 
-    def _auto_audit(self, declared: DeclaredTool, args: dict[str, Any], created_at: float) -> None:
-        upstream = self._require_upstream()
-        try:
-            get_audit_logger().record(AuditEntry(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                week=current_week(),
-                request_id="",
-                connector=self.name,
-                tool=declared.exposed_name,
-                tool_name=f"{upstream.label}: {declared.name}",
-                summary=f"{declared.verb.capitalize()} on {upstream.label}",
-                sender=upstream.label,
-                decision="auto_accepted",
-                auto_accept_rule="auto",
-                latency_seconds=time.time() - created_at,
-                claude_reason=current_reason(),
-            ))
-        except Exception as exc:  # noqa: BLE001 -- an audit failure never blocks a read
-            logger.warning("Audit log write failed: %s", exc)
+
+_UNAVAILABLE = {
+    "not_connected": "{label} is not connected. Connect {label} on the Connect page (/connect).",
+    "auth_expired": (
+        "The {label} sign-in has expired or was revoked. Connect {label} on the Connect page (/connect) "
+        "to sign in again."
+    ),
+    "insufficient_scope": (
+        "{label} needs more access than PrivacyFence was granted. Connect {label} again on the Connect "
+        "page (/connect)."
+    ),
+    "unreachable": "The {label} server could not be reached.",
+    "too_large": "The {label} result is larger than 1 MB; ask for less.",
+}
 
 
 def _value(result: CallResult) -> Any:

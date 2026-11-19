@@ -957,7 +957,6 @@ values shown are the ones in force. The settings are stored in `org/admin_config
 | Sign-in | Allowed email domains, groups claim and required groups ([section 4](#who-may-sign-in)); with the built-in Google sign-in, the administrators read-only | After a restart |
 | Step-up | Whether approvals need a fresh passkey, and for which approvals ([section 12](#12-approvals-and-step-up)) | After a restart |
 | Scoped tokens | Whether people may create scoped tokens, their longest lifetime, whether AI clients may propose one | After a restart |
-| Upstream MCP servers | Read-only: each declared upstream, whether its tool list has arrived, its tools and gates, and the groups mapped to its audiences ([Upstream MCP servers](upstream-mcp.md)) | A declaration change after a restart; the group map at once |
 | Audit forwarding | Syslog or HTTPS forwarding of audit entries ([section 14](#monitoring)) | After a restart |
 | Privacy Filter | The install-wide privacy policy and PII detection, below | On the next request |
 | Stats | Counts of people, connectors and auto-accept rules; never whose or what | |
@@ -974,15 +973,6 @@ config once ([section 6](#a-6x-bundle-on-an-upgraded-server)). If you still pass
 6.x bundle, the daemon logs that they are ignored; manage them on this page instead. The
 reasoning is in [ADR 0257](adr/0257-operational-settings-live-in-a-daemon-written-admin-config.md) and
 [ADR 0258](adr/0258-administration-is-a-separate-admin-page.md).
-
-### Upstream MCP servers
-
-An organization can put its own MCP server, such as a knowledge hub, behind PrivacyFence: you declare its
-tools and how each is gated in a YAML or JSON file (or inline) (`PRIVACYFENCE_UPSTREAM_MCP_FILE`), map Workspace
-groups to audiences in `admin_config.json`, and PrivacyFence signs a short claim, bound to that one call, naming the person
-and their audiences onto every call so the server filters its own data. Approvals for people added to a restricted
-audience are on **Admin → Group membership**. See [Upstream MCP servers](upstream-mcp.md).
-**Admin → Upstream MCP servers** shows what is declared and whether each server's tools have arrived.
 
 ### Install-wide and per-user policy
 

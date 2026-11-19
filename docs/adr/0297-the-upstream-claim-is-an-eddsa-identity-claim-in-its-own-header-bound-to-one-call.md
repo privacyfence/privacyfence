@@ -9,6 +9,8 @@ Implemented: `src/privacyfence/identity_claim.py`, `src/privacyfence/upstream_cl
 Amended by [ADR 0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md), 2026-11-15.
 Amended by [ADR 0326](0326-a-service-claim-may-call-the-declared-audiences-tool.md), 2026-11-18.
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 ADR 0286 sent the upstream an RS256 bearer token in `Authorization`, valid for 60 seconds and good for any

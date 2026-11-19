@@ -1,96 +1,196 @@
-"""Startup wiring for upstream MCP servers (organization mode, ADR 0285, 0286, 0287).
+"""Runtime wiring for hosted, OAuth-authenticated upstream MCP servers (organization mode).
 
-``daemon_main`` loads the operator file, registers the declared tools and builds the claim signer,
-then calls ``configure``. From there this module is the one place that knows the live upstream
-set: the connector list for a principal, the caller claim for one dispatched call (the only code
-that reads the caller contextvars on behalf of an upstream call, so connector code never does),
-the audiences a person holds, the ``privacyfence_status`` rows and the Admin page's rows, and the lifespan that fetches each
-upstream's tool list once at startup, retrying with backoff until it succeeds. The tool list is never
-refreshed: a description changing mid-session is a rug-pull vector. An upstream that declares
-``audiences_tool`` has its audiences refreshed on an interval instead (ADR 0325).
+``daemon_main`` loads the operator file and calls ``configure``. From there this module is the one place
+that knows the live upstream set (ADR 0329, ADR 0331): the registration store, token provider and client of
+each upstream, the connector list for a principal, who may call, the administrator's tool-list flow
+(``refresh`` builds a pending list in memory, ``save`` makes it the saved list and registers it into the
+policy tables, ``set_gates`` changes the gates of saved tools), and the ``privacyfence_status`` and Admin
+page rows.
+
+There is no network call at start and no lifespan: a saved list is registered from disk, and an upstream
+with no saved list exposes no tools until an administrator saves one. Until ``save``, AI clients keep seeing
+the previously saved list whatever the server now says (the rug-pull guard).
 """
 from __future__ import annotations
 
-import asyncio
-import contextlib
+import dataclasses
 import functools
 import logging
+import os
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
-from dataclasses import dataclass
+import unicodedata
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx2
 
-from .agent_identity import current_agent, current_client_id
-from . import group_membership, upstream_audiences
+from . import upstream_mcp_registry
 from .audit_log import AuditEntry, current_week, get_audit_logger
-from .group_membership import MembershipResolver
-from .connectors.upstream_mcp import UpstreamMcpConnector
+from .connectors.upstream_mcp import _UNAVAILABLE, UpstreamMcpConnector
+from .org_mode import ConfigurationError
 from .principal import Principal, current_principal
 from .scoped_tokens import current_token_scope
-from .identity_claim import CallerNotAllowedError, ClaimSigner, IdentityCaller
-from .upstream_audiences import AudiencesResultError, UpstreamAudienceSource
-from .upstream_mcp_client import UpstreamMcpClient, UpstreamMcpClientError, UpstreamToolCatalog
-from .upstream_mcp_config import GroupMapStore, UpstreamServer
+from .upstream_mcp_client import (
+    BearerSource,
+    CallerNotAllowedError,
+    UpstreamMcpClient,
+    UpstreamMcpClientError,
+    UpstreamToolCatalog,
+)
+from .upstream_mcp_config import UpstreamServer
+from .upstream_oauth_discovery import RegistrationStore
+from .upstream_oauth_tokens import (
+    OAuthClient,
+    UpstreamTokenProvider,
+    load_token,
+    token_path,
+    token_paths,
+)
+from .upstream_tools import (
+    GATES,
+    SavedTool,
+    ToolEntry,
+    ToolStore,
+    classify,
+    diff,
+    tool_digest,
+    unsupported_reason,
+)
 
 logger = logging.getLogger(__name__)
 
-BACKOFF_START_SECONDS = 5.0
-BACKOFF_MAX_SECONDS = 300.0
+MAX_ROW_DESCRIPTION_CHARS = 200
+_SECRET_AUTH_METHODS = frozenset({"client_secret_post", "client_secret_basic"})
 
-_sleep = asyncio.sleep  # tests patch this, not asyncio.sleep
-_audiences_sleep = asyncio.sleep  # the audiences loop's own, so tests patch the two separately
+NOT_CONNECTED_TO_REFRESH = "Connect {label} on the Connect page (/connect) first, then refresh."
+CONNECT_HINT = "Connect {label} on the Connect page (/connect)."
+ADMIN_HINT = "An administrator has to refresh the tool list on the Admin page."
+
+
+class UpstreamAdminError(Exception):
+    """An administrator action was refused. ``str(exc)`` is the text to show; ``status`` the HTTP status."""
+
+    def __init__(self, message: str, status: int = 400) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+class UpstreamRefreshError(UpstreamAdminError):
+    """The tool list could not be fetched (not connected, sign-in expired, server unreachable)."""
+
+
+@dataclass(frozen=True)
+class _PendingTool:
+    entry: ToolEntry
+    class_default: str
+    verb: str
+    state: str  # new | changed | unchanged | unsupported
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _Pending:
+    fetched_at: float
+    tools: tuple[_PendingTool, ...]
+    removed: tuple[str, ...]
 
 
 @dataclass
 class _Entry:
     upstream: UpstreamServer
-    catalog: UpstreamToolCatalog
+    registrations: RegistrationStore
+    tokens: UpstreamTokenProvider
     client: UpstreamMcpClient
-    listed: bool = False
-    audiences: UpstreamAudienceSource | None = None
-    audiences_failing: bool = False  # the last applied attempt failed
-    audiences_digest: str | None = None  # of the last applied table; only to see that it changed
+    catalog: UpstreamToolCatalog
+    saved: tuple[SavedTool, ...] = ()
+    saved_at: str | None = None
+    pending: _Pending | None = None
 
 
 @dataclass
 class _Runtime:
     entries: dict[str, _Entry]
-    signer: ClaimSigner
-    groups: GroupMapStore
-    resolver: MembershipResolver
-    membership_max_additions: int = group_membership.DEFAULT_MAX_ADDITIONS
+    store: ToolStore
+    last_fetch: float = field(default=0.0)
 
 
 _runtime: _Runtime | None = None
+_tools_changed: Callable[[], None] | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
+
+
+def _client_source(upstream: UpstreamServer, registrations: RegistrationStore) -> Callable[[str], OAuthClient]:
+    """The client a refresh authenticates as.
+
+    A declared client with a secret picks ``client_secret_post`` or ``client_secret_basic`` from the
+    server's metadata at Connect time, and after a restart ``client_for`` has not seen that metadata. The
+    method that worked at Connect is on every saved token record, so it is read from there."""
+
+    def source(upstream_id: str) -> OAuthClient:
+        client = registrations.client_for(upstream_id)
+        if client.client_secret is None or upstream.oauth.client_id is None:
+            return client
+        for path in token_paths(upstream_id):
+            record = load_token(path)
+            if record is not None and record.client_id == client.client_id and record.auth_method in _SECRET_AUTH_METHODS:
+                return dataclasses.replace(client, auth_method=record.auth_method)
+        return client
+
+    return source
 
 
 def configure(
-    *, upstreams: Sequence[UpstreamServer], signer: ClaimSigner, groups: GroupMapStore,
-    resolver: MembershipResolver,
-    membership_max_additions: int = group_membership.DEFAULT_MAX_ADDITIONS,
+    *,
+    upstreams: Sequence[UpstreamServer],
+    tool_store: ToolStore,
+    registrations_dir: Path,
     transport: httpx2.AsyncBaseTransport | None = None,
 ) -> None:
+    """Build every upstream's parts and register its saved list (no network). Raises
+    ``ConfigurationError`` for a declared secret variable that is empty."""
     global _runtime
-    entries = {
-        upstream.id: _Entry(
-            upstream, UpstreamToolCatalog(upstream), UpstreamMcpClient(upstream, signer, transport=transport),
-            audiences=(
-                UpstreamAudienceSource(upstream.audiences_refresh_seconds) if upstream.audiences_tool else None
-            ),
-        )
-        for upstream in upstreams
-    }
     for upstream in upstreams:
-        if upstream.audiences_tool and groups.group_audiences(upstream.id):
-            logger.warning(
-                "admin_config.json: upstream_mcp.%s.groups is ignored: %s takes its audiences from its "
-                "audiences tool", upstream.id, upstream.id,
+        name = upstream.oauth.client_secret_env
+        if name is not None and not os.environ.get(name):
+            raise ConfigurationError(
+                f'Upstream "{upstream.id}": oauth.client_secret_env names {name}, which is not set.'
             )
-    _runtime = _Runtime(entries=entries, signer=signer, groups=groups, resolver=resolver,
-                       membership_max_additions=membership_max_additions)
+    entries: dict[str, _Entry] = {}
+    for upstream in upstreams:
+        registrations = RegistrationStore(registrations_dir, transport=transport, upstreams=[upstream])
+        tokens = UpstreamTokenProvider(
+            _client_source(upstream, registrations), on_invalid_client=registrations.forget, transport=transport,
+        )
+        entry = _Entry(
+            upstream=upstream, registrations=registrations, tokens=tokens,
+            client=UpstreamMcpClient(upstream, transport=transport), catalog=UpstreamToolCatalog(upstream),
+        )
+        entries[upstream.id] = entry
+        if not upstream.oauth.scopes:
+            logger.warning(
+                "Upstream %s declares no oauth.scopes; it will ask for every scope the server lists.", upstream.id,
+            )
+        listed = tool_store.load(upstream.id)
+        if listed is not None and listed.url != upstream.url:
+            logger.warning(
+                "Upstream %s: the saved tool list was made for another address and is ignored; refresh the tools.",
+                upstream.id,
+            )
+            listed = None
+        if listed is not None and listed.tools:
+            entry.saved = listed.tools
+            entry.saved_at = listed.saved_at
+            entry.catalog.update(listed.tools)
+            upstream_mcp_registry.get_registry().apply(upstream, listed.tools)
+    _runtime = _Runtime(entries=entries, store=tool_store)
 
 
 def configured() -> bool:
@@ -98,148 +198,280 @@ def configured() -> bool:
 
 
 def reset() -> None:
-    """Forget the configuration (tests)."""
-    global _runtime
+    """Forget the configuration and the callback (tests)."""
+    global _runtime, _tools_changed
     _runtime = None
+    _tools_changed = None
 
 
-def signer() -> ClaimSigner | None:
-    return _runtime.signer if _runtime is not None else None
+def set_tools_changed_callback(callback: Callable[[], None] | None) -> None:
+    """What to call after a save so AI clients are told the tool list changed."""
+    global _tools_changed
+    _tools_changed = callback
 
 
 def upstream_ids() -> frozenset[str]:
     return frozenset(_runtime.entries) if _runtime is not None else frozenset()
 
 
-def connectors_for_principal() -> list[UpstreamMcpConnector]:
-    """One connector per upstream; the catalog and client are shared, the caller is resolved per call."""
-    if _runtime is None:
-        return []
-    return [
-        UpstreamMcpConnector(
-            entry.upstream, entry.catalog, entry.client, caller=functools.partial(caller_for, entry.upstream),
-        )
-        for entry in _runtime.entries.values()
-    ]
-
-
-def audiences_for_email(upstream_id: str, email: str, verified: bool) -> frozenset[str]:
-    """The audiences ``email`` holds on ``upstream_id`` now; empty unless the email is verified."""
-    assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
-    address = group_membership.lookup_email(email)
-    if not verified or not address:
-        return frozenset()
-    entry = _runtime.entries.get(upstream_id)
-    if entry is not None and entry.audiences is not None:
-        return entry.audiences.audiences_for(address)  # never the group map for this upstream (ADR 0325)
-    return _runtime.resolver.audiences_for(address, _runtime.groups.group_audiences(upstream_id))
-
-
-def all_group_audiences() -> dict[str, frozenset[str]]:
-    """Group name to audiences, merged over every upstream (the same group in two upstreams unions its audiences)."""
-    if _runtime is None:
-        return {}
-    merged: dict[str, frozenset[str]] = {}
-    for upstream_id, entry in _runtime.entries.items():
-        if entry.audiences is not None:
-            continue  # the sync tool and the approvals never act on an upstream that has its own source
-        for group, audiences in _runtime.groups.group_audiences(upstream_id).items():
-            merged[group] = merged.get(group, frozenset()) | audiences
-    return merged
-
-
-def membership_source() -> str:
-    """``static`` when a static file resolver supplies membership, else ``snapshot``."""
-    if _runtime is not None and isinstance(_runtime.resolver, group_membership.StaticFileResolver):
-        return "static"
-    return "snapshot"
-
-
-def max_additions() -> int:
-    """The snapshot addition cap from the operator file's ``membership`` section."""
-    if _runtime is None:
-        return group_membership.DEFAULT_MAX_ADDITIONS
-    return _runtime.membership_max_additions
-
-
-def _native_tool_names(upstream: UpstreamServer, entry: _Entry | None, allowed: frozenset[str] | None) -> tuple[str, ...]:
-    """The upstream's own names of the exposed tools (the declared name, without the ``<id>_`` prefix)."""
+def _entry(upstream_id: str) -> _Entry:
+    entry = _runtime.entries.get(upstream_id) if _runtime is not None else None
     if entry is None:
-        return ()
-    exposed = {spec.name for spec in entry.catalog.specs()}
-    return tuple(sorted(
-        declared.name for declared in upstream.tools
-        if declared.exposed_name in exposed and (allowed is None or declared.exposed_name in allowed)
-    ))
+        raise UpstreamAdminError("Unknown upstream.")
+    return entry
 
 
-def caller_for(upstream: UpstreamServer) -> IdentityCaller:
-    """Who is calling ``upstream`` right now, and which of its audiences they may see (plan 3.1, 3.3)."""
-    assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
-    principal = current_principal()
-    scope = current_token_scope()
-    entry = _runtime.entries.get(upstream.id)
-    if scope is None:
-        principal_type = "claude_client"
-        audiences = audiences_for_email(upstream.id, principal.email, principal.email_verified)
-        act: dict[str, str] = {}
-        client_id = current_client_id()
-        if client_id:
-            act["sub"] = client_id
-        agent = current_agent()
-        if agent.is_attested():
-            act["agent"] = agent.id
-        email = principal.email if principal.email_verified else None
-        if email and upstream.email_for_visibility:
-            email = group_membership.lookup_email(email)
-        caller = IdentityCaller(
-            sub=principal.id, principal_type=principal_type,
-            email=email,
-            audiences=tuple(sorted(audiences)), tools=_native_tool_names(upstream, entry, None),
-            act=act or None,
-        )
-    else:
-        principal_type = "n8n_workflow"
-        verified = bool(getattr(scope, "principal_email_verified", False))
-        held = audiences_for_email(upstream.id, scope.principal_email, verified)
-        chosen = getattr(scope, "upstream_audiences", {}).get(upstream.id, ())
-        caller = IdentityCaller(
-            sub=f"n8n-token:{scope.id}", principal_type=principal_type,
-            audiences=tuple(sorted(held & frozenset(chosen))),
-            tools=_native_tool_names(upstream, entry, frozenset(scope.tools)),
-            approved_by=scope.principal_id, token_id=scope.id,
-        )
+def oauth_upstream(upstream_id: str) -> UpstreamServer | None:
+    entry = _runtime.entries.get(upstream_id) if _runtime is not None else None
+    return entry.upstream if entry is not None else None
+
+
+def registrations_for(upstream_id: str) -> RegistrationStore:
+    return _entry(upstream_id).registrations
+
+
+def tokens_for(upstream_id: str) -> UpstreamTokenProvider:
+    return _entry(upstream_id).tokens
+
+
+# --------------------------------------------------------------------------- #
+# Connectors and callers
+# --------------------------------------------------------------------------- #
+
+
+def admit_caller(upstream: UpstreamServer) -> None:
+    """Raise ``CallerNotAllowedError`` when this caller's type may not use ``upstream``."""
+    principal_type = "n8n_workflow" if current_token_scope() is not None else "claude_client"
     if principal_type not in upstream.allowed_principal_types:
         raise CallerNotAllowedError(principal_type)
-    return caller
 
 
-def held_audiences(principal: Principal, email_verified: bool) -> dict[str, frozenset[str]]:
-    """The audiences ``principal`` holds, per upstream id (what a scoped token may narrow)."""
+def _bearer_source(entry: _Entry, path: Path) -> BearerSource:
+    async def bearer(force_refresh: bool) -> str:
+        return await entry.tokens.bearer(path, force_refresh)
+
+    return bearer
+
+
+def connectors_for_principal() -> list[UpstreamMcpConnector]:
+    """One connector per upstream with a saved list and a sign-in of the current principal."""
     if _runtime is None:
-        return {}
+        return []
+    principal = current_principal()
+    connectors: list[UpstreamMcpConnector] = []
+    for entry in _runtime.entries.values():
+        path = token_path(principal, entry.upstream.id)
+        if not entry.saved or not path.exists():
+            continue
+        connectors.append(UpstreamMcpConnector(
+            entry.upstream, entry.catalog, entry.client,
+            admit=functools.partial(admit_caller, entry.upstream), bearer=_bearer_source(entry, path),
+        ))
+    return connectors
+
+
+# --------------------------------------------------------------------------- #
+# The administrator's tool list
+# --------------------------------------------------------------------------- #
+
+
+def _clean(text: str, limit: int) -> str:
+    return "".join(char for char in text if not unicodedata.category(char).startswith("C"))[:limit]
+
+
+def _audit(entry: _Entry, decision: str, tool: str, tool_name: str, summary: str) -> None:
+    """One audit entry per administrator action; counts only, and a failed write changes nothing."""
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id="",
+            connector=entry.upstream.id,
+            tool=tool,
+            tool_name=tool_name,
+            summary=summary,
+            sender="privacyfence",
+            decision=decision,
+            auto_accept_rule="",
+            latency_seconds=0.0,
+        ))
+    except Exception as exc:  # noqa: BLE001 -- an audit failure never changes the outcome
+        logger.warning("Audit log write failed: %s", exc)
+
+
+def _to_entry(tool: Any) -> ToolEntry:
+    hints = tool.annotations
+    return ToolEntry(
+        name=tool.name,
+        description=tool.description or "",
+        input_schema=tool.input_schema,
+        read_only=hints.read_only_hint if hints is not None else None,
+        destructive=hints.destructive_hint if hints is not None else None,
+    )
+
+
+def _offered_gate(entry: _Entry, tool: _PendingTool) -> str:
+    """The gate the pending list offers: the saved gate only for a tool that did not change."""
+    saved = {item.name: item.gate for item in entry.saved if tool.state == "unchanged"}
+    return saved.get(tool.entry.name, tool.class_default)
+
+
+def _pending_row(entry: _Entry, pending: _Pending) -> dict[str, Any]:
+    prefix = entry.upstream.id
+    rows = [
+        {
+            "name": tool.entry.name, "exposed_name": f"{prefix}_{tool.entry.name}", "state": tool.state,
+            "verb": tool.verb, "default_gate": tool.class_default, "gate": _offered_gate(entry, tool),
+            "description": _clean(tool.entry.description, MAX_ROW_DESCRIPTION_CHARS),
+            **({"reason": tool.reason} if tool.reason is not None else {}),
+        }
+        for tool in pending.tools
+    ]
+    names = lambda state: [row["name"] for row in rows if row["state"] == state]  # noqa: E731
     return {
-        upstream_id: audiences_for_email(upstream_id, principal.email, email_verified)
-        for upstream_id in _runtime.entries
+        "fetched_at": pending.fetched_at,
+        "new": names("new"),
+        "changed": names("changed"),
+        "removed": list(pending.removed),
+        "unsupported": [{"name": tool.entry.name, "reason": tool.reason} for tool in pending.tools if tool.state == "unsupported"],
+        "tools": rows,
     }
+
+
+async def refresh(upstream_id: str, principal: Principal) -> dict[str, Any]:
+    """List the server's tools with ``principal``'s own connection and keep the result as the pending list.
+
+    Nothing is exposed or changed until ``save``. Raises ``UpstreamRefreshError`` with the text to show."""
+    assert _runtime is not None  # nosec B101 -- _entry raised already when it is not configured
+    entry = _entry(upstream_id)
+    label = entry.upstream.label
+    try:
+        tools = await entry.client.list_tools(bearer=_bearer_source(entry, token_path(principal, upstream_id)))
+    except UpstreamMcpClientError as exc:
+        if exc.kind == "not_connected":
+            raise UpstreamRefreshError(NOT_CONNECTED_TO_REFRESH.format(label=label), 409) from None
+        raise UpstreamRefreshError(_UNAVAILABLE.get(exc.kind, _UNAVAILABLE["unreachable"]).format(label=label), 502) from None
+    fetched = tuple(
+        (item, unsupported_reason(upstream_id, item)) for item in (_to_entry(tool) for tool in tools)
+    )
+    result = diff(entry.saved, fetched)
+    groups = (
+        [(item, "new", None) for item in result.new]
+        + [(item, "changed", None) for item in result.changed]
+        + [(item, "unchanged", None) for item in result.unchanged]
+        + [(item, "unsupported", reason) for item, reason in result.unsupported]
+    )
+    pending_tools = tuple(
+        _PendingTool(item, classify(item.read_only, item.destructive)[0], classify(item.read_only, item.destructive)[1], state, reason)
+        for item, state, reason in sorted(groups, key=lambda group: group[0].name)
+    )
+    # Two refreshes never share a ``fetched_at``, so a save is bound to the list the administrator saw.
+    stamp = max(time.time(), _runtime.last_fetch + 1e-6)
+    _runtime.last_fetch = stamp
+    entry.pending = _Pending(stamp, pending_tools, result.removed)
+    _audit(
+        entry, "upstream_tools_refreshed", "refresh_tools", f"{label}: refresh tools",
+        f"Refreshed the tools of {upstream_id}: {len(result.new)} new, {len(result.changed)} changed, "
+        f"{len(result.removed)} removed, {len(result.unsupported)} unsupported",
+    )
+    return _pending_row(entry, entry.pending)
+
+
+def _checked_gates(gates: Mapping[str, str]) -> None:
+    if any(gate not in GATES for gate in gates.values()):
+        raise UpstreamAdminError("Gate must be review, popup or auto.")
+
+
+def _install(entry: _Entry, tools: tuple[SavedTool, ...]) -> None:
+    """Write ``tools`` as the saved list and register it; the previous state returns when either step fails."""
+    upstream = entry.upstream
+    registry = upstream_mcp_registry.get_registry()
+    previous = entry.saved
+    try:
+        registry.apply(upstream, tools)
+    except ConfigurationError as exc:
+        raise UpstreamAdminError(str(exc), 409) from None
+    now = datetime.now(timezone.utc)
+    assert _runtime is not None  # nosec B101
+    try:
+        _runtime.store.save(upstream.id, upstream.url, tools, now)
+    except BaseException:
+        registry.apply(upstream, previous)
+        raise
+    entry.saved = tools
+    entry.saved_at = now.isoformat()
+    entry.catalog.update(tools)
+    if _tools_changed is not None:
+        _tools_changed()
+
+
+def save(upstream_id: str, gates: Mapping[str, str], fetched_at: float) -> None:
+    """Make the pending list the saved list with the chosen ``gates`` (an unchosen tool keeps its default)."""
+    entry = _entry(upstream_id)
+    _checked_gates(gates)
+    pending = entry.pending
+    if pending is None:
+        raise UpstreamAdminError("Refresh the tool list first.", 409)
+    if fetched_at != pending.fetched_at:
+        raise UpstreamAdminError("The tool list changed since you refreshed it. Refresh again.", 409)
+    chosen = [
+        SavedTool(
+            name=tool.entry.name, description=tool.entry.description, input_schema=tool.entry.input_schema,
+            read_only=tool.entry.read_only, destructive=tool.entry.destructive,
+            gate=gates.get(tool.entry.name, _offered_gate(entry, tool)), verb=tool.verb,
+            digest=tool_digest(tool.entry),
+        )
+        for tool in pending.tools if tool.state != "unsupported"
+    ]
+    _install(entry, tuple(chosen))
+    entry.pending = None
+    _audit(
+        entry, "upstream_tools_saved", "save_tools", f"{entry.upstream.label}: save tools",
+        f"Saved {len(chosen)} tool(s) of {upstream_id}: "
+        f"{sum(tool.gate == 'review' for tool in chosen)} review, {sum(tool.gate == 'popup' for tool in chosen)} popup, "
+        f"{sum(tool.gate == 'auto' for tool in chosen)} auto",
+    )
+
+
+def set_gates(upstream_id: str, gates: Mapping[str, str]) -> None:
+    """Change the gates of saved tools, with no refresh."""
+    entry = _entry(upstream_id)
+    _checked_gates(gates)
+    if any(name not in {tool.name for tool in entry.saved} for name in gates):
+        raise UpstreamAdminError("That tool is not in the saved list.")
+    changed = tuple(dataclasses.replace(tool, gate=gates.get(tool.name, tool.gate)) for tool in entry.saved)
+    _install(entry, changed)
+    _audit(
+        entry, "upstream_tool_gates_changed", "set_tool_gates", f"{entry.upstream.label}: change tool gates",
+        f"Changed the gates of {len(gates)} tool(s) of {upstream_id}",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Status and the Admin page
+# --------------------------------------------------------------------------- #
 
 
 def status() -> list[dict[str, object]]:
     """The ``upstreams`` rows of ``privacyfence_status``."""
     if _runtime is None:
         return []
+    principal = current_principal()
     rows: list[dict[str, object]] = []
     for entry in _runtime.entries.values():
+        label = entry.upstream.label
+        connected = token_path(principal, entry.upstream.id).exists()
         row: dict[str, object] = {
             "id": entry.upstream.id,
-            "label": entry.upstream.label,
-            "tools_exposed": len(entry.catalog.specs()),
-            "state": "ready" if entry.listed else "waiting_for_tool_list",
-            "missing_tools": entry.catalog.missing() if entry.listed else [],
-            "audiences_source": "upstream" if entry.audiences is not None else "groups",
+            "label": label,
+            "tools_exposed": len(entry.saved),
+            "state": "ready" if entry.saved else "waiting_for_admin",
+            "connected": connected,
         }
-        if entry.audiences is not None:
-            row["audiences_state"] = entry.audiences.state()
+        if not entry.saved:
+            row["admin_hint"] = ADMIN_HINT
+        if not connected:
+            row["connect_hint"] = CONNECT_HINT.format(label=label)
         rows.append(row)
     return rows
 
@@ -252,171 +484,47 @@ def _shown_url(url: str) -> str:
     return origin + "/…" if parts.path.strip("/") or parts.query else origin
 
 
-def admin_rows() -> list[dict[str, object]]:
-    """What the Admin page's Upstream MCP servers section shows (ADR 0319): each declared upstream with
-    its tool-list state, its declared tools and whether each is exposed, and the group-to-audience map
-    in force. It carries no secret and none of the upstream's own text."""
+def _issuer_host(entry: _Entry, paths: list[Path]) -> str | None:
+    """The pinned issuer's host, else the one a person's saved sign-in used; ``None`` before anyone connects."""
+    if entry.upstream.oauth.issuer is not None:
+        return urlsplit(entry.upstream.oauth.issuer).netloc
+    for path in paths:
+        record = load_token(path)
+        if record is not None:
+            return urlsplit(record.issuer).netloc
+    return None
+
+
+def admin_rows(principal: Principal | None = None) -> list[dict[str, object]]:
+    """What the Admin page's Upstream MCP servers section shows. It carries no token, client id or person;
+    ``principal`` (default: the current one) only decides ``admin_connected``."""
     if _runtime is None:
         return []
+    who = principal if principal is not None else current_principal()
     rows: list[dict[str, object]] = []
     for entry in _runtime.entries.values():
         upstream = entry.upstream
-        exposed = {spec.name for spec in entry.catalog.specs()} if entry.listed else set()
-        groups = _runtime.groups.group_audiences(upstream.id)
-        source = entry.audiences
+        files = token_paths(upstream.id)
         rows.append({
             "id": upstream.id,
             "label": upstream.label,
             "url": _shown_url(upstream.url),
-            "audience": upstream.audience,
-            "state": "ready" if entry.listed else "waiting_for_tool_list",
-            "identity_claim": upstream.identity_claim,
-            "claim_lifetime_seconds": upstream.claim_lifetime_seconds,
+            "issuer_host": _issuer_host(entry, files),
+            "registration": "declared" if upstream.oauth.client_id is not None else "dynamic",
+            "scopes": list(upstream.oauth.scopes),
+            "connected_people": len(files),
+            "admin_connected": token_path(who, upstream.id).exists(),
             "allowed_principal_types": list(upstream.allowed_principal_types),
-            "email_for_visibility": upstream.email_for_visibility,
+            "saved_at": entry.saved_at,
             "tools": [
                 {
-                    "name": tool.exposed_name, "gate": tool.gate, "verb": tool.verb, "effect": tool.effect,
-                    "state": ("exposed" if tool.exposed_name in exposed else "missing") if entry.listed else "waiting",
+                    "name": tool.name, "exposed_name": f"{upstream.id}_{tool.name}", "verb": tool.verb,
+                    "read_only": tool.read_only, "default_gate": classify(tool.read_only, tool.destructive)[0],
+                    "gate": tool.gate, "description": _clean(tool.description, MAX_ROW_DESCRIPTION_CHARS),
                 }
-                for tool in upstream.tools
+                for tool in entry.saved
             ],
-            "groups": [] if source is not None else [
-                {"group": group, "audiences": sorted(audiences)} for group, audiences in sorted(groups.items())
-            ],
-            "audiences_source": "upstream" if source is not None else "groups",
-            "audiences_tool": upstream.audiences_tool,
-            "audiences_refresh_seconds": upstream.audiences_refresh_seconds if source is not None else None,
-            "audiences": source.summary() if source is not None else None,
-            "groups_ignored": len(groups) if source is not None else 0,
+            "pending": _pending_row(entry, entry.pending) if entry.pending is not None else None,
         })
     return rows
 
-
-async def _fetch_tool_list(entry: _Entry, notify_tools_changed: Callable[[], None]) -> None:
-    delay = BACKOFF_START_SECONDS
-    while True:
-        try:
-            tools = await entry.client.list_tools()
-        except Exception:  # noqa: BLE001 -- the client already logged the cause; retry whatever failed
-            logger.warning(
-                "Upstream %s did not list its tools; retrying in %d seconds", entry.upstream.id, int(delay),
-            )
-            await _sleep(delay)
-            delay = min(delay * 2, BACKOFF_MAX_SECONDS)
-            continue
-        entry.catalog.update(tools)
-        entry.listed = True
-        missing = entry.catalog.missing()
-        if missing:
-            logger.warning("Upstream %s lacks declared tools: %s", entry.upstream.id, ", ".join(missing))
-        logger.info("Upstream %s ready with %d tool(s)", entry.upstream.id, len(entry.catalog.specs()))
-        notify_tools_changed()
-        return
-
-
-def _audit_audiences(entry: _Entry, decision: str, summary: str, jti: str, latency: float) -> None:
-    """One audit entry about the audiences refresh; never an address, and a failed write changes nothing."""
-    try:
-        get_audit_logger().record(AuditEntry(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            week=current_week(),
-            request_id="",
-            connector=entry.upstream.id,
-            tool=entry.upstream.audiences_tool or "",
-            tool_name="Read audiences",
-            summary=summary,
-            sender="privacyfence",
-            decision=decision,
-            auto_accept_rule="",
-            latency_seconds=latency,
-            claim_jti=jti,
-        ))
-    except Exception as exc:  # noqa: BLE001 -- an audit failure never changes the outcome
-        logger.warning("Audit log write failed: %s", exc)
-
-
-async def refresh_audiences(upstream_id: str) -> bool:
-    """One attempt to read ``upstream_id``'s audiences from its audiences tool (ADR 0325); True on success."""
-    assert _runtime is not None, "upstream_mcp_runtime is not configured"  # nosec B101
-    entry = _runtime.entries[upstream_id]
-    source = entry.audiences
-    tool = entry.upstream.audiences_tool
-    assert source is not None and tool is not None, "upstream has no audiences tool"  # nosec B101
-    seq = source.begin()
-    started = time.monotonic()
-    jti = ""
-    snapshot: upstream_audiences.AudienceSnapshot | None = None
-    kind = ""
-    try:
-        caller = IdentityCaller(sub="privacyfence", principal_type="service", tools=(tool,))
-        result = await entry.client.call_tool(tool, {}, caller)
-        jti = result.jti
-        snapshot = upstream_audiences.parse_result(result.structured, result.text)
-    except UpstreamMcpClientError as exc:
-        kind = exc.kind
-        logger.warning("Upstream %s audiences refresh failed: %s", upstream_id, kind)
-    except AudiencesResultError as exc:
-        kind = "invalid"
-        logger.warning("Upstream %s answered its audiences tool with an unusable result: %s", upstream_id, exc.reason)
-    except Exception:  # noqa: BLE001 -- the loop must never die silently
-        kind = "invalid"
-        logger.warning("Upstream %s audiences refresh failed unexpectedly", upstream_id, exc_info=True)
-    latency = time.monotonic() - started
-    if snapshot is None:
-        if not source.record_failure(kind, seq):
-            return False
-        if not entry.audiences_failing:
-            _audit_audiences(
-                entry, "upstream_audiences_failed", f"Audiences from {upstream_id} not refreshed: {kind}", jti, latency,
-            )
-        entry.audiences_failing = True
-        return False
-    if not source.apply(snapshot, seq):
-        return False
-    logger.info(
-        "Upstream %s audiences refreshed: %d audiences, %d people, %d dropped (jti %s)",
-        upstream_id, snapshot.audience_count, snapshot.people_count, snapshot.dropped, jti,
-    )
-    if entry.audiences_failing or entry.audiences_digest != snapshot.digest:
-        _audit_audiences(
-            entry, "upstream_audiences_applied",
-            f"Audiences from {upstream_id} applied: {snapshot.audience_count} audience(s), "
-            f"{snapshot.people_count} people, {snapshot.dropped} address(es) dropped",
-            jti, latency,
-        )
-    entry.audiences_failing = False
-    entry.audiences_digest = snapshot.digest
-    return True
-
-
-async def _refresh_audiences_loop(entry: _Entry) -> None:
-    refresh = entry.upstream.audiences_refresh_seconds
-    backoff = BACKOFF_START_SECONDS
-    while True:
-        if await refresh_audiences(entry.upstream.id):
-            backoff = BACKOFF_START_SECONDS
-            await _audiences_sleep(refresh)
-        else:
-            await _audiences_sleep(min(backoff, refresh))
-            backoff = min(backoff * 2, BACKOFF_MAX_SECONDS)
-
-
-@contextlib.asynccontextmanager
-async def lifespan(notify_tools_changed: Callable[[], None]) -> AsyncIterator[None]:
-    """One fetch task per upstream, and one audiences loop per upstream with a source, while the server runs; cancelled on shutdown."""
-    tasks = [
-        asyncio.create_task(_fetch_tool_list(entry, notify_tools_changed))
-        for entry in (_runtime.entries.values() if _runtime is not None else ())
-    ]
-    tasks += [
-        asyncio.create_task(_refresh_audiences_loop(entry))
-        for entry in (_runtime.entries.values() if _runtime is not None else ())
-        if entry.audiences is not None
-    ]
-    try:
-        yield
-    finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
