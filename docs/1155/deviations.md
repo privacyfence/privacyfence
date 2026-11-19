@@ -54,6 +54,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - worker: RegistrationStore.__init__ takes an extra optional upstreams= keyword, and ensure_client remembers its upstream, because client_for(upstream_id) must answer for a declared client; the p15 runtime has to pass upstreams= when it builds each store.
 - worker: The public-address check also refuses multicast and reserved addresses, where the plan names only is_global (Python treats some multicast ranges as global); stricter than the plan, in line with its rule that multicast is refused.
 - review: Open point passed to p15: after a restart and before any Connect, a declared client with a secret falls back to client_secret_basic because the server auth methods are not stored; p15 must cache or persist them so a refresh works against a server that supports only client_secret_post.
+- worker: The registration cache and the client record keep the auth method the server answered with (or none when no secret was issued) rather than the method that was asked for.
 
 
 ## p12-tool-store
@@ -63,6 +64,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p13-policy-hooks
 
 - review: The worker report text could not be read back, only its first line; the 14-file diff was checked for scope, and the merged tree passes the unit suite, mypy, the strict-module check, the integration suite that runs here (38 passed, 570 skipped without a browser), and full coverage of the new registry module.
+- worker: policy/describe.py rule_sentence gained a special case that words a per-tool upstream rule as Always allow <Label>: <tool>; the plan does not mention it.
 
 ## p14-client-connector
 
@@ -73,7 +75,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - worker: Finding from p11 handled: the runtime builds one RegistrationStore per upstream and passes upstreams=[upstream]; for a declared client with a secret, _client_source takes auth_method from the newest saved token record with the same client_id (falling back to client_for), so a refresh after a restart uses the method that worked at Connect. No p10 or p11 file changed.
 - worker: The brief check that any other mode with an upstream variable set raises is not implemented, because organization mode is the only mode (org_mode.validate_mode refuses the rest), so it could never fire.
-- worker: admin_rows takes an optional principal (default the current one) because admin_connected needs the administrator; the runtime adds UpstreamAdminError(message, status) and UpstreamRefreshError with statuses 400, 409 and 502 for p16 to map; pending tools carry extra fields name, exposed_name, gate and reason; fetched_at is time.time() bumped by 1e-6 so two refreshes never share a value; the tools-changed callback is a module global that survives configure and is cleared by reset; _UNAVAILABLE is i
+- worker: admin_rows takes an optional principal (default the current one) because admin_connected needs the administrator.
+- worker: The runtime adds UpstreamAdminError(message, status) and UpstreamRefreshError with statuses 400, 409 and 502 for p16 to map; pending tools carry the extra fields name, exposed_name, gate and reason.
+- worker: fetched_at is time.time() bumped by 1e-6 so two refreshes never share a value; the tools-changed callback is a module global that survives configure and is cleared by reset.
+- worker: The runtime imports the private _UNAVAILABLE message table from connectors/upstream_mcp.py instead of duplicating the six message texts.
 
 ## p16-admin-backend
 
@@ -95,14 +100,12 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p20-integration
 
 - retry: The integration test found two defects outside the phase files: privacyfence_status lost its upstreams rows when p1 unwired the old feature and no later phase restored them, and saving a tool list did not evict connector hosts already built for people, so they never saw the new tools. The phase was reported blocked, its test branch kept as is, and fix-1 (merging that branch) fixes both in web/mcp_dispatch.py and web/server.py with unit tests.
-- None.
 - review: The p20 test branch reached the feature branch through the fix-1 merge, whose message carries both trailers so the phase counts as done; fix-1 added unit tests in test_mcp_dispatch.py and test_server.py and says it did not run those two against the unfixed code, but the integration tests cover both defects.
 
 ## p21-adrs
 
 - review: ADR numbers 0327 and 0328 were taken on main, so the new ADRs are numbered 0329, 0330 and 0331 (owner decision, board ask a-7e915c58fe47b2ca); the plan was renumbered before the start commit.
 - review: ADR 0331 should record two behaviours found by the integration test: privacyfence_status carries the upstream rows from the runtime, and saving a tool list evicts every person connector host so the new tools show at once.
-- None.
 
 ## p22-adr-status
 
@@ -114,7 +117,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- final: Blocking finding: the p15-runtime worker entry in this file was cut off mid-sentence (the add command shortens long text). Rewritten in full by the orchestrator as four shorter entries, including the import of the private _UNAVAILABLE table; the file passes tld plan deviations check. The reviewer found no other blocking problem.
 
 ## Finishing
 
