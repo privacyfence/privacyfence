@@ -194,6 +194,7 @@ TOKEN_WRITE_SITES: tuple[tuple[str, str | None, str], ...] = (
     ("salesforce_client", None, "_save_token_file"),
     ("slack_client", None, "save_token_record"),
     ("tasks_client", "TasksClient", "_save_token"),
+    ("upstream_oauth_tokens", None, "save_token"),
 )
 
 # scripts/sync_room_directory.py's own standalone _atomic_write_text -- see
@@ -259,7 +260,7 @@ class TestTokenSitesUseTheSharedSecureWriteHelper:
         # above is itself worth catching, not just silently checking
         # whatever's currently listed -- see that tuple's own comment for
         # why the count is pinned.
-        assert len(TOKEN_WRITE_SITES) == 13
+        assert len(TOKEN_WRITE_SITES) == 14
 
     @pytest.mark.parametrize(
         "module_name, class_name, func_name", TOKEN_WRITE_SITES,
