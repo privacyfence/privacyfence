@@ -34,7 +34,8 @@ and CI workflows are the source of truth; a doc that disagrees with them is a bu
   organization, including claude.ai as a client.
 - [`org-mode-docker.md`](org-mode-docker.md) — run the organization deployment as containers: the
   published image, a tested Compose file with Caddy, upgrades, backups and verifying the image.
-- [`upstream-mcp.md`](upstream-mcp.md) — removed; rewritten for OAuth upstream servers.
+- [`upstream-mcp.md`](upstream-mcp.md) — put hosted MCP servers such as Canva or Framer behind PrivacyFence: the
+  operator's file, each person's own sign-in, the administrator's tool review and the gates.
 - [`identity-claim.md`](identity-claim.md) — removed; kept so links to it keep working.
 - [`n8n-node.md`](n8n-node.md) — the PrivacyFence node for n8n: install the community node, the
   credential, calling a tool from a workflow or an AI Agent, and the delivery switch.
