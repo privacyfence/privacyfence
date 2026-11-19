@@ -274,7 +274,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0179](0179-an-idp-step-up-starts-only-from-the-card-by-post.md) | An IdP step-up starts only from the card, by POST | Accepted |
 | [0180](0180-jira-and-salesforce-csv-exports-neutralise-formula-cells.md) | Jira and Salesforce CSV exports neutralise formula cells | Accepted; amends 0155 |
 | [0181](0181-the-qa-runner-is-reachable-only-from-mains-two-qa-workflows.md) | The QA runner is reachable only from `main`'s two QA workflows, and its jobs hold read-only tokens | Accepted; amends 0019 |
-| [0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md) | Every tool a release or QA-runner job installs comes from a hash-pinned lock or an exact npm pin | Accepted; extends 0085; amended by 0309 |
+| [0182](0182-every-tool-a-release-or-qa-runner-job-installs-comes-from-a-hash-pinned-lock.md) | Every tool a release or QA-runner job installs comes from a hash-pinned lock or an exact npm pin | Accepted; extends 0085; amended by 0309, 0332 |
 | [0183](0183-under-pkexec-the-privilege-separation-script-accepts-only-the-companions-own-requests.md) | Under pkexec the privilege-separation script accepts only the companion's own requests | Deprecated: ADR 0301 removed desktop mode |
 | [0184](0184-the-macos-pkg-runs-its-own-copy-of-the-script-over-a-root-owned-bundle.md) | The macOS pkg runs its own copy of the privilege-separation script, and only over a root-owned app bundle | Deprecated: ADR 0301 removed desktop mode |
 | [0185](0185-a-release-tag-is-created-only-by-release-yml.md) | A release tag is created only by `release.yml`; a tag ruleset refuses `v*` tags from other accounts | Superseded by 0312 |
@@ -421,3 +421,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0326](0326-a-service-claim-may-call-the-declared-audiences-tool.md) | A service claim may call the declared audiences tool | Accepted; amends 0297; relates to 0286, 0310, 0325 |
 | [0327](0327-stable-releases-go-through-tld-release-and-a-release-only-version-file.md) | Stable releases go through `/tld:release` and a release-only version file | Accepted; amends 0312, 0030; relates to 0022, 0023 |
 | [0328](0328-the-n8n-node-is-published-under-the-privacyfence-npm-scope.md) | The n8n node is published under the @privacyfence npm scope | Accepted; amends 0289 |
+| [0332](0332-lockfile-freshness-checks-consistency-not-the-newest-release.md) | lockfile-freshness checks that the locks match their inputs, not that they are the newest release | Accepted; amends 0182 |
