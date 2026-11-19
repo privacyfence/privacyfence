@@ -110,7 +110,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p23-docs
 
-- pending
+- worker: Left out the brief mention of linking ADR 0072 for plaintext tokens, because 0072 is about sealed refresh tokens; the page cites ADR 0330 for why tokens are not encrypted; no audit-log page is linked since none exists. The first sentence of the changelog Added entry was reworded because 8.0.0 is already released.
 
 ## Final review
 
