@@ -38,7 +38,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p8-docs-cleanup
 
-- pending
+- review: The worker report text could not be read back, only its first line; the 9-file docs diff was reviewed by name and size, with no version heading added to CHANGELOG.md.
 
 ## p9-config
 
