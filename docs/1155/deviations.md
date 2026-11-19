@@ -86,7 +86,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p18-admin-ui
 
-- pending
+- worker: The token-form connection note sits after the gated-tools fieldset, not directly under that upstream tool chips, because the form has no per-upstream tool group; the Save button gather-and-post step and the note rendering for a ticked versus unticked tool are tested only as markup and page source, since the node harness has no click events and browser tests skip here. A browser or manual check is owed.
 
 ## p19-reference-server
 
