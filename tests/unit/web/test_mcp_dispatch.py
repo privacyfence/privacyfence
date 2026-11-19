@@ -1074,6 +1074,19 @@ class TestStatus:
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=True)])
         assert "upstreams" not in dispatcher.status("checking")
 
+    def test_status_carries_the_upstream_rows_when_the_runtime_is_configured(self, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        rows = [{"id": "oauthref", "state": "waiting_for_admin", "tools_exposed": 0}]
+        monkeypatch.setattr(upstream_mcp_runtime, "configured", lambda: True)
+        monkeypatch.setattr(upstream_mcp_runtime, "status", lambda: rows)
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=True)])
+        assert dispatcher.status("checking")["upstreams"] == rows
+        # Also on the not-set-up path, which returns from a different branch.
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        assert dispatcher.status("checking")["upstreams"] == rows
+
     def test_audits_status_checked_when_un_onboarded(self):
         dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])

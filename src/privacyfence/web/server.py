@@ -704,7 +704,15 @@ def _build_org_app(
     extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
-        upstream_mcp_runtime.set_tools_changed_callback(mcp_dispatcher.notify_tools_changed)
+        def _upstream_tools_changed() -> None:
+            # A host built while the saved list was empty has no upstream connector and nothing
+            # else rebuilds it, so drop every person's host (idle caches only; approvals live
+            # elsewhere) before telling connected clients to re-list.
+            if org.connector_registry is not None:
+                org.connector_registry.evict_all()
+            mcp_dispatcher.notify_tools_changed()
+
+        upstream_mcp_runtime.set_tools_changed_callback(_upstream_tools_changed)
         mcp_route, session_manager = mount_mcp(
             mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), org.provider),
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
