@@ -40,6 +40,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - review: The worker report text could not be read back, only its first line; the 9-file docs diff was reviewed by name and size, with no version heading added to CHANGELOG.md.
 - review: Owner decision (board ask a-cb243482c7e1c50b): the nine lines p8 deleted from the released 8.0.0 changelog section are restored, and one Removed entry under [Unreleased] announces the breaking removal. The plan had assumed those entries were unreleased.
+- review: Three links in the restored 8.0.0 lines pointed at headings p8 removed (org-mode-docker upstream-mcp-file, and anchors in upstream-mcp.md and identity-claim.md); they now point at the files themselves or are plain text so the docs link test passes.
 
 ## p9-config
 
