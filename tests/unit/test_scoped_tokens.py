@@ -1619,3 +1619,96 @@ class TestTokenState:
         _file(tmp_path).write_text(good + " ", encoding="utf-8")
         os.utime(_file(tmp_path), ns=(2 * 10**9, 2 * 10**9))
         assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW) == "live"
+
+
+class TestNormaliseCreateRequestShapes:
+    BASE = {"label": "x", "days": 5, "tools": [TOOL], "rules": []}
+
+    @pytest.mark.parametrize("override", [{"tools": TOOL}, {"rules": "all"}])
+    def test_tools_that_are_not_a_list_or_unreadable_rules_are_malformed(self, override):
+        assert scoped_tokens.normalise_create_request({**self.BASE, **override}) is None
+
+    def test_a_tool_name_that_is_not_a_string_is_malformed(self):
+        assert scoped_tokens.normalise_create_request({**self.BASE, "tools": [TOOL, 7]}) is None
+
+    @pytest.mark.parametrize("key", ["allow_personal_data", "allow_personal_data_reads"])
+    def test_a_personal_data_flag_that_is_not_a_bool_is_malformed(self, key):
+        assert scoped_tokens.normalise_create_request({**self.BASE, key: "yes"}) is None
+        assert scoped_tokens.normalise_create_request({**self.BASE, key: True}) is not None
+
+
+class TestUpstreamApprovalRows:
+    """An approval row is kept on load only when its operation is the one its value names (ADR 0300)."""
+
+    @staticmethod
+    def _admin_token(store):
+        from privacyfence.policy import scopes
+        from privacyfence.upstream_mcp_registry import get_registry
+        from tests.unit.test_upstream_mcp_registry import saved_tool, upstream
+
+        get_registry().apply(upstream(), (saved_tool("fetch", "auto"),))
+        digest = scopes.UPSTREAM_DECLARATIONS["kh.fetch"]
+        return _create(
+            store, tools=["kh_fetch"], rules=[], is_admin=True,
+            upstream_approvals=[{"tool": "kh_fetch", "digest": digest}],
+        ), digest
+
+    def test_an_approval_row_survives_a_restart(self):
+        (token, _), digest = self._admin_token(_store())
+        restarted = _store()
+        restarted.load()
+        (row,) = restarted.get("local", token.id).rules
+        assert (row.predicate, row.value, row.operations) == (
+            "upstream.approved_tool", f"kh.fetch@{digest}", frozenset({"kh.fetch"}),
+        )
+
+    @pytest.mark.parametrize("operations", [["kh.other"], ["kh.fetch", "kh.other"], []])
+    def test_an_approval_row_whose_operations_do_not_match_its_value_is_dropped(self, tmp_path, operations):
+        (token, _), _digest = self._admin_token(_store())
+        path = _file(tmp_path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["tokens"][0]["rules"][0]["operations"] = operations
+        path.write_text(json.dumps(data), encoding="utf-8")
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).rules == ()
+
+    def test_an_approval_row_whose_value_names_no_operation_is_dropped(self, tmp_path):
+        (token, _), _digest = self._admin_token(_store())
+        path = _file(tmp_path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["tokens"][0]["rules"][0]["value"] = "kh.fetch"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        restarted = _store()
+        restarted.load()
+        assert restarted.get("local", token.id).rules == ()
+
+    def test_a_changed_declaration_refuses_the_approval(self):
+        self._admin_token(_store())
+        with pytest.raises(ScopedTokenError, match="The server's declaration of kh_fetch changed"):
+            _create(
+                _store(), label="stale", tools=["kh_fetch"], rules=[], is_admin=True,
+                upstream_approvals=[{"tool": "kh_fetch", "digest": "stale"}],
+            )
+
+    def test_an_approval_for_a_tool_the_token_does_not_list_is_refused(self):
+        _, digest = self._admin_token(_store())
+        with pytest.raises(ScopedTokenError, match="declaration of kh_fetch changed"):
+            _create(
+                _store(), label="unlisted", tools=[TOOL], rules=[], is_admin=True,
+                upstream_approvals=[{"tool": "kh_fetch", "digest": digest}],
+            )
+
+    def test_an_approval_row_cannot_be_copied_from_another_token(self):
+        store = _store()
+        (token, _), _digest = self._admin_token(store)
+        (row,) = token.rules
+        with pytest.raises(ScopedTokenError, match="^That rule cannot be copied.$"):
+            _create(
+                store, label="copy", rules=[{"kind": "duplicate", "token_id": token.id, "rule_id": row.id}],
+            )
+
+    def test_the_same_rule_chosen_twice_is_taken_once(self):
+        token, _ = _create(_store(), rules=_copy("rule-a", "rule-a"))
+        assert [row.id for row in token.rules].count(token.rules[0].id) == 1
+        assert len(token.rules) == 1
