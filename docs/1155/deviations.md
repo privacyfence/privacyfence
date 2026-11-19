@@ -9,7 +9,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p2-ui-membership
 
-- pending
+- worker: The brief said to keep the token form audiences parts but its acceptance required them gone; the worker followed the acceptance, so the form posts no upstream_audiences and the server-side fields stay for p4.
 
 ## p3-delete-core
 
