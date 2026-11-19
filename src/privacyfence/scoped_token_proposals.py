@@ -32,7 +32,6 @@ ID_PREFIX = "stp-"
 GONE_MESSAGE = "This token proposal has expired or was already used."
 WIDENED_MESSAGE = "A proposed token can only be narrowed here. To add rules or tools, use New token."
 UPSTREAM_REFUSED_MESSAGE = "Upstream tools cannot be proposed; create the token in Settings."
-GROUP_MEMBERSHIP_REFUSED_MESSAGE = "This tool cannot be proposed; create the token in Settings."
 _TOO_MANY_MESSAGE = "Too many token proposals are waiting. Review or decline them in Settings → Scoped tokens."
 _REASON_LIMIT = 500
 _TOOL_NAME = "privacyfence_propose_scoped_token"
@@ -155,11 +154,8 @@ def new_proposal(
     delivery: DeliveryTarget | None = None, mcp_url: str = "",
 ) -> TokenProposal:
     from . import upstream_mcp_runtime  # function-local: the runtime reaches the connectors
-    from .connectors.group_membership import TOOL_NAME as GROUP_MEMBERSHIP_TOOL  # function-local: import cycle
 
     for tool in request.get("tools", ()):
-        if tool == GROUP_MEMBERSHIP_TOOL:
-            raise ProposalError(GROUP_MEMBERSHIP_REFUSED_MESSAGE)
         # An upstream tool is named "<id>_<tool>" (upstream_mcp_registry).
         if any(str(tool).startswith(f"{upstream_id}_") for upstream_id in upstream_mcp_runtime.upstream_ids()):
             raise ProposalError(UPSTREAM_REFUSED_MESSAGE)

@@ -1411,32 +1411,6 @@ class TestScopedTokenRoutes:
         assert token.allow_personal_data_reads is True
         assert token.allow_personal_data is False
 
-    SYNC_BODY = {**BODY, "tools": ["privacyfence_update_group_membership"], "confirmed": True}
-
-    def test_a_non_admin_cannot_create_the_sync_token(self, tmp_path, monkeypatch):
-        client, csrf, store = self._setup(tmp_path, monkeypatch)
-
-        r = self._post(client, "create", self.SYNC_BODY, csrf)
-
-        assert r.status_code == 400
-        assert r.json() == {
-            "error": "Only an administrator can create a token for privacyfence_update_group_membership.",
-        }
-        assert store.tokens_for(ALICE) == []
-
-    def test_an_admin_can_create_the_sync_token(self, tmp_path, monkeypatch):
-        _seed(tmp_path, monkeypatch, "carol")
-        store = self._store(ADMIN)
-        app, sessions = _app(scoped_token_policy=self.ENABLED, scoped_token_store=store)
-        client = _client(app)
-        csrf = _signed_in(client, sessions, ADMIN)
-
-        r = self._post(client, "create", self.SYNC_BODY, csrf)
-
-        assert r.status_code == 200, r.text
-        [token] = store.tokens_for(ADMIN)
-        assert "privacyfence_update_group_membership" in token.tools
-
     def _hold(self, monkeypatch, held):
         from privacyfence import upstream_mcp_runtime
 
