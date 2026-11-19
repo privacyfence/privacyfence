@@ -77,7 +77,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p16-admin-backend
 
-- pending
+- worker: Added _checked_upstream_params in routes_admin.py because _coerce lets float and dict parameters through unchecked and routes_settings.py is outside touches: gates must be an object of at most 50 string entries and fetched_at a number that is not a bool (400 otherwise); an int fetched_at is accepted and converted to a float; an OSError while saving becomes a 500 with the text Could not save the upstream tool list.; _dispatch became async.
 
 ## p17-connect-routes
 
