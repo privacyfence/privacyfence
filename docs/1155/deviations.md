@@ -35,6 +35,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - scope: scope: contrib/examples/knowledge-hub/{admin_config.upstream_mcp,group_membership_static,upstream-mcp}.json deleted outside touches (part of the removed examples); accepted.
 - scope: scope: docs/org-mode-docker.md - the commented-out upstream lines were removed to match compose.yaml; collides with p8 and p23 but a small removal; accepted.
 - review: The worker report text could not be read back, only its first line; the 11-file diff was reviewed in full (the pyproject.toml change is a comment only, so no lock change is owed).
+- scope: scope: contrib/examples/knowledge-hub/admin_config.upstream_mcp.json - deleted with the removed examples; accepted.
+- scope: scope: contrib/examples/knowledge-hub/group_membership_static.json - deleted with the removed examples; accepted.
+- scope: scope: contrib/examples/knowledge-hub/upstream-mcp.json - deleted with the removed examples; accepted.
 
 ## p8-docs-cleanup
 
@@ -114,11 +117,21 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p23-docs
 
 - worker: Left out the brief mention of linking ADR 0072 for plaintext tokens, because 0072 is about sealed refresh tokens; the page cites ADR 0330 for why tokens are not encrypted; no audit-log page is linked since none exists. The first sentence of the changelog Added entry was reworded because 8.0.0 is already released.
+- retry: The final coverage ratchet failed for scoped_tokens.py (98.52 percent, floor 99.4) and web/server.py (94.95 percent, floor 97.7) because tests of the removed feature were deleted; fix-2 added tests in test_scoped_tokens.py and test_server.py (now 100 and 99.56 percent) and no floor was lowered. The tests reach 796->811 and 912->919 of server.py were left uncovered: both need an issuer URL with no hostname, which the fixture validation rejects.
+- scope: scope: tests/unit/test_scoped_tokens.py and tests/unit/web/test_server.py - fix-2 touched only these two test files; accepted.
 
 ## Final review
 
 - final: Blocking finding: the p15-runtime worker entry in this file was cut off mid-sentence (the add command shortens long text). Rewritten in full by the orchestrator as four shorter entries, including the import of the private _UNAVAILABLE table; the file passes tld plan deviations check. The reviewer found no other blocking problem.
+- scope: scope: src/privacyfence/web/mcp_dispatch.py - changed by fix-1 to restore the status rows and the eviction on save; accepted.
+- scope: scope: src/privacyfence/web/server.py - changed by fix-1 to restore the status rows and the eviction on save; accepted.
+- scope: scope: tests/unit/web/test_mcp_dispatch.py - changed by fix-1 to restore the status rows and the eviction on save; accepted.
+- scope: scope: tests/unit/web/test_server.py - changed by fix-1 to restore the status rows and the eviction on save; accepted.
+- scope: scope: tests/unit/test_scoped_tokens.py - tests added by fix-2 to restore coverage; accepted.
+- scope: scope: tests/unit/web/test_server.py - tests added by fix-2 to restore coverage; accepted.
 
 ## Finishing
+- review: Definition of done run on the feature branch: ruff, mypy, the strict-module check, bandit, the unit and integration suites (20460 passed, 582 skipped, mostly browser tests that cannot launch here) and the coverage ratchet all pass; the dod rows for the QA live fixture, sync, n8n and the OAuth relay do not apply (see the plan).
+- scope: Scope drift: every out-of-scope path recorded in the phase sections above was reviewed by the orchestrator and is still in the final diff, so all are accepted; no later commit reverted one.
+- review: Seven non-blocking findings of the final review stay open and are listed in the pull request body; two stale coverage floors (scoped_tokens.py, web/server.py, also markdown_to_html.py) can be raised by the owner.
 
-- pending
