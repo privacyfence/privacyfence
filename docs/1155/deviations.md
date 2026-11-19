@@ -18,7 +18,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-token-fields
 
-- pending
+- worker: Also removed held_audiences (only the audience check used it) and renamed the test class TestUpstreamDomains to TestEmailVerified; small and in the spirit of the brief.
 
 ## p5-delete-claim-modules
 
