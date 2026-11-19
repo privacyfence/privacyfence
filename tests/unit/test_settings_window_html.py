@@ -1819,3 +1819,129 @@ class TestProvisioningKeyVariableName:
         page = _render_admin(_admin_state(row), is_admin=True)
         assert "Automatic accounts: on, but ACME_PEEK_KEY is not set on the server." in page
         assert "PRIVACYFENCE_PEEK_PROVISIONING_KEY" not in page
+
+
+def _up_tool(name, verb="read", gate=None, default="review", description="Reads.", state=None, uid="canva"):
+    row = {
+        "name": name, "exposed_name": f"{uid}_{name}", "verb": verb, "read_only": verb == "read",
+        "default_gate": default, "gate": gate or default, "description": description,
+    }
+    if state:
+        row["state"] = state
+    return row
+
+
+def _up_row(**over):
+    row = {
+        "id": "canva", "label": "Canva", "url": "https://mcp.canva.com/…", "issuer_host": "auth.canva.com",
+        "registration": "dynamic", "scopes": [], "connected_people": 2, "admin_connected": True,
+        "allowed_principal_types": ["claude_client"], "saved_at": None, "tools": [], "pending": None,
+    }
+    row.update(over)
+    return row
+
+
+def _up_page(*rows):
+    return _render_org("upstreams", _org_state(upstream_servers=list(rows)))
+
+
+def _payload(page, marker):
+    m = re.search(marker + r"[^>]*data-payload='([^']*)'", page)
+    assert m, marker
+    return json.loads(m.group(1).replace("&#39;", "'"))
+
+
+@needs_node
+class TestUpstreamsSection:
+    def test_a_waiting_upstream_says_so_and_offers_refresh_but_no_save(self):
+        page = _up_page(_up_row())
+        assert "Sign-in: OAuth at auth.canva.com, 2 people connected, client dynamic." in page
+        assert "Waiting for an administrator to refresh the tools. AI clients see none of its tools until you save a list." in page
+        assert _payload(page, 'aria-label="Refresh tools for Canva" data-action="refresh_upstream_tools"') == {"upstream_id": "canva"}
+        assert "data-upstream-save" not in page
+
+    def test_refresh_is_disabled_with_its_hint_when_the_admin_is_not_connected(self):
+        page = _up_page(_up_row(admin_connected=False))
+        assert "Connect Canva on the Connect page first." in page
+        assert 'aria-disabled="true" aria-label="Refresh tools for Canva"' in page
+        assert "refresh_upstream_tools" not in page
+
+    def test_a_ready_upstream_lists_saved_tools_with_class_default_and_selected_gate(self):
+        tools = [
+            _up_tool("get_design"),
+            _up_tool("set_title", verb="update", gate="auto", default="popup"),
+            _up_tool("wipe", verb="delete", default="popup"),
+        ]
+        page = _up_page(_up_row(tools=tools))
+        assert "Waiting for an administrator" not in page
+        assert page.count("data-up-class=") == 3
+        for word in ("read", "write", "destructive"):
+            assert f'data-up-class="1">{word}<' in page
+        sel = re.search(r'data-up-tool="set_title".*?</select>', page, re.DOTALL).group(0)
+        assert '<option value="auto" selected>auto</option>' in sel
+        assert '<option value="popup">popup (default)</option>' in sel
+        assert "auto lets each person create an Always allow rule for the tool; until they do, it still asks (review or popup as shown)." in page
+        assert "Not exposed until you save." not in page
+        assert _payload(page, 'data-upstream-save="canva" data-pending="0"') == {"upstream_id": "canva"}
+        assert "Save</div>" in page
+
+    def test_review_on_a_non_read_tool_shows_the_warning(self):
+        page = _up_page(_up_row(tools=[
+            _up_tool("a", verb="update", gate="review", default="popup"), _up_tool("b", verb="read", gate="review"),
+            _up_tool("c", verb="update", gate="popup", default="popup"),
+        ]))
+        warns = re.findall(r'data-up-warn="1"( hidden)?>Runs before the person sees anything\.', page)
+        assert warns == ["", " hidden", " hidden"]
+
+    def test_a_pending_list_shows_new_changed_removed_and_unsupported(self):
+        pending = {
+            "fetched_at": 1234.5, "new": ["fresh"], "changed": ["edited"], "removed": ["gone", "old"],
+            "unsupported": [{"name": "odd", "reason": "its name is not 1-48 letters, digits, underscores or hyphens"}],
+            "tools": [
+                _up_tool("known", state="unchanged", gate="auto"),
+                _up_tool("edited", state="changed", gate="auto", default="review"),
+                _up_tool("fresh", verb="update", state="new", default="popup"),
+                {"name": "odd", "exposed_name": "canva_odd", "state": "unsupported", "verb": "read",
+                 "default_gate": "review", "gate": "review", "description": "", "reason": "its name is not 1-48 letters, digits, underscores or hyphens"},
+            ],
+        }
+        page = _up_page(_up_row(tools=[_up_tool("known", gate="auto")], pending=pending))
+        order = [m for m in re.findall(r'data-up-row="(\w+)"', page)]
+        assert order == ["edited", "fresh", "known"]
+        assert 'data-up-state="new"' in page and 'data-up-state="changed"' in page
+        assert page.count("Not exposed until you save.") == 2
+        assert page.count("Its gate was reset; choose auto again if you want it.") == 1
+        edited = re.search(r'data-up-tool="edited".*?</select>', page, re.DOTALL).group(0)
+        assert '<option value="review" selected>review (default)</option>' in edited
+        known = re.search(r'data-up-tool="known".*?</select>', page, re.DOTALL).group(0)
+        assert '<option value="auto" selected>auto</option>' in known
+        assert "Removed by the server: gone, old" in page
+        assert "odd (its name is not 1-48 letters" in page
+        assert "data-up-tool=\"odd\"" not in page
+        assert _payload(page, 'data-upstream-save="canva" data-pending="1"') == {"upstream_id": "canva", "fetched_at": 1234.5}
+
+    def test_the_save_handler_builds_each_payload_from_the_selects(self):
+        html = build_html(_org_state(), surface="admin", is_admin=True)
+        assert "select[data-up-tool]" in html
+        assert "base.gates = gates;" in html
+        assert "'save_upstream_tools' : 'set_upstream_tool_gates'" in html
+        assert "var upSave = e.target.closest('[data-upstream-save]');" in html
+        assert "warn.hidden = " in html
+
+    def test_hostile_server_text_is_escaped(self):
+        evil = "<img src=x onerror=alert(1)>"
+        pending = {
+            "fetched_at": 1.0, "new": [evil], "changed": [], "removed": [evil], "unsupported": [{"name": evil, "reason": evil}],
+            "tools": [_up_tool(evil, state="new", description=evil)],
+        }
+        page = _up_page(_up_row(label=evil, issuer_host=evil, url=evil, pending=pending, tools=[_up_tool(evil, description=evil)]))
+        assert "<img" not in page
+        assert "&lt;img src=x onerror=alert(1)&gt;" in page
+
+    def test_the_token_form_notes_the_connection_only_for_an_upstream_with_a_ticked_tool(self):
+        html = build_html(_make_state(), scoped_tokens={**TestScopedTokensSection.DATA, "upstreams": [
+            {"id": "canva", "label": "<b>Canva</b>", "tools": ["canva_get"], "gated_tools": [], "connection_note": True}]})
+        assert "function scopedConnectionNotesHtml()" in html
+        assert "data-st-connection-for=\"' + esc(u.id) + '\"" in html
+        assert "This token acts through your own ' + esc(u.label) +\n        ' connection: it can do what your account there can do." in html
+        assert "html += scopedConnectionNotesHtml();" in html
