@@ -6,6 +6,7 @@ instead.
 """
 from __future__ import annotations
 
+import dataclasses
 import sys
 
 import pytest
@@ -531,6 +532,30 @@ class TestWebServerConstruction:
             WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), mcp_dispatcher=McpDispatcher(lambda: {}),
         )
         assert server.mcp_url == f"{ISSUER}/mcp"
+
+    def test_a_saved_upstream_list_evicts_every_connector_host_and_tells_clients(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        calls: list[str] = []
+
+        class _Registry:
+            def evict_all(self):
+                calls.append("evict_all")
+
+        class _Dispatcher(McpDispatcher):
+            def notify_tools_changed(self):
+                calls.append("notify")
+
+        org = _org_auth(tmp_path, monkeypatch)
+        org = dataclasses.replace(org, connector_registry=_Registry())
+        upstream_mcp_runtime.reset()
+        try:
+            build_app(WebApprovalUI(), org=org, mcp_dispatcher=_Dispatcher(lambda: {}))
+            upstream_mcp_runtime._tools_changed()  # what a save fires
+        finally:
+            upstream_mcp_runtime.reset()
+        # Hosts first, so a client that re-lists on the notification sees the rebuilt ones.
+        assert calls == ["evict_all", "notify"]
 
     def test_the_event_loop_is_never_exposed(self, tmp_path, monkeypatch):
         server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch))
