@@ -27,7 +27,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-claim-helpers
 
-- pending
+- scope: scope: tests/unit/web/test_routes_mcp.py - 17 lines of tests of the removed helper deleted outside touches; accepted.
+- review: The worker report text could not be read back, only its first line; the 4-file diff was reviewed in full.
 
 ## p7-delete-assets
 
