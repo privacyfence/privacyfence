@@ -69,12 +69,12 @@ PYTHON_FLOOR="3.11.5"
 # existing file: it reads that file's existing pins back in as preferences and keeps them unless
 # they're no longer resolvable, so re-running this script over its own prior output silently
 # reproduces the same (possibly stale) versions no matter how much time has passed or what's been
-# released upstream since. dependency-audit.yml's lockfile-freshness job doesn't have this problem
-# only because it compiles into a scratch file under /tmp that never already exists -- which means
-# without `--upgrade`, this script can report success while leaving the exact drift that job is
-# complaining about completely unfixed. `--upgrade` makes the ignore-existing-pins behavior
-# unconditional (it implies `--refresh` too), so this script's resolution always matches a from
-# scratch one, the same guarantee the CI job gets for free from never having a pre-existing file.
+# released upstream since. dependency-audit.yml's lockfile-freshness job seeds its scratch directory
+# with the committed pins (hashes removed, so every hash is fetched again) on purpose, so it checks
+# that the locks still match pyproject.toml and release.in and does not fail on a newer upstream
+# release (ADR 0332).
+# Without --upgrade this script behaves like that check and never moves a pin; with it, every run
+# picks up the newest releases, which is what a deliberate refresh wants.
 uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
   --output-file=requirements/runtime.lock.txt \
   pyproject.toml
