@@ -58,7 +58,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p13-policy-hooks
 
-- pending
+- review: The worker report text could not be read back, only its first line; the 14-file diff was checked for scope, and the merged tree passes the unit suite, mypy, the strict-module check, the integration suite that runs here (38 passed, 570 skipped without a browser), and full coverage of the new registry module.
 
 ## p14-client-connector
 
