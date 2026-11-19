@@ -102,6 +102,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 - review: ADR numbers 0327 and 0328 were taken on main, so the new ADRs are numbered 0329, 0330 and 0331 (owner decision, board ask a-7e915c58fe47b2ca); the plan was renumbered before the start commit.
 - review: ADR 0331 should record two behaviours found by the integration test: privacyfence_status carries the upstream rows from the runtime, and saving a tool list evicts every person connector host so the new tools show at once.
+- None.
 
 ## p22-adr-status
 
