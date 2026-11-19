@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Iterator
 
 from . import agent_runtimes, audit_log, paths, secure_files
 from .n8n_api import N8nApi, N8nApiClientError
@@ -269,7 +269,7 @@ def deliver(
     *, principal: Principal, bound: dict[str, Any], proposal: TokenProposal,
     config: agent_runtimes.N8nRuntimeConfig, api: N8nApi, token_store: ScopedTokenStore,
     policy: ScopedTokenPolicy, on_abandoned: Callable[[], None] | None = None,
-    held_audiences: Mapping[str, frozenset[str]] | None = None, principal_email_verified: bool = False,
+    principal_email_verified: bool = False,
 ) -> DeliveryOutcome:
     """Create the token and its credential in the runtime, recording both before either exists
     (ADR 0281). ``bound`` is the confirmed request; the secret goes to the runtime and nowhere else."""
@@ -330,8 +330,6 @@ def deliver(
                 tools=bound["tools"], policy=policy,
                 allow_personal_data=bound["allow_personal_data"],
                 allow_personal_data_reads=bound["allow_personal_data_reads"],
-                upstream_audiences=bound.get("upstream_audiences") or None,
-                held_audiences=held_audiences,
                 principal_email_verified=principal_email_verified,
                 is_admin=False,  # a sync token is created in Settings only (plan 3.8)
                 token_id=token_id,

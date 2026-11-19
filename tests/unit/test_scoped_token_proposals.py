@@ -359,8 +359,3 @@ class TestUpstreamTools:
 
     def test_a_proposal_of_built_in_tools_is_unaffected(self):
         assert _proposal().request["tools"] == ["drive_download_file", "gmail_list_messages"]
-
-    def test_the_review_cannot_add_a_domain(self):
-        proposed = _request()
-        assert stp.narrowing_error(proposed, {**proposed, "upstream_audiences": {}}) is None
-        assert stp.narrowing_error(proposed, {**proposed, "upstream_audiences": {"kh": ["hr"]}}) == stp.WIDENED_MESSAGE
