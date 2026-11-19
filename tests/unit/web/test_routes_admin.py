@@ -28,6 +28,7 @@ from privacyfence import webauthn_stepup as wa
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.step_up_config import StepUpConfig
+from privacyfence import upstream_mcp_runtime
 from privacyfence.web import org_session, org_stats, routes_admin
 from tests.connector_config_support import SENTINEL, public_bytes, sign
 
@@ -69,6 +70,8 @@ ACTION_BODIES = {
     "toggle_pii_category": {"category_key": "detect_ip_addresses"},
     "set_default_policy": {"group": "privacy", "policy": "redact"},
     "set_category_policy": {"group": "privacy", "category": "body", "policy": "block"},
+    "save_upstream_tools": {"upstream_id": "acme", "gates": {"echo": "review"}, "fetched_at": 1700000000.123456},
+    "set_upstream_tool_gates": {"upstream_id": "acme", "gates": {"echo": "auto"}},
 }
 
 
@@ -693,6 +696,211 @@ class TestRouteClassification:
 
     def test_the_registry_type_is_the_real_one(self):
         assert hasattr(ConnectorRegistry, "evict_all")
+
+
+# --------------------------------------------------------------------------- #
+# The three upstream-tool actions
+# --------------------------------------------------------------------------- #
+
+FETCHED_AT = 1700000000.123456
+
+
+class FakeUpstream:
+    """Stands in for upstream_mcp_runtime: it records the calls and refuses like the real one."""
+
+    def __init__(self, monkeypatch):
+        self.calls = []
+        self.refresh_error = None
+        self.rows = [{"id": "acme", "label": "Acme", "tools": [], "pending": None}]
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "refresh", self.refresh)
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "save", self.save)
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "set_gates", self.set_gates)
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "admin_rows", self.admin_rows)
+
+    def _known(self, upstream_id):
+        if upstream_id != "acme":
+            raise upstream_mcp_runtime.UpstreamAdminError("Unknown upstream.")
+
+    async def refresh(self, upstream_id, principal):
+        self._known(upstream_id)
+        self.calls.append(("refresh", upstream_id, principal.id))
+        if self.refresh_error is not None:
+            raise self.refresh_error
+        return {}
+
+    def save(self, upstream_id, gates, fetched_at):
+        self._known(upstream_id)
+        if any(g not in ("review", "popup", "auto") for g in gates.values()):
+            raise upstream_mcp_runtime.UpstreamAdminError("Gate must be review, popup or auto.")
+        if "nothing" in gates:
+            raise upstream_mcp_runtime.UpstreamAdminError("Refresh the tool list first.", 409)
+        if fetched_at != FETCHED_AT:
+            raise upstream_mcp_runtime.UpstreamAdminError(
+                "The tool list changed since you refreshed it. Refresh again.", 409,
+            )
+        self.calls.append(("save", upstream_id, dict(gates), fetched_at))
+
+    def set_gates(self, upstream_id, gates):
+        self._known(upstream_id)
+        if any(g not in ("review", "popup", "auto") for g in gates.values()):
+            raise upstream_mcp_runtime.UpstreamAdminError("Gate must be review, popup or auto.")
+        if "ghost" in gates:
+            raise upstream_mcp_runtime.UpstreamAdminError("That tool is not in the saved list.")
+        self.calls.append(("set_gates", upstream_id, dict(gates)))
+
+    def admin_rows(self, principal=None):
+        self.calls.append(("admin_rows", principal.id if principal else None))
+        return self.rows
+
+
+@pytest.fixture
+def upstream(monkeypatch):
+    return FakeUpstream(monkeypatch)
+
+
+class TestUpstreamActions:
+    def test_refresh_needs_no_passkey_and_passes_the_admin(self, upstream):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.post("refresh_upstream_tools", {"upstream_id": "acme"}, csrf)
+        assert r.status_code == 200
+        assert ("refresh", "acme", "carol") in upstream.calls
+        assert r.json()["upstream_servers"] == upstream.rows
+
+    def test_save_needs_the_step_up_then_saves(self, upstream, audit):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = ACTION_BODIES["save_upstream_tools"]
+        r = _passkey_post(world, "save_upstream_tools", body, csrf)
+        assert r.status_code == 200, r.text
+        assert ("save", "acme", {"echo": "review"}, FETCHED_AT) in upstream.calls
+        # The runtime writes the audit row; the route adds none for these actions.
+        assert not [s for _, s in audit if "upstream" in s.lower() and "Step-up" not in s]
+
+    def test_a_json_float_fetched_at_arrives_unchanged(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {**ACTION_BODIES["save_upstream_tools"], "fetched_at": FETCHED_AT}
+        assert _passkey_post(world, "save_upstream_tools", body, csrf).status_code == 200
+        saved = [c for c in upstream.calls if c[0] == "save"][0]
+        assert saved[3] == FETCHED_AT and isinstance(saved[3], float)
+
+    def test_set_gates_needs_the_step_up_then_applies(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_upstream_tool_gates", ACTION_BODIES["set_upstream_tool_gates"], csrf)
+        assert r.status_code == 200
+        assert ("set_gates", "acme", {"echo": "auto"}) in upstream.calls
+
+    @pytest.mark.parametrize("action", ["refresh_upstream_tools", "save_upstream_tools", "set_upstream_tool_gates"])
+    def test_a_non_admin_is_403(self, upstream, action):
+        world = World()
+        csrf = world.sign_in(ALICE)
+        r = world.post(action, {"upstream_id": "acme", "gates": {}, "fetched_at": 1.0}, csrf)
+        assert r.status_code == 403
+        assert upstream.calls == []
+
+    def test_an_unknown_upstream_is_400(self, upstream):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.post("refresh_upstream_tools", {"upstream_id": "nope"}, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "Unknown upstream."})
+
+    def test_a_bad_gate_is_400_with_the_exact_text(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {"upstream_id": "acme", "gates": {"echo": "yolo"}}
+        r = _passkey_post(world, "set_upstream_tool_gates", body, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "Gate must be review, popup or auto."})
+
+    def test_a_tool_that_is_not_saved_is_400(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_upstream_tool_gates", {"upstream_id": "acme", "gates": {"ghost": "auto"}}, csrf)
+        assert (r.status_code, r.json()) == (400, {"error": "That tool is not in the saved list."})
+
+    def test_save_without_a_pending_list_is_409(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {"upstream_id": "acme", "gates": {"nothing": "review"}, "fetched_at": FETCHED_AT}
+        r = _passkey_post(world, "save_upstream_tools", body, csrf)
+        assert (r.status_code, r.json()) == (409, {"error": "Refresh the tool list first."})
+
+    def test_save_with_a_stale_fetched_at_is_409(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {"upstream_id": "acme", "gates": {}, "fetched_at": FETCHED_AT + 1}
+        r = _passkey_post(world, "save_upstream_tools", body, csrf)
+        assert (r.status_code, r.json()) == (
+            409, {"error": "The tool list changed since you refreshed it. Refresh again."},
+        )
+
+    def test_the_refresh_error_text_and_status_pass_through(self, upstream):
+        upstream.refresh_error = upstream_mcp_runtime.UpstreamRefreshError(
+            "Connect Acme on the Connect page (/connect) first, then refresh.", 409,
+        )
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        r = world.post("refresh_upstream_tools", {"upstream_id": "acme"}, csrf)
+        assert (r.status_code, r.json()) == (
+            409, {"error": "Connect Acme on the Connect page (/connect) first, then refresh."},
+        )
+        upstream.refresh_error = upstream_mcp_runtime.UpstreamRefreshError("The Acme server could not be reached.", 502)
+        assert world.post("refresh_upstream_tools", {"upstream_id": "acme"}, csrf).status_code == 502
+
+    @pytest.mark.parametrize("gates", [[], "x", {"echo": 5}, {f"t{i}": "auto" for i in range(51)}])
+    def test_gates_must_be_a_small_object_of_strings(self, upstream, gates):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = world.post("set_upstream_tool_gates", {"upstream_id": "acme", "gates": gates}, csrf)
+        assert r.status_code == 400 and r.json()["error"].startswith("gates:")
+
+    @pytest.mark.parametrize("value", ["1.5", True, None, [1]])
+    def test_fetched_at_must_be_a_number(self, upstream, value):
+        world = World()
+        csrf = world.sign_in(ADMIN)
+        _enrol(ADMIN)
+        r = world.post("save_upstream_tools", {"upstream_id": "acme", "gates": {}, "fetched_at": value}, csrf)
+        assert r.status_code == 400 and r.json()["error"].startswith("fetched_at:")
+
+    def test_an_integer_fetched_at_is_accepted_as_a_float(self, upstream):
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        body = {"upstream_id": "acme", "gates": {}, "fetched_at": 5}
+        r = _passkey_post(world, "save_upstream_tools", body, csrf)
+        assert r.status_code == 409  # 5.0 is not the pending list's stamp
+
+    def test_a_failed_write_is_500(self, upstream, monkeypatch):
+        def boom(*args):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(routes_admin.upstream_mcp_runtime, "set_gates", boom)
+        world = World()
+        _enrol(ADMIN)
+        csrf = world.sign_in(ADMIN)
+        r = _passkey_post(world, "set_upstream_tool_gates", ACTION_BODIES["set_upstream_tool_gates"], csrf)
+        assert (r.status_code, r.json()) == (500, {"error": "Could not save the upstream tool list."})
+
+    def test_the_state_carries_upstream_servers(self, upstream):
+        world = World()
+        world.sign_in(ADMIN)
+        assert world.client.get("/api/admin/state").json()["upstream_servers"] == upstream.rows
+        assert ("admin_rows", "carol") in upstream.calls
+
+    def test_the_state_has_an_empty_list_when_nothing_is_configured(self):
+        upstream_mcp_runtime.reset()
+        world = World()
+        world.sign_in(ADMIN)
+        assert world.client.get("/api/admin/state").json()["upstream_servers"] == []
 
 
 # --------------------------------------------------------------------------- #
