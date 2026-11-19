@@ -166,7 +166,7 @@ json.dumps({"tool": tool, "arguments": arguments}, sort_keys=True,
 7. Duplicate keys in the request body are refused by the verifier.
 
 The six vectors below are the contract; they are also in
-[`contrib/verifier/req_test_vectors.json`](../contrib/verifier/req_test_vectors.json), computed
+`contrib/verifier/req_test_vectors.json`, computed
 independently of any implementation. An implementation that reproduces all six has the canonicalisation
 right.
 
@@ -236,7 +236,7 @@ Do these in order and answer `401` on the first failure:
 
 ## Using `pf_claim_verify.py`
 
-[`contrib/verifier/pf_claim_verify.py`](../contrib/verifier/pf_claim_verify.py) is one file you vendor into
+`contrib/verifier/pf_claim_verify.py` is one file you vendor into
 your server. It needs Python 3.9 or later, the standard library, PyJWT and `cryptography`.
 
 ```python
