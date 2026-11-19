@@ -7,6 +7,7 @@ Extends the rule of [ADR 0085](0085-ci-installs-ai-client-clis-from-a-committed-
 AI-client CLIs to every build and release tool.
 
 Amended by [ADR 0309](0309-the-organization-image-is-the-only-distribution.md), 2026-11-15.
+Amended by [ADR 0332](0332-lockfile-freshness-checks-consistency-not-the-newest-release.md), 2026-11-19.
 
 ## Context
 

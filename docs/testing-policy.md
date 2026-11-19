@@ -139,8 +139,8 @@ variable removed: these tests need no vendor account or credential, and must kee
 
 - **`dependency-audit.yml`** — on a PR or a push to `main` that touches
   `pyproject.toml`, `requirements/*.lock.txt` or any `package.json`/`package-lock.json`, weekly
-  (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a lock file is out of step with
-  `pyproject.toml`; `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`,
+  (Monday 07:00 UTC), and on dispatch. `lockfile-freshness` fails if a committed lock no longer matches what
+  `pyproject.toml`, `requirements/release.in` or the `docs` extra need (a newer upstream release alone does not, [ADR 0332](adr/0332-lockfile-freshness-checks-consistency-not-the-newest-release.md)); `pip-audit --strict` blocks on any finding in `requirements/runtime.lock.txt`,
   `docs.lock.txt` (the website's docs generator) and `release.lock.txt` (the hash-pinned `uv` and
   `pip-audit` that CI itself installs, compiled from `requirements/release.in`) and reports
   `dev.lock.txt` informationally; `floor-audit` resolves `pyproject.toml` at the lowest version each
