@@ -32,7 +32,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p7-delete-assets
 
-- pending
+- scope: scope: contrib/examples/knowledge-hub/{admin_config.upstream_mcp,group_membership_static,upstream-mcp}.json deleted outside touches (part of the removed examples); accepted.
+- scope: scope: docs/org-mode-docker.md - the commented-out upstream lines were removed to match compose.yaml; collides with p8 and p23 but a small removal; accepted.
+- review: The worker report text could not be read back, only its first line; the 11-file diff was reviewed in full (the pyproject.toml change is a comment only, so no lock change is owed).
 
 ## p8-docs-cleanup
 
