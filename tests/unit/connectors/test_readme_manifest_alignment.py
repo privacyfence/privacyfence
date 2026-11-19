@@ -36,11 +36,13 @@ from privacyfence.connectors.tasks import TasksConnector
 from privacyfence.connectors.miro import MiroConnector
 from privacyfence.connectors.peek import PeekConnector
 from privacyfence.connectors.telegram import TelegramConnector
+from privacyfence.connectors.upstream_mcp import UpstreamMcpConnector
 
 CONNECTOR_CLASSES = [
     GmailConnector, DriveConnector, SlackConnector, CalendarConnector,
     ContactsConnector, SalesforceConnector, JiraConnector, ConfluenceConnector,
     TasksConnector, TelegramConnector, AppsScriptConnector, GristConnector, PeekConnector, AssetsConnector, MiroConnector,
+    UpstreamMcpConnector,
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
