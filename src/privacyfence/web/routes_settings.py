@@ -914,7 +914,6 @@ def build_org_routes(
                         tools=bound["tools"], policy=token_policy,
                         allow_personal_data=bound["allow_personal_data"],
                         allow_personal_data_reads=bound["allow_personal_data_reads"],
-                        upstream_audiences=bound.get("upstream_audiences") or None,
                         principal_email_verified=session_email_verified,
                         is_admin=principal.is_admin,
                         upstream_approvals=upstream_approvals,
