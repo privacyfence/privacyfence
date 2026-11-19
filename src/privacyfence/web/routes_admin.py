@@ -60,6 +60,7 @@ from .. import (
     paths,
     relay_client,
     settings_window_html,
+    upstream_mcp_runtime,
     web_shell,
 )
 from ..connector_registry import ConnectorRegistry
@@ -118,7 +119,15 @@ ADMIN_ACTIONS: dict[str, AdminAction] = {
     "toggle_pii_category": AdminAction(_ORG_ONLY, True, "self"),
     "set_default_policy": AdminAction(_ORG_ONLY, True, "self"),
     "set_category_policy": AdminAction(_ORG_ONLY, True, "self"),
+    # The three upstream-tool actions persist to org/upstream_tools/, not admin_config.json, so
+    # upstream_mcp_runtime carries them out (and writes their audit rows).
+    "refresh_upstream_tools": AdminAction(_ORG_ONLY, False, "live"),
+    "save_upstream_tools": AdminAction(_ORG_ONLY, True, "live"),
+    "set_upstream_tool_gates": AdminAction(_ORG_ONLY, True, "live"),
 }
+
+_UPSTREAM_ACTIONS = frozenset({"refresh_upstream_tools", "save_upstream_tools", "set_upstream_tool_gates"})
+MAX_UPSTREAM_GATES = 50
 
 # The actions ``org_install_policy.apply_change`` carries out.
 _PRIVACY_ACTIONS = frozenset(org_install_policy.SUPPORTED_ACTIONS)
@@ -158,6 +167,10 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
     "toggle_pii_category": (("category_key", str, True),),
     "set_default_policy": (("group", str, True), ("policy", str, True)),
     "set_category_policy": (("group", str, True), ("category", str, True), ("policy", str, True)),
+    "refresh_upstream_tools": (("upstream_id", str, True),),
+    # ``fetched_at`` is a float: ``_coerce`` would truncate an int and refuses a JSON number as a str.
+    "save_upstream_tools": (("upstream_id", str, True), ("gates", dict, True), ("fetched_at", float, True)),
+    "set_upstream_tool_gates": (("upstream_id", str, True), ("gates", dict, True)),
 }
 
 # The sections that take effect only when the server starts again, with the name the page shows.
@@ -338,10 +351,39 @@ def _admin_state(
     if install_wide_settings is not None:
         state["privacy"] = _privacy_rows(install_wide_settings)
     state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))
+    state["upstream_servers"] = upstream_mcp_runtime.admin_rows(principal)
     return state
 
 
-def _dispatch(
+def _checked_upstream_params(action: str, params: dict[str, Any]) -> None:
+    """The shapes ``_coerce`` leaves alone: ``gates`` is an object of at most 50 string values and
+    ``fetched_at`` a number (a JSON float keeps its exact value)."""
+    if action == "refresh_upstream_tools":
+        return
+    gates = params["gates"]
+    if not isinstance(gates, dict) or len(gates) > MAX_UPSTREAM_GATES:
+        raise _BadAction(f"gates: expected an object of at most {MAX_UPSTREAM_GATES} gates")
+    if not all(isinstance(name, str) and isinstance(gate, str) for name, gate in gates.items()):
+        raise _BadAction("gates: expected tool names and gates as strings")
+    if action == "save_upstream_tools":
+        fetched_at = params["fetched_at"]
+        if isinstance(fetched_at, bool) or not isinstance(fetched_at, (int, float)):
+            raise _BadAction("fetched_at: expected a number")
+        params["fetched_at"] = float(fetched_at)
+
+
+async def _apply_upstream_action(action: str, params: dict[str, Any], principal: Principal) -> None:
+    """Carry out one upstream-tool action; the runtime refuses with the status and text to show."""
+    upstream_id = params["upstream_id"]
+    if action == "refresh_upstream_tools":
+        await upstream_mcp_runtime.refresh(upstream_id, principal)
+    elif action == "save_upstream_tools":
+        upstream_mcp_runtime.save(upstream_id, params["gates"], params["fetched_at"])
+    else:
+        upstream_mcp_runtime.set_gates(upstream_id, params["gates"])
+
+
+async def _dispatch(
     principal: Principal, action: str, body: dict[str, Any], *,
     bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
@@ -369,6 +411,11 @@ def _dispatch(
             params[name] = _coerce(body[name], kind)
         except _BadAction as exc:
             return _error(f"{name}: {exc}.")
+    if action in _UPSTREAM_ACTIONS:
+        try:
+            _checked_upstream_params(action, params)
+        except _BadAction as exc:
+            return _error(f"{exc}.")
     assertion = body.get("webauthn_assertion")
     refusal = _apply_step_up_gate(
         principal, action, body, assertion if isinstance(assertion, dict) else None,
@@ -379,7 +426,18 @@ def _dispatch(
         with principal_scope(principal):
             _record_settings_audit(principal, f"Step-up required for {action!r}, refused (principal={principal.id})")
         return refusal
-    if action in _PRIVACY_ACTIONS:
+    if action in _UPSTREAM_ACTIONS:
+        try:
+            with principal_scope(principal):
+                await _apply_upstream_action(action, params, principal)
+        except upstream_mcp_runtime.UpstreamAdminError as exc:
+            return _error(str(exc), exc.status)
+        except OSError as exc:
+            logger.error("Could not save the upstream tool list: %s", exc)
+            return _error("Could not save the upstream tool list.", 500)
+        summary = ""
+        changed: list[str] = []
+    elif action in _PRIVACY_ACTIONS:
         try:
             summary = _apply_privacy_action(
                 action, params, install_wide_settings if install_wide_settings is not None else {},
@@ -391,7 +449,7 @@ def _dispatch(
             # Writing settings.yaml failed, so nothing was applied: the policy is unchanged.
             logger.error("Could not write the install-wide settings.yaml: %s", exc)
             return _error("could not write settings.yaml", 500)
-        changed: list[str] = []
+        changed = []
     else:
         try:
             summary, changed = admin_config.apply_change(
@@ -683,7 +741,7 @@ def build_org_routes(
         if not org_session.check_origin(request):
             return _error("Cross-origin request rejected.", 403)
         body = {key: value for key, value in payload.items() if key != "csrf"}
-        return _dispatch(
+        return await _dispatch(
             principal, action, body, bundle=bundle, org_config=org_config,
             startup_admin=startup_admin, step_up=step_up, step_up_origin=step_up_origin,
             challenges=challenges, refresh_live=refresh_live,
