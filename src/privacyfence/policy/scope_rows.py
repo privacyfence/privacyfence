@@ -267,7 +267,12 @@ def rows_from_config(cfg: Any) -> list[ScopeRow]:
 
 
 def scope_of_rule(rule: PolicyRule) -> tuple[str, Any] | None:
-    """The ``(scope, value)`` a v2 rule belongs to, or ``None`` when it must stay a custom row."""
+    """The ``(scope, value)`` a v2 rule belongs to, or ``None`` when it must stay a custom row.
+
+    A per-tool upstream Always allow rule is always custom: its scope group disappears with the tool,
+    and several auto tools of one upstream would be ambiguous (ADR 0331)."""
+    if rule.predicate == "upstream.always_allow":
+        return None
     candidates: set[str] = set()
     if len(rule.conditions) == 1:
         matching = [

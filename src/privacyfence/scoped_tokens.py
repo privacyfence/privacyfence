@@ -564,11 +564,20 @@ def normalise_rule_requests(raw: Any) -> list[dict[str, Any]] | None:
 
 
 def _checked_upstream_approvals(
-    tool_set: frozenset[str], approvals: Sequence[Mapping[str, str]], *, is_admin: bool,
+    tool_set: frozenset[str],
+    approvals: Sequence[Mapping[str, str]],
+    rows: Iterable[Any],
+    *,
+    is_admin: bool,
 ) -> list[tuple[str, str]]:
-    """The ``(tool, digest)`` approvals of a create request after plan 3.4's three rules, in order:
-    only an administrator approves; a gated upstream tool needs an approval; an approval must name a
-    listed gated upstream tool and the operator's current digest."""
+    """The ``(tool, digest)`` approvals of a create request after the rules of ADR 0300 and 0331, in
+    order: only an administrator sends an approval; a listed gated upstream tool is covered by an
+    approval or by one of the token's own rules (``rows``: the compiled rules of the request, so a
+    row a copy or duplicate request resolves later does not count); an approval must name a listed
+    gated upstream tool and the server's current digest.
+
+    A covering rule has the predicate ``upstream.always_allow``, the tool's exposed name as its value,
+    the tool's operation among its operations, and the tool still at the ``auto`` ceiling."""
     from . import gate  # function-local: the module is import-cycle sensitive
     from .policy import scopes as policy_scopes
 
@@ -576,11 +585,18 @@ def _checked_upstream_approvals(
     if pairs and not is_admin:
         raise ScopedTokenError(f"Only an administrator can create a token for {pairs[0][0]}.")
     approved = {tool for tool, _ in pairs}
+    ruled = {
+        row.value
+        for row in rows
+        if row.predicate == "upstream.always_allow" and isinstance(row.value, str)
+        and auto_accept.TOOL_TO_OPERATION.get(row.value) in row.operations
+        and row.value in policy_scopes.UPSTREAM_AUTO_TOOLS
+    }
     for name in sorted(tool_set):
-        if gate.is_gated_upstream_tool(name) and name not in approved:
+        if gate.is_gated_upstream_tool(name) and name not in approved and name not in ruled:
             raise ScopedTokenError(
                 f"{name} changes data or releases results unseen; an administrator must approve it "
-                "on the New token form."
+                "on the New token form, or the token needs an Always allow rule for it."
             )
     for tool, digest in pairs:
         operation = auto_accept.TOOL_TO_OPERATION.get(tool)
@@ -715,10 +731,11 @@ class ScopedTokenStore:
             raise ScopedTokenError("That token id is already in use.")
 
         tool_set = frozenset(tools)
-        approvals = _checked_upstream_approvals(tool_set, upstream_approvals, is_admin=is_admin)
         new_rules, own_rows = self._prepare(
-            label=label, rules=rules, policy=policy, approvals=len(approvals),
+            label=label, rules=rules, policy=policy,
+            approvals=len({(a["tool"], a["digest"]) for a in upstream_approvals}),
         )
+        approvals = _checked_upstream_approvals(tool_set, upstream_approvals, new_rules, is_admin=is_admin)
         with self._lock:
             self._refresh(principal)
             existing = self._tokens[principal.id]

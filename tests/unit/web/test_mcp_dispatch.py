@@ -560,6 +560,53 @@ class TestCall:
 # check_policy -- ported from TestCheckPolicyDispatch
 # --------------------------------------------------------------------------- #
 
+class TestScopedUpstreamApproval:
+    """The dispatcher refuses a scoped call of a gated upstream tool before it reaches the connector
+    unless the token's own rules cover it (ADR 0300, ADR 0331)."""
+
+    @staticmethod
+    def _setup(tool_gate="review"):
+        from privacyfence.policy import scope_rows
+        from privacyfence.policy.engine import PolicyRule
+        from privacyfence.upstream_mcp_registry import get_registry
+        from tests.unit.test_upstream_mcp_registry import saved_tool, upstream
+
+        get_registry().apply(upstream(), (saved_tool("fetch", tool_gate),))
+        connector = FakeConnector("kh", result="r")
+        rule = PolicyRule(
+            id="r", predicate="upstream.always_allow", value="kh_fetch", operations=frozenset({"kh.fetch"}),
+        )
+        covered = dataclasses.replace(_SCOPE, tools=frozenset({"kh_fetch"}), rules=tuple(scope_rows.rows_for_rules([rule], "r-1")))
+        bare = dataclasses.replace(_SCOPE, tools=frozenset({"kh_fetch"}))
+        return connector, covered, bare
+
+    async def test_a_token_without_a_covering_rule_never_reaches_the_connector(self):
+        connector, _covered, bare = self._setup("auto")
+        dispatcher = _dispatcher({"kh": connector})
+        with scoped_tokens.token_scope(bare), pytest.raises(GateDeniedError, match="no administrator approval"):
+            await dispatcher.call("s1", "kh", "kh_fetch", {})
+        assert connector.calls == []
+
+    async def test_a_token_with_the_per_tool_rule_reaches_the_connector(self):
+        connector, covered, _bare = self._setup("auto")
+        dispatcher = _dispatcher({"kh": connector})
+        with scoped_tokens.token_scope(covered):
+            assert await dispatcher.call("s1", "kh", "kh_fetch", {}) == "r"
+        assert connector.calls == [("kh_fetch", {})]
+
+    async def test_a_rule_for_a_tool_below_the_ceiling_does_not_count(self):
+        connector, covered, _bare = self._setup("review")
+        dispatcher = _dispatcher({"kh": connector})
+        with scoped_tokens.token_scope(covered), pytest.raises(GateDeniedError):
+            await dispatcher.call("s1", "kh", "kh_fetch", {})
+        assert connector.calls == []
+
+    async def test_an_unscoped_call_is_left_to_the_gate(self):
+        connector, _covered, _bare = self._setup("review")
+        dispatcher = _dispatcher({"kh": connector})
+        assert await dispatcher.call("s1", "kh", "kh_fetch", {}) == "r"
+
+
 class TestCheckPolicy:
     @pytest.fixture(autouse=True)
     def _audit_dir(self, tmp_path):
