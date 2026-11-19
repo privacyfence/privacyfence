@@ -15,7 +15,7 @@ dependencies = [
     "google-auth-oauthlib>=1.1.0",
     "google-api-python-client>=2.100.0",
     "pyyaml>=6.0",
-    # the OAuth upstream MCP client needs it (it also backs mcp's client transport). Floor at 2.12: every
+    # mcp's client transport needs it for upstream MCP servers (ADR 0285). Floor at 2.12: every
     # httpx2 release below it has an advisory pip-audit reports (the lowest-version audit that
     # used to check this no longer exists).
     "httpx2>=2.12",
