@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.1.0] - 2026-11-19
+
 ### Added
 
 - **Hosted MCP servers with their own sign-in.** It replaces the claim-based upstream servers of 8.0.0, which are removed (see Removed below). An operator can declare an upstream (`id`, `label`, `url`, optional `oauth` settings, for example Canva or Framer) and each person connects their own account on the Connect page. An administrator refreshes the server's tool list on the Admin page, reviews the defaults (read-only tools `review`, everything else `popup`) and saves; new or changed tools stay hidden until then. A tool set to `auto` keeps asking until a person makes an Always allow rule for it ([ADR 0329](docs/adr/0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), [ADR 0331](docs/adr/0331-the-administrator-manages-each-upstream-servers-tools.md), [#1155](https://github.com/privacyfence/privacyfence/issues/1155)).
