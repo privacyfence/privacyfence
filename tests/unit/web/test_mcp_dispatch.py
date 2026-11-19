@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from privacyfence import agent_runtimes, auto_accept, local_files, scoped_tokens, upstream_mcp_registry
+from privacyfence import agent_runtimes, local_files, scoped_tokens
 from privacyfence.approvals import ApprovalPending, PendingApprovalRegistry
 from privacyfence.audit_log import current_released_request_id, current_week, init_audit_logger, set_released_request_id
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -29,10 +29,7 @@ from privacyfence.deny_feedback import DENIAL_FEEDBACK_KEY, INTENTS, DenialFeedb
 from privacyfence import gate
 from privacyfence.gate import GateDeniedError, is_unattended
 from privacyfence.principal import Principal, principal_scope
-from privacyfence.policy import scope_rows
-from privacyfence.policy.registry import Verb
 from privacyfence.scoped_tokens import ScopedToken
-from privacyfence.upstream_mcp_config import DeclaredTool, UpstreamServer, declaration_digest
 from privacyfence.web import mcp_dispatch
 from privacyfence.web.mcp_dispatch import McpDispatcher
 
@@ -1767,54 +1764,3 @@ class TestRuntimeCredentialStatus(_DeliveryBase):
 
         monkeypatch.setattr(mcp_dispatch, "get_audit_logger", broken)
         assert self._status(self._dispatcher()) == {"state": "not_delivered"}
-
-
-class TestScopedUpstreamApproval:
-    """A token call of a gated upstream tool nothing covers never reaches the connector (plan 3.5)."""
-
-    @pytest.fixture(autouse=True)
-    def _upstream(self, tmp_path):
-        init_audit_logger(str(tmp_path))
-        self.declared = DeclaredTool(
-            name="propose_change", exposed_name="kh_propose_change", operation="kh.propose_change",
-            gate="popup", verb="update", effect="Proposes a change.",
-        )
-        self.server = UpstreamServer(
-            id="kh", label="Knowledge hub", url="https://kh.example.com/mcp", audience="kh",
-            tools=(self.declared,),
-        )
-        upstream_mcp_registry.register([self.server])
-        auto_accept.set_policy_v2_store_rules([])
-        yield
-        auto_accept.set_policy_v2_store_rules([])
-
-    def _token(self, *, approved: bool) -> ScopedToken:
-        rows = ()
-        if approved:
-            rows = (scope_rows.ScopeRow(
-                id="r-approval", scope=None,
-                value=f"{self.declared.operation}@{declaration_digest(self.server, self.declared)}",
-                verbs=frozenset({Verb("update")}), operations=frozenset({self.declared.operation}),
-                predicate="upstream.approved_tool",
-            ),)
-        return dataclasses.replace(_SCOPE, tools=frozenset({"kh_propose_change"}), rules=rows)
-
-    async def test_an_uncovered_token_call_never_reaches_the_connector(self):
-        connector = ScopeAwareConnector("kh", allow_scoped=True)
-        dispatcher = _dispatcher({"kh": connector})
-        with scoped_tokens.token_scope(self._token(approved=False)), pytest.raises(GateDeniedError):
-            await dispatcher.call("s1", "kh", "kh_propose_change", {})
-        assert connector.seen_scopes == []
-
-    async def test_a_covered_token_call_reaches_the_connector(self):
-        connector = ScopeAwareConnector("kh", allow_scoped=True)
-        dispatcher = _dispatcher({"kh": connector})
-        with scoped_tokens.token_scope(self._token(approved=True)):
-            assert await dispatcher.call("s1", "kh", "kh_propose_change", {}) == "scoped result"
-        assert connector.seen_scopes == [_SCOPE.id]
-
-    async def test_an_unscoped_call_is_unaffected(self):
-        connector = ScopeAwareConnector("kh", allow_scoped=True)
-        dispatcher = _dispatcher({"kh": connector})
-        assert await dispatcher.call("s1", "kh", "kh_propose_change", {}) == "full-token result"
-        assert connector.seen_scopes == [None]

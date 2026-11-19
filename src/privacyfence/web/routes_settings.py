@@ -902,12 +902,6 @@ def build_org_routes(
         """Mint the token and answer with its secret, once. Returns the token (``None`` when
         nothing was created) and the response to give."""
         store = scoped_token_store or get_store()
-        from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
-
-        held_audiences = (
-            upstream_mcp_runtime.held_audiences(principal, session_email_verified)
-            if upstream_mcp_runtime.configured() else {}
-        )
         with principal_scope(principal):
             try:
                 _ensure_principal_settings_loaded()
@@ -922,7 +916,6 @@ def build_org_routes(
                         allow_personal_data_reads=bound["allow_personal_data_reads"],
                         upstream_audiences=bound.get("upstream_audiences") or None,
                         principal_email_verified=session_email_verified,
-                        held_audiences=held_audiences,
                         is_admin=principal.is_admin,
                         upstream_approvals=upstream_approvals,
                     ),
@@ -989,12 +982,6 @@ def build_org_routes(
             registry.restore(proposal)
             return JSONResponse({"error": agent_runtimes.DELIVERY_UNAVAILABLE}, status_code=503)
         store = scoped_token_store or get_store()
-        from .. import upstream_mcp_runtime  # function-local: only organization mode with upstreams uses it
-
-        held_audiences = (
-            upstream_mcp_runtime.held_audiences(principal, session_email_verified)
-            if upstream_mcp_runtime.configured() else {}
-        )
         with principal_scope(principal):
             try:
                 _ensure_principal_settings_loaded()
@@ -1004,7 +991,7 @@ def build_org_routes(
                 lambda: runtime_credentials.deliver(
                     principal=principal, bound=bound, proposal=proposal, config=agent_runtime, api=api,
                     token_store=store, policy=token_policy, on_abandoned=runtime_credential_sweeper.wake,
-                    held_audiences=held_audiences, principal_email_verified=session_email_verified,
+                    principal_email_verified=session_email_verified,
                 ),
             )
             token = outcome.token

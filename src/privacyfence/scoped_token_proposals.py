@@ -153,11 +153,12 @@ def new_proposal(
     uncovered_tools: Sequence[str] = (), now: float | None = None,
     delivery: DeliveryTarget | None = None, mcp_url: str = "",
 ) -> TokenProposal:
-    from . import upstream_mcp_runtime  # function-local: the runtime reaches the connectors
+    from . import auto_accept  # function-local: avoids an import cycle
+    from .policy import scopes
 
     for tool in request.get("tools", ()):
-        # An upstream tool is named "<id>_<tool>" (upstream_mcp_registry).
-        if any(str(tool).startswith(f"{upstream_id}_") for upstream_id in upstream_mcp_runtime.upstream_ids()):
+        # An upstream tool is registered with an operation in the declarations table (ADR 0300).
+        if auto_accept.TOOL_TO_OPERATION.get(str(tool)) in scopes.UPSTREAM_DECLARATIONS:
             raise ProposalError(UPSTREAM_REFUSED_MESSAGE)
     now = time.time() if now is None else now
     return TokenProposal(

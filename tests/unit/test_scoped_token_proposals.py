@@ -347,9 +347,11 @@ class TestRecord:
 class TestUpstreamTools:
     @pytest.fixture(autouse=True)
     def _runtime(self, monkeypatch):
-        from privacyfence import upstream_mcp_runtime
+        from privacyfence import auto_accept
+        from privacyfence.policy import scopes
 
-        monkeypatch.setattr(upstream_mcp_runtime, "upstream_ids", lambda: frozenset({"kh"}))
+        monkeypatch.setitem(auto_accept.TOOL_TO_OPERATION, "kh_search", "kh.search")
+        monkeypatch.setitem(scopes.UPSTREAM_DECLARATIONS, "kh.search", "digest")
 
     def test_a_proposal_naming_an_upstream_tool_is_refused(self):
         with pytest.raises(stp.ProposalError, match="Upstream tools cannot be proposed; create the token in Settings."):
