@@ -1278,6 +1278,14 @@ _JS = r"""
     return html;
   }
 
+  // Under the tools of each upstream with a ticked tool: whose connection the token uses (ADR 0329).
+  function scopedConnectionNotesHtml() {
+    return scopedUpstreamsWithTools().map(function (u) {
+      return '<div class="pf-hint" data-st-connection-for="' + esc(u.id) + '">This token acts through your own ' + esc(u.label) +
+        ' connection: it can do what your account there can do.</div>';
+    }).join('');
+  }
+
   function scopedUpstreamApprovals() {
     var out = [];
     (SCOPED.upstreams || []).forEach(function (u) {
@@ -1428,6 +1436,7 @@ _JS = r"""
         (uncovered.length === 1 ? 'it' : 'them') + ', or untick ' + (uncovered.length === 1 ? 'it' : 'them') + '.</div>';
     }
     html += scopedGatedHtml();
+    html += scopedConnectionNotesHtml();
     var stPdOn = !!ui.stPersonalData;
     var stPdLabel = 'Let exports, downloads and page uploads carry personal data';
     html += '<div class="pf-chips pf-caps-row"><div class="pf-chip' + (stPdOn ? ' on' : '') + '" role="checkbox" aria-checked="' +
@@ -2495,9 +2504,103 @@ _JS = r"""
     return '<div class="pf-page"><h1 class="pf-page-title">Agent runtimes</h1>' + formCardHtml('runtimes', rows, 'agent runtimes') + '</div>';
   }
 
-  // Filled in by the OAuth upstream page (issue 1155).
+  // The Upstream MCP servers page (ADR 0331). Everything a server supplied (its label, tool names,
+  // descriptions, reasons) goes through esc(); the rows already cut the descriptions.
+  var UPSTREAM_GATES = ['review', 'popup', 'auto'];
+  var UPSTREAM_CLASS = { read: 'read', update: 'write', 'delete': 'destructive' };
+
+  function upstreamGateSelect(upId, t, gate) {
+    var html = '<select class="field" data-up-tool="' + esc(t.name) + '" data-up-for="' + esc(upId) + '" data-up-verb="' + esc(t.verb) +
+      '" aria-label="Gate for ' + esc(t.exposed_name) + '">';
+    UPSTREAM_GATES.forEach(function (g) {
+      html += '<option value="' + g + '"' + (g === gate ? ' selected' : '') + '>' + g + (g === t.default_gate ? ' (default)' : '') + '</option>';
+    });
+    return html + '</select>';
+  }
+
+  function upstreamWarnHtml(t, gate) {
+    var show = t.verb !== 'read' && gate === 'review';
+    return '<div class="pf-hint" data-up-warn="1"' + (show ? '' : ' hidden') + '>Runs before the person sees anything.</div>';
+  }
+
+  function upstreamToolRow(upId, t, pending) {
+    var gate = t.gate;
+    var held = pending && (t.state === 'new' || t.state === 'changed');
+    if (held && t.state === 'changed') { gate = t.default_gate; }
+    var html = '<div class="pf-row" data-up-row="' + esc(t.name) + '"><div class="pf-row-text"><div class="pf-row-title">' + esc(t.exposed_name) +
+      ' <span class="pf-st-meta" data-up-class="1">' + esc(UPSTREAM_CLASS[t.verb] || t.verb) + '</span>';
+    if (held) { html += ' <span class="pf-st-meta" data-up-state="' + esc(t.state) + '">' + esc(t.state) + '</span>'; }
+    html += '</div>';
+    if (t.description) { html += '<div class="pf-hint">' + esc(t.description) + '</div>'; }
+    if (held) { html += '<div class="pf-hint">Not exposed until you save.</div>'; }
+    if (held && t.state === 'changed') { html += '<div class="pf-hint">Its gate was reset; choose auto again if you want it.</div>'; }
+    html += upstreamWarnHtml(t, gate) + '</div><div class="pf-row-controls">' + upstreamGateSelect(upId, t, gate) + '</div></div>';
+    return html;
+  }
+
+  function upstreamCardHtml(u) {
+    var pending = u.pending || null;
+    var html = '<h2 class="pf-group-title">' + esc(u.label) + '</h2><div class="card pf-card" data-upstream="' + esc(u.id) + '">';
+    html += '<div class="pf-hint">' + esc(u.url) + '</div>';
+    var n = u.connected_people;
+    html += '<div class="pf-hint">Sign-in: OAuth at ' + esc(u.issuer_host) + ', ' + esc(n) + ' ' + (n === 1 ? 'person' : 'people') +
+      ' connected, client ' + esc(u.registration) + '.</div>';
+    var tools = u.tools || [];
+    if (!tools.length && !pending) {
+      html += '<div class="pf-hint" data-up-state-line="waiting">Waiting for an administrator to refresh the tools. ' +
+        'AI clients see none of its tools until you save a list.</div>';
+    }
+    var refreshLabel = 'Refresh tools for ' + u.label;
+    if (u.admin_connected) {
+      html += '<div><div class="button" role="button" tabindex="0" aria-label="' + esc(refreshLabel) + '" ' +
+        dataAttr('refresh_upstream_tools', { upstream_id: u.id }) + '>Refresh tools</div></div>';
+    } else {
+      html += '<div><div class="button" role="button" aria-disabled="true" aria-label="' + esc(refreshLabel) + '">Refresh tools</div></div>' +
+        '<div class="pf-hint">Connect ' + esc(u.label) + ' on the Connect page first.</div>';
+    }
+    var shown = pending
+      ? pending.tools.filter(function (t) { return t.state !== 'unsupported'; })
+          .sort(function (a, b) { return (b.state === 'new' || b.state === 'changed' ? 1 : 0) - (a.state === 'new' || a.state === 'changed' ? 1 : 0); })
+      : tools;
+    if (shown.length) {
+      html += '<div data-up-table="' + esc(u.id) + '">';
+      shown.forEach(function (t) { html += upstreamToolRow(u.id, t, !!pending); });
+      html += '</div>';
+    }
+    if (pending && pending.removed.length) {
+      html += '<div class="pf-hint" data-up-removed="1">Removed by the server: ' + esc(pending.removed.join(', ')) + '</div>';
+    }
+    if (pending && pending.unsupported.length) {
+      html += '<div class="pf-hint" data-up-unsupported="1">Not offered: ' + pending.unsupported.map(function (x) {
+        return esc(x.name) + ' (' + esc(x.reason) + ')';
+      }).join('; ') + '</div>';
+    }
+    if (shown.length) {
+      html += '<div class="pf-hint">auto lets each person create an Always allow rule for the tool; until they do, it still asks (review or popup as shown).</div>';
+      var base = pending ? { upstream_id: u.id, fetched_at: pending.fetched_at } : { upstream_id: u.id };
+      html += '<div><div class="button primary" role="button" tabindex="0" aria-label="Save ' + esc(u.label) + ' tools" data-upstream-save="' + esc(u.id) +
+        '" data-pending="' + (pending ? '1' : '0') + '" data-payload=\'' + JSON.stringify(base).replace(/'/g, '&#39;') + '\'>Save</div></div>';
+    }
+    return html + '</div>';
+  }
+
   function renderUpstreams(state) {
-    return '<div class="pf-page"><h1 class="pf-page-title">Upstream MCP servers</h1></div>';
+    var html = '<div class="pf-page"><h1 class="pf-page-title">Upstream MCP servers</h1>';
+    (state.upstream_servers || []).forEach(function (u) { html += upstreamCardHtml(u); });
+    return html + '</div>';
+  }
+
+  // Save: the gates come from the selects of that card at click time.
+  function saveUpstream(el) {
+    var upId = el.getAttribute('data-upstream-save');
+    var base = {};
+    try { base = JSON.parse(el.getAttribute('data-payload') || '{}'); } catch (err) { base = {}; }
+    var gates = {};
+    Array.prototype.forEach.call(document.querySelectorAll('select[data-up-tool]'), function (sel) {
+      if (sel.getAttribute('data-up-for') === upId) { gates[sel.getAttribute('data-up-tool')] = sel.value; }
+    });
+    base.gates = gates;
+    post(el.getAttribute('data-pending') === '1' ? 'save_upstream_tools' : 'set_upstream_tool_gates', base);
   }
 
   // The bearer token's variable name is shown, never an input: the server sends that variable's
@@ -2818,6 +2921,9 @@ _JS = r"""
       return;
     }
 
+    var upSave = e.target.closest('[data-upstream-save]');
+    if (upSave) { saveUpstream(upSave); return; }
+
     var actionEl = e.target.closest('[data-action]');
     if (actionEl) {
       // A toggle's checkbox: keep it showing what Python says (the next
@@ -2899,6 +3005,11 @@ _JS = r"""
 
   function onChange(e) {
     var el = e.target;
+    if (el.tagName === 'SELECT' && el.hasAttribute('data-up-tool')) {
+      var warn = el.closest('[data-up-row]').querySelector('[data-up-warn]');
+      if (warn) { warn.hidden = !(el.getAttribute('data-up-verb') !== 'read' && el.value === 'review'); }
+      return;
+    }
     // A scope change resets the value/verb selections below it -- a different scope's value has a
     // different shape (a Drive folder id isn't a Jira project key) and its own, generally different,
     // set of governable verbs, so carrying either over would at best be meaningless and at worst
