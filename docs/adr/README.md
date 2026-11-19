@@ -377,10 +377,10 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0282](0282-runtime-delivery-is-organization-mode-only-and-starts-from-an-ai-proposal.md) | Runtime delivery is organization-mode only and starts only from an AI proposal | Accepted; relates to 0250, 0261; amended by 0294 |
 | [0283](0283-only-a-person-can-extend-a-scoped-token-from-today-capped-by-max-days.md) | Only a person can extend a scoped token, from today and capped by max_days | Accepted; amends 0164, 0165 |
 | [0284](0284-an-expired-tokens-n8n-credential-is-kept-until-the-token-is-revoked.md) | An expired token's n8n credential is kept until the token is revoked | Accepted; amends 0280, 0281; relates to 0283 |
-| [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196; amended by 0288 |
-| [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274; amended by 0297 |
-| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272; amended by 0288, 0298 |
-| [0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) | The upstream MCP declaration can be YAML or inline, and seeds the grants | Accepted; amends 0285, 0287; amended by 0298 |
+| [0285](0285-upstream-mcp-servers-are-declared-connectors.md) | Upstream MCP servers are declared connectors | Accepted; relates to 0077, 0115, 0196; amended by 0288; Superseded by 0329 |
+| [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274; amended by 0297; Superseded by 0329 |
+| [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272; amended by 0288, 0298; Superseded by 0329 |
+| [0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) | The upstream MCP declaration can be YAML or inline, and seeds the grants | Accepted; amends 0285, 0287; amended by 0298; Superseded by 0329 |
 | [0289](0289-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md) | The n8n node ships from this repository as an npm package and is published with provenance on stable tags | Accepted; relates to 0278; amended by 0328 |
 | [0290](0290-the-delivered-credential-type-is-an-administrators-choice.md) | The delivered credential type is an administrator's choice, and the new type is checked against n8n before a token is minted | Accepted; amends 0278, 0280 |
 | [0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md) | The privacyFenceApi credential holds the address and the token, and has no authenticate block | Accepted; amends 0278 |
@@ -389,10 +389,10 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0294](0294-n8n-delivery-can-be-switched-on-from-the-server-environment.md) | n8n delivery can be switched on from the server environment | Accepted; amends 0253, 0279, 0282; relates to 0165, 0257 |
 | [0295](0295-the-supported-python-floor-is-3-11-5.md) | The supported Python floor is 3.11.5 | Accepted |
 | [0296](0296-the-n8n-nodes-dev-tooling-advisories-wait-for-upstream-not-overrides.md) | The n8n node's dev-tooling advisories wait for upstream, not overrides | Accepted; relates to 0289 |
-| [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286; amended by 0310; amended by 0326 |
-| [0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) | Audiences come from group membership, and scoped tokens only narrow them | Accepted; amends 0287; supersedes the grant seeding of 0288; amended by 0325 |
-| [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298; amended by 0311; amended by 0325 |
-| [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285 |
+| [0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-header-bound-to-one-call.md) | The upstream claim is an EdDSA identity claim in its own header, bound to one call | Accepted; amends 0286; amended by 0310; amended by 0326; Superseded by 0329 |
+| [0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md) | Audiences come from group membership, and scoped tokens only narrow them | Accepted; amends 0287; supersedes the grant seeding of 0288; amended by 0325; Superseded by 0329 |
+| [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298; amended by 0311; amended by 0325; Superseded by 0329 |
+| [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285; amended by 0331 |
 | [0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md) | Desktop mode and its installers are removed in 8.x | Accepted; supersedes 0002, 0003, 0261 |
 | [0302](0302-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262; amended by 0317 |
 | [0303](0303-the-mode-setting-accepts-only-org.md) | The mode setting accepts only org | Accepted; relates to 0260 |
@@ -402,7 +402,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0307](0307-linux-is-the-only-ci-platform.md) | Linux is the only CI platform | Accepted; relates to 0057 |
 | [0308](0308-the-mcp-registry-listing-of-the-extension-is-no-longer-published.md) | The MCP registry listing of the extension is no longer published | Accepted; supersedes 0112 |
 | [0309](0309-the-organization-image-is-the-only-distribution.md) | The organization image is the only distribution | Accepted; amends 0020, 0040, 0114, 0161, 0182, 0208, 0209, 0255; relates to 0295 |
-| [0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md) | `email` is an opt-in visibility input of the identity claim | Accepted; amends 0297; relates to 0298 |
+| [0310](0310-email-is-an-opt-in-visibility-input-of-the-identity-claim.md) | `email` is an opt-in visibility input of the identity claim | Accepted; amends 0297; relates to 0298; Superseded by 0329 |
 | [0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md) | The OIDC provider sends approved group membership to apps that opt in | Superseded by 0323 |
 | [0312](0312-a-release-tag-is-created-only-by-tld-release-yml.md) | A release tag is created only by `tld-release.yml` | Accepted; supersedes 0185, amends 0021; relates to 0023, 0030; amended by 0327 |
 | [0313](0313-workflow-commands-come-from-the-tld-plugin.md) | Workflow commands come from the tld plugin | Accepted; supersedes 0132 |
@@ -411,13 +411,16 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0316](0316-the-releases-integration-branch-convention-is-retired.md) | The `releases/*` integration-branch convention is retired | Accepted |
 | [0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md) | An org directory holding only admin_config.json is fresh | Accepted; amends 0302 |
 | [0318](0318-pkce-can-be-turned-off-for-one-named-oidc-app.md) | PKCE can be turned off for one named OIDC app | Accepted; amends 0273 |
-| [0319](0319-the-admin-page-shows-upstream-mcp-servers-read-only.md) | The Admin page shows upstream MCP servers read-only | Accepted; amends 0258; relates to 0285; amended by 0325 |
+| [0319](0319-the-admin-page-shows-upstream-mcp-servers-read-only.md) | The Admin page shows upstream MCP servers read-only | Accepted; amends 0258; relates to 0285; amended by 0325; Superseded by 0331 |
 | [0320](0320-drive-rules-match-on-file-tags-not-folder-ancestry.md) | Drive rules match on a file tag, not on folder ancestry | Accepted; relates to 0172, 0222, 0232 |
 | [0321](0321-drive-tags-are-plain-properties-and-collaborators-can-forge-them.md) | Drive tags are plain properties, and collaborators can forge them | Accepted; relates to 0320 |
 | [0322](0322-tag-writing-tools-are-popup-only-and-exempt-from-every-rule.md) | The tag-writing tools are popup-only and exempt from every rule | Accepted; relates to 0077, 0164, 0236 |
 | [0323](0323-the-oidc-provider-sends-no-group-membership.md) | The OIDC provider sends no group membership | Accepted; supersedes 0311; relates to 0273, 0298, 0299, 0310, 0318; amended by 0325 |
 | [0324](0324-apps-script-can-create-an-empty-project-without-a-card.md) | Apps Script can create an empty project without a card | Accepted; amends 0075 |
-| [0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md) | An upstream can be the source of its own audiences | Accepted; amends 0298, 0299, 0319, 0323; relates to 0285, 0300, 0310 |
-| [0326](0326-a-service-claim-may-call-the-declared-audiences-tool.md) | A service claim may call the declared audiences tool | Accepted; amends 0297; relates to 0286, 0310, 0325 |
+| [0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md) | An upstream can be the source of its own audiences | Accepted; amends 0298, 0299, 0319, 0323; relates to 0285, 0300, 0310; Superseded by 0329 |
+| [0326](0326-a-service-claim-may-call-the-declared-audiences-tool.md) | A service claim may call the declared audiences tool | Accepted; amends 0297; relates to 0286, 0310, 0325; Superseded by 0329 |
 | [0327](0327-stable-releases-go-through-tld-release-and-a-release-only-version-file.md) | Stable releases go through `/tld:release` and a release-only version file | Accepted; amends 0312, 0030; relates to 0022, 0023 |
 | [0328](0328-the-n8n-node-is-published-under-the-privacyfence-npm-scope.md) | The n8n node is published under the @privacyfence npm scope | Accepted; amends 0289 |
+| [0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md) | Hosted MCP servers sign in each person with their own OAuth, and the claim-based upstream feature is removed | Accepted; supersedes 0285, 0286, 0287, 0288, 0297, 0298, 0299, 0310, 0325, 0326; relates to 0330, 0331 |
+| [0330](0330-oauth-upstreams-discover-their-server-register-a-client-and-keep-tokens-per-person.md) | OAuth upstreams discover their server, register a client and keep tokens per person | Accepted; relates to 0072, 0178, 0259, 0329 |
+| [0331](0331-the-administrator-manages-each-upstream-servers-tools.md) | The administrator manages each upstream server's tools | Accepted; supersedes 0319; amends 0300; relates to 0329, 0330 |
