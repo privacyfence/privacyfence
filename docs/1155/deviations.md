@@ -95,10 +95,13 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p20-integration
 
 - retry: The integration test found two defects outside the phase files: privacyfence_status lost its upstreams rows when p1 unwired the old feature and no later phase restored them, and saving a tool list did not evict connector hosts already built for people, so they never saw the new tools. The phase was reported blocked, its test branch kept as is, and fix-1 (merging that branch) fixes both in web/mcp_dispatch.py and web/server.py with unit tests.
+- None.
+- review: The p20 test branch reached the feature branch through the fix-1 merge, whose message carries both trailers so the phase counts as done; fix-1 added unit tests in test_mcp_dispatch.py and test_server.py and says it did not run those two against the unfixed code, but the integration tests cover both defects.
 
 ## p21-adrs
 
 - review: ADR numbers 0327 and 0328 were taken on main, so the new ADRs are numbered 0329, 0330 and 0331 (owner decision, board ask a-7e915c58fe47b2ca); the plan was renumbered before the start commit.
+- review: ADR 0331 should record two behaviours found by the integration test: privacyfence_status carries the upstream rows from the runtime, and saving a tool list evicts every person connector host so the new tools show at once.
 
 ## p22-adr-status
 
