@@ -66,7 +66,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p14-client-connector
 
-- pending
+- scope: scope: tests/unit/connectors/test_readme_manifest_alignment.py - lists UpstreamMcpConnector in CONNECTOR_CLASSES; needed for pytest tests/unit to pass once the connector module exists; accepted.
+- worker: Design choices beyond the plan text: BearerAuth records the first error status so the session-close DELETE cannot hide a 401; list_tools reads one page only (as the old client did); a connector with an upstream but no admit, client or bearer fails closed with "not configured"; a new helper person_gate_of in upstream_mcp_client.py gives a saved tool its review/popup gate.
 
 ## p15-runtime
 
