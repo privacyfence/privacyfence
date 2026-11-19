@@ -1102,7 +1102,7 @@ The version is not checked.
    address for n8n** (empty means this server's address), and save. Restart when asked.
 5. Choose **Credential type in n8n**. **MCP Client node** (the default) delivers n8n's built-in bearer
    credential, which goes on an MCP Client node. **PrivacyFence node** delivers a PrivacyFence API credential
-   that holds the token and the PrivacyFence MCP address, for the community node `n8n-nodes-privacyfence`
+   that holds the token and the PrivacyFence MCP address, for the community node `@privacyfence/n8n-nodes-privacyfence`
    ([the node](n8n-node.md)). That choice needs the node installed in n8n and the **PrivacyFence MCP address
    for n8n** set; if n8n does not know the credential type, delivery says so and mints no token. The setting
    is server-wide: with it, an AI Agent in n8n uses one PrivacyFence node per call instead of the MCP Client

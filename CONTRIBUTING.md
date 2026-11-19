@@ -74,7 +74,7 @@ Do not report a security vulnerability in a public issue — follow [`SECURITY.m
 ## Code Style
 
 - `src/privacyfence/` (the daemon): Python 3.11.5+, standard library preferred over new dependencies
-- `n8n/` (the n8n community node `n8n-nodes-privacyfence`): TypeScript, an npm package published from CI
+- `n8n/` (the n8n community node `@privacyfence/n8n-nodes-privacyfence`): TypeScript, an npm package published from CI
   on each stable release tag, held to n8n's strict community-node lint. [`docs/n8n-node.md`](docs/n8n-node.md)
 - No comments unless the *why* is non-obvious
 - Match the surrounding code's style

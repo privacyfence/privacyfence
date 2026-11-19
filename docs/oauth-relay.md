@@ -19,7 +19,7 @@ server that proved it controls its own domain.
 - **Tags do not deploy it.** A release tag never changes the relay, and a relay change never needs an
   app release.
 - **Order.** The relay must be live before the first release whose organization servers use built-in
-  apps. [`releasing.md`](releasing.md) and the `/cut-release` command check
+  apps. [`releasing.md`](releasing.md) and the release steps in `.claude/skills/steward/SKILL.md` check
   `curl -fsSI https://oauth.privacyfence.eu/health` before tagging.
 - **Compatibility rule.** Every relay version must keep serving every released server that uses it.
   The contract (`/register`, `/callback/:grant`, the `state` format, the loopback rule) only grows:

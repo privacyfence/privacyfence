@@ -175,7 +175,7 @@ export async function openSession(send: HttpSend, options: OpenSessionOptions): 
 	const init = await rpc('initialize', {
 		protocolVersion: REQUESTED_VERSION,
 		capabilities: {},
-		clientInfo: { name: 'n8n-nodes-privacyfence', version: options.clientVersion },
+		clientInfo: { name: '@privacyfence/n8n-nodes-privacyfence', version: options.clientVersion },
 	});
 	const sessionId = init.response.headers['mcp-session-id'];
 	if (!sessionId) throw new McpTransportError(t.notMcp);

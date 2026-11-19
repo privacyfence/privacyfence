@@ -9,6 +9,7 @@ Amends [ADR 0021](0021-release-tag-push-never-uses-github-token.md): the token i
 environment `tld-release`, and the tag is an annotated one created through the REST API.
 Relates to [ADR 0023](0023-changelog-is-the-only-source-of-release-notes.md) and
 [ADR 0030](0030-preflight-dispatches-build-yml-before-tagging.md).
+Amended by [ADR 0327](0327-stable-releases-go-through-tld-release-and-a-release-only-version-file.md).
 
 ## Context
 

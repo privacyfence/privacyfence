@@ -3,7 +3,7 @@
 The one home for everything a human checks before a release: the gates in the order they run,
 then the manual checks. What CI proves automatically, and where, is in
 [`testing-policy.md`](testing-policy.md). How a tag is cut is in [`releasing.md`](releasing.md)
-and `/cut-release` (`.claude/commands/cut-release.md`).
+and the steward skill's "Cutting a release" section (`.claude/skills/steward/SKILL.md`).
 
 ## What stays manual
 

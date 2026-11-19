@@ -16,7 +16,7 @@ HOW TO USE THIS FILE
 
 2. This file is NEVER a version source. setuptools_scm derives the version from the git tag and
    remains the only one -- see docs/releasing.md. Nothing may parse this file to
-   determine a version, and no version string lives in the source tree. The dependency runs the
+   determine a version, and no version string lives in the source tree (`.tld/release-version` records the last stable version for `/tld:release` only; nothing builds from it). The dependency runs the
    other way: scripts/changelog_section.py reads a version *out* of this file to produce the
    GitHub Release body for that tag (see .github/workflows/build.yml).
 
@@ -42,6 +42,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- **The n8n node's npm package is now `@privacyfence/n8n-nodes-privacyfence`.** Install it in n8n under that name; the node's type is `@privacyfence/n8n-nodes-privacyfence.privacyFence`. It was never published under the old name `n8n-nodes-privacyfence` ([ADR 0328](docs/adr/0328-the-n8n-node-is-published-under-the-privacyfence-npm-scope.md)).
+
+## [8.0.0] - 2026-11-18
 
 ### Added
 
@@ -3659,7 +3665,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v7.0.2...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v8.0.0...HEAD
+[8.0.0]: https://github.com/privacyfence/privacyfence/compare/v7.0.2...v8.0.0
 [7.0.2]: https://github.com/privacyfence/privacyfence/compare/v7.0.1...v7.0.2
 [7.0.1]: https://github.com/privacyfence/privacyfence/compare/v7.0.0...v7.0.1
 [7.0.0]: https://github.com/privacyfence/privacyfence/compare/v6.13.0...v7.0.0
