@@ -94,7 +94,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p20-integration
 
-- pending
+- retry: The integration test found two defects outside the phase files: privacyfence_status lost its upstreams rows when p1 unwired the old feature and no later phase restored them, and saving a tool list did not evict connector hosts already built for people, so they never saw the new tools. The phase was reported blocked, its test branch kept as is, and fix-1 (merging that branch) fixes both in web/mcp_dispatch.py and web/server.py with unit tests.
 
 ## p21-adrs
 
