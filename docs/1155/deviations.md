@@ -49,8 +49,10 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 - review: The worker report text could not be read back, only its first line; the three-file diff was checked for scope, and the new module passes its tests with full coverage and no bandit findings.
 
 ## p11-oauth-discovery
+- worker: RegistrationStore.__init__ takes an extra optional upstreams= keyword, and ensure_client remembers its upstream, because client_for(upstream_id) must answer for a declared client; the p15 runtime has to pass upstreams= when it builds each store.
+- worker: The public-address check also refuses multicast and reserved addresses, where the plan names only is_global (Python treats some multicast ranges as global); stricter than the plan, in line with its rule that multicast is refused.
+- review: Open point passed to p15: after a restart and before any Connect, a declared client with a secret falls back to client_secret_basic because the server auth methods are not stored; p15 must cache or persist them so a refresh works against a server that supports only client_secret_post.
 
-- review: The worker report text could not be read back, only its first line; the two-file diff was checked for scope, and the new module passes its tests with full coverage and no bandit findings.
 
 ## p12-tool-store
 
