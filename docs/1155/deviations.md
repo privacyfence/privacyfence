@@ -42,7 +42,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p9-config
 
-- pending
+- review: The worker report text could not be read back, only its first line; the two-file diff was checked for scope, and its tests pass with 100 percent coverage of the new module.
 
 ## p10-oauth-tokens
 
