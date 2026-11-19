@@ -154,8 +154,6 @@ def _default_config() -> dict[str, Any]:
             "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
         },
         "audit_forwarding": {},
-        # Group-to-audience maps for upstream MCP servers (upstream_mcp_config.GroupMapStore reads them).
-        "upstream_mcp": {},
     }
 
 

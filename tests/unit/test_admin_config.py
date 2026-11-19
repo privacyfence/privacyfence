@@ -89,8 +89,16 @@ class TestLoadAndSave:
         assert loaded["unattended_sessions"] == {"enabled": False}
         assert loaded["imported_from_bundle_sha256"] == ""
         assert loaded["rooms"] == [] and loaded["authz"] == {}
-        assert loaded["upstream_mcp"] == {}
         assert loaded["org_server"] is True
+
+    def test_a_leftover_upstream_mcp_section_is_kept_on_load_and_save(self, tmp_path):
+        leftover = {"srv": {"groups": {"staff": ["aud"]}}}
+        _write(tmp_path, {"version": 1, "upstream_mcp": leftover})
+        loaded = admin_config.load()
+        assert loaded is not None
+        assert loaded["upstream_mcp"] == leftover
+        _change("offer_service", {"service": "slack"})
+        assert _stored()["upstream_mcp"] == leftover
 
     def test_normalization_fills_nested_keys(self, tmp_path):
         _write(tmp_path, {"version": 1, "services": {"grist": {"auto_provision": {"enabled": True}}}})
