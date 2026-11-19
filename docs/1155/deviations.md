@@ -13,7 +13,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-delete-core
 
-- pending
+- worker: The worker also edited tests/unit/web/test_routes_org_settings.py, test_gate.py and test_org_docker_deploy_files.py (outside touches), deleting only tests that built on the removed modules.
 
 ## p4-token-fields
 
