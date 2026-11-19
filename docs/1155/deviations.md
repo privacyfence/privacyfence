@@ -22,7 +22,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p5-delete-claim-modules
 
-- pending
+- scope: scope: contrib/verifier/pf_claim_verify.py and contrib/verifier/req_test_vectors.json - deleted outside touches; the phase title names the verifier, so accepted.
+- review: The worker report text could not be read back, only its first line; the diff was reviewed in full by name and status and the unit suite passes.
 
 ## p6-claim-helpers
 
