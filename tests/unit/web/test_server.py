@@ -934,3 +934,158 @@ def test_the_token_page_has_no_upstreams_key_when_none_is_configured(tmp_path, m
     data = _page_data(tmp_path, monkeypatch, {"drive"})
 
     assert "upstreams" not in data
+
+
+def _apply_upstreams(*pairs):
+    """Register ``(upstream_id, [SavedTool, ...])`` pairs through the live registration helper."""
+    from privacyfence.upstream_mcp_registry import get_registry
+    from tests.unit.test_upstream_mcp_registry import upstream
+
+    for upstream_id, tools in pairs:
+        get_registry().apply(upstream(upstream_id, upstream_id.upper()), tuple(tools))
+
+
+def test_gated_tools_leave_out_another_upstream_whose_id_starts_with_this_one():
+    from privacyfence.web.server import _gated_tools
+    from tests.unit.test_upstream_mcp_registry import saved_tool
+
+    _apply_upstreams(
+        ("kh", [saved_tool("search")]), ("kh_two", [saved_tool("lookup")]),
+    )
+
+    assert [t["name"] for t in _gated_tools("kh")] == ["kh_search"]
+    assert [t["name"] for t in _gated_tools("kh_two")] == ["kh_two_lookup"]
+
+
+def _token_with_approval(tmp_path, monkeypatch):
+    from privacyfence import auto_accept, paths, scoped_tokens
+    from privacyfence.policy import scopes
+    from tests.unit.test_upstream_mcp_registry import saved_tool
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    _apply_upstreams(("kh", [saved_tool("fetch", "auto")]))
+    admin = Principal(id="alice", email="alice@example.com", is_admin=True)
+    store = scoped_tokens.ScopedTokenStore(lambda: [admin])
+    scoped_tokens.set_store(store)
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(admin):
+        auto_accept.init_config_path(str(config_path))
+        store.create(
+            admin, label="sync", days=30, rules=[], tools=["kh_fetch"], policy=policy, is_admin=True,
+            upstream_approvals=[{"tool": "kh_fetch", "digest": scopes.UPSTREAM_DECLARATIONS["kh.fetch"]}],
+        )
+    return admin, policy
+
+
+def test_the_token_list_names_the_tools_a_tokens_approvals_cover(tmp_path, monkeypatch):
+    from privacyfence.web.server import scoped_token_page_data
+
+    admin, policy = _token_with_approval(tmp_path, monkeypatch)
+
+    with principal_scope(admin):
+        data = scoped_token_page_data(admin, policy=policy, connector_names={"kh"})
+
+    (approved,) = data["tokens"][0]["approved_upstream_tools"]
+    assert (approved["name"], approved["gate"]) == ("kh_fetch", "review")
+
+
+def test_an_approval_for_a_tool_the_upstream_no_longer_lists_is_left_out_of_the_token_list(tmp_path, monkeypatch):
+    from privacyfence.web.server import scoped_token_page_data
+
+    admin, policy = _token_with_approval(tmp_path, monkeypatch)
+    _apply_upstreams(("kh", []))
+
+    with principal_scope(admin):
+        data = scoped_token_page_data(admin, policy=policy, connector_names={"kh"})
+
+    assert data["tokens"][0]["approved_upstream_tools"] == []
+
+
+class TestOrgModeWiring:
+    def test_a_saved_upstream_list_still_tells_clients_without_a_connector_registry(self, tmp_path, monkeypatch):
+        from privacyfence import upstream_mcp_runtime
+
+        calls: list[str] = []
+
+        class _Dispatcher(McpDispatcher):
+            def notify_tools_changed(self):
+                calls.append("notify")
+
+        upstream_mcp_runtime.reset()
+        try:
+            build_app(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), mcp_dispatcher=_Dispatcher(lambda: {}))
+            upstream_mcp_runtime._tools_changed()
+        finally:
+            upstream_mcp_runtime.reset()
+        assert calls == ["notify"]
+
+    def test_the_settings_token_page_lists_the_dispatchers_connectors(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept, scoped_tokens
+        from privacyfence.web import routes_settings
+
+        captured: dict = {}
+        real = routes_settings.build_org_routes
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(routes_settings, "build_org_routes", spy)
+        org = _org_auth(tmp_path, monkeypatch)
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+        build_app(WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {"drive": object()}))
+        alice = Principal(id="alice", email="alice@example.com")
+        scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
+
+        with principal_scope(alice):
+            auto_accept.init_config_path(str(config_path))
+            data = captured["scoped_token_page_data"](alice)
+
+        assert {g["connector"] for g in data["scope_groups"]} == {"drive"}
+
+
+class TestStopWithAStuckThread:
+    class _Thread:
+        def __init__(self, survives_forced_exit):
+            self.survives_forced_exit = survives_forced_exit
+            self.joins = 0
+
+        def join(self, timeout=None):
+            self.joins += 1
+
+        def is_alive(self):
+            return self.joins < 2 or self.survives_forced_exit
+
+    def _stuck_server(self, tmp_path, monkeypatch, *, survives_forced_exit):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=0)
+        server._thread = self._Thread(survives_forced_exit)  # type: ignore[assignment]
+        return server
+
+    def test_a_thread_that_outlives_the_grace_period_is_forced_to_exit(self, tmp_path, monkeypatch, caplog):
+        server = self._stuck_server(tmp_path, monkeypatch, survives_forced_exit=False)
+
+        with caplog.at_level("WARNING", logger="privacyfence.web.server"):
+            server.stop()
+
+        assert server._server.should_exit and server._server.force_exit
+        assert server._thread.joins == 2
+        assert "still running after stop()" not in caplog.text
+
+    def test_a_thread_that_survives_the_forced_exit_is_reported(self, tmp_path, monkeypatch, caplog):
+        server = self._stuck_server(tmp_path, monkeypatch, survives_forced_exit=True)
+
+        with caplog.at_level("WARNING", logger="privacyfence.web.server"):
+            server.stop()
+
+        assert server._server.force_exit
+        assert "The web server thread is still running after stop()" in caplog.text
+
+    def test_stopping_a_server_that_never_started_asks_it_to_exit_and_returns(self, tmp_path, monkeypatch):
+        server = WebServer(WebApprovalUI(), org=_org_auth(tmp_path, monkeypatch), host="localhost", port=0)
+
+        server.stop()
+
+        assert server._server.should_exit and server.stopped
