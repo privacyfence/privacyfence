@@ -208,6 +208,14 @@ def _reset_singletons():
 
 
 @pytest.fixture(autouse=True)
+def _reset_upstream_mcp_registry():
+    yield
+    from privacyfence import upstream_mcp_registry
+
+    upstream_mcp_registry.reset()
+
+
+@pytest.fixture(autouse=True)
 def _clear_server_environment(monkeypatch):
     # These variables choose the mode and the listener; a developer's shell must never change what
     # a test sees. The identity-provider variables are cleared by prefix so a new one is covered

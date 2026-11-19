@@ -1498,6 +1498,86 @@ class TestUpstreamApprovals:
         assert owned is not None and owned.entry["rules"] == []
 
 
+class TestUpstreamToolCoverage:
+    """A listed gated upstream tool needs an administrator's tick or the token's own per-tool rule."""
+
+    @staticmethod
+    def _apply(*gates):
+        from privacyfence.upstream_mcp_registry import get_registry
+        from tests.unit.test_upstream_mcp_registry import saved_tool, upstream
+
+        get_registry().apply(upstream(), tuple(saved_tool(name, gate_) for name, gate_ in gates))
+
+    @staticmethod
+    def _rule(name="fetch", verb="read"):
+        return [{"kind": "new", "group": f"upstream.always_allow/kh_{name}", "value": "", "verbs": [verb]}]
+
+    REFUSED = (
+        "kh_fetch changes data or releases results unseen; an administrator must approve it on the New "
+        "token form, or the token needs an Always allow rule for it."
+    )
+
+    def test_a_non_administrator_without_a_rule_is_refused(self):
+        self._apply(("fetch", "auto"))
+        with pytest.raises(ScopedTokenError) as err:
+            _create(_store(), tools=["kh_fetch"], rules=[])
+        assert str(err.value) == self.REFUSED
+
+    def test_the_per_tool_rule_covers_it_for_anyone(self):
+        self._apply(("fetch", "auto"))
+        token, _ = _create(_store(), tools=["kh_fetch"], rules=self._rule())
+        (row,) = token.rules
+        assert (row.predicate, row.value, row.operations) == ("upstream.always_allow", "kh_fetch", frozenset({"kh.fetch"}))
+
+    def test_an_administrator_can_tick_it_instead(self):
+        from privacyfence.policy import scopes
+
+        self._apply(("fetch", "auto"))
+        digest = scopes.UPSTREAM_DECLARATIONS["kh.fetch"]
+        token, _ = _create(
+            _store(), tools=["kh_fetch"], rules=[], is_admin=True,
+            upstream_approvals=[{"tool": "kh_fetch", "digest": digest}],
+        )
+        assert [row.predicate for row in token.rules] == ["upstream.approved_tool"]
+
+    def test_a_non_administrator_cannot_send_an_approval(self):
+        self._apply(("fetch", "auto"))
+        with pytest.raises(ScopedTokenError, match="Only an administrator can create a token for kh_fetch"):
+            _create(_store(), tools=["kh_fetch"], rules=[], upstream_approvals=[{"tool": "kh_fetch", "digest": "x"}])
+
+    def test_a_rule_for_a_tool_below_the_ceiling_does_not_cover_it(self):
+        self._apply(("fetch", "auto"), ("other", "auto"))
+        with pytest.raises(ScopedTokenError) as err:
+            _create(_store(), tools=["kh_fetch"], rules=self._rule("other"))
+        assert str(err.value) == self.REFUSED
+
+    def test_a_rule_for_a_lowered_tool_is_not_offered_and_does_not_cover_it(self):
+        self._apply(("fetch", "review"))
+        with pytest.raises(ScopedTokenError):
+            _create(_store(), tools=["kh_fetch"], rules=self._rule())
+
+    def test_a_copied_rule_does_not_count_as_coverage(self, monkeypatch):
+        from privacyfence.policy.engine import PolicyRule
+
+        self._apply(("fetch", "auto"))
+        rule = PolicyRule(
+            id="mine", predicate="upstream.always_allow", value="kh_fetch", operations=frozenset({"kh.fetch"}),
+        )
+        monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: scope_rows.rows_for_rules([rule], "mine"))
+        with pytest.raises(ScopedTokenError) as err:
+            _create(_store(), tools=["kh_fetch"], rules=_copy("mine"))
+        assert str(err.value) == self.REFUSED
+
+    def test_the_rule_count_includes_the_approvals_sent(self):
+        self._apply(("fetch", "auto"))
+        rules = [{"kind": "copy", "rule_id": "rule-a"}] * scoped_tokens.MAX_RULES_PER_TOKEN
+        with pytest.raises(ScopedTokenError, match="at most"):
+            _create(
+                _store(), tools=["kh_fetch"], rules=rules, is_admin=True,
+                upstream_approvals=[{"tool": "kh_fetch", "digest": "x"}],
+            )
+
+
 class TestTokenState:
     def test_live_expired_and_absent(self):
         store = _store()

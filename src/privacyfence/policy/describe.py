@@ -17,6 +17,7 @@ popup's confirmation dialog and the MCP bridge's policy tools all render rules t
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Iterable
 
 from . import propose, registry, scopes
@@ -32,10 +33,23 @@ if TYPE_CHECKING:
 EXCLUSION_SCOPE_TYPES: frozenset[str] = frozenset({"slack.my_conversations"})
 
 
+# Display labels of upstream MCP servers (operator-declared, ADR 0331), set by
+# ``upstream_mcp_registry``; a built-in connector never appears here.
+_CONNECTOR_LABELS: dict[str, str] = {}
+
+
+def set_connector_labels(mapping: Mapping[str, str]) -> None:
+    """Replace the labels of upstream connectors (``id`` -> ``label``)."""
+    _CONNECTOR_LABELS.clear()
+    _CONNECTOR_LABELS.update(mapping)
+
+
 def connector_label(connector: str) -> str:
     """``apps_script`` -> ``Apps Script``. Derived rather than tabulated: every connector name in
-    this repo is a lowercase, underscore-separated spelling of its own display name."""
-    return connector.replace("_", " ").title()
+    this repo is a lowercase, underscore-separated spelling of its own display name. An upstream
+    server's id uses the label its operator declared."""
+    label = _CONNECTOR_LABELS.get(connector)
+    return label if label is not None else connector.replace("_", " ").title()
 
 
 def scope_type_label(scope_type: str) -> str:
@@ -142,6 +156,8 @@ def rule_sentence(rule: PolicyRule, value_display: str | None = None) -> str:
     scope_type = scope_type_of(rule)
     connectors = sorted({propose.connector_of_operation(operation) for operation in rule.operations})
     connector = connector_label(connectors[0]) if connectors else ""
+    if rule.predicate == "upstream.always_allow":
+        return f"Always allow {connector}: {_value_phrase(rule.value)}"
     if scope_type:
         noun = scope_type_label(scope_type)
         phrase = value_display if value_display else _value_phrase(rule.value)
