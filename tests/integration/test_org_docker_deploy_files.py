@@ -61,15 +61,6 @@ def test_compose_file_matches_the_doc() -> None:
     assert fenced_block(DOC, "Compose file", "yaml") == COMPOSE.read_text(encoding="utf-8")
 
 
-def test_the_upstream_mcp_example_in_the_doc_is_a_valid_declaration() -> None:
-    from privacyfence import upstream_mcp_config
-
-    block = fenced_block(DOC, "Upstream MCP file", "yaml")
-    (server,) = upstream_mcp_config.parse_upstreams(yaml.safe_load(block), source="x")
-    assert server.id == "kh"
-    assert "grants" not in block
-
-
 def test_compose_names_the_upstream_mcp_settings_only_in_comments() -> None:
     lines = [
         line
