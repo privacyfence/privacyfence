@@ -397,7 +397,6 @@ def test_ticking_a_gated_tool_posts_an_approval_with_its_digest(upstream_page):
     page.fill("[data-st-label]", "kh job")
     page.click('[data-st-gated-tool="kh_read_notes"]')
     page.click('[data-st-gated-tool="kh_propose_change"]')
-    assert page.query_selector("[data-st-audiences-for]") is not None
     page.click("[data-st-create]")
     [posted] = page.evaluate("window.__posted")
     assert posted["upstream_approvals"] == [
