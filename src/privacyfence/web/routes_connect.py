@@ -581,6 +581,8 @@ def build_routes(
             flash_connected=request.query_params.get("connected", ""),
             flash_error=request.query_params.get("error", ""),
             flash_reason=request.query_params.get("reason", ""),
+            upstream_connected=request.query_params.get("upstream_connected", ""),
+            upstream_error=request.query_params.get("upstream_error", ""),
             grist_error=grist_errors.get(principal.id, ""),
             csrf=session_id, nonce=_csp_nonce_for(request), whats_new_version=whats_new_version,
         )
@@ -1096,7 +1098,14 @@ def _render_connect_page(
     *, principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState,
     flash_connected: str, flash_error: str, csrf: str, nonce: str, grist_error: str = "",
     peek_state: _PeekState | None = None, whats_new_version: str = "", flash_reason: str = "",
+    upstream_connected: str = "", upstream_error: str = "",
 ) -> str:
+    from . import routes_upstream_oauth  # function-local: that module imports from this package's siblings
+
+    upstream_flash, upstream_rows = routes_upstream_oauth.connect_section_html(
+        principal, upstream_connected, upstream_error,
+    )
+
     def offered(service: str) -> bool:  # ADR 0196: a service the org config doesn't enable is not listed
         return org_mode.connector_enabled_by_org(org_config, service)
 
@@ -1120,8 +1129,8 @@ def _render_connect_page(
         "<h1>Connect your accounts</h1>"
         f'<p class="lead">Signed in as {_esc(who)}. Connecting a service lets PrivacyFence act on it for you, still gated by '
         "the same approval rules as everything else.</p>"
-        f"{_flash_html(flash_connected, flash_error, flash_reason)}"
-        f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}{peek_row}{grist_row}</ul>'
+        f"{_flash_html(flash_connected, flash_error, flash_reason)}{upstream_flash}"
+        f'<ul class="services stack">{google_rows}{other_rows}{telegram_row}{peek_row}{grist_row}{upstream_rows}</ul>'
         '<form class="cluster" method="post" action="/logout">'
         '<button type="submit" class="button secondary">Sign out</button></form>'
         "</div>"

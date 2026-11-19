@@ -824,3 +824,88 @@ def test_scoped_token_page_data_carries_the_runtime_credential_of_a_delivered_to
     }
     assert tokens["plain"]["runtime_credential"] is None
     assert tokens["pending"]["runtime_credential"] is None
+
+
+def _configured_upstream(tmp_path):
+    from datetime import datetime, timezone
+
+    from privacyfence import upstream_mcp_runtime
+    from privacyfence.upstream_mcp_config import UpstreamOAuthSettings, UpstreamServer
+    from privacyfence.upstream_tools import SavedTool, ToolEntry, ToolStore, classify, tool_digest
+
+    url = "https://mcp.example.com/mcp"
+
+    def saved(name, gate_):
+        entry = ToolEntry(name, f"{name} tool", {"type": "object", "properties": {}}, True, None)
+        return SavedTool(
+            name=name, description=entry.description, input_schema=entry.input_schema, read_only=True,
+            destructive=None, gate=gate_, verb=classify(True, None)[1], digest=tool_digest(entry),
+        )
+
+    store = ToolStore(tmp_path / "org" / "upstream_tools")
+    store.save("kh", url, (saved("fetch", "auto"), saved("search", "review")), datetime.now(timezone.utc))
+    upstream_mcp_runtime.configure(
+        upstreams=[UpstreamServer(id="kh", label="Knowledge Hub", url=url, oauth=UpstreamOAuthSettings())],
+        tool_store=store, registrations_dir=tmp_path / "org" / "upstream_oauth",
+    )
+
+
+@pytest.fixture
+def _upstream_runtime(tmp_path, monkeypatch):
+    from privacyfence import paths, upstream_mcp_registry, upstream_mcp_runtime
+
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    _configured_upstream(tmp_path)
+    yield
+    upstream_mcp_registry.reset()
+    upstream_mcp_runtime.reset()
+
+
+def _upstream_page(tmp_path, monkeypatch, *, admin):
+    from privacyfence import auto_accept, scoped_tokens
+    from privacyfence.web.server import scoped_token_page_data
+
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+    person = Principal(id="alice", email="alice@example.com", is_admin=admin)
+    scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [person]))
+    policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+    with principal_scope(person):
+        auto_accept.init_config_path(str(config_path))
+        return scoped_token_page_data(person, policy=policy, connector_names={"kh"})
+
+
+def test_the_token_page_carries_the_upstream_entry_with_gated_tools_for_an_admin(
+    tmp_path, monkeypatch, _upstream_runtime,
+):
+    data = _upstream_page(tmp_path, monkeypatch, admin=True)
+
+    (entry,) = data["upstreams"]
+    assert (entry["id"], entry["label"], entry["connection_note"]) == ("kh", "Knowledge Hub", True)
+    assert "kh_search" in [t["name"] for t in entry["gated_tools"]]
+    assert entry["tools"] == ["kh_fetch"]
+
+
+def test_the_token_page_gives_a_non_admin_no_gated_tools(tmp_path, monkeypatch, _upstream_runtime):
+    data = _upstream_page(tmp_path, monkeypatch, admin=False)
+
+    (entry,) = data["upstreams"]
+    assert entry["gated_tools"] == []
+    assert entry["tools"] == ["kh_fetch"]
+
+
+def test_an_auto_tool_is_in_the_main_tool_list_and_a_review_tool_only_in_the_tick_list(
+    tmp_path, monkeypatch, _upstream_runtime,
+):
+    data = _upstream_page(tmp_path, monkeypatch, admin=True)
+
+    listed = [name for group in data["tools"] for name in group["tools"]]
+    assert "kh_fetch" in listed
+    assert "kh_search" not in listed
+    assert "kh_search" in [t["name"] for t in data["upstreams"][0]["gated_tools"]]
+
+
+def test_the_token_page_has_no_upstreams_key_when_none_is_configured(tmp_path, monkeypatch):
+    data = _page_data(tmp_path, monkeypatch, {"drive"})
+
+    assert "upstreams" not in data
