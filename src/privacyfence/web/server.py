@@ -274,8 +274,10 @@ def scoped_token_page_data(
         }
     by_connector: dict[str, list[str]] = {}
     for name in sorted(auto_accept.TOOL_TO_GATE):
-        if gate.is_gated_upstream_tool(name):
-            continue  # Offered only as an administrator's approval below (ADR 0300).
+        if gate.is_gated_upstream_tool(name) and name not in policy_scopes.UPSTREAM_AUTO_TOOLS:
+            # Offered only as an administrator's approval below (ADR 0300). A tool at the `auto`
+            # ceiling stays here: a person's own per-tool rule can cover it (ADR 0331).
+            continue
         connector = _tool_connector(name, connector_names)
         if connector is not None:
             by_connector.setdefault(connector, []).append(name)
@@ -327,6 +329,17 @@ def scoped_token_page_data(
             for entry in policy_catalogue.scope_catalogue() if entry["connector"] in connector_names
         ],
     }
+    from .. import upstream_mcp_runtime  # function-local, as in _build_org_app
+
+    if upstream_mcp_runtime.configured():
+        page["upstreams"] = [
+            {
+                "id": row["id"], "label": row["label"], "tools": by_connector.get(str(row["id"]), []),
+                "gated_tools": _gated_tools(str(row["id"])) if principal.is_admin else [],
+                "connection_note": True,
+            }
+            for row in upstream_mcp_runtime.status()
+        ]
     return page
 
 
@@ -679,8 +692,9 @@ def _build_org_app(
     from ..org_mode import AuthzPolicyConfig
     from . import (
         routes_admin, routes_approvals, routes_org_stepup, routes_push, routes_security,
-        routes_whats_new, single_user_auth,
+        routes_upstream_oauth, routes_whats_new, single_user_auth,
     )
+    from .. import upstream_mcp_runtime
     from .routes_settings import build_org_routes
 
     if org.provider.single_user != (org.idp is None):
@@ -690,6 +704,7 @@ def _build_org_app(
     extra_routes: list[BaseRoute] = []
     lifespans = []
     if mcp_dispatcher is not None:
+        upstream_mcp_runtime.set_tools_changed_callback(mcp_dispatcher.notify_tools_changed)
         mcp_route, session_manager = mount_mcp(
             mcp_dispatcher, verifier=CompositeTokenVerifier(ScopedTokenVerifier(), org.provider),
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
@@ -729,6 +744,10 @@ def _build_org_app(
             sessions=org.sessions, connector_registry=org.connector_registry,
             org_config=org.org_config, issuer_url=org.issuer_url,
         ))
+        if upstream_mcp_runtime.configured():
+            extra_routes.extend(routes_upstream_oauth.build_routes(
+                sessions=org.sessions, connector_registry=org.connector_registry, issuer_url=org.issuer_url,
+            ))
         default_next_path = "/connect"
     issuer_host = urlparse(org.issuer_url).hostname or ""
     step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)

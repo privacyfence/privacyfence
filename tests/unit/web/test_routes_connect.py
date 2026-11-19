@@ -236,6 +236,41 @@ class TestConnectPageLook:
         assert "style=" not in body
 
 
+class TestUpstreamRows:
+    @pytest.fixture(autouse=True)
+    def _runtime(self, tmp_path):
+        from privacyfence import upstream_mcp_runtime
+        from privacyfence.upstream_mcp_config import UpstreamOAuthSettings, UpstreamServer
+        from privacyfence.upstream_tools import ToolStore
+
+        upstream_mcp_runtime.configure(
+            upstreams=[UpstreamServer(
+                id="canva", label="Canva", url="https://mcp.canva.com/mcp", oauth=UpstreamOAuthSettings(),
+            )],
+            tool_store=ToolStore(tmp_path / "org" / "upstream_tools"),
+            registrations_dir=tmp_path / "org" / "upstream_oauth",
+        )
+        yield
+        upstream_mcp_runtime.reset()
+
+    def _page(self, query=""):
+        app, sessions, _registry = _app()
+        session_id, _principal = _signed_in(sessions)
+        return _client(app).get(f"/connect{query}", cookies={org_session.SESSION_COOKIE: session_id}).text
+
+    def test_the_connect_page_lists_an_upstream(self):
+        page = self._page("?upstream_connected=canva")
+        assert 'class="pf-service-chip">Canva<' in page
+        assert 'href="/upstream-mcp/canva/connect">Connect</a>' in page
+        assert "Canva connected." in page
+        assert "Could not connect Canva" in self._page("?upstream_error=canva")
+
+    def test_an_unknown_upstream_flash_value_is_ignored(self):
+        page = self._page("?upstream_connected=nope&upstream_error=<b>x</b>")
+        assert "nope connected" not in page and "Could not connect" not in page
+        assert "<b>x</b>" not in page
+
+
 class TestTelegramFormOnAPhone:
     """Each step of the Telegram sign-in asks a phone for the right keyboard (``inputmode``)
     and tells the browser what it may fill in (``autocomplete``)."""
