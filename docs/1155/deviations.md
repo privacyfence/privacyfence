@@ -54,7 +54,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p12-tool-store
 
-- pending
+- review: The worker report text could not be read back, only its first line; the two-file diff was checked for scope and the new module passes its tests with full coverage.
 
 ## p13-policy-hooks
 
