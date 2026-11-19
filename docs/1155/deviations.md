@@ -81,7 +81,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p17-connect-routes
 
-- pending
+- worker: The token page main tool list takes an upstream tool when it is in UPSTREAM_AUTO_TOOLS, but _gated_tools is unchanged, so an auto-ceiling tool also still appears in the administrator tick list; a review tool appears only in the tick list as the plan says.
+- review: Open point: the Connect rows are listed in sorted-id order, not declared order, because the runtime exposes upstream_ids() as a frozenset; a small runtime accessor would fix it. Not blocking.
 
 ## p18-admin-ui
 
