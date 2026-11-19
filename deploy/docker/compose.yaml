@@ -18,10 +18,6 @@ services:
     environment:
       PRIVACYFENCE_ISSUER_URL: https://${PF_HOSTNAME:?set PF_HOSTNAME in .env}
       PRIVACYFENCE_TRUSTED_PROXIES: 172.30.87.2
-      # Or declare them right here, with no file (write $ as $$; set one of the two, not both):
-      # PRIVACYFENCE_UPSTREAM_MCP: |
-      #   version: 1
-      #   upstreams: []
     env_file:
       - path: privacyfence.env
         required: false
@@ -38,9 +34,6 @@ services:
     #   - n8n_api_key
     volumes:
       - pf-data:/var/lib/privacyfence-org/.privacyfence
-      # Upstream MCP servers (docs/upstream-mcp.md): create upstream_mcp.yaml first, mount it read-only and name
-      # it in privacyfence.env with PRIVACYFENCE_UPSTREAM_MCP_FILE=/etc/privacyfence/upstream_mcp.yaml.
-      # - ./upstream_mcp.yaml:/etc/privacyfence/upstream_mcp.yaml:ro
     networks:
       pf:
         ipv4_address: 172.30.87.10
