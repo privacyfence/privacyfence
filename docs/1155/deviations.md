@@ -71,7 +71,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p15-runtime
 
-- pending
+- worker: Finding from p11 handled: the runtime builds one RegistrationStore per upstream and passes upstreams=[upstream]; for a declared client with a secret, _client_source takes auth_method from the newest saved token record with the same client_id (falling back to client_for), so a refresh after a restart uses the method that worked at Connect. No p10 or p11 file changed.
+- worker: The brief check that any other mode with an upstream variable set raises is not implemented, because organization mode is the only mode (org_mode.validate_mode refuses the rest), so it could never fire.
+- worker: admin_rows takes an optional principal (default the current one) because admin_connected needs the administrator; the runtime adds UpstreamAdminError(message, status) and UpstreamRefreshError with statuses 400, 409 and 502 for p16 to map; pending tools carry extra fields name, exposed_name, gate and reason; fetched_at is time.time() bumped by 1e-6 so two refreshes never share a value; the tools-changed callback is a module global that survives configure and is cleared by reset; _UNAVAILABLE is i
 
 ## p16-admin-backend
 
