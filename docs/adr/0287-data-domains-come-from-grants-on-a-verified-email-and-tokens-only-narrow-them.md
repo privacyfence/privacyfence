@@ -8,6 +8,8 @@ and [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md). Implemented:
 Amended by [ADR 0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) and
 [ADR 0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md).
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 The upstream (ADR 0285) filters by the data domains in the claim (ADR 0286). Something has to decide

@@ -9,6 +9,8 @@ the Admin page's "Group membership" section. Issue [#1103](https://github.com/pr
 Amended by [ADR 0311](0311-the-oidc-provider-sends-approved-group-membership-to-apps-that-opt-in.md), 2026-11-15.
 Amended by [ADR 0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md), 2026-11-18.
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 Audiences come from Workspace groups (ADR 0298), so something outside PrivacyFence, an n8n job that reads the

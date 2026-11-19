@@ -9,6 +9,8 @@ Implemented: `src/privacyfence/group_membership.py`, `upstream_mcp_config.py`, `
 `scoped_tokens.py`. Issue [#1103](https://github.com/privacyfence/privacyfence/issues/1103).
 Amended by [ADR 0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md), 2026-11-18.
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 ADR 0287 decided who holds a data domain with grants in `admin_config.json`, each matching `*`, an email

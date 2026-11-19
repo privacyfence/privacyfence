@@ -7,6 +7,8 @@ Accepted — 2026-11-14. Implemented: `src/privacyfence/upstream_mcp_config.py`,
 Amended by [ADR 0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md).
 Amended by [ADR 0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md): an administrator can approve a gated upstream tool for a scoped token.
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 Issue [#1091](https://github.com/privacyfence/privacyfence/issues/1091): an organization wants its own

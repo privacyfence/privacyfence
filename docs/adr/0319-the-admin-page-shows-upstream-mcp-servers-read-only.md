@@ -7,6 +7,8 @@ Amends [ADR 0258](0258-administration-is-a-separate-admin-page.md): the Admin pa
 Relates to [ADR 0285](0285-upstream-mcp-servers-are-declared-connectors.md).
 Amended by [ADR 0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md), 2026-11-18.
 
+**Superseded by [ADR 0331](0331-the-administrator-manages-each-upstream-servers-tools.md), 2026-11-19.**
+
 ## Context
 
 An administrator could learn what upstream MCP servers were declared, and whether a server's tool list had
