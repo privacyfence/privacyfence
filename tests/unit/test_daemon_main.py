@@ -5095,3 +5095,113 @@ class TestRetireBundle:
         monkeypatch.setattr(daemon_main, "load_config", lambda path, **kwargs: pytest.fail("read config"))
         monkeypatch.setattr(daemon_main, "run_retire_bundle", lambda: 7)
         assert daemon_main.main(["--retire-bundle"]) == 7
+
+
+# ---------------------------------------------------------------------------- #
+# Upstream MCP servers (ADR 0329)
+# ---------------------------------------------------------------------------- #
+
+
+class TestConfigureUpstreamMcp:
+    DECLARATION = "version: 2\nupstreams:\n  - id: canva\n    label: Canva\n    url: https://mcp.example.com/mcp\n"
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, monkeypatch, tmp_path):
+        from privacyfence import upstream_mcp_config
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.delenv(upstream_mcp_config.ENV_VAR, raising=False)
+        monkeypatch.delenv(upstream_mcp_config.ENV_VAR_INLINE, raising=False)
+        monkeypatch.setattr(admin_config, "load", lambda: None)
+
+    def test_nothing_is_configured_without_a_declaration(self):
+        from privacyfence import upstream_mcp_runtime
+
+        daemon_main._configure_upstream_mcp()
+        assert not upstream_mcp_runtime.configured()
+
+    def test_an_inline_declaration_configures_the_runtime(self, monkeypatch, tmp_path, caplog):
+        from privacyfence import upstream_mcp_config, upstream_mcp_runtime
+
+        monkeypatch.setenv(upstream_mcp_config.ENV_VAR_INLINE, self.DECLARATION)
+        with caplog.at_level(logging.INFO):
+            daemon_main._configure_upstream_mcp()
+        assert upstream_mcp_runtime.upstream_ids() == frozenset({"canva"})
+        assert "Upstream MCP server(s): canva" in caplog.text
+        assert upstream_mcp_runtime.status()[0]["state"] == "waiting_for_admin"
+
+    def test_a_file_declaration_registers_the_saved_list_from_the_org_directory(self, monkeypatch, tmp_path):
+        from datetime import datetime, timezone
+
+        from privacyfence import auto_accept, upstream_mcp_config, upstream_mcp_runtime
+        from privacyfence.upstream_tools import SavedTool, ToolEntry, ToolStore, tool_digest
+
+        declaration = tmp_path / "upstreams.yaml"
+        declaration.write_text(self.DECLARATION)
+        monkeypatch.setenv(upstream_mcp_config.ENV_VAR, str(declaration))
+        entry = ToolEntry("search", "d", {"type": "object", "properties": {}}, True, None)
+        ToolStore(paths.org_dir() / "upstream_tools").save(
+            "canva", "https://mcp.example.com/mcp",
+            (SavedTool("search", "d", entry.input_schema, True, None, "review", "read", tool_digest(entry)),),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        daemon_main._configure_upstream_mcp()
+        assert auto_accept.TOOL_TO_GATE["canva_search"] == "review"
+        assert upstream_mcp_runtime.status()[0]["tools_exposed"] == 1
+
+    def test_the_leftover_warnings_are_logged_with_no_variable_set(self, monkeypatch, tmp_path, caplog):
+        org = paths.org_dir()
+        org.mkdir(parents=True, exist_ok=True)
+        (org / "upstream_claim_keys.json").write_text("{}")
+        (org / "group_membership.json").write_text("{}")
+        monkeypatch.setattr(admin_config, "load", lambda: {"upstream_mcp": {}})
+        with caplog.at_level(logging.WARNING):
+            daemon_main._configure_upstream_mcp()
+        assert "org/upstream_claim_keys.json (signing keys; delete it)" in caplog.text
+        assert "org/group_membership.json" in caplog.text
+        assert "admin_config.json holds an upstream_mcp section that is no longer used" in caplog.text
+
+    def test_the_leftovers_are_logged_before_a_version_1_file_is_refused(self, monkeypatch, tmp_path, caplog):
+        from privacyfence import upstream_mcp_config
+
+        org = paths.org_dir()
+        org.mkdir(parents=True, exist_ok=True)
+        (org / "group_membership.json").write_text("{}")
+        monkeypatch.setenv(upstream_mcp_config.ENV_VAR_INLINE, "version: 1\nupstreams: []\n")
+        with caplog.at_level(logging.WARNING), pytest.raises(org_mode.ConfigurationError, match="reads version 2 only"):
+            daemon_main._configure_upstream_mcp()
+        assert "Left over from the removed claim-based upstream feature" in caplog.text
+
+    def test_an_unreadable_admin_config_does_not_stop_the_start(self, monkeypatch):
+        def broken():
+            raise admin_config.AdminConfigError("unreadable")
+
+        monkeypatch.setattr(admin_config, "load", broken)
+        daemon_main._configure_upstream_mcp()
+
+    def test_a_configured_upstream_with_a_saved_list_and_a_sign_in_joins_the_connectors(self, monkeypatch, tmp_path):
+        import time as _time
+        from datetime import datetime, timezone
+
+        from privacyfence import upstream_mcp_config
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upstream_oauth_tokens import TokenRecord, save_token, token_path
+        from privacyfence.upstream_tools import SavedTool, ToolEntry, ToolStore, tool_digest
+
+        monkeypatch.setenv(upstream_mcp_config.ENV_VAR_INLINE, self.DECLARATION)
+        entry = ToolEntry("search", "d", {"type": "object", "properties": {}}, True, None)
+        ToolStore(paths.org_dir() / "upstream_tools").save(
+            "canva", "https://mcp.example.com/mcp",
+            (SavedTool("search", "d", entry.input_schema, True, None, "review", "read", tool_digest(entry)),),
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        daemon_main._configure_upstream_mcp()
+        connectors, _failures = _build_connectors({}, {})
+        assert connectors == []  # nobody has signed in yet
+        save_token(token_path(LOCAL_PRINCIPAL, "canva"), TokenRecord(
+            upstream_id="canva", access_token="a", refresh_token=None, expires_at=_time.time() + 3600, scope="",
+            issuer="https://auth.example.com", client_id="c", auth_method="none",
+            token_endpoint="https://auth.example.com/token", resource=None, connected_at=1.0,
+        ))
+        connectors, _failures = _build_connectors({}, {})
+        assert [c.name for c in connectors] == ["canva"]

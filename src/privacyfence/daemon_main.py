@@ -105,6 +105,9 @@ from . import (
     runtime_credential_sweeper,
     scoped_tokens,
     step_up_config,
+    upstream_mcp_config,
+    upstream_mcp_runtime,
+    upstream_tools,
 )
 from .policy import store as policy_store
 
@@ -1190,6 +1193,8 @@ def _start_org_web_server(
 
     _flush_deferred_warnings()
 
+    _configure_upstream_mcp()
+
     oidc_clients = oidc_provider.clients_from_env()
     oidc = None
     if oidc_clients:
@@ -1349,6 +1354,29 @@ def _salesforce_report_max_pages(config: dict[str, Any]) -> int:
         )
         return DEFAULT_REPORT_MAX_PAGES
     return value
+
+
+def _configure_upstream_mcp() -> None:
+    """Configure the hosted upstream MCP servers declared by ``PRIVACYFENCE_UPSTREAM_MCP_FILE`` or
+    ``PRIVACYFENCE_UPSTREAM_MCP`` (ADR 0329): log what the removed claim-based feature left on disk,
+    then load the declaration and hand it to the runtime, which registers each saved tool list with no
+    network call. The leftovers are logged first, so a server whose variable was removed or still names
+    a version 1 file (refused below) logs them too. Raises ``org_mode.ConfigurationError`` on any problem."""
+    try:
+        stored = admin_config.load()
+    except admin_config.AdminConfigError:
+        stored = None  # the admin config reports its own problem; the leftover hint is best effort
+    for leftover in upstream_mcp_config.leftovers(stored):
+        logger.warning("%s", leftover)
+    upstreams = upstream_mcp_config.load_declared()
+    if upstreams is None:
+        return
+    upstream_mcp_runtime.configure(
+        upstreams=upstreams,
+        tool_store=upstream_tools.ToolStore(org_dir() / "upstream_tools"),
+        registrations_dir=org_dir() / "upstream_oauth",
+    )
+    logger.info("Upstream MCP server(s): %s", ", ".join(upstream.id for upstream in upstreams))
 
 
 def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tuple[list, dict[str, str]]:
@@ -1725,6 +1753,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
         except MiroClientError as exc:
             logger.warning("Miro connector disabled: %s", exc)
             failures["miro"] = _classify_connector_failure(exc)
+
+    if upstream_mcp_runtime.configured():
+        connectors.extend(upstream_mcp_runtime.connectors_for_principal())
 
     return connectors, failures
 

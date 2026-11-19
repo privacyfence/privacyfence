@@ -210,8 +210,9 @@ def _reset_singletons():
 @pytest.fixture(autouse=True)
 def _reset_upstream_mcp_registry():
     yield
-    from privacyfence import upstream_mcp_registry
+    from privacyfence import upstream_mcp_registry, upstream_mcp_runtime
 
+    upstream_mcp_runtime.reset()
     upstream_mcp_registry.reset()
 
 
