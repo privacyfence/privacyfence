@@ -355,10 +355,6 @@ class TestUpstreamTools:
         with pytest.raises(stp.ProposalError, match="Upstream tools cannot be proposed; create the token in Settings."):
             _proposal(request=_request(tools=["gmail_list_messages", "kh_search"]))
 
-    def test_a_proposal_naming_the_sync_tool_is_refused(self):
-        with pytest.raises(stp.ProposalError, match="This tool cannot be proposed; create the token in Settings."):
-            _proposal(request=_request(tools=["gmail_list_messages", "privacyfence_update_group_membership"]))
-
     def test_a_proposal_of_built_in_tools_is_unaffected(self):
         assert _proposal().request["tools"] == ["drive_download_file", "gmail_list_messages"]
 

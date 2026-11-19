@@ -1503,31 +1503,21 @@ class TestChosenTokenId:
         assert token.id == chosen
 
 
-class TestSyncTokenIsAdminOnly:
-    SYNC = "privacyfence_update_group_membership"
+def test_a_token_naming_an_unregistered_tool_loads_and_keeps_the_name(tmp_path):
+    token, _ = _create(_store(), label="kept")
+    path = _file(tmp_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["tokens"][0]["tools"] = sorted([TOOL, "gone_tool"])
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert "gone_tool" not in auto_accept.TOOL_TO_GATE
 
-    def test_a_non_admin_cannot_create_it_and_nothing_is_stored(self):
-        store = _store()
-        with pytest.raises(ScopedTokenError, match="Only an administrator can create a token for " + self.SYNC):
-            _create(store, tools=[self.SYNC])
-        assert store.tokens_for(LOCAL_PRINCIPAL) == []
+    restarted = _store()
+    restarted.load()
+    assert restarted.get("local", token.id).tools == frozenset({TOOL, "gone_tool"})
 
-    def test_an_admin_can_create_it(self):
-        store = _store()
-        token, _ = _create(store, tools=[self.SYNC], is_admin=True)
-        assert self.SYNC in token.tools
-
-    def test_other_tools_need_no_admin(self):
-        token, _ = _create(_store(), tools=[TOOL])
-        assert TOOL in token.tools
-
-    def test_an_expired_or_revoked_sync_token_no_longer_reaches_the_tool(self):
-        store = _store()
-        token, _ = _create(store, tools=[self.SYNC], is_admin=True)
-        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW + 1) == "live"
-        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=token.expires_at) == "expired"
-        store.revoke(LOCAL_PRINCIPAL, token.id)
-        assert store.token_state(LOCAL_PRINCIPAL, token.id, now=NOW + 1) == "absent"
+    _create(restarted, label="second")  # any later save rewrites the file
+    written = {e["label"]: e for e in json.loads(path.read_text(encoding="utf-8"))["tokens"]}
+    assert written["kept"]["tools"] == sorted([TOOL, "gone_tool"])
 
 
 def _register_upstream():

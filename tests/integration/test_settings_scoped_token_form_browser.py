@@ -366,59 +366,6 @@ def upstream_page(browser):
     pg.close()
 
 
-def test_an_upstream_fieldset_shows_only_with_one_of_its_tools_ticked(upstream_page):
-    page = upstream_page
-    assert page.query_selector("[data-st-audiences-for]") is None
-    page.click('[data-st-tool="kh_search"]')
-    assert page.inner_text("[data-st-audiences-for] legend") == "Audiences for Knowledge hub"
-    assert page.inner_text("[data-st-audiences-for] .pf-hint") == (
-        "The token sees only the audiences you tick, and never more than you can see yourself.")
-    assert page.eval_on_selector_all(
-        "[data-st-audience]", "els => els.map(e => [e.getAttribute('data-st-audience'), e.getAttribute('aria-checked')])",
-    ) == [["general", "false"], ["hr", "false"]]
-    page.click('[data-st-tool="kh_search"]')
-    assert page.query_selector("[data-st-audiences-for]") is None
-
-
-def test_the_created_token_holds_exactly_the_ticked_domain(upstream_page, tmp_path, monkeypatch):
-    from privacyfence import auto_accept, paths, scoped_tokens
-    from privacyfence.principal import Principal
-
-    page = upstream_page
-    _capture_posts(page)
-    page.fill("[data-st-label]", "kh job")
-    page.click('[data-st-tool="kh_search"]')
-    page.click('[data-st-audience="hr"]')
-    page.click("[data-st-create]")
-    [posted] = page.evaluate("window.__posted")
-    assert posted["upstream_audiences"] == {"kh": ["hr"]}
-
-    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    monkeypatch.setattr(auto_accept, "get_policy_rows", lambda: [])
-    monkeypatch.setitem(auto_accept.TOOL_TO_GATE, "kh_search", "auto")
-    alice = Principal(id="alice", email="alice@example.com", email_verified=True)
-    body = scoped_tokens.normalise_create_request(posted)
-    assert body is not None
-    store = scoped_tokens.ScopedTokenStore(lambda: [alice])
-    token, _secret = store.create(
-        alice, label=body["label"], days=body["days"], rules=body["rules"], tools=body["tools"],
-        policy=scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365),
-        upstream_audiences=body["upstream_audiences"], held_audiences={"kh": frozenset({"general", "hr"})},
-        principal_email_verified=True,
-    )
-    assert token.upstream_audiences == {"kh": frozenset({"hr"})}
-
-
-def test_no_domain_ticked_sends_none(upstream_page):
-    page = upstream_page
-    _capture_posts(page)
-    page.fill("[data-st-label]", "kh job")
-    page.click('[data-st-tool="kh_search"]')
-    page.click("[data-st-create]")
-    [posted] = page.evaluate("window.__posted")
-    assert posted["upstream_audiences"] == {}
-
-
 def test_a_gated_upstream_tool_shows_its_effect_and_a_writes_data_marker(upstream_page):
     page = upstream_page
     assert page.inner_text("[data-st-gated-for] legend") == "Upstream tools that change data or release results unseen"

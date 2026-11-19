@@ -151,16 +151,6 @@ class TestDeliverUpstreamDomains:
         )
         assert seen["is_admin"] is False
 
-    def test_a_delivered_sync_token_is_refused(self, tokens):
-        api = FakeApi()
-        bound = {**BOUND, "tools": ["privacyfence_update_group_membership"]}
-        outcome = rc.deliver(
-            principal=ALICE, bound=bound, proposal=_proposal(), config=CONFIG, api=api, token_store=tokens,
-            policy=ENABLED, held_audiences={}, principal_email_verified=True,
-        )
-        assert outcome.status == 400 and "Only an administrator can create a token" in outcome.error
-        assert api.created == [] and tokens.tokens_for(ALICE) == []
-
 
 def _remove_the_record():
     rc.get_store().remove(rc.get_store().all()[0].credential_id)
