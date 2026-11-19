@@ -47,7 +47,7 @@ RECORD_FAILED = (
 )
 NODE_NOT_INSTALLED = (
     "n8n does not know the PrivacyFence credential type. "
-    "Ask the n8n administrator to install the community node n8n-nodes-privacyfence, then try again."
+    "Ask the n8n administrator to install the community node @privacyfence/n8n-nodes-privacyfence, then try again."
 )
 _UNEXPECTED_ERROR = "an unexpected error occurred"
 

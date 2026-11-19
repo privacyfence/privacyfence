@@ -381,7 +381,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0286](0286-privacyfence-sends-the-upstream-a-signed-caller-claim.md) | PrivacyFence sends the upstream a signed caller claim | Accepted; amends 0036; relates to 0006, 0273, 0274; amended by 0297 |
 | [0287](0287-data-domains-come-from-grants-on-a-verified-email-and-tokens-only-narrow-them.md) | Data domains come from grants on a verified email, and scoped tokens only narrow them | Accepted; amends 0164, 0236; relates to 0272; amended by 0288, 0298 |
 | [0288](0288-the-upstream-mcp-declaration-can-be-yaml-or-inline-and-seeds-the-grants.md) | The upstream MCP declaration can be YAML or inline, and seeds the grants | Accepted; amends 0285, 0287; amended by 0298 |
-| [0289](0289-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md) | The n8n node ships from this repository as an npm package and is published with provenance on stable tags | Accepted; relates to 0278 |
+| [0289](0289-the-n8n-node-ships-from-this-repository-and-is-published-with-provenance.md) | The n8n node ships from this repository as an npm package and is published with provenance on stable tags | Accepted; relates to 0278; amended by 0328 |
 | [0290](0290-the-delivered-credential-type-is-an-administrators-choice.md) | The delivered credential type is an administrator's choice, and the new type is checked against n8n before a token is minted | Accepted; amends 0278, 0280 |
 | [0291](0291-the-privacyfenceapi-credential-holds-the-address-and-the-token.md) | The privacyFenceApi credential holds the address and the token, and has no authenticate block | Accepted; amends 0278 |
 | [0292](0292-the-n8n-node-carries-its-own-handshake-only-mcp-client.md) | The n8n node carries its own handshake-only MCP client with no dependencies | Accepted; relates to 0289 |
@@ -420,3 +420,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0325](0325-an-upstream-can-be-the-source-of-its-own-audiences.md) | An upstream can be the source of its own audiences | Accepted; amends 0298, 0299, 0319, 0323; relates to 0285, 0300, 0310 |
 | [0326](0326-a-service-claim-may-call-the-declared-audiences-tool.md) | A service claim may call the declared audiences tool | Accepted; amends 0297; relates to 0286, 0310, 0325 |
 | [0327](0327-stable-releases-go-through-tld-release-and-a-release-only-version-file.md) | Stable releases go through `/tld:release` and a release-only version file | Accepted; amends 0312, 0030; relates to 0022, 0023 |
+| [0328](0328-the-n8n-node-is-published-under-the-privacyfence-npm-scope.md) | The n8n node is published under the @privacyfence npm scope | Accepted; amends 0289 |

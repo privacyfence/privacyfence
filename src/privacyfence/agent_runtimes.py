@@ -30,8 +30,8 @@ N8N_API_KEY_ENV = "PRIVACYFENCE_N8N_API_KEY"  # the variable's name, never a key
 RUNTIMES = ("n8n",)
 CREDENTIAL_TYPES = ("httpBearerAuth", "privacyFenceApi")
 DEFAULT_CREDENTIAL_TYPE = "httpBearerAuth"
-N8N_NODE_PACKAGE = "n8n-nodes-privacyfence"
-N8N_NODE_TYPE = "n8n-nodes-privacyfence.privacyFence"
+N8N_NODE_PACKAGE = "@privacyfence/n8n-nodes-privacyfence"
+N8N_NODE_TYPE = "@privacyfence/n8n-nodes-privacyfence.privacyFence"
 
 DELIVERY_UNAVAILABLE = (
     "Delivery to n8n is not set up on this PrivacyFence server. "
@@ -50,7 +50,7 @@ DELIVERY_MESSAGE_PRIVACYFENCE_NODE = (
     "and confirm it themselves. When they do, PrivacyFence creates an n8n credential of type "
     "privacyFenceApi holding the token and this server's address; call "
     "privacyfence_runtime_credential_status with this proposal_id to get the credential's id for "
-    "the PrivacyFence node (community node n8n-nodes-privacyfence, which must be installed in that n8n). "
+    "the PrivacyFence node (community node @privacyfence/n8n-nodes-privacyfence, which must be installed in that n8n). "
     "Anyone who can edit workflows in that n8n can use the credential, so keep its tools and rules narrow. "
     "Calls that would need an approval are refused at once. Tools in uncovered_tools have no rule, "
     "so the token's calls to them will be denied."

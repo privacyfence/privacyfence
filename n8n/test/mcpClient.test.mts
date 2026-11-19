@@ -93,7 +93,7 @@ test('full handshake order and headers', async () => {
 	assert.deepEqual(bodies[0]?.params, {
 		protocolVersion: '2025-11-25',
 		capabilities: {},
-		clientInfo: { name: 'n8n-nodes-privacyfence', version: '1.2.3' },
+		clientInfo: { name: '@privacyfence/n8n-nodes-privacyfence', version: '1.2.3' },
 	});
 	assert.deepEqual(
 		[bodies[0]?.id, bodies[2]?.id, bodies[3]?.id],
