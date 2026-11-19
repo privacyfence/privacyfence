@@ -698,12 +698,6 @@ class McpDispatcher:
             "mode": "org", "setup_complete": setup_complete, "connectors": connectors,
         }
 
-        # ADR 0285: only when the operator configured upstream MCP servers.
-        from .. import upstream_mcp_runtime
-
-        if upstream_mcp_runtime.configured():
-            result["upstreams"] = upstream_mcp_runtime.status()
-
         if setup_complete:
             result["next_step"] = None
             result["message"] = (
