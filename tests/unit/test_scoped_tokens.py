@@ -1664,7 +1664,7 @@ class TestUpstreamApprovalRows:
 
     @pytest.mark.parametrize("operations", [["kh.other"], ["kh.fetch", "kh.other"], []])
     def test_an_approval_row_whose_operations_do_not_match_its_value_is_dropped(self, tmp_path, operations):
-        (token, _), _digest = self._admin_token(_store())
+        (token, _), _ = self._admin_token(_store())
         path = _file(tmp_path)
         data = json.loads(path.read_text(encoding="utf-8"))
         data["tokens"][0]["rules"][0]["operations"] = operations
@@ -1674,7 +1674,7 @@ class TestUpstreamApprovalRows:
         assert restarted.get("local", token.id).rules == ()
 
     def test_an_approval_row_whose_value_names_no_operation_is_dropped(self, tmp_path):
-        (token, _), _digest = self._admin_token(_store())
+        (token, _), _ = self._admin_token(_store())
         path = _file(tmp_path)
         data = json.loads(path.read_text(encoding="utf-8"))
         data["tokens"][0]["rules"][0]["value"] = "kh.fetch"
@@ -1701,7 +1701,7 @@ class TestUpstreamApprovalRows:
 
     def test_an_approval_row_cannot_be_copied_from_another_token(self):
         store = _store()
-        (token, _), _digest = self._admin_token(store)
+        (token, _), _ = self._admin_token(store)
         (row,) = token.rules
         with pytest.raises(ScopedTokenError, match="^That rule cannot be copied.$"):
             _create(
