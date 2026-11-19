@@ -15,6 +15,8 @@ Implemented: `src/privacyfence/upstream_audiences.py`, `upstream_mcp_config.py`,
 [#1153](https://github.com/privacyfence/privacyfence/issues/1153); the record of the change is
 [`docs/1153/plan.md`](../1153/plan.md).
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 Audiences, the labels an upstream uses for slices of its data, come from the group map in

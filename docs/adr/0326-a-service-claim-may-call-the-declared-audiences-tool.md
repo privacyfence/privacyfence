@@ -11,6 +11,8 @@ Implemented: `docs/identity-claim.md`, `src/privacyfence/upstream_mcp_runtime.py
 [#1153](https://github.com/privacyfence/privacyfence/issues/1153); the record of the change is
 [`docs/1153/plan.md`](../1153/plan.md).
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 ADR 0297 defined the `service` principal as PrivacyFence's own startup tool listing: `sub` `privacyfence`,

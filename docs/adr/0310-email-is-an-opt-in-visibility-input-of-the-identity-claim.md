@@ -8,6 +8,8 @@ Amends [ADR 0297](0297-the-upstream-claim-is-an-eddsa-identity-claim-in-its-own-
 Relates to [ADR 0298](0298-audiences-come-from-group-membership-and-tokens-only-narrow-them.md).
 Issue [#1133](https://github.com/privacyfence/privacyfence/issues/1133).
 
+**Superseded by [ADR 0329](0329-hosted-mcp-servers-sign-in-each-person-with-their-own-oauth-and-the-claim-feature-is-removed.md), 2026-11-19.**
+
 ## Context
 
 ADR 0297 made `sub`, `principal_type`, `audiences` and `req` the claim fields an upstream may use to decide
