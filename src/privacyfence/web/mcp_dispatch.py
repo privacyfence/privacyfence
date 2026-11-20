@@ -251,6 +251,13 @@ class McpDispatcher:
         if connector is None:
             raise ValueError(f"Unknown connector: {connector_name!r}")
         args = self._declared_args_only(connector, tool, args)
+        missing = self._missing_required_args(connector, tool, args)
+        if missing:
+            needs = self._required_arg_names(connector, tool)
+            raise ValueError(
+                f"Missing required argument{'s' if len(missing) > 1 else ''}: {', '.join(missing)}. "
+                f"{tool} needs: {', '.join(needs)}."
+            )
 
         # principal_id folds into both the dedupe key and the
         # last-write timestamp below.
@@ -376,6 +383,25 @@ class McpDispatcher:
                 declared = {p.name for p in spec.params} | _CONNECTOR_COMPUTED_ARGS
                 return {k: v for k, v in args.items() if k in declared}
         return args
+
+    @staticmethod
+    def _required_arg_names(connector: Connector, tool: str) -> list[str]:
+        """The tool's required parameters in declaration order, ``reason`` excluded (the dispatcher pops
+        it before the call). Empty for a tool with a verbatim ``input_schema`` or no spec: its own schema,
+        not a ``ToolParam`` list, says what it takes."""
+        for spec in connector.tool_specs():
+            if spec.name == tool:
+                if spec.input_schema is not None:
+                    return []
+                return [p.name for p in spec.params if p.required and p.name != "reason"]
+        return []
+
+    @staticmethod
+    def _missing_required_args(connector: Connector, tool: str, args: dict) -> list[str]:
+        """Required parameters absent from ``args``, so a call that omits one fails with a message naming
+        it instead of a ``TypeError`` from the connector's method. Only absence counts: a key sent with
+        ``None`` is present."""
+        return [n for n in McpDispatcher._required_arg_names(connector, tool) if n not in args]
 
     @staticmethod
     def _is_read_only(connector: Connector, tool: str) -> bool:

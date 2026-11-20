@@ -71,6 +71,29 @@ class FakeConnector(Connector):
         return self._result
 
 
+class _RequiredArgsConnector(FakeConnector):
+    def tool_specs(self) -> list[ToolSpec]:
+        x = ToolParam(name="x", annotation="int", required=True)
+        return [
+            ToolSpec(
+                name="gmail_tool", description="t", read_only=True,
+                params=[x, ToolParam(name="opt", annotation="int", required=False)],
+            ),
+            ToolSpec(
+                name="gmail_two_tool", description="t", read_only=True,
+                params=[x, ToolParam(name="y", annotation="int", required=True)],
+            ),
+            ToolSpec(
+                name="gmail_reason_tool", description="t", read_only=True,
+                params=[ToolParam(name="reason", annotation="str", required=True), x],
+            ),
+            ToolSpec(
+                name="gmail_upstream_tool", description="t", read_only=True,
+                params=[x], input_schema={"type": "object", "properties": {}},
+            ),
+        ]
+
+
 _SCOPE = ScopedToken(
     id="st-0123456789ab", label="sales-sync", digest="", principal_id="local", principal_email="",
     principal_display_name="", created_at=time.time(), expires_at=time.time() + 90 * 86400,
@@ -186,6 +209,54 @@ class TestCall:
         dispatcher = _dispatcher({"gmail": connector})
         await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1, "destination_dir": "~/Downloads", "local_path": "/etc/hosts"})
         assert connector.calls == [("gmail_tool", {"x": 1})]
+
+    async def test_a_call_that_omits_a_required_argument_fails_naming_it(self):
+        # An n8n node with empty Arguments used to reach the connector as "missing 1 required
+        # positional argument"; the caller now gets the argument's name and the tool's requirements.
+        connector = _RequiredArgsConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        with pytest.raises(ValueError) as exc:
+            await dispatcher.call("s1", "gmail", "gmail_tool", {"opt": 1})
+        assert str(exc.value) == "Missing required argument: x. gmail_tool needs: x."
+        assert connector.calls == []
+
+    async def test_a_call_that_omits_two_required_arguments_uses_the_plural_text(self):
+        connector = _RequiredArgsConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        with pytest.raises(ValueError) as exc:
+            await dispatcher.call("s1", "gmail", "gmail_two_tool", {})
+        assert str(exc.value) == "Missing required arguments: x, y. gmail_two_tool needs: x, y."
+        assert connector.calls == []
+
+    async def test_a_call_with_every_required_argument_passes(self):
+        connector = _RequiredArgsConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        assert connector.calls == [("gmail_tool", {"x": 1})]
+
+    async def test_a_required_argument_sent_as_none_counts_as_present(self):
+        connector = _RequiredArgsConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": None})
+        assert connector.calls == [("gmail_tool", {"x": None})]
+
+    async def test_a_missing_optional_argument_passes(self):
+        connector = _RequiredArgsConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        assert connector.calls[0][1] == {"x": 1}
+
+    async def test_an_absent_reason_does_not_count_as_a_missing_argument(self):
+        connector = _RequiredArgsConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_reason_tool", {"x": 1})
+        assert connector.calls == [("gmail_reason_tool", {"x": 1})]
+
+    async def test_a_tool_with_a_verbatim_input_schema_is_not_checked_for_required_arguments(self):
+        connector = _RequiredArgsConnector("gmail")
+        dispatcher = _dispatcher({"gmail": connector})
+        await dispatcher.call("s1", "gmail", "gmail_upstream_tool", {})
+        assert connector.calls == [("gmail_upstream_tool", {})]
 
     async def test_an_argument_the_connector_computes_itself_is_not_dropped(self):
         connector = FakeConnector("gmail")
