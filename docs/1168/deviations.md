@@ -20,8 +20,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## Final review
 
-- pending
+- None.
 
 ## Finishing
 
-- pending
+- final: No scope drift. Full dod (coverage floor, bandit, mypy) passed; qa-record-fixture.yml for drive on this branch finished green with no fixture change.
