@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.2.2] - 2026-11-20
+
 ### Fixed
 
 - **The n8n node's Arguments field can be set through the n8n MCP.** The node has a second version whose field is stored as `toolArguments`, because the n8n MCP rejects a parameter named `arguments`; existing nodes keep their field and keep working ([ADR 0336](docs/adr/0336-the-n8n-node-is-versioned-and-its-arguments-field-is-tool-arguments.md), [#1175](https://github.com/privacyfence/privacyfence/issues/1175)).
@@ -3692,7 +3694,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v8.1.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v8.2.2...HEAD
+[8.2.2]: https://github.com/privacyfence/privacyfence/compare/v8.2.1...v8.2.2
 [8.1.0]: https://github.com/privacyfence/privacyfence/compare/v8.0.0...v8.1.0
 [8.0.0]: https://github.com/privacyfence/privacyfence/compare/v7.0.2...v8.0.0
 [7.0.2]: https://github.com/privacyfence/privacyfence/compare/v7.0.1...v7.0.2
