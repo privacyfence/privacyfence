@@ -1417,7 +1417,7 @@ class TestDenyWithFeedback:
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         init_audit_logger(str(tmp_path / "audit"))
-        monkeypatch.setattr(gate, "_evaluate_auto_accept", lambda *a, **k: (False, "", ""))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", lambda *a, **k: (False, "", "", ""))
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
         return tmp_path
 

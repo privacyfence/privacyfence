@@ -93,7 +93,7 @@ from typing import Any, Callable, cast
 from .agent_identity import UNKNOWN_AGENT, AgentIdentity, current_agent
 from .agent_label import label_for
 from .deny_feedback import DenialFeedback
-from .principal import current_principal
+from .principal import Principal, current_principal, principal_scope
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +279,9 @@ class PendingApproval:
     # time (see module docstring) -- "local" for every approval in local
     # mode.
     principal_id: str = field(default_factory=lambda: current_principal().id)
+    # The principal itself (not just its id), so a re-evaluation on behalf of
+    # another principal can enter ``principal_scope`` for it.
+    principal: Principal = field(default_factory=current_principal)
     connector: str = ""
     tool: str = ""
     gate_kind: str = ""            # "review" | "popup" -- "" for a bare confirm dialog
@@ -333,6 +336,8 @@ class PendingApproval:
     # already been resolved into a rule name (or discarded), so there's
     # nothing else worth carrying here. See gate.py's own module docstring.
     final_rule_name: str = ""
+    # "person" | "organization" | "token" | "" -- which rule list resolved it.
+    final_rule_source: str = ""
     decided_at: float | None = None
     ledger_expires_at: float | None = None
     # True once no later call may take this entry from the ledger: a write
@@ -498,6 +503,8 @@ class LedgerHit:
     # was made on, so the release it authorizes is audited under the same
     # request_id as that call's "approval_pending" row (ADR 0093).
     request_id: str = ""
+    # Which rule list resolved the card (see PendingApproval.final_rule_source).
+    rule_source: str = ""
 
 
 class PendingApprovalRegistry:
@@ -777,7 +784,7 @@ class PendingApprovalRegistry:
                 reports.append({"id": approval_id, "outcome": "already_decided"})
         return reports
 
-    def finalize(self, approval_id: str, decision: str, rule_name: str = "") -> bool:
+    def finalize(self, approval_id: str, decision: str, rule_name: str = "", rule_source: str = "") -> bool:
         """Resolve the whole approval -- called once, by gate.py's own
         interaction driver, when the full multi-step dance (main popup, any
         PII/rule confirmation) has concluded, and by reevaluate_all() below
@@ -792,6 +799,7 @@ class PendingApprovalRegistry:
                 return False
             approval.final_decision = decision
             approval.final_rule_name = rule_name
+            approval.final_rule_source = rule_source
             approval.decided_at = time.time()
             if approval.dedupe_key is not None:
                 approval.ledger_expires_at = approval.decided_at + self.ledger_ttl
@@ -856,6 +864,7 @@ class PendingApprovalRegistry:
                 decided_at=approval.decided_at, decided_via=approval.decided_via, batch_id=approval.batch_id,
                 feedback=approval.deny_feedback if approval.final_decision == "deny" else DenialFeedback(),
                 expires_at=approval.ledger_expires_at, request_id=approval.request_id,
+                rule_source=approval.final_rule_source,
             )
 
     # ------------------------------------------------------------------ #
@@ -994,7 +1003,7 @@ class PendingApprovalRegistry:
     # Rules-changed re-evaluation broadcast
     # ------------------------------------------------------------------ #
 
-    def reevaluate_all(self, should_auto_accept: Callable[[str, Any], tuple[bool, str]]) -> list[PendingApproval]:
+    def reevaluate_all(self, should_auto_accept: Callable[[str, Any], tuple[bool, str, str]]) -> list[PendingApproval]:
         """Called whenever the live rule/grant set changes (see gate.py's
         subscription to auto_accept.add_rules_changed_listener). Any
         not-yet-answered card whose operation is now covered by a rule --
@@ -1014,26 +1023,53 @@ class PendingApprovalRegistry:
         own dedupe-key fix (see module docstring) exists to close.
         """
         principal_id = current_principal().id
-        resolved: list[PendingApproval] = []
         with self._lock:
-            candidates = [
-                a for a in self._pending.values()
-                if a.kind == "card" and not a.is_finalized() and not a.event.is_set()
-                and a.operation_key is not None and not a.pii_forces_confirmation
-                and a.principal_id == principal_id
-            ]
+            candidates = [a for a in self._candidates_locked() if a.principal_id == principal_id]
+        return self._reevaluate(candidates, should_auto_accept)
+
+    def reevaluate_every_principal(
+        self, should_auto_accept: Callable[[str, Any], tuple[bool, str, str]],
+    ) -> list[PendingApproval]:
+        """Like reevaluate_all(), but over every principal's pending cards: for a
+        change that applies to all of them (an organization rule). Each card is
+        evaluated inside ``principal_scope(approval.principal)``, so the callback's
+        per-principal state (the person's own rules) is that card's owner's."""
+        with self._lock:
+            candidates = self._candidates_locked()
+        return self._reevaluate(candidates, should_auto_accept, enter_principal=True)
+
+    def _candidates_locked(self) -> list[PendingApproval]:
+        """Must be called with self._lock held."""
+        return [
+            a for a in self._pending.values()
+            if a.kind == "card" and not a.is_finalized() and not a.event.is_set()
+            and a.operation_key is not None and not a.pii_forces_confirmation
+        ]
+
+    def _reevaluate(
+        self, candidates: list[PendingApproval],
+        should_auto_accept: Callable[[str, Any], tuple[bool, str, str]],
+        enter_principal: bool = False,
+    ) -> list[PendingApproval]:
+        resolved: list[PendingApproval] = []
         for approval in candidates:
             try:
-                auto_ok, matched_rule = should_auto_accept(
-                    cast(str, approval.operation_key),  # filtered to operation_key is not None just above (approvals.py:968)
-                    approval.review_ctx,
-                )
+                if enter_principal:
+                    with principal_scope(approval.principal):
+                        result = should_auto_accept(
+                            cast(str, approval.operation_key), approval.review_ctx,
+                        )
+                else:
+                    result = should_auto_accept(
+                        cast(str, approval.operation_key), approval.review_ctx,
+                    )
+                auto_ok, matched_rule, source = result
             except Exception:
                 logger.exception("should_auto_accept raised during rules-changed re-evaluation")
                 continue
             if not auto_ok:
                 continue
-            if self.finalize(approval.id, "auto_accepted", matched_rule):
+            if self.finalize(approval.id, "auto_accepted", matched_rule, source):
                 resolved.append(approval)
         return resolved
 

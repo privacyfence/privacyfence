@@ -60,7 +60,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import (
-    agent_label, agent_runtimes, auto_accept, gate, latency, paths, relay_client,
+    agent_label, agent_runtimes, auto_accept, gate, latency, org_rules, paths, relay_client,
     runtime_credentials, scoped_token_proposals, scoped_tokens, secure_files, web_shell, write_effects,
 )
 from ..connector_registry import ConnectorRegistry
@@ -263,6 +263,11 @@ def scoped_token_page_data(
             _scoped_rule_entry(row, cached_row_value(row, resolver), row_value_items(row, resolver))
             for row in auto_accept.get_policy_rows()
         ]
+        own_ids = {entry["id"] for entry in rules}
+        rules.extend(
+            dict(_scoped_rule_entry(row, cached_row_value(row, resolver), row_value_items(row, resolver)), organization=True)
+            for row in org_rules.rows() if row.id not in own_ids
+        )
         # A token's rules are its own rows (ADR 0236), named the way the Auto-accept page names them.
         token_rules = {
             token.id: [

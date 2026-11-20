@@ -270,6 +270,20 @@ class TestScopeRowHelpers:
         )) is None
 
 
+class TestOrgRuleRows:
+    def test_rows_have_no_usage_fields_and_keep_the_rest(self):
+        rows = scope_rows.rows_from_config(TestScopeRowHelpers()._v2_cfg())
+        result = ss.org_rule_rows(rows, resolve_value=lambda row: "v", resolver=get_resolver())
+        assert len(result) == len(rows)
+        for entry in result:
+            assert not {"match_count", "last_matched", "never_matched"} & set(entry)
+            assert entry["value"] == "v" and entry["sentence"] and entry["verbs"] is not None
+            assert "value_items" in entry
+
+    def test_no_rows_is_an_empty_list(self):
+        assert ss.org_rule_rows([], resolve_value=lambda row: "", resolver=get_resolver()) == []
+
+
 class TestRelativeTime:
     def _ago(self, **delta):
         from datetime import datetime, timedelta, timezone

@@ -25,3 +25,4 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## Finishing
 
 - final: No scope drift. Full dod (coverage floor, bandit, mypy) passed; qa-record-fixture.yml for drive on this branch finished green with no fixture change.
+- conflict: Merging main brought in ADRs 0333 and 0334 from another plan, so this ADR became 0335 (file, index rows, links); docs/1168/plan.md still says 0333.

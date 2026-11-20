@@ -127,7 +127,7 @@ folder's URL; `root` is not accepted) and tick the verbs.
 A subfolder is covered after a listing that started at the rule's folder returned it; a file in an unlisted
 subfolder still asks. The memory is per token, in memory, and expires after one hour; list the folder again
 to renew it. Shortcuts are never followed, and the scope never covers write, move, copy or upload.
-See [ADR 0333](adr/0333-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md).
+See [ADR 0335](adr/0335-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md).
 """
 
 

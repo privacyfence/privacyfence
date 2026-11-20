@@ -20,6 +20,7 @@ from typing import Any, Callable, Hashable
 
 from ..approvals import ApprovalPending, PendingApprovalRegistry
 from ..audit_log import AuditEntry, current_week, get_audit_logger, released_request_scope
+from .. import org_rules
 from ..auto_accept import (
     PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
 )
@@ -401,13 +402,13 @@ class McpDispatcher:
                 "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
                 "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
                 "pii_gate_may_apply": False, "pii_gate": "none", "pii_gate_detail": "",
-                "suggested_rules": [],
+                "suggested_rules": [], "rule_source": None,
             }
         else:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
             my_email = getattr(connector, "my_email", "")
             agent_args = {k: v for k, v in args.items() if k not in _CONNECTOR_COMPUTED_ARGS}
-            verdict, matched_rule, matched_rule_id, reason = preflight_auto_accept(
+            verdict, matched_rule, matched_rule_id, reason, rule_source = preflight_auto_accept(
                 operation_key, agent_args, my_email, tool,
             )
             if gate == "review":
@@ -419,6 +420,7 @@ class McpDispatcher:
             result = {
                 "gate": gate, "verdict": verdict, "matched_rule": matched_rule or None,
                 "matched_rule_id": matched_rule_id or None,
+                "rule_source": rule_source or None,
                 "reason": reason, "pii_gate_may_apply": gate == "review",
                 # A grace-window match covers only this file for a while; a standing rule is still owed.
                 "suggested_rules": (
@@ -465,7 +467,14 @@ class McpDispatcher:
         below expects."""
         _ = self.connectors
         rule_rows = sorted((_policy_rule_row(row) for row in get_policy_rows()), key=lambda row: row["sentence"])
-        result = {"rules": rule_rows, "scope_groups": policy_catalogue.scope_catalogue()}
+        organization_rules = sorted(
+            (dict(_policy_rule_row(row), source="organization") for row in org_rules.rows()),
+            key=lambda row: row["sentence"],
+        )
+        result = {
+            "rules": rule_rows, "organization_rules": organization_rules,
+            "scope_groups": policy_catalogue.scope_catalogue(),
+        }
         try:
             get_audit_logger().record(AuditEntry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -597,7 +606,7 @@ class McpDispatcher:
             f"{body['days']} days" + (", delivery to n8n" if delivery is not None else ""),
         )
         # Only a copy rule's sentence reads the person's Auto-accept rows.
-        own_rows = get_policy_rows() if any(rule["kind"] == "copy" for rule in body["rules"]) else []
+        own_rows = scoped_tokens.copyable_rows() if any(rule["kind"] == "copy" for rule in body["rules"]) else []
         data = review_data(proposal, own_rows)
         result: dict[str, Any] = {
             "proposal_id": proposal.id,

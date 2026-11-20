@@ -32,7 +32,7 @@ import subprocess
 
 import pytest
 
-from privacyfence.settings_window_html import build_html
+from privacyfence.settings_window_html import _admin_section_defaults, build_html
 
 
 def _make_state(**overrides):
@@ -263,7 +263,7 @@ class TestAutoAcceptTemplate:
 
     def test_move_needs_two_ids_hint_and_block(self):
         html = build_html(_make_state())
-        assert "function aaPairHint(group)" in html
+        assert "function rulePairHint(group, list)" in html
         assert "['move'].filter" in html
         assert "['move', 'copy']" not in html
         assert "Enter at least two ids, separated by a comma." in html
@@ -287,7 +287,8 @@ class TestAutoAcceptTemplate:
         assert "data-aa-edit-verb" in html
         assert "data-aa-edit-save" in html
         assert "data-aa-edit-cancel" in html
-        assert "dataAttr('set_policy_rule_verbs', { rule_id: r.id, verbs: selected })" in html
+        assert "dataAttr(list.setVerbs, { rule_id: r.id, verbs: ruleVerbsParam(list, selected) })" in html
+        assert "setVerbs: 'set_policy_rule_verbs', joinVerbs: false" in html
         assert "Change this rule to allow ' + selected.join(', ') + '? Added verbs cover all of their tools. " in html
         assert "Tools that only removed verbs cover stop being auto-accepted." in html
         # Custom rows (scope null) get no link; Save is inert while no verb is selected.
@@ -299,7 +300,7 @@ class TestAutoAcceptTemplate:
         assert "data-aa-personal-data" not in html
         assert "personal_data_label" not in html
         assert "aaPersonalData" not in html
-        assert "verbs: checked });" in html
+        assert "verbs: ruleVerbsParam(list, checked) });" in html
 
     def test_filter_bar_wired(self):
         html = build_html(_make_state())
@@ -604,6 +605,10 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
+    def test_an_org_row_in_the_copy_list_is_labelled(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "r.organization ? ' <span class=\"pf-st-meta\">(set by your organization)</span>'" in html
+
     def test_the_gated_fieldset_text_is_exact(self):
         html = build_html(_make_state(), scoped_tokens={
             **self.DATA, "delivery": "once",
@@ -703,7 +708,7 @@ class TestScopedTokensSection:
     def test_the_pair_hint_is_shared_with_the_auto_accept_page(self):
         html = build_html(_make_state(), scoped_tokens=self.DATA)
         assert "function pairHint(group, checkedVerbs, value)" in html
-        assert "return pairHint(group, ui.aaCheckedVerbs, ui.aaValue);" in html
+        assert "return pairHint(group, ui[list.prefix + 'CheckedVerbs'], ui[list.prefix + 'Value']);" in html
         assert "pairHint(newGroup, ui.stNewVerbs, ui.stNewValue)" in html
 
     def test_scope_group_labels_and_value_hints_are_escaped(self):
@@ -976,7 +981,8 @@ class TestAdminSurfaceCapabilities:
     def test_an_org_admin_gets_every_section_and_nothing_is_suppressed(self):
         caps = _admin_caps(build_html(_admin_state(), surface="admin", is_admin=True))
         assert caps["sections"] == dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "audit", "privacy", "stats"), True,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "org_rules", "runtimes", "upstreams", "audit",
+             "privacy", "stats"), True,
         )
         assert caps["not_applicable_actions"] == []
 
@@ -1019,7 +1025,7 @@ class TestAdminSurfaceCapabilities:
         assert pairs == [
             ("services", "Services"), ("features", "Features"),
             ("delivery", "File delivery"), ("access", "Sign-in"), ("step_up", "Step-up"),
-            ("tokens", "Scoped tokens"), ("runtimes", "Agent runtimes"), ("upstreams", "Upstream MCP servers"),
+            ("tokens", "Scoped tokens"), ("org_rules", "Organization rules"), ("runtimes", "Agent runtimes"), ("upstreams", "Upstream MCP servers"),
             ("audit", "Audit forwarding"),
             ("privacy", "Privacy Filter"), ("stats", "Stats"),
         ]
@@ -1075,8 +1081,8 @@ class TestServicesSection:
     def test_the_nav_shows_only_the_sections_the_capabilities_include(self):
         org = _render_admin(_admin_state(_row("google", "Google")))
         assert re.findall(r'aria-label="([^"]+)" data-nav', org) == [
-            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Upstream MCP servers",
-            "Audit forwarding", "Privacy Filter", "Stats",
+            "Services", "Features", "File delivery", "Sign-in", "Step-up", "Scoped tokens", "Organization rules", "Agent runtimes",
+            "Upstream MCP servers", "Audit forwarding", "Privacy Filter", "Stats",
         ]
         assert 'aria-selected="true"' in org
 
@@ -1550,7 +1556,10 @@ class TestOrgAdminSections:
     def test_the_org_admin_surface_has_all_of_the_org_sections(self):
         caps = _admin_caps(build_html(_org_state(), surface="admin", is_admin=True))
         keys = [k for k, v in caps["sections"].items() if v]
-        assert keys == ["services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "audit", "privacy", "stats"]
+        assert keys == [
+            "services", "features", "delivery", "access", "step_up", "tokens", "org_rules", "runtimes", "upstreams", "audit",
+            "privacy", "stats",
+        ]
         page = _render_org("services")
         for label in ("File delivery", "Sign-in", "Step-up", "Scoped tokens", "Agent runtimes", "Upstream MCP servers", "Audit forwarding", "Privacy Filter", "Stats"):
             assert f'aria-label="{label}"' in page
@@ -1945,3 +1954,80 @@ class TestUpstreamsSection:
         assert "data-st-connection-for=\"' + esc(u.id) + '\"" in html
         assert "This token acts through your own ' + esc(u.label) +\n        ' connection: it can do what your account there can do." in html
         assert "html += scopedConnectionNotesHtml();" in html
+
+
+def _org_rule_row(rule_id="org-r1", sentence="Drive - in folder Reports: allow read", verbs=("read",)):
+    return {
+        "id": rule_id, "sentence": sentence, "connector": "drive", "connector_label": "Drive",
+        "scope_type": "drive.folder", "scope": "drive.folder", "scope_verbs": ["read", "download"],
+        "value": "Reports", "value_ids": ["FOLDER1"],
+        "verbs": [{"verb": v, "family": "read"} for v in verbs], "covered_tools": ["drive_get_file_content"],
+        "missing_tools": [],
+    }
+
+
+def _admin_org_rules_state(*rules):
+    aa = _make_state()["auto_accept"]
+    return _org_state(org_rules={"rules": list(rules), "scope_groups": aa["scope_groups"], "connectors": aa["connectors"]})
+
+
+@needs_node
+class TestOrgRulesUi:
+    """Admin, Organization rules and the read-only "Set by your organization" block (plan 3.5). The
+    add-rule and Edit verbs controls are the Auto-accept page's own (RULE_LISTS); the clicks are
+    proved in tests/integration/test_settings_org_rules_browser.py."""
+
+    def test_the_nav_pair_is_on_the_admin_surface_only(self):
+        admin = build_html(_admin_state(), surface="admin", is_admin=True)
+        assert _admin_caps(admin)["sections"]["org_rules"] is True
+        assert "['tokens', 'Scoped tokens'], ['org_rules', 'Organization rules']" in admin
+        settings = _admin_caps(build_html(_make_state(), is_admin=True))
+        assert "org_rules" not in settings["sections"]
+        assert "org_rules" not in _admin_section_defaults()
+
+    def test_the_admin_section_shows_the_warning_the_rules_and_the_form(self):
+        page = _render_org("org_rules", _admin_org_rules_state(_org_rule_row()))
+        assert "<h1 class=\"pf-page-title\">Organization rules</h1>" in page
+        assert 'data-rule-list="org"' in page
+        assert (
+            "These rules let every person&#39;s AI use the matching resources without asking, also in unattended sessions. "
+            "A rule with a write or send verb lets every person&#39;s AI change or send without a card. "
+            "A rule on a Drive tag can be forged by anyone who can edit a tagged file, so prefer read verbs."
+        ) in page
+        assert "Drive - in folder Reports: allow read" in page
+        assert 'data-aa-edit="org-r1"' in page
+        assert 'data-action="remove_org_rule" data-payload=\'{"rule_id":"org-r1"}\'' in page
+        assert "data-aa-add=\"1\"" in page and "data-aa-group-select" in page
+        # No match counts and no person-only actions on an organization rule.
+        assert "Matched" not in page and "Never matched" not in page
+        assert "remove_policy_rule" not in page and "update_policy_rule" not in page
+
+    def test_an_empty_admin_section_says_so_and_still_offers_the_form(self):
+        page = _render_org("org_rules", _admin_org_rules_state())
+        assert "No organization rules yet -- add one below." in page
+        assert "data-aa-add=\"1\"" in page
+
+    def test_the_admin_list_names_its_three_actions(self):
+        html = build_html(_admin_org_rules_state(), surface="admin", is_admin=True)
+        assert ("org: { prefix: 'or', stateKey: 'org_rules', add: 'add_org_rule', remove: 'remove_org_rule', "
+                "setVerbs: 'set_org_rule_verbs', joinVerbs: true }") in html
+        assert ("person: { prefix: 'aa', stateKey: 'auto_accept', add: 'add_policy_rule', remove: 'remove_policy_rule', "
+                "setVerbs: 'set_policy_rule_verbs', joinVerbs: false }") in html
+        # Only the organization's actions get one comma-separated string.
+        assert "return list.joinVerbs ? verbs.join(',') : verbs;" in html
+        assert "post(list.add, { group: ui[p + 'Group'], value: valueInput ? valueInput.value : '', verbs: ruleVerbsParam(list, checked) });" in html
+
+    def test_the_person_page_shows_org_rules_read_only(self):
+        state = _make_state(org_rules=[_org_rule_row()])
+        page = _render(build_html(state, initial_section="auto_accept"))
+        block = page.split('data-org-rules-readonly="1"', 1)[1]
+        assert "Set by your organization" in block
+        assert "Only an administrator can change these." in block
+        assert "Drive - in folder Reports: allow read" in block
+        assert "data-action" not in block and "data-aa-edit" not in block and "pf-link" not in block
+
+    def test_the_person_page_has_no_block_without_org_rules(self):
+        for state in (_make_state(), _make_state(org_rules=[])):
+            page = _render(build_html(state, initial_section="auto_accept"))
+            assert "Set by your organization" not in page
+            assert "data-org-rules-readonly" not in page

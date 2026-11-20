@@ -1,4 +1,4 @@
-# ADR 0333: A Drive folder-tree rule follows the folders a listing returned
+# ADR 0335: A Drive folder-tree rule follows the folders a listing returned
 
 ## Status
 

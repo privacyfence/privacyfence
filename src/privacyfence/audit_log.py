@@ -72,7 +72,60 @@ logger = logging.getLogger(__name__)
 #        staged_download_served rows carry the releasing request's request_id and agent
 #   8 -- upstream identity claim (ADR 0297): + claim_jti, claim_sub, claim_principal_type,
 #        claim_audiences, claim_act, claim_req, upstream_status, metadata
-CURRENT_SCHEMA_VERSION = 8
+#   9 -- who allowed the call: + allowed_by
+CURRENT_SCHEMA_VERSION = 9
+
+# What the Excel "Allowed By" column shows for each stored-or-inferred ``allowed_by`` value
+# (see allowed_by_for / effective_allowed_by). "" (nothing allowed the call, or not applicable)
+# is left blank.
+ALLOWED_BY_LABELS = {
+    "person": "Person",
+    "person_rule": "Person's own auto-accept rule",
+    "org_rule": "Organization auto-accept rule",
+    "token_rule": "Scoped token's rule",  # nosec B105  # a label, not a secret
+    "no_approval_needed": "No approval needed",
+}
+
+_PERSON_DECISIONS = frozenset({"approved", "accepted_via_accept_all", "accepted_via_temp_session"})
+
+
+def allowed_by_for(decision: str, rule_source: str) -> str:
+    """The ``allowed_by`` value to store for a decision. ``rule_source`` is what matched an
+    ``auto_accepted`` call: ``person``, ``organization``, ``token`` or ``""`` (no rule: the
+    temp-accept window, which is a person's click). Every other decision gives ``""``."""
+    if decision in _PERSON_DECISIONS:
+        return "person"
+    if decision == "auto_accepted":
+        return {
+            "organization": "org_rule",
+            "token": "token_rule",  # nosec B105  # an allowed_by enum value, not a secret
+            "person": "person_rule",
+        }.get(rule_source, "person")
+    return ""
+
+
+def effective_allowed_by(data: dict[str, Any]) -> str:
+    """``allowed_by`` for an entry dict read from a ``.jsonl`` line: the stored value when set,
+    else inferred from the row (written before schema 9, or by a connector's own ``_auto_audit``,
+    which does not go through gate._audit)."""
+    stored = data.get("allowed_by") or ""
+    if stored:
+        return str(stored)
+    decision = data.get("decision") or ""
+    if decision in _PERSON_DECISIONS:
+        return "person"
+    if decision != "auto_accepted":
+        return ""
+    if str(data.get("agent_id") or "").startswith("scoped-token:"):
+        return "token_rule"
+    rule = data.get("auto_accept_rule") or ""
+    if rule == "session_temp_accept":
+        return "person"
+    if rule == "auto":
+        return "no_approval_needed"
+    if data.get("rule_id") or rule:
+        return "person_rule"
+    return ""
 
 # The hash chain's own root -- what the very first entry this install ever
 # records (or the first one after a chain-state file goes missing, e.g. a
@@ -164,7 +217,8 @@ class AuditEntry:
                             # "group_membership_applied" | "group_membership_rejected" |
                             # "group_membership_denied" | "group_membership_approved" |
                             # "group_membership_declined" |
-                            # "upstream_audiences_applied" | "upstream_audiences_failed"
+                            # "upstream_audiences_applied" | "upstream_audiences_failed" |
+                            # "org_rule_added" | "org_rule_removed" | "org_rule_verbs_changed"
                             # (the runtime_credential_* decisions record a scoped token's delivery
                             #  into an agent runtime and its cleanup, ADR 0278 and ADR 0281; they
                             #  render as plain entries and none counts as an approval.
@@ -448,6 +502,11 @@ class AuditEntry:
     upstream_status: str = ""  # ok | tool_error | unreachable | too_large | refused | claim_failed
     metadata: dict[str, str] = field(default_factory=dict)  # upstream, claim_version, identity_claim,
                               # token_id, approved_by, gate only; never argument values or upstream text
+    allowed_by: str = ""      # who allowed the call (schema 9): person | person_rule | org_rule |
+                              # token_rule | no_approval_needed | "". Written by gate._audit from
+                              # the decision and the matching rule's source; "" on every entry
+                              # recorded before schema 9 -- read those through
+                              # effective_allowed_by(), which infers it.
 
     # ---- Hash-chain and provenance fields ----
     # All six below default to a value meaning "not yet stamped" and are
@@ -827,11 +886,14 @@ class AuditLogger:
             "Request ID", "Expired Decision",
             # Upstream identity claim (schema 8): appended last, same reason again.
             "Claim jti", "Claim sub", "Principal type", "Audiences", "Upstream status",
+            # Who allowed the call (schema 9): appended last, same reason again.
+            "Allowed By",
         ]
         COL_WIDTHS = [
             22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30, 14,
             24, 24, 16, 22, 18, 14, 16, 22,
             38, 30, 16, 30, 16,
+            30,
         ]
 
         hdr_font  = Font(bold=True, color="FFFFFF")
@@ -862,7 +924,11 @@ class AuditLogger:
             "cancelled":             PatternFill("solid", fgColor="E9ECEF"),
             "approval_pending":      PatternFill("solid", fgColor="E7F0FF"),
             "expired":               PatternFill("solid", fgColor="FFD8A8"),
+            "org_rule_added":        PatternFill("solid", fgColor="FFF3CD"),
+            "org_rule_removed":      PatternFill("solid", fgColor="FFF3CD"),
+            "org_rule_verbs_changed": PatternFill("solid", fgColor="FFF3CD"),
         }
+        org_rule_fill = PatternFill("solid", fgColor="EDE7F6")
 
         ws.append(HEADERS)
         for col, _ in enumerate(HEADERS, 1):
@@ -872,6 +938,7 @@ class AuditLogger:
             c.alignment = hdr_align
 
         for entry in entries:
+            allowed_by = effective_allowed_by(asdict(entry))
             ws.append([
                 entry.timestamp, entry.week, entry.connector, entry.tool,
                 entry.tool_name, _excel_literal(entry.summary), _excel_literal(entry.sender),
@@ -891,8 +958,9 @@ class AuditLogger:
                 _excel_literal(entry.claim_jti or ""), _excel_literal(entry.claim_sub or ""),
                 entry.claim_principal_type or "",
                 _excel_literal(", ".join(entry.claim_audiences)), entry.upstream_status or "",
+                ALLOWED_BY_LABELS.get(allowed_by, ""),
             ])
-            fill = decision_fills.get(entry.decision, PatternFill())
+            fill = org_rule_fill if allowed_by == "org_rule" else decision_fills.get(entry.decision, PatternFill())
             for col in range(1, len(HEADERS) + 1):
                 ws.cell(row=ws.max_row, column=col).fill = fill
 
@@ -1007,13 +1075,15 @@ class AuditLogger:
                     count += 1
         return count
 
-    def rule_usage(self) -> dict[str, dict[str, Any]]:
+    def rule_usage(self, source: str = "person_rule") -> dict[str, dict[str, Any]]:
         """Per-rule usage, for the Auto-accept Settings page's "Matched 42x, last 3 days ago" /
         "never matched" line, keyed by rule id because a rule name can repeat (ADR 0074): ``{rule_id:
         {"count": int, "last_matched": <ISO-8601 timestamp string>}}``, built from every ``"auto_accepted"`` decision this
         install has ever recorded whose ``rule_id`` resolved to a real row (see AuditEntry.
         rule_id's own docstring for when that's empty). Calls made with a scoped token are left
-        out: they match the token's own rules, never the person's (ADR 0236).
+        out: they match the token's own rules, never the person's (ADR 0236). Only entries whose
+        ``effective_allowed_by`` equals ``source`` count, so an organization rule's match never
+        raises the count of a person's rule that happens to share its id.
 
         Scans every week file, not just the two ``recent_entries()`` keeps warm -- staleness is a
         lifetime question ("has this rule matched even once since it was created?"), not a
@@ -1041,7 +1111,7 @@ class AuditLogger:
                     rule_id = data.get("rule_id") or ""
                     if not rule_id or data.get("decision") != "auto_accepted":
                         continue
-                    if str(data.get("agent_id") or "").startswith("scoped-token:"):
+                    if effective_allowed_by(data) != source:
                         continue
                     timestamp = data.get("timestamp") or ""
                     entry = usage.setdefault(rule_id, {"count": 0, "last_matched": ""})

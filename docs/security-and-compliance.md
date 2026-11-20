@@ -419,8 +419,10 @@ endpoint (**Admin → Audit forwarding**, stored as `audit_forwarding` in `org/a
 Security events have their own `decision` values: `sign_in_code_minted`,
 `webauthn_credential_enrolled`, `webauthn_credential_removed`, `webauthn_enrollment_refused`,
 `webauthn_recovery_code_used`, `webauthn_recovery_refused`, `step_up_requirement_enabled` and
-`step_up_requirement_disabled`. Treat the audit log as sensitive. It shows which services, tools and
+`step_up_requirement_disabled`. Changes to organization auto-accept rules have the `decision` values `org_rule_added`, `org_rule_removed` and `org_rule_verbs_changed`. Treat the audit log as sensitive. It shows which services, tools and
 resources were used even when no content was released.
+
+Every entry also has an `allowed_by` field that says who allowed the call: `person` (a click or an allow-all choice), `person_rule` (the person's own auto-accept rule), `org_rule` (an organization auto-accept rule) or `token_rule` (a scoped token's rule); it is empty when nothing allowed the call. Entries written before the field existed, and the tools that never ask, are classified when read (the latter as `no_approval_needed`), so the Excel export's **Allowed By** column is filled for old rows too. See [ADR 0334](adr/0334-the-audit-entry-names-who-allowed-a-call.md).
 
 ## Which AI system the audit log names
 
