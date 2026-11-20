@@ -5,7 +5,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-scope-and-grants
 
-- pending
+- worker: Worker reported no deviations; it could not run tld, so the orchestrator ran the roles check (none required).
+- review: Diff review: inside the brief and touches; ListingGrants stores an emptied entry map until the next read prunes it, which is harmless.
 
 ## p2-connector-listing-grants
 
