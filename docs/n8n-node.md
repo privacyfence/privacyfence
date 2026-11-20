@@ -52,6 +52,10 @@ Suppose the token covers one auto-approved tool, `drive_list_shared_drives`.
 
    (This tool takes no arguments; for one that does, put them here, written as `{"name": "value"}`.)
 
+   A node that an agent adds through the n8n MCP stores this field as `toolArguments`, because the n8n MCP refuses a
+   parameter named `arguments`; it appears as **Arguments** in the editor all the same. Nodes saved earlier keep
+   working unchanged.
+
 5. Run the node. The item it returns is the tool's own JSON. A result that
    is an array or a plain value comes back as `{"result": ...}`, and text that is not JSON as `{"text": ...}`.
 
@@ -78,7 +82,7 @@ The node has no Drive-specific code: the walk is ordinary workflow logic.
 ## Using it as an AI Agent tool
 
 Connect the PrivacyFence node to an **AI Agent** node's tool input. The agent sees the node's own parameters,
-not the PrivacyFence tool's input schema: it chooses the tool and writes the `arguments` JSON object itself.
+not the PrivacyFence tool's input schema: it chooses the tool and writes the **Arguments** JSON object itself (stored as `toolArguments` in a node added through the n8n MCP).
 Give the agent a clear description of the tools it may use, and keep the token's rules narrow.
 
 ## When a call is refused
@@ -131,6 +135,6 @@ token.
 | `PrivacyFence at <host> answered HTTP <status>.` | Any other HTTP answer. Check the server's log and any proxy in front of it. |
 | `PrivacyFence at <host> answered an MCP error: <message>` | PrivacyFence answered with an error; the message is its own, cut to 300 characters. |
 | `The PrivacyFence credential needs an address and a token.` | A field of the credential is empty. |
-| `The arguments must be a JSON object.` | **Arguments** is not a JSON object such as `{}`. |
+| `The arguments must be a JSON object.` | **Arguments** (`toolArguments` in a node added through the n8n MCP) is not a JSON object such as `{}`. |
 | `The PrivacyFence node failed unexpectedly.` | An error the node does not describe, on purpose, so that nothing sensitive reaches the item. Run the node again and check the PrivacyFence audit log. |
 | `n8n does not know the PrivacyFence credential type. Ask the n8n administrator to install the community node @privacyfence/n8n-nodes-privacyfence, then try again.` (`NODE_NOT_INSTALLED`) | Shown by PrivacyFence to the person or AI client when delivery is set to the PrivacyFence node and n8n has no such credential type. Install the community node in that n8n, restart it if it asks, and try again. No token was created. |

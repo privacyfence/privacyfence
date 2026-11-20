@@ -428,3 +428,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0333](0333-organization-auto-accept-rules-are-set-by-an-administrator.md) | Organization auto-accept rules are set by an administrator | Accepted; amends 0257; relates to 0164, 0172, 0236, 0320, 0321, 0334 |
 | [0334](0334-the-audit-entry-names-who-allowed-a-call.md) | The audit entry names who allowed a call | Accepted; relates to 0071, 0074, 0333 |
 | [0335](0335-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md) | A Drive folder-tree rule follows the folders a listing returned | Accepted; amends 0320; relates to 0164, 0175, 0222, 0236 |
+| [0336](0336-the-n8n-node-is-versioned-and-its-arguments-field-is-tool-arguments.md) | The n8n node is versioned and its arguments field is `toolArguments` | Accepted |
