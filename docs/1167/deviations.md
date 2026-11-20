@@ -14,7 +14,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-approvals-principal-and-source
 
-- pending
+- retry: Merge turned tests/unit/test_gate.py TestRulesChangedReevaluation red because gate.py (phase p4) still passes a 2-tuple callback; merge undone and p3 sent back to accept a 2-tuple callback until p4 lands.
 
 ## p4-gate-org-rules
 
@@ -26,7 +26,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p6-admin-backend
 
-- pending
+- None.
 
 ## p7-admin-and-person-ui
 
