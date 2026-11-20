@@ -620,13 +620,14 @@ class TestReevaluateAll:
         )
 
         def should_auto_accept(operation_key, ctx):
-            return True, "trusted_sender_domain"
+            return True, "trusted_sender_domain", "organization"
 
         resolved = registry.reevaluate_all(should_auto_accept)
 
         assert [a.id for a in resolved] == [approval.id]
         assert approval.final_decision == "auto_accepted"
         assert approval.final_rule_name == "trusted_sender_domain"
+        assert approval.final_rule_source == "organization"
         assert approval.is_finalized()
 
     def test_a_card_not_covered_by_any_rule_is_left_alone(self):
@@ -636,7 +637,7 @@ class TestReevaluateAll:
             operation_key="gmail.read_message", review_ctx=object(),
         )
 
-        resolved = registry.reevaluate_all(lambda op, ctx: (False, ""))
+        resolved = registry.reevaluate_all(lambda op, ctx: (False, "", ""))
 
         assert resolved == []
 
@@ -647,7 +648,7 @@ class TestReevaluateAll:
             operation_key="gmail.read_message", review_ctx=object(), pii_forces_confirmation=True,
         )
 
-        resolved = registry.reevaluate_all(lambda op, ctx: (True, "trusted_sender_domain"))
+        resolved = registry.reevaluate_all(lambda op, ctx: (True, "trusted_sender_domain", ""))
 
         assert resolved == []
 
@@ -659,7 +660,7 @@ class TestReevaluateAll:
         )
         registry.answer(approval.id, "deny")  # a human already clicked
 
-        resolved = registry.reevaluate_all(lambda op, ctx: (True, "trusted_sender_domain"))
+        resolved = registry.reevaluate_all(lambda op, ctx: (True, "trusted_sender_domain", ""))
 
         assert resolved == []
 
@@ -667,7 +668,7 @@ class TestReevaluateAll:
         registry = make_registry()
         registry.register_confirm()
 
-        resolved = registry.reevaluate_all(lambda op, ctx: (True, "some_rule"))
+        resolved = registry.reevaluate_all(lambda op, ctx: (True, "some_rule", ""))
 
         assert resolved == []
 
@@ -965,10 +966,74 @@ class TestPrincipalDimension:
             )
             # Bob's rules now cover op1 -- must not touch Alice's own
             # pending card for the same operation_key under her rules.
-            resolved = registry.reevaluate_all(lambda op, ctx: (True, "bobs-rule"))
+            resolved = registry.reevaluate_all(lambda op, ctx: (True, "bobs-rule", "person"))
         assert resolved == [bob_approval]
         assert not alice_approval.is_finalized()
         assert bob_approval.is_finalized()
+
+
+class TestReevaluateEveryPrincipal:
+    def _two_cards(self, registry):
+        cards = {}
+        for name in ("alice", "bob"):
+            with principal_scope(Principal(id=name)):
+                cards[name], _ = registry.register_or_coalesce(
+                    dedupe_key=f"k-{name}", connector="c", tool="t", gate_kind="review",
+                    request_id=f"r-{name}", operation_key="op1", review_ctx=object(),
+                )
+        return cards
+
+    def test_each_card_is_evaluated_inside_its_own_principals_scope(self):
+        registry = make_registry()
+        cards = self._two_cards(registry)
+
+        def only_alice(op, ctx):
+            from privacyfence.principal import current_principal
+            return (current_principal().id == "alice", "r", "person")
+
+        resolved = registry.reevaluate_every_principal(only_alice)
+
+        assert resolved == [cards["alice"]]
+        assert cards["alice"].is_finalized()
+        assert not cards["bob"].is_finalized()
+
+    def test_the_source_reaches_the_card_and_the_ledger_hit(self):
+        registry = make_registry()
+        cards = self._two_cards(registry)
+
+        resolved = registry.reevaluate_every_principal(lambda op, ctx: (True, "org-rule", "organization"))
+
+        assert len(resolved) == 2
+        assert all(a.final_rule_source == "organization" for a in cards.values())
+        with principal_scope(Principal(id="alice")):
+            hit = registry.consume_ledger("k-alice")
+        assert hit is not None
+        assert hit.rule_name == "org-rule"
+        assert hit.rule_source == "organization"
+
+    def test_reevaluate_all_still_skips_the_other_principals_card(self):
+        registry = make_registry()
+        cards = self._two_cards(registry)
+        with principal_scope(Principal(id="bob")):
+            resolved = registry.reevaluate_all(lambda op, ctx: (True, "r", "person"))
+        assert resolved == [cards["bob"]]
+        assert not cards["alice"].is_finalized()
+
+    def test_a_two_tuple_callback_means_an_empty_source(self):
+        registry = make_registry()
+        cards = self._two_cards(registry)
+        resolved = registry.reevaluate_every_principal(lambda op, ctx: (True, "old-rule"))
+        assert len(resolved) == 2
+        assert all(a.final_rule_name == "old-rule" and a.final_rule_source == "" for a in cards.values())
+
+    def test_pii_forced_and_confirm_cards_are_skipped(self):
+        registry = make_registry()
+        registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            operation_key="op1", review_ctx=object(), pii_forces_confirmation=True,
+        )
+        registry.register_confirm()
+        assert registry.reevaluate_every_principal(lambda op, ctx: (True, "r", "person")) == []
 
 
 class TestPerPrincipalApprovalCap:
