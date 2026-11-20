@@ -19,7 +19,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p4-gate-org-rules
 
-- pending
+- None.
 
 ## p5-person-and-ai-surfaces
 
