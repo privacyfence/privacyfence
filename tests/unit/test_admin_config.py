@@ -1,6 +1,7 @@
 """The admin config store: schema, load/save and the one-time import from a bundle."""
 from __future__ import annotations
 
+import dataclasses
 import copy
 import hashlib
 import json
@@ -1830,6 +1831,27 @@ class TestOrgRules:
     def test_missing_value_refused(self):
         with pytest.raises(admin_config.AdminConfigError, match="needs a scope"):
             self._add(value="")
+
+    def test_a_malformed_value_is_refused_with_the_validator_message(self):
+        with pytest.raises(admin_config.AdminConfigError, match="is not a Drive folder id"):
+            self._add(value="not a folder id!")
+
+    def test_a_verb_the_scope_cannot_govern_compiles_to_no_rules(self):
+        with pytest.raises(admin_config.AdminConfigError, match="needs a scope"):
+            self._add(group="drive.folder", verbs="send")
+
+    def test_a_row_that_cannot_be_stored_as_an_org_rule_is_refused(self, monkeypatch):
+        from privacyfence.policy import scope_rows
+
+        real_add_rules = scope_rows.add_rules
+
+        def add_rules_with_unscoped_rows(existing, new_rules):
+            rows, touched = real_add_rules(existing, new_rules)
+            return [dataclasses.replace(row, scope=None) for row in rows], touched
+
+        monkeypatch.setattr(scope_rows, "add_rules", add_rules_with_unscoped_rows)
+        with pytest.raises(admin_config.AdminConfigError, match="cannot be stored as an organization rule"):
+            self._add()
 
     def test_unknown_group_refused(self):
         with pytest.raises(admin_config.AdminConfigError, match="needs a scope"):

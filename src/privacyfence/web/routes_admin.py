@@ -72,6 +72,7 @@ from ..principal import Principal, principal_scope
 from ..resource_names import get_resolver
 from ..settings_state import (
     REPO_URL, _auto_accept_state_from_rows, _pii_general_fields, _privacy_state_from_config, cached_row_value,
+    strip_usage_fields,
 )
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
@@ -368,8 +369,7 @@ def _org_rules_state(principal: Principal) -> dict[str, Any]:
             org_rules.rows(), {}, resolve_value=lambda row: cached_row_value(row, resolver), resolver=resolver,
         )
     for rule in state["rules"]:
-        for key in ("match_count", "last_matched", "never_matched"):
-            rule.pop(key, None)
+        strip_usage_fields(rule)
     return state
 
 

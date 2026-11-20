@@ -82,7 +82,7 @@ ALLOWED_BY_LABELS = {
     "person": "Person",
     "person_rule": "Person's own auto-accept rule",
     "org_rule": "Organization auto-accept rule",
-    "token_rule": "Scoped token's rule",
+    "token_rule": "Scoped token's rule",  # nosec B105  # a label, not a secret
     "no_approval_needed": "No approval needed",
 }
 
@@ -96,9 +96,11 @@ def allowed_by_for(decision: str, rule_source: str) -> str:
     if decision in _PERSON_DECISIONS:
         return "person"
     if decision == "auto_accepted":
-        return {"organization": "org_rule", "token": "token_rule", "person": "person_rule"}.get(
-            rule_source, "person"
-        )
+        return {
+            "organization": "org_rule",
+            "token": "token_rule",  # nosec B105  # an allowed_by enum value, not a secret
+            "person": "person_rule",
+        }.get(rule_source, "person")
     return ""
 
 
