@@ -71,11 +71,11 @@ function fakeServer(options: ServerOptions = {}) {
 function context(
 	server: ReturnType<typeof fakeServer>,
 	params: Json,
-	opts: { continueOnFail?: boolean; items?: number; credential?: Json } = {},
+	opts: { continueOnFail?: boolean; items?: number; credential?: Json; typeVersion?: number } = {},
 ) {
 	return {
 		getInputData: () => Array.from({ length: opts.items ?? 1 }, () => ({ json: {} })),
-		getNode: () => ({ name: 'PrivacyFence', type: 'privacyFence', typeVersion: 1 }),
+		getNode: () => ({ name: 'PrivacyFence', type: 'privacyFence', typeVersion: opts.typeVersion ?? 1 }),
 		getCredentials: async () => opts.credential ?? { mcpUrl: URL_, token: TOKEN },
 		getNodeParameter: (name: string, _index: number, fallback?: unknown) =>
 			name in params ? params[name] : fallback,
@@ -148,6 +148,53 @@ test('invalid arguments are refused before any call', async () => {
 			/The arguments must be a JSON object\./,
 		);
 		assert.ok(!server.calls.some((c) => c.rpc === 'tools/call'));
+	}
+});
+
+test('a version-2 node reads toolArguments and ignores arguments', async () => {
+	const server = fakeServer();
+	const params = { ...callParams, arguments: '{"q":"old"}', toolArguments: '{"q":"new"}' };
+	await run(context(server, params, { typeVersion: 2 }));
+	const call = server.sent.find((m) => m.method === 'tools/call') as { params: Json };
+	assert.deepEqual(call.params.arguments, { q: 'new', reason: 'why' });
+});
+
+test('a version-1 node reads arguments and ignores toolArguments', async () => {
+	const server = fakeServer();
+	const params = { ...callParams, toolArguments: '{"q":"new"}' };
+	await run(context(server, params, { typeVersion: 1 }));
+	const call = server.sent.find((m) => m.method === 'tools/call') as { params: Json };
+	assert.deepEqual(call.params.arguments, { q: 'x', reason: 'why' });
+});
+
+test('invalid toolArguments are refused before any call on a version-2 node', async () => {
+	for (const bad of ['not json', '[1]', '"s"', '3']) {
+		const server = fakeServer();
+		await assert.rejects(
+			run(context(server, { ...callParams, toolArguments: bad }, { typeVersion: 2 })),
+			/The arguments must be a JSON object\./,
+		);
+		assert.ok(!server.calls.some((c) => c.rpc === 'tools/call'));
+	}
+});
+
+test('the description lists versions 1 and 2 with 2 as the default', () => {
+	assert.deepEqual(node.description.version, [1, 2]);
+	assert.equal(node.description.defaultVersion, 2);
+});
+
+test('arguments shows only for version 1 and toolArguments exists for later versions', () => {
+	const props = node.description.properties as Array<{
+		name: string;
+		displayOptions?: { show?: Record<string, unknown> };
+	}>;
+	const old = props.filter((p) => p.name === 'arguments');
+	assert.ok(old.length > 0);
+	for (const p of old) assert.deepEqual(p.displayOptions?.show?.['@version'], [1]);
+	const current = props.filter((p) => p.name === 'toolArguments');
+	assert.ok(current.length > 0);
+	for (const p of current) {
+		assert.deepEqual(p.displayOptions?.show?.['@version'], [{ _cnd: { gte: 2 } }]);
 	}
 });
 

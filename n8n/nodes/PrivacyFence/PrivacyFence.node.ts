@@ -202,7 +202,8 @@ export class PrivacyFence implements INodeType {
 			dark: 'file:privacyfence.dark.svg',
 		},
 		group: ['transform'],
-		version: 1,
+		version: [1, 2],
+		defaultVersion: 2,
 		subtitle: '={{$parameter["operation"] === "listTools" ? "List tools" : $parameter["tool"]}}',
 		description: 'Call a tool your PrivacyFence server lets this workflow use',
 		defaults: {
@@ -256,7 +257,17 @@ export class PrivacyFence implements INodeType {
 				type: 'json',
 				default: '{}',
 				description: "The tool's arguments as a JSON object, without reason",
-				displayOptions: { show: { operation: ['callTool'] } },
+				displayOptions: { show: { operation: ['callTool'], '@version': [1] } },
+			},
+			{
+				displayName: 'Arguments',
+				name: 'toolArguments',
+				type: 'json',
+				default: '{}',
+				description: "The tool's arguments as a JSON object, without reason",
+				displayOptions: {
+					show: { operation: ['callTool'], '@version': [{ _cnd: { gte: 2 } }] },
+				},
 			},
 			{
 				displayName: 'Options',
@@ -325,7 +336,8 @@ export class PrivacyFence implements INodeType {
 					}
 					const tool = this.getNodeParameter('tool', itemIndex, '') as string;
 					const reason = this.getNodeParameter('reason', itemIndex, '') as string;
-					const rawArguments = this.getNodeParameter('arguments', itemIndex, '{}') as unknown;
+					const argumentsName = this.getNode().typeVersion >= 2 ? 'toolArguments' : 'arguments';
+					const rawArguments = this.getNodeParameter(argumentsName, itemIndex, '{}') as unknown;
 					let parsed: unknown = rawArguments;
 					if (typeof rawArguments === 'string') {
 						try {

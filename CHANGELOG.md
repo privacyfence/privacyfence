@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The n8n node's Arguments field can be set through the n8n MCP.** The node has a second version whose field is stored as `toolArguments`, because the n8n MCP rejects a parameter named `arguments`; existing nodes keep their field and keep working ([ADR 0336](docs/adr/0336-the-n8n-node-is-versioned-and-its-arguments-field-is-tool-arguments.md), [#1175](https://github.com/privacyfence/privacyfence/issues/1175)).
+
 ## [8.2.1] - 2026-11-20
 
 ### Fixed

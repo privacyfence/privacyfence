@@ -25,7 +25,7 @@ credential to check the connection.
 
 1. Add the **PrivacyFence** node and pick your credential.
 2. Choose **Call a Tool**, pick the tool and type a **Reason** (PrivacyFence records it in its audit log).
-3. Put the tool's arguments in **Arguments** as a JSON object, without `reason`.
+3. Put the tool's arguments in **Arguments** as a JSON object, without `reason`. A node added through the n8n MCP stores this field as `toolArguments`; older nodes keep working.
 
 **List Tools** returns one item per tool the token may call.
 
