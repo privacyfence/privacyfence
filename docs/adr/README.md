@@ -412,7 +412,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md) | An org directory holding only admin_config.json is fresh | Accepted; amends 0302 |
 | [0318](0318-pkce-can-be-turned-off-for-one-named-oidc-app.md) | PKCE can be turned off for one named OIDC app | Accepted; amends 0273 |
 | [0319](0319-the-admin-page-shows-upstream-mcp-servers-read-only.md) | The Admin page shows upstream MCP servers read-only | Accepted; amends 0258; relates to 0285; amended by 0325; Superseded by 0331 |
-| [0320](0320-drive-rules-match-on-file-tags-not-folder-ancestry.md) | Drive rules match on a file tag, not on folder ancestry | Accepted; relates to 0172, 0222, 0232 |
+| [0320](0320-drive-rules-match-on-file-tags-not-folder-ancestry.md) | Drive rules match on a file tag, not on folder ancestry | Accepted; relates to 0172, 0222, 0232; amended by 0333 |
 | [0321](0321-drive-tags-are-plain-properties-and-collaborators-can-forge-them.md) | Drive tags are plain properties, and collaborators can forge them | Accepted; relates to 0320 |
 | [0322](0322-tag-writing-tools-are-popup-only-and-exempt-from-every-rule.md) | The tag-writing tools are popup-only and exempt from every rule | Accepted; relates to 0077, 0164, 0236 |
 | [0323](0323-the-oidc-provider-sends-no-group-membership.md) | The OIDC provider sends no group membership | Accepted; supersedes 0311; relates to 0273, 0298, 0299, 0310, 0318; amended by 0325 |
@@ -425,3 +425,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0330](0330-oauth-upstreams-discover-their-server-register-a-client-and-keep-tokens-per-person.md) | OAuth upstreams discover their server, register a client and keep tokens per person | Accepted; relates to 0072, 0178, 0259, 0329 |
 | [0331](0331-the-administrator-manages-each-upstream-servers-tools.md) | The administrator manages each upstream server's tools | Accepted; supersedes 0319; amends 0300; relates to 0329, 0330 |
 | [0332](0332-lockfile-freshness-checks-consistency-not-the-newest-release.md) | lockfile-freshness checks that the locks match their inputs, not that they are the newest release | Accepted; amends 0182 |
+| [0333](0333-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md) | A Drive folder-tree rule follows the folders a listing returned | Accepted; amends 0320; relates to 0164, 0175, 0222, 0236 |

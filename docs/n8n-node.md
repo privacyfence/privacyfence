@@ -60,6 +60,21 @@ The **List Tools** operation returns one item per tool the token may call, with 
 
 The node has no address field of its own and no way to override the credential's address.
 
+## Reading a whole Drive folder
+
+One rule on the top folder is enough to read a whole tree.
+
+1. The token needs a `drive.folder_tree` rule for the top folder with the verbs read and download, and the tools
+   `drive_list_folder`, `drive_get_file_content` and/or `drive_download_file`.
+2. In the workflow, call `drive_list_folder` on the top folder. Loop over the folders it returns with a **Code**
+   node that keeps a queue of folder ids and has a back-edge to the list step, so each subfolder is listed in
+   turn. Read or download each file the listings return.
+3. A read or download passes only for a file in the top folder or in a subfolder a listing returned within the
+   last hour; a file in an unlisted subfolder is refused. List the tree again to renew it.
+4. When the files contain personal data, the token also needs `allow_personal_data` or `allow_personal_data_reads`.
+
+The node has no Drive-specific code: the walk is ordinary workflow logic.
+
 ## Using it as an AI Agent tool
 
 Connect the PrivacyFence node to an **AI Agent** node's tool input. The agent sees the node's own parameters,

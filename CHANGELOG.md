@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **A Drive rule that follows listings into subfolders.** The new scope "Google Drive — a folder and the subfolders reached by listing it" covers read and download of files in a folder and in the subfolders a `drive_list_folder` call returned under it, so a workflow can read a whole tree with one rule on the top folder. Add it in Settings or in a scoped token's rules ([ADR 0333](docs/adr/0333-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md), [#1168](https://github.com/privacyfence/privacyfence/issues/1168)).
+
 ## [8.1.0] - 2026-11-19
 
 ### Added
