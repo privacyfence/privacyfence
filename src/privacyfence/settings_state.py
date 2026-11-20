@@ -429,19 +429,28 @@ def _rule_row(
     }
 
 
+_USAGE_FIELDS = ("match_count", "last_matched", "never_matched")
+
+
+def strip_usage_fields(rule_row: dict[str, Any]) -> dict[str, Any]:
+    """Drop the usage fields from one rule row, in place: an organization-wide rule has no single
+    owner to count for. Returns the row."""
+    for key in _USAGE_FIELDS:
+        rule_row.pop(key, None)
+    return rule_row
+
+
 def org_rule_rows(
     rows: list[policy_scope_rows.ScopeRow], *,
     resolve_value: Callable[[policy_scope_rows.ScopeRow], str], resolver: ResourceNameResolver,
 ) -> list[dict[str, Any]]:
-    """The organization's rules as read-only rows: ``_rule_row`` without the usage fields, which an
-    organization-wide rule has no single owner to count for."""
-    result = []
-    for row in rows:
-        entry = _rule_row(row, {}, resolved_value=resolve_value(row), value_items=row_value_items(row, resolver))
-        for key in ("match_count", "last_matched", "never_matched"):
-            entry.pop(key, None)
-        result.append(entry)
-    return result
+    """The organization's rules as read-only rows: ``_rule_row`` without the usage fields."""
+    return [
+        strip_usage_fields(
+            _rule_row(row, {}, resolved_value=resolve_value(row), value_items=row_value_items(row, resolver))
+        )
+        for row in rows
+    ]
 
 
 def _auto_accept_state_from_rows(

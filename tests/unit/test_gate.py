@@ -3940,6 +3940,17 @@ class TestOrgRules:
         assert cards["bob"].final_rule_source == "organization"
         assert not cards["alice"].is_finalized()
 
+        with principal_scope(Principal(id="bob")):
+            retry = await gated_call_or_pending(
+                **base_kwargs(gate="review", raw_data=SimpleNamespace(sender="b@corp.example", labels=[])),
+            )
+        assert retry is FILTERED
+        with principal_scope(Principal(id="bob")):
+            late = read_audit_entries(get_audit_logger()._log_dir)[-1]  # bob's own log
+        assert late["decision"] == "auto_accepted"
+        assert late["allowed_by"] == "org_rule"
+        assert late["rule_id"] == _org_row("corp.example").id
+
         registry.answer(cards["alice"].id, "deny")
         await asyncio.sleep(0.02)
 
@@ -3975,6 +3986,34 @@ class TestRulesChangedReevaluation:
         decisions = [e["decision"] for e in read_audit_entries(audit_dir)]
         assert decisions[-1] == "auto_accepted"
         return registry
+
+    async def _a_held_call_released_by_a_rule_change(self, monkeypatch, audit_dir, gate_kind, **overrides):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+
+        held = asyncio.ensure_future(gated_call_or_pending(**base_kwargs(gate=gate_kind, **overrides)))
+        for _ in range(200):
+            if registry._pending:
+                break
+            await asyncio.sleep(0.01)
+        assert registry._pending and not held.done()
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "new_rule")))
+        auto_accept.notify_rules_changed()
+        assert await asyncio.wait_for(held, timeout=5) is FILTERED
+        late = read_audit_entries(audit_dir)[-1]
+        assert late["decision"] == "auto_accepted"
+        assert late["auto_accept_rule"] == "new_rule"
+
+    async def test_a_held_review_call_is_released_when_a_rule_change_covers_it(self, monkeypatch, audit_dir):
+        await self._a_held_call_released_by_a_rule_change(monkeypatch, audit_dir, "review")
+
+    async def test_a_held_popup_call_is_released_when_a_rule_change_covers_it(self, monkeypatch, audit_dir):
+        await self._a_held_call_released_by_a_rule_change(
+            monkeypatch, audit_dir, "popup", tool="gmail_create_draft",
+        )
 
     async def test_rules_change_resolves_only_cards_the_new_rules_cover(self, monkeypatch, audit_dir):
         await self._resolves_on_rule_change(monkeypatch, audit_dir, "review")

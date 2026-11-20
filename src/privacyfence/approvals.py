@@ -1003,7 +1003,7 @@ class PendingApprovalRegistry:
     # Rules-changed re-evaluation broadcast
     # ------------------------------------------------------------------ #
 
-    def reevaluate_all(self, should_auto_accept: Callable[[str, Any], tuple[Any, ...]]) -> list[PendingApproval]:
+    def reevaluate_all(self, should_auto_accept: Callable[[str, Any], tuple[bool, str, str]]) -> list[PendingApproval]:
         """Called whenever the live rule/grant set changes (see gate.py's
         subscription to auto_accept.add_rules_changed_listener). Any
         not-yet-answered card whose operation is now covered by a rule --
@@ -1028,7 +1028,7 @@ class PendingApprovalRegistry:
         return self._reevaluate(candidates, should_auto_accept)
 
     def reevaluate_every_principal(
-        self, should_auto_accept: Callable[[str, Any], tuple[Any, ...]],
+        self, should_auto_accept: Callable[[str, Any], tuple[bool, str, str]],
     ) -> list[PendingApproval]:
         """Like reevaluate_all(), but over every principal's pending cards: for a
         change that applies to all of them (an organization rule). Each card is
@@ -1048,7 +1048,7 @@ class PendingApprovalRegistry:
 
     def _reevaluate(
         self, candidates: list[PendingApproval],
-        should_auto_accept: Callable[[str, Any], tuple[Any, ...]],
+        should_auto_accept: Callable[[str, Any], tuple[bool, str, str]],
         enter_principal: bool = False,
     ) -> list[PendingApproval]:
         resolved: list[PendingApproval] = []
@@ -1063,8 +1063,7 @@ class PendingApprovalRegistry:
                     result = should_auto_accept(
                         cast(str, approval.operation_key), approval.review_ctx,
                     )
-                # The 2-tuple (ok, rule_id) form stays until the gate moves to 3-tuples.
-                auto_ok, matched_rule, source = result if len(result) == 3 else (*result, "")
+                auto_ok, matched_rule, source = result
             except Exception:
                 logger.exception("should_auto_accept raised during rules-changed re-evaluation")
                 continue
