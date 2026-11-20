@@ -12,13 +12,16 @@ from freezegun import freeze_time
 from privacyfence import paths
 from privacyfence.audit_log import (
     APPROVED_LIKE_DECISIONS,
+    ALLOWED_BY_LABELS,
     CURRENT_SCHEMA_VERSION,
     GENESIS_HASH,
     AuditEntry,
     AuditLogger,
     _previous_week,
+    allowed_by_for,
     compute_security_config_hash,
     current_week,
+    effective_allowed_by,
     get_audit_logger,
     init_audit_logger,
     set_security_config_hash_for_all_principals,
@@ -1265,14 +1268,14 @@ class TestUpstreamClaimFields:
         "claim_act", "claim_req", "upstream_status", "metadata",
     )
 
-    def test_schema_version_is_eight(self):
-        assert CURRENT_SCHEMA_VERSION == 8
+    def test_schema_version_is_at_least_eight(self):
+        assert CURRENT_SCHEMA_VERSION >= 8
 
-    def test_new_entry_is_recorded_as_schema_eight(self, tmp_path):
+    def test_new_entry_is_recorded_at_the_current_schema(self, tmp_path):
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(decision="upstream_forwarded"))
         line = json.loads((tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8"))
-        assert line["schema_version"] == 8
+        assert line["schema_version"] == CURRENT_SCHEMA_VERSION
         assert line["claim_audiences"] == ["all", "mgmt"]
         assert line["claim_act"] == {"sub": "client-1"}
         assert line["metadata"] == {"upstream": "hub"}
@@ -1312,7 +1315,7 @@ class TestUpstreamClaimFields:
         logger.record(make_entry(decision="upstream_forwarded"))
 
         lines = [json.loads(x) for x in (tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert [x["schema_version"] for x in lines] == [7, 8]
+        assert [x["schema_version"] for x in lines] == [7, CURRENT_SCHEMA_VERSION]
         assert "claim_jti" not in lines[0]
         assert logger.verify_chain("2026-W28").ok is True
 
@@ -1325,8 +1328,150 @@ class TestUpstreamClaimFields:
         ))
 
         ws = openpyxl.load_workbook(logger.export_week_to_excel("2026-W28"))["Decisions"]
-        assert [c.value for c in ws[1]][30:] == [
+        assert [c.value for c in ws[1]][30:35] == [
             "Claim jti", "Claim sub", "Principal type", "Audiences", "Upstream status",
         ]
-        assert [c.value for c in ws[2]][30:] == ["jti-1", "sub-1", "claude_client", "all, mgmt", "ok"]
-        assert [c.value for c in ws[3]][30:] == [None] * 5
+        assert [c.value for c in ws[2]][30:35] == ["jti-1", "sub-1", "claude_client", "all, mgmt", "ok"]
+        assert [c.value for c in ws[3]][30:35] == [None] * 5
+
+
+class TestAllowedBy:
+    """Schema 9: who allowed the call -- allowed_by_for (write time) and effective_allowed_by
+    (read time, for rows with no stored value)."""
+
+    @pytest.mark.parametrize(("decision", "source", "expected"), [
+        ("approved", "", "person"),
+        ("accepted_via_accept_all", "", "person"),
+        ("accepted_via_temp_session", "", "person"),
+        ("auto_accepted", "organization", "org_rule"),
+        ("auto_accepted", "token", "token_rule"),
+        ("auto_accepted", "person", "person_rule"),
+        ("auto_accepted", "", "person"),
+        ("rejected", "", ""),
+        ("rejected", "organization", ""),
+        ("denied_scoped_token", "token", ""),
+        ("policy_check", "person", ""),
+        ("org_rule_added", "", ""),
+    ])
+    def test_allowed_by_for(self, decision, source, expected):
+        assert allowed_by_for(decision, source) == expected
+
+    def test_schema_version_is_nine(self):
+        assert CURRENT_SCHEMA_VERSION == 9
+
+    def test_stored_value_wins(self):
+        assert effective_allowed_by({"allowed_by": "org_rule", "decision": "auto_accepted",
+                                     "rule_id": "r-1"}) == "org_rule"
+
+    def test_token_agent(self):
+        assert effective_allowed_by({"decision": "auto_accepted", "agent_id": "scoped-token:st-1",
+                                     "auto_accept_rule": "x", "rule_id": "r-1"}) == "token_rule"
+
+    def test_session_temp_accept_is_a_person(self):
+        assert effective_allowed_by({"decision": "auto_accepted",
+                                     "auto_accept_rule": "session_temp_accept"}) == "person"
+
+    def test_connector_auto_row_needs_no_approval(self):
+        assert effective_allowed_by({"decision": "auto_accepted", "auto_accept_rule": "auto",
+                                     "schema_version": 9, "allowed_by": ""}) == "no_approval_needed"
+
+    def test_rule_id_is_a_person_rule(self):
+        assert effective_allowed_by({"decision": "auto_accepted", "rule_id": "r-1"}) == "person_rule"
+
+    def test_rule_name_without_id_is_a_person_rule(self):
+        assert effective_allowed_by({"decision": "auto_accepted",
+                                     "auto_accept_rule": "Read my mail"}) == "person_rule"
+
+    def test_auto_accepted_with_nothing_is_empty(self):
+        assert effective_allowed_by({"decision": "auto_accepted"}) == ""
+
+    def test_approved_is_a_person_and_rejected_is_empty(self):
+        assert effective_allowed_by({"decision": "approved"}) == "person"
+        assert effective_allowed_by({"decision": "rejected"}) == ""
+
+    def test_new_field_defaults_to_empty(self):
+        assert make_entry().allowed_by == ""
+
+    def test_verify_chain_passes_on_schema_8_line_then_schema_9_line(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        old = dataclasses.asdict(make_entry(schema_version=8, prev_hash=GENESIS_HASH))
+        del old["allowed_by"]
+        old["entry_hash"] = logger._hash_canonical(old)
+        (tmp_path / "2026-W28.jsonl").write_text(json.dumps(old) + "\n", encoding="utf-8")
+        logger._last_hash = old["entry_hash"]
+
+        logger.record(make_entry(decision="auto_accepted", allowed_by="org_rule"))
+
+        result = logger.verify_chain("2026-W28")
+        assert result.ok is True
+        assert result.entries_checked == 2
+
+
+class TestAllowedByExport:
+    def _rows(self, tmp_path, entries):
+        logger = AuditLogger(str(tmp_path))
+        for e in entries:
+            logger.record(e)
+        path = logger.export_week_to_excel("2026-W28")
+        ws = openpyxl.load_workbook(path)["Decisions"]
+        return ws
+
+    def test_header_is_column_36(self, tmp_path):
+        ws = self._rows(tmp_path, [make_entry()])
+        headers = [c.value for c in ws[1]]
+        assert headers.index("Allowed By") == 35
+
+    def test_labels(self, tmp_path):
+        ws = self._rows(tmp_path, [
+            make_entry(decision="approved", allowed_by="person"),
+            make_entry(decision="auto_accepted", allowed_by="person_rule", rule_id="r-1"),
+            make_entry(decision="auto_accepted", allowed_by="org_rule", rule_id="r-2"),
+            make_entry(decision="auto_accepted", allowed_by="token_rule"),
+            make_entry(decision="auto_accepted", auto_accept_rule="auto"),
+            make_entry(decision="rejected"),
+        ])
+        values = [ws.cell(row=r, column=36).value for r in range(2, 8)]
+        assert values == [
+            ALLOWED_BY_LABELS["person"], ALLOWED_BY_LABELS["person_rule"],
+            ALLOWED_BY_LABELS["org_rule"], ALLOWED_BY_LABELS["token_rule"],
+            ALLOWED_BY_LABELS["no_approval_needed"], None,
+        ]
+
+    def test_org_rule_row_has_its_own_fill(self, tmp_path):
+        ws = self._rows(tmp_path, [
+            make_entry(decision="auto_accepted", allowed_by="org_rule", rule_id="r-2"),
+            make_entry(decision="auto_accepted", allowed_by="person_rule", rule_id="r-1"),
+        ])
+        assert ws.cell(row=2, column=1).fill.fgColor.rgb.endswith("EDE7F6")
+        assert ws.cell(row=3, column=1).fill.fgColor.rgb.endswith("E3F2FD")
+
+    @pytest.mark.parametrize("decision", ["org_rule_added", "org_rule_removed", "org_rule_verbs_changed"])
+    def test_org_rule_decisions_are_highlighted(self, tmp_path, decision):
+        ws = self._rows(tmp_path, [make_entry(decision=decision)])
+        assert ws.cell(row=2, column=1).fill.fgColor.rgb.endswith("FFF3CD")
+
+
+class TestRuleUsageBySource:
+    def _log(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", allowed_by="person_rule"))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", allowed_by="org_rule"))
+        return logger
+
+    def test_person_rule_ignores_org_rows_with_the_same_id(self, tmp_path):
+        assert self._log(tmp_path).rule_usage()["r-1"]["count"] == 1
+
+    def test_org_rule_counts_only_org_rows(self, tmp_path):
+        usage = self._log(tmp_path).rule_usage("org_rule")
+        assert usage["r-1"]["count"] == 1
+
+    def test_legacy_rows_with_a_rule_id_count_for_person_rule(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1"))
+        assert logger.rule_usage()["r-1"]["count"] == 1
+        assert logger.rule_usage("org_rule") == {}
+
+    def test_token_rows_do_not_count_for_person_rule(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", agent_id="scoped-token:st-1"))
+        assert logger.rule_usage() == {}

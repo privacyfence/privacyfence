@@ -1,6 +1,7 @@
 """The admin config store: schema, load/save and the one-time import from a bundle."""
 from __future__ import annotations
 
+import dataclasses
 import copy
 import hashlib
 import json
@@ -1777,3 +1778,104 @@ class TestLockedByEnvironment:
         monkeypatch.setenv("PRIVACYFENCE_PEEK_AUTO_PROVISION", "maybe")
         assert admin_config._env_auto_provision() == frozenset()
         assert admin_config._locked_variable("peek") == ""
+
+
+class TestOrgRules:
+    def _add(self, value="folder1", verbs="read", group="drive.folder"):
+        return _change("add_org_rule", {"group": group, "value": value, "verbs": verbs})
+
+    def test_add_a_drive_folder_read_rule(self):
+        summary, sections = self._add()
+        assert summary.startswith("Added organization rule: ") and "folder1" in summary
+        assert sections == ["org_rules"]
+        stored = _stored()["org_rules"]
+        assert len(stored) == 1 and stored[0]["scope"] == "drive.folder" and stored[0]["value"] == ["folder1"]
+        assert "read" in stored[0]["verbs"]
+
+    def test_same_rule_with_another_verb_merges_into_one_row(self):
+        self._add(verbs="read")
+        self._add(verbs="download")
+        stored = _stored()["org_rules"]
+        assert len(stored) == 1 and {"read", "download"} <= set(stored[0]["verbs"])
+
+    def test_remove(self):
+        self._add()
+        rule_id = _stored()["org_rules"][0]["id"]
+        summary, sections = _change("remove_org_rule", {"rule_id": rule_id})
+        assert summary.startswith("Removed organization rule: ") and sections == ["org_rules"]
+        assert _stored()["org_rules"] == []
+
+    def test_unknown_id(self):
+        with pytest.raises(admin_config.AdminConfigError, match="Unknown organization rule."):
+            _change("remove_org_rule", {"rule_id": "r-nope"})
+        with pytest.raises(admin_config.AdminConfigError, match="Unknown organization rule."):
+            _change("set_org_rule_verbs", {"rule_id": "r-nope", "verbs": "read"})
+
+    def test_verbs_change(self):
+        self._add(verbs="read,download")
+        rule_id = _stored()["org_rules"][0]["id"]
+        summary, sections = _change("set_org_rule_verbs", {"rule_id": rule_id, "verbs": "read"})
+        assert summary.startswith("Changed the verbs of organization rule: ") and sections == ["org_rules"]
+        assert _stored()["org_rules"][0]["verbs"] == ["read"]
+
+    def test_verbs_a_scope_cannot_take_are_refused(self):
+        self._add()
+        rule_id = _stored()["org_rules"][0]["id"]
+        with pytest.raises(admin_config.AdminConfigError, match="Those verbs cannot be set on that rule."):
+            _change("set_org_rule_verbs", {"rule_id": rule_id, "verbs": ""})
+
+    def test_no_verbs_refused(self):
+        with pytest.raises(admin_config.AdminConfigError, match="needs a scope"):
+            self._add(verbs="")
+
+    def test_missing_value_refused(self):
+        with pytest.raises(admin_config.AdminConfigError, match="needs a scope"):
+            self._add(value="")
+
+    def test_a_malformed_value_is_refused_with_the_validator_message(self):
+        with pytest.raises(admin_config.AdminConfigError, match="is not a Drive folder id"):
+            self._add(value="not a folder id!")
+
+    def test_a_verb_the_scope_cannot_govern_compiles_to_no_rules(self):
+        with pytest.raises(admin_config.AdminConfigError, match="needs a scope"):
+            self._add(group="drive.folder", verbs="send")
+
+    def test_a_row_that_cannot_be_stored_as_an_org_rule_is_refused(self, monkeypatch):
+        from privacyfence.policy import scope_rows
+
+        real_add_rules = scope_rows.add_rules
+
+        def add_rules_with_unscoped_rows(existing, new_rules):
+            rows, touched = real_add_rules(existing, new_rules)
+            return [dataclasses.replace(row, scope=None) for row in rows], touched
+
+        monkeypatch.setattr(scope_rows, "add_rules", add_rules_with_unscoped_rows)
+        with pytest.raises(admin_config.AdminConfigError, match="cannot be stored as an organization rule"):
+            self._add()
+
+    def test_unknown_group_refused(self):
+        with pytest.raises(admin_config.AdminConfigError, match="needs a scope"):
+            self._add(group="no.such.group")
+
+    def test_the_101st_rule_is_refused(self):
+        for i in range(admin_config.MAX_ORG_RULES):
+            self._add(value=f"f{i}")
+        with pytest.raises(admin_config.AdminConfigError, match="at most 100 rules"):
+            self._add(value="one-too-many")
+        assert len(_stored()["org_rules"]) == admin_config.MAX_ORG_RULES
+
+    def test_a_no_op_returns_nothing_and_writes_nothing(self):
+        self._add()
+        path = admin_config.admin_config_path()
+        before = path.read_bytes()
+        assert self._add() == ("", [])
+        assert path.read_bytes() == before
+
+    def test_a_stored_row_that_does_not_parse_is_dropped_on_the_next_write(self, tmp_path):
+        self._add()
+        config = _stored()
+        config["org_rules"].append({"junk": 1})
+        admin_config.admin_config_path().write_text(json.dumps(config), encoding="utf-8")
+        self._add(value="other")
+        assert all("scope" in row for row in _stored()["org_rules"])
+        assert len(_stored()["org_rules"]) == 2

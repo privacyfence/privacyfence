@@ -2708,6 +2708,7 @@ _MEMBER_SECTIONS = ("auto_accept", "audit", "about")
 # install's owner sees.
 _ORG_ADMIN_PAGE_SECTIONS = (
     "services", "features", "delivery", "access", "step_up", "tokens", "upstreams", "audit", "privacy", "stats",
+    "org_rules",
 )
 _READ_KINDS = ("pdf", "image", "markdown", "table")
 

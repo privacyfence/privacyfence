@@ -275,6 +275,29 @@ class TestPrincipalScopedRules:
         assert r.status_code == 200
         assert "widgetmakers.test" not in r.text
 
+    def test_two_principals_see_the_same_org_rules_and_their_own_auto_accept_rules(self, tmp_path, monkeypatch):
+        from privacyfence import org_rules
+        from privacyfence.policy.registry import Verb
+        org_row = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for("drive.folder", ["orgFolder"]), scope="drive.folder", value=["orgFolder"],
+            verbs=frozenset({Verb.READ}), operations=scope_rows.implied_operations("drive.folder", [Verb.READ]),
+        )
+        org_rules.set([org_row])
+        _seed(
+            tmp_path, monkeypatch, "alice",
+            rules=_catalogue_rules("gmail.sender_domain", "read", ["widgetmakers.test"]),
+        )
+        _seed(tmp_path, monkeypatch, "bob", rules=[])
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        alice = _initial_state(client.get("/settings").text)
+        _signed_in(client, sessions, BOB)
+        bob = _initial_state(client.get("/settings").text)
+        assert [r["id"] for r in alice["org_rules"]] == [org_row.id] == [r["id"] for r in bob["org_rules"]]
+        assert alice["org_rules"] == bob["org_rules"]
+        assert len(alice["auto_accept"]["rules"]) == 1 and bob["auto_accept"]["rules"] == []
+
     def test_shows_the_signed_in_principals_own_rule(self, tmp_path, monkeypatch):
         rules = _catalogue_rules("gmail.sender_domain", "read", ["widgetmakers.test"])
         _seed(tmp_path, monkeypatch, "alice", rules=rules)

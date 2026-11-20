@@ -425,3 +425,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0330](0330-oauth-upstreams-discover-their-server-register-a-client-and-keep-tokens-per-person.md) | OAuth upstreams discover their server, register a client and keep tokens per person | Accepted; relates to 0072, 0178, 0259, 0329 |
 | [0331](0331-the-administrator-manages-each-upstream-servers-tools.md) | The administrator manages each upstream server's tools | Accepted; supersedes 0319; amends 0300; relates to 0329, 0330 |
 | [0332](0332-lockfile-freshness-checks-consistency-not-the-newest-release.md) | lockfile-freshness checks that the locks match their inputs, not that they are the newest release | Accepted; amends 0182 |
+| [0333](0333-organization-auto-accept-rules-are-set-by-an-administrator.md) | Organization auto-accept rules are set by an administrator | Accepted; amends 0257; relates to 0164, 0172, 0236, 0320, 0321, 0334 |
+| [0334](0334-the-audit-entry-names-who-allowed-a-call.md) | The audit entry names who allowed a call | Accepted; relates to 0071, 0074, 0333 |

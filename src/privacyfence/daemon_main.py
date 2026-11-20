@@ -98,6 +98,7 @@ from . import (
     oidc_provider,
     org_bundle_signing,
     org_mode,
+    org_rules,
     paths,
     peek_provisioning,
     policy_upgrade,
@@ -589,6 +590,7 @@ def load_admin_config(bundle: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         )
     except admin_config.AdminConfigError as exc:
         raise org_mode.ConfigurationError(str(exc)) from exc
+    org_rules.load_from_config(admin)
     legacy = admin_config.legacy_keys_in(bundle)
     if imported:
         logger.warning(

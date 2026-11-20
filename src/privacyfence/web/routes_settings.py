@@ -53,7 +53,7 @@ from starlette.responses import (
 from starlette.routing import BaseRoute, Route
 
 from .. import (
-    agent_runtimes, auto_accept, runtime_credential_sweeper, runtime_credentials,
+    agent_runtimes, auto_accept, org_rules, runtime_credential_sweeper, runtime_credentials,
     scoped_token_proposals, settings_window_html, web_shell, whats_new,
 )
 from ..audit_log import AuditEntry, current_week, get_audit_logger
@@ -66,11 +66,11 @@ from ..principal import Principal, principal_scope
 from ..resource_names import get_resolver
 from ..scoped_tokens import (
     DEFAULT_DAYS, PROPOSALS_DISABLED_MESSAGE, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore,
-    get_store, normalise_create_request,
+    copyable_rows, get_store, normalise_create_request,
 )
 from ..settings_state import (
     REPO_URL, _about_state_dict, _auto_accept_state_from_rows,
-    _parse_value_list, _rule_usage_map,
+    _parse_value_list, _rule_usage_map, org_rule_rows,
     audit_rows, cached_row_value, rule_resource_ids,
 )
 from ..step_up_config import StepUpConfig, effective_scope, set_personal_scope, step_up_scope_fields
@@ -704,6 +704,9 @@ def build_org_routes(
                 rows, _rule_usage_map(), resolve_value=lambda row: cached_row_value(row, resolver),
                 resolver=resolver,
             ),
+            "org_rules": org_rule_rows(
+                org_rules.rows(), resolve_value=lambda row: cached_row_value(row, resolver), resolver=resolver,
+            ),
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
             "about": about,
         }
@@ -1243,7 +1246,7 @@ def build_org_routes(
                     pass  # _wrap_org_settings meets the same error and renders it
                 else:
                     shown = scoped_token_proposals.review_data(
-                        proposal, auto_accept.get_policy_rows(),
+                        proposal, copyable_rows(),
                         runtime_host=(urlsplit(agent_runtime.base_url).hostname or "") if agent_runtime else "",
                         project_id=agent_runtime.project_id if agent_runtime else "",
                     )

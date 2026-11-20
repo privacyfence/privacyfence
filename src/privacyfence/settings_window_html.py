@@ -340,6 +340,8 @@ _JS = r"""
     // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {}, aaEdit: null,
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
+    // The Admin page's Organization rules form: the same controls, its own state (RULE_LISTS.org).
+    orGroup: null, orValue: '', orCheckedVerbs: {}, orEdit: null,
     stLabel: '', stDays: null, stRules: {}, stTools: {}, stGated: {}, stPersonalData: false, stPersonalDataReads: false, stDuplicateOf: null,
     stNewGroup: null, stNewValue: '', stNewVerbs: {}, stNewRules: [], stDupRules: {},
     // Review panel for an AI-proposed token (window.__pfScopedProposal); spLabel === null until first drawn.
@@ -749,12 +751,54 @@ _JS = r"""
       'folder are in the same rule. Enter at least two ids, separated by a comma.';
   }
 
+  // The two rule lists that share the add-rule form and the Edit verbs panel: the person's own
+  // (Settings, Auto-accept) and the organization's (Admin, Organization rules). `prefix` names the
+  // list's `ui` keys (aaGroup / orGroup, ...), `stateKey` where its rules and scope groups are in
+  // the state, and the three actions are the list's own. The Admin actions take the verbs as one
+  // comma-separated string, because ADMIN_PARAMS has no list type. A control finds its list from
+  // the nearest data-rule-list holder; with none it is the person's.
+  var RULE_LISTS = {
+    person: { prefix: 'aa', stateKey: 'auto_accept', add: 'add_policy_rule', remove: 'remove_policy_rule', setVerbs: 'set_policy_rule_verbs', joinVerbs: false },
+    org: { prefix: 'or', stateKey: 'org_rules', add: 'add_org_rule', remove: 'remove_org_rule', setVerbs: 'set_org_rule_verbs', joinVerbs: true },
+  };
+
+  function ruleListOf(el) {
+    var holder = el && el.closest ? el.closest('[data-rule-list]') : null;
+    return (holder && RULE_LISTS[holder.getAttribute('data-rule-list')]) || RULE_LISTS.person;
+  }
+
+  function ruleVerbsParam(list, verbs) {
+    return list.joinVerbs ? verbs.join(',') : verbs;
+  }
+
+  // A rule's sentence and its verb chips: the top of every rule row, editable or read-only.
+  function ruleSummaryHtml(r) {
+    return '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + withValuesHtml(r.sentence_parts, r.value_items, r.sentence) + '</div>' +
+      '<div class="pf-aa-verbs">' + verbChipsHtml(r.verbs) + '</div></div>';
+  }
+
+  // A row's Edit verbs and Remove links (no Edit verbs for a custom row, whose scope is null).
+  function ruleEditLinksHtml(r, list) {
+    var html = '';
+    if (r.scope && r.scope_verbs && r.scope_verbs.length) {
+      html += '<div class="pf-link" role="button" tabindex="0" aria-label="Edit verbs" data-aa-edit="' +
+        esc(r.id) + '">Edit verbs</div>';
+    }
+    return html + '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove rule" ' +
+      dataAttr(list.remove, { rule_id: r.id }) + '>✕ Remove</div>';
+  }
+
+  function ruleEditPanelHtml(r, list) {
+    var edit = ui[list.prefix + 'Edit'];
+    return edit && edit.id === r.id ? editVerbsHtml(r, list) : '';
+  }
+
   // The "Edit verbs" panel of one rule row: the scope's verbs as toggles, pre-selected with the
-  // row's verbs (ui.aaEdit.verbs), then Save verbs / Cancel. Save carries its own confirm text and
-  // is inert while no verb is selected. `move` cannot be switched on for a pair scope row with
-  // fewer than two value ids.
-  function editVerbsHtml(r) {
-    var chosen = ui.aaEdit.verbs || {};
+  // row's verbs (ui.aaEdit.verbs, ui.orEdit.verbs), then Save verbs / Cancel. Save carries its own
+  // confirm text and is inert while no verb is selected. `move` cannot be switched on for a pair
+  // scope row with fewer than two value ids.
+  function editVerbsHtml(r, list) {
+    var chosen = ui[list.prefix + 'Edit'].verbs || {};
     var needsPair = aaMoveNeedsPair(r.scope) && r.value_ids.length < 2;
     var selected = r.scope_verbs.filter(function (v) { return chosen[v]; });
     var html = '<div class="pf-aa-edit"><div class="pf-chips pf-caps-row">';
@@ -774,7 +818,7 @@ _JS = r"""
       html += '<div class="button primary" role="button" tabindex="0" aria-label="Save verbs" data-aa-edit-save="1" data-confirm="' +
         esc('Change this rule to allow ' + selected.join(', ') + '? Added verbs cover all of their tools. ' +
           'Tools that only removed verbs cover stop being auto-accepted.') +
-        '" ' + dataAttr('set_policy_rule_verbs', { rule_id: r.id, verbs: selected }) + '>Save verbs</div>';
+        '" ' + dataAttr(list.setVerbs, { rule_id: r.id, verbs: ruleVerbsParam(list, selected) }) + '>Save verbs</div>';
     } else {
       html += '<div class="button primary" role="button" aria-label="Save verbs" aria-disabled="true" data-aa-edit-save="1">Save verbs</div>';
     }
@@ -840,22 +884,12 @@ _JS = r"""
       var isExpanded = !!expanded[r.id];
       var copyAttr = r.value_ids.length ? ' data-copy-id="' + esc(r.value_ids.join(', ')) +
         '" title="' + esc(r.value_ids.join(', ')) + ' -- right-click to copy"' : '';
-      html += '<div class="card pf-card pf-aa-row"' + copyAttr + '>';
-      html += '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + withValuesHtml(r.sentence_parts, r.value_items, r.sentence) + '</div>';
-      html += '<div class="pf-aa-verbs">' + verbChipsHtml(r.verbs) + '</div></div>';
+      html += '<div class="card pf-card pf-aa-row"' + copyAttr + '>' + ruleSummaryHtml(r);
       html += '<div class="pf-aa-links">';
       html += '<div class="pf-link" role="button" tabindex="0" aria-expanded="' + (isExpanded ? 'true' : 'false') +
         '" aria-label="What this unblocks" data-aa-expand="' + esc(r.id) + '">' + (isExpanded ? '▾' : '▸') +
         ' Unblocks ' + r.covered_tools.length + ' tool' + (r.covered_tools.length === 1 ? '' : 's') + '</div>';
-      var editing = !!(ui.aaEdit && ui.aaEdit.id === r.id);
-      if (r.scope && r.scope_verbs && r.scope_verbs.length) {
-        html += '<div class="pf-link" role="button" tabindex="0" aria-label="Edit verbs" data-aa-edit="' +
-          esc(r.id) + '">Edit verbs</div>';
-      }
-      html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove rule" ' +
-        dataAttr('remove_policy_rule', { rule_id: r.id }) + '>✕ Remove</div>';
-      html += '</div>';
-      if (editing) html += editVerbsHtml(r);
+      html += ruleEditLinksHtml(r, RULE_LISTS.person) + '</div>' + ruleEditPanelHtml(r, RULE_LISTS.person);
       // Tools added after this rule was saved: its verbs name them, its stored operations do not
       // reach them. Widening is only ever this explicit, confirmed click (ADR 0166).
       if (r.missing_tools && r.missing_tools.length) {
@@ -879,21 +913,40 @@ _JS = r"""
       html += '</div>';
     });
 
-    if (!ui.aaGroup && aa.scope_groups.length) ui.aaGroup = aa.scope_groups[0].id;
-    var group = null;
-    aa.scope_groups.forEach(function (g) { if (g.id === ui.aaGroup) group = g; });
-    var checkedVerbs = ui.aaCheckedVerbs || {};
+    html += addRuleFormHtml(aa.scope_groups, RULE_LISTS.person);
 
-    html += '<div class="card pf-card pf-aa-add"><h2 class="pf-row-title">Add a rule</h2>';
+    // The organization's rules, read-only: a person cannot change or switch one off (ADR 0333).
+    var orgRules = state.org_rules || [];
+    if (orgRules.length) {
+      html += '<div class="pf-org-rules-readonly" data-org-rules-readonly="1"><h2 class="pf-row-title">Set by your organization</h2>';
+      html += '<div class="pf-page-subtitle">Only an administrator can change these.</div>';
+      orgRules.forEach(function (r) { html += '<div class="card pf-card pf-aa-row">' + ruleSummaryHtml(r) + '</div>'; });
+      html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  // The "Add a rule" card of a rule list (RULE_LISTS): a scope, its value when it takes one, its
+  // verbs as toggles, and Add rule. Its selections live in ui under the list's prefix.
+  function addRuleFormHtml(groups, list) {
+    var p = list.prefix;
+    if (!ui[p + 'Group'] && groups.length) ui[p + 'Group'] = groups[0].id;
+    var group = null;
+    groups.forEach(function (g) { if (g.id === ui[p + 'Group']) group = g; });
+    var checkedVerbs = ui[p + 'CheckedVerbs'] || {};
+
+    var html = '<div class="card pf-card pf-aa-add"><h2 class="pf-row-title">Add a rule</h2>';
     html += '<label><span class="field-label">Scope</span><select class="field" data-aa-group-select="1">';
-    aa.scope_groups.forEach(function (g) {
-      html += '<option value="' + esc(g.id) + '"' + (g.id === ui.aaGroup ? ' selected' : '') + '>' + esc(g.label) + '</option>';
+    groups.forEach(function (g) {
+      html += '<option value="' + esc(g.id) + '"' + (g.id === ui[p + 'Group'] ? ' selected' : '') + '>' + esc(g.label) + '</option>';
     });
     html += '</select></label>';
     if (group && (group.needs_value || group.value_optional)) {
       html += '<input type="text" class="field pf-input-mono" placeholder="' + esc(group.value_hint) +
         '" aria-label="' + (group.needs_value ? 'Value (comma-separated for more than one)' : 'Value, optional (comma-separated for more than one)') +
-        '" value="' + esc(ui.aaValue) + '" data-aa-value="1"/>';
+        '" value="' + esc(ui[p + 'Value']) + '" data-aa-value="1"/>';
     }
     if (group) {
       html += '<div class="pf-chips pf-caps-row">';
@@ -904,17 +957,14 @@ _JS = r"""
       });
       html += '</div>';
     }
-    var aaHint = aaPairHint(group);
+    var aaHint = rulePairHint(group, list);
     if (aaHint) {
       html += '<div class="pf-hint pf-aa-pair-hint' + (aaHint.invalid ? ' pf-aa-pair-invalid' : '') +
         '" role="status">' + esc(aaHint.text) + '</div>';
     }
     html += '<div><div class="button primary" role="button" aria-label="Add rule" data-aa-add="1"' +
       (aaHint && aaHint.invalid ? ' aria-disabled="true"' : ' tabindex="0"') + '>Add rule</div></div>';
-    html += '</div>';
-
-    html += '</div>';
-    return html;
+    return html + '</div>';
   }
 
   // -------------------------------------------------------------------- //
@@ -1392,6 +1442,7 @@ _JS = r"""
         esc(withValuesText(r.title_parts, r.value_items, r.title) + (allows ? ', ' + allows : '')) + '" data-st-rule="' + esc(r.id) + '">' +
         // One wrapper span: the chip is inline-flex, which would drop the spaces between its text and value spans.
         '<span>' + withValuesHtml(r.title_parts, r.value_items, r.title) +
+        (r.organization ? ' <span class="pf-st-meta">(set by your organization)</span>' : '') +
         (allows ? ' <span class="pf-st-meta">· ' + esc(allows) + '</span>' : '') + '</span></div>';
     });
     html += '</div>';
@@ -2002,7 +2053,7 @@ _JS = r"""
   var ADMIN_NAV_ITEMS = [
     ['services', 'Services'], ['features', 'Features'],
     ['delivery', 'File delivery'], ['access', 'Sign-in'], ['step_up', 'Step-up'],
-    ['tokens', 'Scoped tokens'], ['runtimes', 'Agent runtimes'], ['upstreams', 'Upstream MCP servers'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
+    ['tokens', 'Scoped tokens'], ['org_rules', 'Organization rules'], ['runtimes', 'Agent runtimes'], ['upstreams', 'Upstream MCP servers'], ['audit', 'Audit forwarding'], ['privacy', 'Privacy Filter'], ['stats', 'Stats'],
   ];
 
   // The provider setup doc for each service on the website: the doc's file name without .md.
@@ -2590,6 +2641,27 @@ _JS = r"""
     return html + '</div>';
   }
 
+  var ORG_RULES_WARNING = "These rules let every person's AI use the matching resources without asking, also in " +
+    "unattended sessions. A rule with a write or send verb lets every person's AI change or send without a card. " +
+    'A rule on a Drive tag can be forged by anyone who can edit a tagged file, so prefer read verbs.';
+
+  // Admin, Organization rules (ADR 0333): the Auto-accept page's rule rows and add-rule form
+  // (RULE_LISTS.org), without match counts, since each person's matches are in their own log.
+  function renderOrgRules(state) {
+    var list = RULE_LISTS.org;
+    var org = state.org_rules || { rules: [], scope_groups: [] };
+    var html = '<div class="pf-page" data-rule-list="org"><h1 class="pf-page-title">Organization rules</h1>';
+    html += '<div class="pf-st-notice pf-org-rules-warning" role="note">' + esc(ORG_RULES_WARNING) + '</div>';
+    if (!org.rules.length) {
+      html += '<div class="pf-empty pf-rules-empty">No organization rules yet -- add one below.</div>';
+    }
+    org.rules.forEach(function (r) {
+      html += '<div class="card pf-card pf-aa-row">' + ruleSummaryHtml(r) +
+        '<div class="pf-aa-links">' + ruleEditLinksHtml(r, list) + '</div>' + ruleEditPanelHtml(r, list) + '</div>';
+    });
+    return html + addRuleFormHtml(org.scope_groups, list) + '</div>';
+  }
+
   // Save: the gates come from the selects of that card at click time.
   function saveUpstream(el) {
     var upId = el.getAttribute('data-upstream-save');
@@ -2652,6 +2724,7 @@ _JS = r"""
       case 'access': return renderAccess(state);
       case 'step_up': return renderStepUp(state);
       case 'tokens': return renderTokens(state);
+      case 'org_rules': return renderOrgRules(state);
       case 'runtimes': return renderRuntimes(state);
       case 'upstreams': return renderUpstreams(state);
       case 'audit': return renderAuditForwarding(state);
@@ -2799,28 +2872,31 @@ _JS = r"""
 
     var aaEditEl = e.target.closest('[data-aa-edit]');
     if (aaEditEl) {
+      var editList = ruleListOf(aaEditEl);
+      var editKey = editList.prefix + 'Edit';
       var editId = aaEditEl.getAttribute('data-aa-edit');
-      if (ui.aaEdit && ui.aaEdit.id === editId) { ui.aaEdit = null; render(pyState); return; }
+      if (ui[editKey] && ui[editKey].id === editId) { ui[editKey] = null; render(pyState); return; }
       var editVerbs = {};
-      (pyState.auto_accept.rules || []).forEach(function (r) {
+      (pyState[editList.stateKey].rules || []).forEach(function (r) {
         if (r.id === editId) r.verbs.forEach(function (v) { editVerbs[v.verb] = true; });
       });
-      ui.aaEdit = { id: editId, verbs: editVerbs };
+      ui[editKey] = { id: editId, verbs: editVerbs };
       render(pyState);
       return;
     }
 
     var aaEditVerbEl = e.target.closest('[data-aa-edit-verb]');
     if (aaEditVerbEl) {
-      if (aaEditVerbEl.getAttribute('aria-disabled') === 'true' || !ui.aaEdit) return;
+      var editing = ui[ruleListOf(aaEditVerbEl).prefix + 'Edit'];
+      if (aaEditVerbEl.getAttribute('aria-disabled') === 'true' || !editing) return;
       var editVerb = aaEditVerbEl.getAttribute('data-aa-edit-verb');
-      ui.aaEdit.verbs[editVerb] = !ui.aaEdit.verbs[editVerb];
+      editing.verbs[editVerb] = !editing.verbs[editVerb];
       render(pyState);
       return;
     }
 
     var aaEditCancelEl = e.target.closest('[data-aa-edit-cancel]');
-    if (aaEditCancelEl) { ui.aaEdit = null; render(pyState); return; }
+    if (aaEditCancelEl) { ui[ruleListOf(aaEditCancelEl).prefix + 'Edit'] = null; render(pyState); return; }
 
     var aaEditSaveEl = e.target.closest('[data-aa-edit-save]');
     if (aaEditSaveEl && aaEditSaveEl.getAttribute('aria-disabled') === 'true') return;
@@ -2828,13 +2904,14 @@ _JS = r"""
     var aaVerbEl = e.target.closest('[data-aa-verb-toggle]');
     if (aaVerbEl) {
       var verb = aaVerbEl.getAttribute('data-aa-verb-toggle');
-      ui.aaCheckedVerbs[verb] = !ui.aaCheckedVerbs[verb];
+      var checkedVerbs = ui[ruleListOf(aaVerbEl).prefix + 'CheckedVerbs'];
+      checkedVerbs[verb] = !checkedVerbs[verb];
       render(pyState);
       return;
     }
 
     var aaAddEl = e.target.closest('[data-aa-add]');
-    if (aaAddEl) { submitAddPolicyRule(); return; }
+    if (aaAddEl) { submitAddRule(ruleListOf(aaAddEl)); return; }
 
     var privacyNavEl = e.target.closest('[data-privacy-nav]');
     if (privacyNavEl) { ui.privacyGroup = privacyNavEl.getAttribute('data-privacy-nav'); render(pyState); return; }
@@ -2931,7 +3008,7 @@ _JS = r"""
       if (actionEl.tagName === 'INPUT' && actionEl.type === 'checkbox') e.preventDefault();
       var confirmText = actionEl.getAttribute('data-confirm');
       if (confirmText && !window.confirm(confirmText)) return;
-      if (actionEl.hasAttribute('data-aa-edit-save')) ui.aaEdit = null;
+      if (actionEl.hasAttribute('data-aa-edit-save')) ui[ruleListOf(actionEl).prefix + 'Edit'] = null;
       var action = actionEl.getAttribute('data-action');
       var payload = {};
       try { payload = JSON.parse(actionEl.getAttribute('data-payload') || '{}'); } catch (err) { payload = {}; }
@@ -2981,21 +3058,25 @@ _JS = r"""
     return { invalid: true, text: aaPairInvalidText(what) };
   }
 
-  function aaPairHint(group) {
-    return pairHint(group, ui.aaCheckedVerbs, ui.aaValue);
+  function rulePairHint(group, list) {
+    return pairHint(group, ui[list.prefix + 'CheckedVerbs'], ui[list.prefix + 'Value']);
   }
 
-  function submitAddPolicyRule() {
-    var checked = Object.keys(ui.aaCheckedVerbs || {}).filter(function (v) { return ui.aaCheckedVerbs[v]; });
-    if (!ui.aaGroup || checked.length === 0) return;
+  // A rule list's "Add rule" (RULE_LISTS): the person's list posts add_policy_rule with the verbs
+  // as a list, the organization's posts add_org_rule through the same post(), which on the Admin
+  // page carries the passkey step.
+  function submitAddRule(list) {
+    var p = list.prefix;
+    var checked = Object.keys(ui[p + 'CheckedVerbs'] || {}).filter(function (v) { return ui[p + 'CheckedVerbs'][v]; });
+    if (!ui[p + 'Group'] || checked.length === 0) return;
     var submitGroup = null;
-    pyState.auto_accept.scope_groups.forEach(function (g) { if (g.id === ui.aaGroup) submitGroup = g; });
-    var submitHint = aaPairHint(submitGroup);
+    pyState[list.stateKey].scope_groups.forEach(function (g) { if (g.id === ui[p + 'Group']) submitGroup = g; });
+    var submitHint = rulePairHint(submitGroup, list);
     if (submitHint && submitHint.invalid) return;
     var valueInput = document.querySelector('[data-aa-value]');
-    post('add_policy_rule', { group: ui.aaGroup, value: valueInput ? valueInput.value : '', verbs: checked });
-    ui.aaCheckedVerbs = {};
-    ui.aaValue = '';
+    post(list.add, { group: ui[p + 'Group'], value: valueInput ? valueInput.value : '', verbs: ruleVerbsParam(list, checked) });
+    ui[p + 'CheckedVerbs'] = {};
+    ui[p + 'Value'] = '';
   }
 
   // No blur-commit fields are left (the Auto-accept page's own value field commits live via
@@ -3022,9 +3103,10 @@ _JS = r"""
       return;
     }
     if (el.tagName === 'SELECT' && el.hasAttribute('data-aa-group-select')) {
-      ui.aaGroup = el.value;
-      ui.aaValue = '';
-      ui.aaCheckedVerbs = {};
+      var groupPrefix = ruleListOf(el).prefix;
+      ui[groupPrefix + 'Group'] = el.value;
+      ui[groupPrefix + 'Value'] = '';
+      ui[groupPrefix + 'CheckedVerbs'] = {};
       render(pyState);
     }
   }
@@ -3065,7 +3147,7 @@ _JS = r"""
     // module's own docstring) so it survives a verb-chip toggle's own re-render without losing
     // what was typed; there's no server round trip until "Add rule" is actually clicked.
     if (el.hasAttribute('data-aa-value')) {
-      ui.aaValue = el.value;
+      ui[ruleListOf(el).prefix + 'Value'] = el.value;
       var vpos = el.selectionStart;
       render(pyState);
       var freshValue = document.querySelector('[data-aa-value]');
@@ -3098,7 +3180,7 @@ _JS = r"""
     if (formEl && el.hasAttribute('data-f') && el.type !== 'checkbox') { saveAdminForm(formEl.getAttribute('data-admin-form')); return; }
     if (el.hasAttribute('data-admin-address')) { saveServerAddress(el.getAttribute('data-admin-address')); return; }
     if (el.hasAttribute('data-aa-value')) {
-      submitAddPolicyRule();
+      submitAddRule(ruleListOf(el));
       return;
     }
     if (el.hasAttribute('data-st-new-value')) { addNewScopedRule(); return; }
@@ -3170,7 +3252,8 @@ def _admin_capabilities(*, is_admin: bool) -> dict[str, Any]:
     return {
         "mode": ORG_MODE, "is_admin": is_admin, "surface": "admin",
         "sections": dict.fromkeys(
-            ("services", "features", "delivery", "access", "step_up", "tokens", "runtimes", "upstreams", "audit", "privacy", "stats"), is_admin,
+            ("services", "features", "delivery", "access", "step_up", "tokens", "org_rules", "runtimes", "upstreams", "audit", "privacy",
+             "stats"), is_admin,
         ),
         "not_applicable_actions": [],
         "defaults": _admin_section_defaults() if is_admin else {},

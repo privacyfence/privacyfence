@@ -623,6 +623,16 @@ def _approval_row(tool: str, digest: str) -> ScopeRow:
     )
 
 
+def copyable_rows() -> list[ScopeRow]:
+    """The rows a token's ``copy`` rule may name: the organization's rows first, then the
+    person's own, which win on an id collision. A copy is exact and never follows later changes."""
+    from . import org_rules
+
+    merged = {row.id: row for row in org_rules.rows()}
+    merged.update({row.id: row for row in auto_accept.get_policy_rows()})
+    return list(merged.values())
+
+
 class ScopedTokenStore:
     def __init__(self, principal_dirs: Callable[[], Iterable[Principal]]) -> None:
         self._principal_dirs = principal_dirs
@@ -807,7 +817,7 @@ class ScopedTokenStore:
         # Read before the store lock: get_policy_rows takes the Auto-accept write lock, and
         # ensure_scope_rows takes that lock and then this one.
         own_rows = (
-            {row.id: row for row in auto_accept.get_policy_rows()}
+            {row.id: row for row in copyable_rows()}
             if any(entry["kind"] == "copy" for entry in rules) else {}
         )
         new_rules: list[PolicyRule] = []

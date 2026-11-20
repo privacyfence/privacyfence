@@ -1089,3 +1089,40 @@ class TestStopWithAStuckThread:
         server.stop()
 
         assert server._server.should_exit and server.stopped
+
+
+class TestScopedTokenOrgRows:
+    def test_org_rows_are_listed_once_with_the_flag(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept, org_rules, paths, scoped_tokens
+        from privacyfence.policy import catalogue as policy_catalogue
+        from privacyfence.policy.registry import Verb
+        from privacyfence.policy import scope_rows
+        from privacyfence.web.server import scoped_token_page_data
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text("auto_accept: {}\n", encoding="utf-8")
+        alice = Principal(id="alice", email="alice@example.com")
+        scoped_tokens.set_store(scoped_tokens.ScopedTokenStore(lambda: [alice]))
+        policy = scoped_tokens.ScopedTokenPolicy(enabled=True, max_days=365)
+        org_rules.reset()
+        try:
+            with principal_scope(alice):
+                auto_accept.init_config_path(str(config_path))
+                auto_accept.add_policy_v2_rules(
+                    policy_catalogue.rules_for_catalogue_entry("drive.folder", ["F"], [Verb.READ]),
+                )
+                (own,) = auto_accept.get_policy_rows()
+                org_row = scope_rows.add_rules(
+                    [], policy_catalogue.rules_for_catalogue_entry("drive.folder", ["G"], [Verb.READ]),
+                )[0][0]
+                org_rules.set([org_row, own])
+                data = scoped_token_page_data(alice, policy=policy, connector_names={"drive"})
+        finally:
+            org_rules.reset()
+
+        ids = [r["id"] for r in data["rules"]]
+        assert ids.count(own.id) == 1 and ids.count(org_row.id) == 1
+        by_id = {r["id"]: r for r in data["rules"]}
+        assert by_id[org_row.id]["organization"] is True
+        assert "organization" not in by_id[own.id]

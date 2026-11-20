@@ -39,6 +39,7 @@ from privacyfence import (
     grist_provisioning,
     local_files,
     org_mode,
+    org_rules,
     peek_provisioning,
     pii_detector,
     privacy_filter,
@@ -98,6 +99,7 @@ def _required_run_switch(markers, reason: str) -> str | None:
 
 def _reset() -> None:
     auto_accept._REGISTRY.reset()
+    org_rules.reset()
     audit_log._REGISTRY.reset()
     audit_log._INSTALL_SETTINGS = audit_log._InstallAuditSettings()
     approval_ui._INSTANCE = None
@@ -249,6 +251,7 @@ def _isolate_whats_new_state(monkeypatch, request):
 # real path functions run and count toward their coverage.
 _ADMIN_CONFIG_FIXTURE_EXEMPT = (
     "test_app_credentials", "test_admin_config", "test_relay_client", "test_data_format", "test_connector_configs",
+    "test_org_rules",
 )
 
 

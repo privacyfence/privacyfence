@@ -990,7 +990,7 @@ class TestGmailQueryRule:
     def test_preflight_is_unknown_for_a_query_rule(self):
         install_rules(self.RULES)
 
-        verdict, _rule, _rule_id, _reason = gate.preflight_auto_accept("gmail.read_thread", {"thread_id": "t1"})
+        verdict, _rule, _rule_id, _reason, _source = gate.preflight_auto_accept("gmail.read_thread", {"thread_id": "t1"})
 
         assert verdict == "unknown"
 
@@ -1055,6 +1055,6 @@ class TestArchiveByLabel:
     def test_preflight_is_unknown_for_a_label_rule(self):
         install_rules(self.RULES)
 
-        verdict, _rule, _rule_id, _reason = gate.preflight_auto_accept("gmail.archive_message", {"message_id": "m1"})
+        verdict, _rule, _rule_id, _reason, _source = gate.preflight_auto_accept("gmail.archive_message", {"message_id": "m1"})
 
         assert verdict == "unknown"
