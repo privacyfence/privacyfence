@@ -1019,6 +1019,13 @@ class TestReevaluateEveryPrincipal:
         assert resolved == [cards["bob"]]
         assert not cards["alice"].is_finalized()
 
+    def test_a_two_tuple_callback_means_an_empty_source(self):
+        registry = make_registry()
+        cards = self._two_cards(registry)
+        resolved = registry.reevaluate_every_principal(lambda op, ctx: (True, "old-rule"))
+        assert len(resolved) == 2
+        assert all(a.final_rule_name == "old-rule" and a.final_rule_source == "" for a in cards.values())
+
     def test_pii_forced_and_confirm_cards_are_skipped(self):
         registry = make_registry()
         registry.register_or_coalesce(
