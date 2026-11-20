@@ -641,6 +641,7 @@ SAMPLE_VALUES = {
     "contacts.label": ["Newsletters"],
     "drive.folder": ["1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"],
     "drive.owned_by_me": None,
+    "drive.folder_tree": ["1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"],
     "drive.tag": ["client-a"],
     "gmail.anything": None,
     "gmail.filters": None,

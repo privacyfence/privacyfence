@@ -214,6 +214,15 @@ class TestGmailQuerySuggestion:
             assert any(s["group"] == "gmail.query" for s in suggested_rules(tool, {}))
 
 
+class TestDriveFolderTreeSuggestion:
+    def test_a_drive_read_suggests_the_folder_tree_scope_with_no_value(self):
+        suggestions = suggested_rules("drive_get_file_content", {"file_id": "f1"})
+        [suggestion] = [s for s in suggestions if s["group"] == "drive.folder_tree"]
+        assert suggestion["verb"] == "read"
+        assert suggestion["value"] is None
+        assert suggestion["value_known"] is False
+
+
 class TestDriveTagSuggestion:
     def test_a_drive_read_suggests_the_tag_scope_with_no_value(self):
         suggestions = suggested_rules("drive_get_file_content", {"file_id": "f1"})

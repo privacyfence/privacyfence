@@ -346,6 +346,30 @@ _PRE_FIX_OPERATIONS = {
 }
 
 
+class TestDriveFolderTreeExtra:
+    _ID = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+
+    def test_the_entry_exists(self):
+        entry = next(e for e in catalogue.scope_catalogue() if e["id"] == "drive.folder_tree")
+        assert entry["connector"] == "drive"
+        assert entry["needs_value"] is True
+        assert entry["verbs"] == ["read", "download"]
+
+    def test_read_derives_the_drive_and_sheets_reads(self):
+        extra = catalogue.EXTRA_SCOPES["drive.folder_tree"]
+        assert catalogue.extra_operations_for(extra, Verb.READ) == frozenset(
+            {"drive.read_file_contents", "sheets.read_values"})
+
+    def test_download_derives_the_drive_download(self):
+        extra = catalogue.EXTRA_SCOPES["drive.folder_tree"]
+        assert catalogue.extra_operations_for(extra, Verb.DOWNLOAD) == frozenset({"drive.download_file"})
+
+    def test_rules_for_the_entry_use_the_predicate(self):
+        rules = catalogue.rules_for_catalogue_entry(
+            "drive.folder_tree", [self._ID], [Verb.READ, Verb.DOWNLOAD])
+        assert rules and {r.predicate for r in rules} == {"drive.folder_tree"}
+
+
 class TestDriveTagExtra:  # selected by -k drive_tag via the method names
     @staticmethod
     def _sheets_ops(verb):
@@ -381,7 +405,7 @@ class TestDriveTagExtra:  # selected by -k drive_tag via the method names
     def test_drive_tag_fix_leaves_every_other_extra_scope_deriving_what_it_derived_before(self):
         derived = {
             (key, verb.name): catalogue.extra_operations_for(extra, verb)
-            for key, extra in catalogue.EXTRA_SCOPES.items() if key != "drive.tag"
+            for key, extra in catalogue.EXTRA_SCOPES.items() if key not in {"drive.tag", "drive.folder_tree"}
             for verb in extra.verbs
         }
         assert derived == _PRE_FIX_OPERATIONS

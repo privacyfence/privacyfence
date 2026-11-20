@@ -121,6 +121,12 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
         label="Google Drive — files with a tag (anyone who can edit a file can set its tags)",
         needs_value=True, value_hint="client-a, public-docs",
     ),
+    "drive.folder_tree": PolicyExtraScope(
+        predicate="drive.folder_tree", connector="drive",
+        verbs=(Verb.READ, Verb.DOWNLOAD),
+        label="Google Drive — a folder and the subfolders reached by listing it",
+        needs_value=True, value_hint="a folder id, for example 1AbCdEfGhIjKlMnOpQrSt",
+    ),
     "gmail.query": PolicyExtraScope(
         predicate="gmail.query", connector="gmail",
         verbs=(Verb.READ, Verb.DOWNLOAD),

@@ -53,7 +53,8 @@ SESSIONLESS_SESSION_KEY = "sessionless"
 # asking check_policy could otherwise supply them and be told a call would auto-accept when the
 # real call, which recomputes them, would not.
 _CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm", "is_one_to_one_dm", "own_user_id", "matching_queries",
-                                    "is_member", "all_results_in_my_conversations"})
+                                    "is_member", "all_results_in_my_conversations",
+                                    "listed_folders"})
 
 
 def _policy_rule_row(row) -> dict:
