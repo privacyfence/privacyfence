@@ -106,6 +106,8 @@ _SINGLE_USER_STEP_UP = {"enabled": True, "require_passkey": True, "scope": "writ
 
 _write_lock = threading.Lock()
 
+MAX_ORG_RULES = 100
+
 
 class AdminConfigError(ValueError):
     """The admin config file is unreadable, malformed or of an unknown version."""
@@ -154,6 +156,7 @@ def _default_config() -> dict[str, Any]:
             "n8n": {"enabled": False, "project_id": "", "mcp_url": "", "credential_type": "httpBearerAuth"},
         },
         "audit_forwarding": {},
+        "org_rules": [],
     }
 
 
@@ -467,6 +470,9 @@ _ACTION_MODES: dict[str, frozenset[str]] = {
     "set_agent_runtimes": _ORG_ONLY,
     "set_audit_forwarding": _ORG_ONLY,
     "remove_connector_config": _ORG_ONLY,
+    "add_org_rule": _ORG_ONLY,
+    "remove_org_rule": _ORG_ONLY,
+    "set_org_rule_verbs": _ORG_ONLY,
 }
 
 MAX_ROOMS = 5000
@@ -933,6 +939,85 @@ def _apply_remove_connector_config(params: dict[str, Any]) -> tuple[str, list[st
     return (f"Removed the {SERVICE_LABELS[name]} connector config", ["services"]) if removed else ("", [])
 
 
+_ORG_RULE_EMPTY = "An organization rule needs a scope, at least one of its verbs, and a value if the scope takes one."
+
+
+def _org_rule_rows(config: dict[str, Any]) -> list[Any]:
+    """The stored org rows that parse; one that does not is dropped on the next write."""
+    from .policy import scope_rows
+
+    raw = config.get("org_rules")
+    parsed = (scope_rows.row_from_dict(item) for item in (raw if isinstance(raw, list) else []))
+    return [row for row in parsed if row is not None]
+
+
+def _store_org_rows(config: dict[str, Any], rows: list[Any], summary: str) -> tuple[str, list[str]]:
+    from .policy import scope_rows
+
+    candidate = [scope_rows.row_to_dict(row) for row in rows]
+    if config.get("org_rules") == candidate:
+        return "", []
+    config["org_rules"] = candidate
+    return summary, ["org_rules"]
+
+
+def _apply_add_org_rule(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    from .policy import catalogue, describe, scope_rows
+    from .policy.value_format import RuleValueError
+
+    group = str(params.get("group", ""))
+    verbs = catalogue.parse_verbs([v.strip() for v in str(params.get("verbs", "")).split(",") if v.strip()])
+    if not verbs:
+        raise AdminConfigError(_ORG_RULE_EMPTY)
+    value = catalogue.parse_value_list(str(params.get("value", "")), group)
+    entry = next((e for e in catalogue.scope_catalogue() if e["id"] == catalogue.GROUP_ALIASES.get(group, group)), None)
+    if entry is None or (entry["needs_value"] and not value):
+        raise AdminConfigError(_ORG_RULE_EMPTY)
+    try:
+        new_rules = catalogue.rules_for_catalogue_entry(group, value, verbs)
+    except RuleValueError as exc:
+        raise AdminConfigError(str(exc)) from None
+    if not new_rules:
+        raise AdminConfigError(_ORG_RULE_EMPTY)
+    existing = _org_rule_rows(config)
+    rows, touched = scope_rows.add_rules(existing, new_rules)
+    if any(row.scope is None for row in rows if row.id in touched):
+        raise AdminConfigError("That rule cannot be stored as an organization rule.")
+    if len(rows) > MAX_ORG_RULES:
+        raise AdminConfigError(f"An organization can have at most {MAX_ORG_RULES} rules.")
+    sentence = describe.row_sentence(next(row for row in rows if row.id == touched[0]))
+    return _store_org_rows(config, rows, f"Added organization rule: {sentence}")
+
+
+def _apply_remove_org_rule(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    from .policy import describe, scope_rows
+
+    rows = _org_rule_rows(config)
+    row = next((r for r in rows if r.id == str(params.get("rule_id", ""))), None)
+    if row is None:
+        raise AdminConfigError("Unknown organization rule.")
+    return _store_org_rows(
+        config, scope_rows.remove_row(rows, row.id), f"Removed organization rule: {describe.row_sentence(row)}"
+    )
+
+
+def _apply_set_org_rule_verbs(config: dict[str, Any], params: dict[str, Any]) -> tuple[str, list[str]]:
+    from .policy import catalogue, describe, scope_rows
+
+    rows = _org_rule_rows(config)
+    rule_id = str(params.get("rule_id", ""))
+    if not any(r.id == rule_id for r in rows):
+        raise AdminConfigError("Unknown organization rule.")
+    verbs = catalogue.parse_verbs([v.strip() for v in str(params.get("verbs", "")).split(",") if v.strip()])
+    updated = scope_rows.set_verbs(rows, rule_id, verbs)
+    if updated is None:
+        raise AdminConfigError("Those verbs cannot be set on that rule.")
+    row = next(r for r in updated if r.id == rule_id)
+    return _store_org_rows(
+        config, updated, f"Changed the verbs of organization rule: {describe.row_sentence(row)}"
+    )
+
+
 def apply_change(
     action: str, params: dict[str, Any], *, bundle: dict[str, Any], single_user: bool
 ) -> tuple[str, list[str]]:
@@ -978,6 +1063,12 @@ def apply_change(
             result = _apply_agent_runtimes(config, params)
         elif action == "remove_connector_config":
             result = _apply_remove_connector_config(params)
+        elif action == "add_org_rule":
+            result = _apply_add_org_rule(config, params)
+        elif action == "remove_org_rule":
+            result = _apply_remove_org_rule(config, params)
+        elif action == "set_org_rule_verbs":
+            result = _apply_set_org_rule_verbs(config, params)
         else:
             result = _apply_audit_forwarding(config, params)
         config["org_server"] = before["org_server"]
