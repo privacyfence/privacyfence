@@ -195,7 +195,7 @@ Several AI systems can share one PrivacyFence. Each card and each audit-log entr
 system that made the request, and says how far that name can be trusted
 ([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md),
 [ADR 0224](adr/0224-an-org-registration-is-attested-by-its-redirect-uris.md)).
-The audit log records four fields: `agent_id`, `agent_name`, `agent_version` and `agent_source`.
+The audit log records four fields: `agent_id`, `agent_name`, `agent_version` and `agent_source`. A separate `allowed_by` field says whether a person, their own rule, an organization rule or a scoped token's rule allowed the call ([ADR 0334](adr/0334-the-audit-entry-names-who-allowed-a-call.md)).
 
 | `agent_source` | Trust | Recorded when |
 |---|---|---|
