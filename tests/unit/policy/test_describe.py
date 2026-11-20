@@ -252,6 +252,14 @@ class TestConfirmationText:
         assert "delete" in text
 
 
+def test_a_folder_tree_rule_sentence_names_the_folder_and_the_tree():
+    folder = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+    rule = PolicyRule(id="r", predicate="drive.folder_tree", value=[folder],
+                      operations=frozenset({"drive.read_file_contents"}))
+    sentence = describe.rule_sentence(rule)
+    assert folder in sentence and "folder tree" in sentence
+
+
 def test_a_tag_rule_sentence_names_the_tag_value():
     rule = PolicyRule(id="r", predicate="drive.tag", value=["client-a"],
                       operations=frozenset({"drive.read_content"}))

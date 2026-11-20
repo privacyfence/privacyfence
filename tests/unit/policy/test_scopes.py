@@ -768,6 +768,50 @@ class TestUpstreamApprovedTool:
         assert self._matches(value) is False
 
 
+class TestDriveFolderTree:
+    selector = NEW_SCOPE_SELECTORS["drive.folder_tree"]
+    root = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+    other = "2CyjNWt1YSB6oGNeLwCeankChVVrqumct85f3vnf"
+    sub = "3DzkOXu2ZTC7pHOfMxDfboLdiWWsrvndu96g4wog"
+
+    @staticmethod
+    def _ctx(parents, listed=None):
+        args = {} if listed is None else {"listed_folders": listed}
+        return make_ctx(connector="drive", args=args,
+                        raw_data={"file": SimpleNamespace(id="f1", parent_ids=parents)})
+
+    def test_selector_shape(self):
+        assert (self.selector.scope_type, self.selector.kind, self.selector.resolves_from) == (
+            "drive.folder_tree", ScopeKind.IDENTITY, ResolvesFrom.FETCHED,
+        )
+
+    def test_matches_a_file_whose_parent_is_the_root(self):
+        assert self.selector.matches([self.root], self._ctx([self.root])) is True
+
+    def test_matches_a_file_in_a_granted_folder(self):
+        ctx = self._ctx([self.sub], {self.root: [self.sub]})
+        assert self.selector.matches([self.root], ctx) is True
+
+    def test_does_not_match_an_ungranted_folder(self):
+        assert self.selector.matches([self.root], self._ctx([self.sub])) is False
+
+    def test_does_not_match_a_grant_listed_under_another_root(self):
+        ctx = self._ctx([self.sub], {self.other: [self.sub]})
+        assert self.selector.matches([self.root], ctx) is False
+
+    def test_empty_value_never_matches(self):
+        for value in (None, [], ""):
+            assert self.selector.matches(value, self._ctx([self.root])) is False
+
+    def test_listed_folders_that_is_not_a_dict_grants_nothing(self):
+        assert self.selector.matches([self.root], self._ctx([self.sub], [self.sub])) is False
+
+    def test_a_rule_with_two_roots_matches_either(self):
+        ctx = self._ctx([self.sub], {self.other: [self.sub]})
+        assert self.selector.matches([self.root, self.other], ctx) is True
+        assert self.selector.matches([self.root, self.other], self._ctx([self.root])) is True
+
+
 class TestDriveTag:
     selector = NEW_SCOPE_SELECTORS["drive.tag"]
 
