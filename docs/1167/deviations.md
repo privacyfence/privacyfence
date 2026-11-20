@@ -5,11 +5,12 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p1-audit-allowed-by
 
-- pending
+- None.
+- review: Both phase merges were verified together (tests/unit and ruff green after the second merge) and the scope check ran after merging, so it recorded skipped; the diffs were checked by hand to stay inside touches.
 
 ## p2-org-rules-store
 
-- pending
+- None.
 
 ## p3-approvals-principal-and-source
 
