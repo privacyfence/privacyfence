@@ -156,7 +156,7 @@ from .agent_identity import agent_scope
 from .approval_ui import get_approval_ui
 from .approval_window_html import NARROW, WIDE
 from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, binding_key, card_digest
-from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger, set_released_request_id
+from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, allowed_by_for, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
     PERSONAL_DATA_READ_TOOLS,
     PERSONAL_DATA_RULE_TOOLS,
@@ -173,7 +173,7 @@ from .auto_accept import (
     remove_policy_v2_rule,
     temp_accept_key,
 )
-from . import latency
+from . import latency, org_rules
 from .deny_feedback import DenialFeedback, EarlierDecision, denial_message
 from .policy import catalogue as policy_catalogue
 from .policy import describe as policy_describe
@@ -427,6 +427,7 @@ def _deferred_registry() -> PendingApprovalRegistry | None:
     against a short list) to just always do.
     """
     add_rules_changed_listener(_on_rules_changed)
+    org_rules.add_changed_listener(_on_org_rules_changed)
     return get_approval_ui().deferred_registry
 
 
@@ -465,7 +466,7 @@ async def _resolve_decision(
     pii_categories: list[str],
     claude_reason: str,
     interact: Any,
-) -> tuple[Any, Any, float | None, str, str, DenialFeedback, EarlierDecision | None, str]:
+) -> tuple[Any, Any, float | None, str, str, DenialFeedback, EarlierDecision | None, str, str]:
     """Shared plumbing for the review/popup gate branches: get a decision
     for this call, either by running ``interact`` (see each branch's own
     definition of it) directly, or -- when ``registry`` is not None --
@@ -473,7 +474,8 @@ async def _resolve_decision(
     onto) a pending approval and waiting up to ``registry.hold_window``.
 
     Returns ``(decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier,
-    approval_request_id)``.
+    approval_request_id, rule_source)``. ``rule_source`` is which rule list resolved an
+    ``auto_accepted`` decision (``person``, ``organization``, ``token``) and ``""`` otherwise.
     ``decision`` is one of "accept"/"deny"/"accept_all"/"auto_accepted", or
     the module-level ``_PENDING`` sentinel -- in which case ``rule_name``
     is instead the ``PendingApproval`` the caller should build a pending
@@ -504,7 +506,7 @@ async def _resolve_decision(
     """
     if registry is None:
         decision, rule_name = await interact(None)
-        return decision, rule_name, None, "", "", DenialFeedback(), None, ""
+        return decision, rule_name, None, "", "", DenialFeedback(), None, "", ""
 
     ledger_hit = registry.consume_ledger(dedupe_key)
     if ledger_hit is not None:
@@ -518,7 +520,7 @@ async def _resolve_decision(
             )
         return (
             ledger_hit.decision, ledger_hit.rule_name, ledger_hit.decided_at, ledger_hit.decided_via,
-            ledger_hit.batch_id, ledger_hit.feedback, earlier, ledger_hit.request_id,
+            ledger_hit.batch_id, ledger_hit.feedback, earlier, ledger_hit.request_id, ledger_hit.rule_source,
         )
 
     approval, created = registry.register_or_coalesce(
@@ -544,7 +546,7 @@ async def _resolve_decision(
 
         decided = await registry.wait_async(approval, hold_window)
         if not decided:
-            return _PENDING, approval, None, "", "", DenialFeedback(), None, approval.request_id
+            return _PENDING, approval, None, "", "", DenialFeedback(), None, approval.request_id, ""
         # Decided within the hold window: this call collects the outcome
         # directly, so a write is consumed exactly as a ledger hit would be,
         # and an identical write afterwards goes back through the gate
@@ -556,7 +558,7 @@ async def _resolve_decision(
     feedback = approval.deny_feedback if approval.final_decision == "deny" else DenialFeedback()
     return (
         approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via,
-        approval.batch_id, feedback, None, approval.request_id,
+        approval.batch_id, feedback, None, approval.request_id, approval.final_rule_source,
     )
 
 
@@ -691,17 +693,31 @@ def _on_rules_changed() -> None:
         )
 
 
-def _should_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool, str]:
-    """The ``(bool, matched_rule)`` shape ``approvals.PendingApprovalRegistry.reevaluate_all``
-    expects -- a thin wrapper around ``_evaluate_auto_accept`` that drops its third (rule id)
-    element, which reevaluate_all has no use for."""
-    ok, rule, _rule_id = _evaluate_auto_accept(operation_key, ctx)
-    return ok, rule
+def _on_org_rules_changed() -> None:
+    """Subscribed to ``org_rules.add_changed_listener`` (see ``_deferred_registry``): the
+    organization's rules apply to every person, so every principal's pending cards are
+    re-evaluated, each inside its own owner's principal scope."""
+    registry = _deferred_registry()
+    if registry is None:
+        return
+    for approval in registry.reevaluate_every_principal(_should_auto_accept):
+        logger.info(
+            "Pending approval %s auto-accepted after an organization rule changed: %s/%s rule=%r",
+            approval.id, approval.connector, approval.tool, approval.final_rule_name,
+        )
 
 
-def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool, str, str]:
+def _should_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool, str, str]:
+    """The ``(ok, matched_rule, rule_source)`` shape ``approvals.PendingApprovalRegistry``'s
+    re-evaluation expects -- a thin wrapper around ``_evaluate_auto_accept`` that drops its third
+    (rule id) element."""
+    ok, rule, _rule_id, source = _evaluate_auto_accept(operation_key, ctx)
+    return ok, rule, source
+
+
+def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool, str, str, str]:
     """Decide whether ``operation_key`` auto-accepts. Returns ``(auto_ok, matched_rule,
-    matched_rule_id)`` -- ``matched_rule``/``matched_rule_id`` are always the same value here:
+    matched_rule_id, rule_source)`` -- ``matched_rule``/``matched_rule_id`` are always the same value here:
     every rule, wherever it originated -- authored through Settings, the MCP bridge or the
     popup's own "Always allow" flow -- lives in the on-disk ``auto_accept:`` section, so there is
     exactly one rule list to check and its own ``.id`` (content-derived,
@@ -711,30 +727,53 @@ def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool,
 
     Under a scoped token (ADR 0164) only the token's own rules count, and the temp-accept window
     is never consulted: a person's "Allow once" armed it for their own session, not for the token.
+
+    An unscoped call checks the person's rules first, then the organization's, then the temp-accept
+    window. ``rule_source`` is the list that matched (``person``, ``organization``, ``token``) and
+    ``""`` for the temp-accept window or no match. Both lists are read once per call, so a change
+    landing mid-call cannot mislabel the match.
     """
     scope = current_token_scope()
-    rules = _rules_in_scope(scope)
-    try:
-        matched = policy_engine.find_matching_rule(rules, operation_key, ctx)
-    except Exception:
-        logger.warning("Policy evaluation raised for op=%r", operation_key, exc_info=True)
-        matched = None
-    if matched is not None:
-        return True, matched.id, matched.id
+    if scope is None:
+        lists: list[tuple[str, list[policy_engine.PolicyRule]]] = [
+            ("person", _person_rules()), ("organization", _org_rules()),
+        ]
+    else:
+        lists = [("token", _rules_in_scope(scope))]
+    for source, rules in lists:
+        try:
+            matched = policy_engine.find_matching_rule(rules, operation_key, ctx)
+        except Exception:
+            logger.warning("Policy evaluation raised for op=%r", operation_key, exc_info=True)
+            matched = None
+        if matched is not None:
+            return True, matched.id, matched.id, source
     if scope is None and is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
-        return True, "session_temp_accept", ""
-    return False, "", ""
+        return True, "session_temp_accept", "", ""
+    return False, "", "", ""
+
+
+def _person_rules() -> list[policy_engine.PolicyRule]:
+    # A token-only rule (an administrator's upstream approval) is never a person's rule.
+    return [
+        rule for rule in get_policy_v2_store_rules()
+        if rule.predicate not in policy_scopes.TOKEN_ONLY_PREDICATES
+    ]
+
+
+def _org_rules() -> list[policy_engine.PolicyRule]:
+    return [
+        rule for rule in org_rules.rules()
+        if rule.predicate not in policy_scopes.TOKEN_ONLY_PREDICATES
+    ]
 
 
 def _rules_in_scope(scope: ScopedToken | None) -> list[policy_engine.PolicyRule]:
-    """Every cached rule for an unscoped call; under a scoped token only the token's own rules
-    (ADR 0164, ADR 0236), never the person's Auto-accept rules."""
+    """Every cached rule for an unscoped call (the person's, then the organization's); under a
+    scoped token only the token's own rules (ADR 0164, ADR 0236), never the person's Auto-accept
+    rules nor the organization's."""
     if scope is None:
-        # A token-only rule (an administrator's upstream approval) is never a person's rule.
-        return [
-            rule for rule in get_policy_v2_store_rules()
-            if rule.predicate not in policy_scopes.TOKEN_ONLY_PREDICATES
-        ]
+        return _person_rules() + _org_rules()
     return scope.compiled_rules()
 
 
@@ -785,10 +824,10 @@ def _personal_data_rule(
 
 def preflight_auto_accept(
     operation_key: str, args: dict, my_email: str = "", tool: str = "",
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     """Preflight counterpart of ``_evaluate_auto_accept`` above, backing
     ``privacyfence_check_policy``'s own prediction. Returns ``(verdict, matched_rule,
-    matched_rule_id, reason)`` -- ``matched_rule``/``matched_rule_id`` are the same value here for
+    matched_rule_id, reason, rule_source)`` -- ``matched_rule``/``matched_rule_id`` are the same value here for
     the same reason ``_evaluate_auto_accept`` above returns them equal. Under a scoped token it
     predicts from the token's rules alone, without the temp-accept window, as that function does.
 
@@ -798,18 +837,39 @@ def preflight_auto_accept(
     must not make the verdict ``unknown`` or be cited as a rule the call depends on.
     """
     scope = current_token_scope()
-    rules = _rules_in_scope(scope)
-    if tool:
-        rules = [rule for rule in rules if tool in policy_describe.covered_tools(rule)]
+
+    def covering(rules: list[policy_engine.PolicyRule]) -> list[policy_engine.PolicyRule]:
+        if not tool:
+            return rules
+        return [rule for rule in rules if tool in policy_describe.covered_tools(rule)]
+
     try:
+        if scope is not None:
+            verdict, rule_id, reason = policy_engine.preflight(
+                covering(_rules_in_scope(scope)), operation_key, args, my_email=my_email,
+                is_temp_accepted=None,
+            )
+            return verdict, rule_id, rule_id, reason, "token" if rule_id else ""
+        # The person's rules (with the temp-accept window) win over the organization's.
         verdict, rule_id, reason = policy_engine.preflight(
-            rules, operation_key, args, my_email=my_email,
-            is_temp_accepted=is_temp_accepted if scope is None else None,
+            covering(_person_rules()), operation_key, args, my_email=my_email,
+            is_temp_accepted=is_temp_accepted,
+        )
+        if verdict == "auto_accept":
+            # The temp-accept window is a person's click, not a rule: no source.
+            return verdict, rule_id, rule_id, reason, "" if rule_id == "session_temp_accept" else "person"
+        org_verdict, org_rule_id, org_reason = policy_engine.preflight(
+            covering(_org_rules()), operation_key, args, my_email=my_email, is_temp_accepted=None,
         )
     except Exception:
         logger.warning("Policy preflight raised for op=%r", operation_key, exc_info=True)
-        return "requires_review", "", "", ""
-    return verdict, rule_id, rule_id, reason
+        return "requires_review", "", "", "", ""
+    if org_verdict == "auto_accept":
+        return org_verdict, org_rule_id, org_rule_id, org_reason, "organization"
+    if "unknown" in (verdict, org_verdict):
+        reasons = " ".join(r for r, v in ((reason, verdict), (org_reason, org_verdict)) if v == "unknown" and r)
+        return "unknown", "", "", reasons, ""
+    return verdict, rule_id, rule_id, reason, ""
 
 
 # Set by web/mcp_dispatch.py's McpDispatcher.call() around a single
@@ -1195,6 +1255,7 @@ async def gated_call(
     def audit(
         *, decision: str, auto_accept_rule: str, pii_detected: bool, decided_at: float | None = None,
         decided_via: str = "", batch_id: str = "", rule_id: str = "", deny_feedback: DenialFeedback | None = None,
+        rule_source: str = "",
     ) -> None:
         nonlocal audited
         audited = True
@@ -1206,6 +1267,7 @@ async def gated_call(
             pii_match_details=_pii_match_details_for_audit(audit_pii_matches, decision),
             claude_reason=claude_reason, decided_at=decided_at, delivery=delivery,
             decided_via=decided_via, batch_id=batch_id, rule_id=rule_id, deny_feedback=deny_feedback,
+            rule_source=rule_source,
         )
 
     try:
@@ -1214,7 +1276,7 @@ async def gated_call(
             if personal_data_rule is not None:
                 audit(
                     decision="auto_accepted", auto_accept_rule=personal_data_rule.id,
-                    rule_id=personal_data_rule.id, pii_detected=True,
+                    rule_id=personal_data_rule.id, pii_detected=True, rule_source="token",
                 )
                 logger.info(
                     "Auto-accepted with personal data: %s/%s rule=%r",
@@ -1222,12 +1284,12 @@ async def gated_call(
                 )
                 return filtered_data
 
-        auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
+        auto_ok, matched_rule, matched_rule_id, matched_source = _evaluate_auto_accept(operation_key, ctx)
 
         if auto_ok and not pii_forces_confirmation and not upload_pii_categories:
             audit(
                 decision="auto_accepted", auto_accept_rule=matched_rule, rule_id=matched_rule_id,
-                pii_detected=bool(pii_categories) or bool(upload_pii_categories),
+                pii_detected=bool(pii_categories) or bool(upload_pii_categories), rule_source=matched_source,
             )
             logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
             return filtered_data
@@ -1252,11 +1314,11 @@ async def gated_call(
             # pii_forces_confirmation, not pii_categories itself, since
             # pii_already_reviewed's own carve-out (see module docstring) is
             # unaffected by anything decided in the meantime.
-            auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
+            auto_ok, matched_rule, matched_rule_id, matched_source = _evaluate_auto_accept(operation_key, ctx)
             if auto_ok and not pii_forces_confirmation:
                 audit(
                     decision="auto_accepted", auto_accept_rule=matched_rule, rule_id=matched_rule_id,
-                    pii_detected=bool(pii_categories),
+                    pii_detected=bool(pii_categories), rule_source=matched_source,
                 )
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
                 return filtered_data
@@ -1320,6 +1382,7 @@ async def gated_call(
 
             (
                 decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier, approval_request_id,
+                rule_source,
             ) = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="review",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
@@ -1344,6 +1407,7 @@ async def gated_call(
                 audit(
                     decision="auto_accepted", auto_accept_rule=rule_name, pii_detected=bool(pii_categories),
                     decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
+                    rule_id=rule_name if rule_source else "", rule_source=rule_source,
                 )
                 logger.info(
                     "Pending approval auto-accepted after a rule changed: %s/%s rule=%r",
@@ -1391,11 +1455,11 @@ async def gated_call(
 
             # Same race as the review branch above: a rule may already cover
             # this by the time we get here.
-            auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
+            auto_ok, matched_rule, matched_rule_id, matched_source = _evaluate_auto_accept(operation_key, ctx)
             if auto_ok and not upload_pii_categories:
                 audit(
                     decision="auto_accepted", auto_accept_rule=matched_rule, rule_id=matched_rule_id,
-                    pii_detected=False,
+                    pii_detected=False, rule_source=matched_source,
                 )
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
                 return filtered_data
@@ -1452,6 +1516,7 @@ async def gated_call(
 
             (
                 decision, rule_name, decided_at, decided_via, batch_id, feedback, earlier, approval_request_id,
+                rule_source,
             ) = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="popup",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
@@ -1476,6 +1541,7 @@ async def gated_call(
                 audit(
                     decision="auto_accepted", auto_accept_rule=rule_name, pii_detected=False, decided_at=decided_at,
                     decided_via=decided_via, batch_id=batch_id,
+                    rule_id=rule_name if rule_source else "", rule_source=rule_source,
                 )
                 return filtered_data
 
@@ -1590,6 +1656,10 @@ async def propose_policy_change(
 
     existing_rows = get_policy_rows()
     existing_by_id = {row.id: row for row in existing_rows}
+    if rule_id and rule_id not in existing_by_id and any(row.id == rule_id for row in org_rules.rows()):
+        raise ValueError(
+            "That rule is set by your organization; only an administrator can change it on the Admin page."
+        )
 
     new_rules: list[policy_engine.PolicyRule] = []
     if operation == "remove":
@@ -1861,7 +1931,7 @@ def _audit(
     *, created_at, request_id, connector, tool, tool_name, summary, sender, decision, auto_accept_rule,
     pii_detected=False, pii_categories=None, pii_match_details="", claude_reason="", decided_at=None,
     delivery="", decided_via="", batch_id="", rule_id="", deny_feedback: DenialFeedback | None = None,
-    expired_decision="",
+    expired_decision="", rule_source="",
 ) -> None:
     feedback = deny_feedback if deny_feedback is not None else DenialFeedback()
     if decision in APPROVED_LIKE_DECISIONS:
@@ -1906,6 +1976,7 @@ def _audit(
             # "auto_accepted" audit() calls above that resolved a canonical id; every other
             # decision keeps the default.
             rule_id=rule_id,
+            allowed_by=allowed_by_for(decision, rule_source),
             # ADR 0084: that a deny carried feedback, never the note's text.
             deny_intent=feedback.intent,
             deny_note_chars=len(feedback.note),

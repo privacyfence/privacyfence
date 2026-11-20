@@ -406,7 +406,7 @@ class McpDispatcher:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
             my_email = getattr(connector, "my_email", "")
             agent_args = {k: v for k, v in args.items() if k not in _CONNECTOR_COMPUTED_ARGS}
-            verdict, matched_rule, matched_rule_id, reason = preflight_auto_accept(
+            verdict, matched_rule, matched_rule_id, reason, _rule_source = preflight_auto_accept(
                 operation_key, agent_args, my_email, tool,
             )
             if gate == "review":

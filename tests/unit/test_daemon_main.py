@@ -4561,6 +4561,27 @@ class TestLoadAdminConfigSingleUser:
         admin, _ = daemon_main.load_admin_config({"mode": "org", "idp": idp})
         assert admin["step_up"] != {"enabled": True, "require_passkey": True, "scope": "writes_and_pii_reads"}
 
+    def test_it_loads_the_org_rules_of_the_written_admin_config(self, tmp_path, monkeypatch):
+        from privacyfence import org_rules
+        from privacyfence.policy import scope_rows
+        from privacyfence.policy.registry import Verb
+
+        path = tmp_path / "admin_config.json"
+        monkeypatch.setattr(admin_config, "admin_config_path", lambda: path)
+        scope = "gmail.sender_domain"
+        row = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for(scope, ["corp.example"]), scope=scope, value=["corp.example"],
+            verbs=frozenset({Verb.READ}), operations=scope_rows.implied_operations(scope, [Verb.READ]),
+        )
+        config = admin_config._default_config()
+        config["org_rules"] = [scope_rows.row_to_dict(row)]
+        path.write_text(json.dumps(config), encoding="utf-8")
+        try:
+            daemon_main.load_admin_config({"mode": "org"})
+            assert [r.id for r in org_rules.rows()] == [row.id]
+        finally:
+            org_rules.reset()
+
 
 class TestSingleUserEffectiveConfig:
     def test_it_never_carries_auto_provisioning(self, monkeypatch):

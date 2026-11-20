@@ -648,7 +648,7 @@ class TestCheckPolicy:
 
         def fake_preflight(operation_key, args, my_email, tool=""):
             seen["args"] = args
-            return "unknown", "", "", "x"
+            return "unknown", "", "", "x", ""
 
         monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
         dispatcher = _dispatcher({"slack": FakeConnector("slack")})
@@ -663,7 +663,7 @@ class TestCheckPolicy:
 
         def fake_preflight(operation_key, args, my_email, tool=""):
             seen["args"] = args
-            return "unknown", "", "", "x"
+            return "unknown", "", "", "x", ""
 
         monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
         dispatcher = _dispatcher({"slack": FakeConnector("slack")})
@@ -678,7 +678,7 @@ class TestCheckPolicy:
 
         def fake_preflight(operation_key, args, my_email, tool=""):
             seen["args"] = args
-            return "unknown", "", "", "x"
+            return "unknown", "", "", "x", ""
 
         monkeypatch.setattr(mcp_dispatch, "preflight_auto_accept", fake_preflight)
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
@@ -800,7 +800,7 @@ class TestCheckPolicy:
     def test_grace_window_match_still_names_the_rule_it_would_take(self, monkeypatch):
         monkeypatch.setattr(
             mcp_dispatch, "preflight_auto_accept",
-            lambda *_a, **_k: ("auto_accept", "session_temp_accept", "", "grace window"),
+            lambda *_a, **_k: ("auto_accept", "session_temp_accept", "", "grace window", ""),
         )
         dispatcher = _dispatcher({"salesforce": FakeConnector("salesforce")})
         result = dispatcher.check_policy("salesforce", "salesforce_export_report", {"report_id": "00O1"})

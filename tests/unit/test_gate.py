@@ -44,7 +44,7 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
-from privacyfence import approval_ui, auto_accept, gate, paths, scoped_tokens, secure_files
+from privacyfence import approval_ui, auto_accept, gate, org_rules, paths, scoped_tokens, secure_files
 from privacyfence.auto_accept import ReviewContext
 from privacyfence.approvals import ApprovalPending, IdenticalWriteAwaitingApprovalError, PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
@@ -121,14 +121,17 @@ class FakeEvaluator:
     values for the ordinary case.
     """
 
-    def __init__(self, result=(False, "")):
+    def __init__(self, result=(False, ""), source=None):
         self.result = result
+        self.source = source
         self.calls = []
 
     def __call__(self, operation_key, ctx):
         self.calls.append((operation_key, ctx))
         ok, rule = self.result
-        return (ok, rule, rule if ok else "")
+        # The temp-accept window is no rule list; every other canned match reads as the person's.
+        source = self.source if self.source is not None else ("" if rule == "session_temp_accept" else "person")
+        return (ok, rule, rule if ok else "", source if ok else "")
 
 
 def install_rules(table: dict) -> None:
@@ -444,6 +447,24 @@ class TestRuleIdAttribution:
         assert entries[0]["decision"] == "auto_accepted"
         assert entries[0]["rule_id"] == policy_store.rule_id_for("always_allow", None, ())
 
+
+    async def test_a_card_resolved_by_a_rule_change_audits_the_rule_id_and_source(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        install_rules({})
+        kwargs = base_kwargs(gate="review")
+
+        first = await gated_call_or_pending(**kwargs)
+        assert first["status"] == "approval_pending"
+        install_rules({"gmail.read_message": [{"predicate": "always_allow"}]})
+        auto_accept.notify_rules_changed()
+
+        assert await gated_call_or_pending(**kwargs) is FILTERED
+        entries = read_audit_entries(audit_dir)
+        expected_id = policy_store.rule_id_for("always_allow", None, ())
+        assert entries[-1]["decision"] == "auto_accepted"
+        assert (entries[-1]["rule_id"], entries[-1]["allowed_by"]) == (expected_id, "person_rule")
 
 class TestReviewGateDecisions:
     async def test_deny_raises_and_audits_rejected(self, monkeypatch, audit_dir):
@@ -1024,14 +1045,14 @@ class TestPreflightAutoAccept:
         auto_accept.set_policy_v2_store_rules([])
 
     def test_no_configured_rule_is_requires_review_with_no_ids(self):
-        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+        verdict, matched_rule, matched_rule_id, _reason, _source = gate.preflight_auto_accept(
             "gmail.read_message", {},
         )
         assert (verdict, matched_rule, matched_rule_id) == ("requires_review", "", "")
 
     def test_v1_args_only_match_reports_the_same_id_for_both_fields(self):
         install_rules({"gmail.create_draft": [{"predicate": "to_is_myself"}]})
-        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+        verdict, matched_rule, matched_rule_id, _reason, _source = gate.preflight_auto_accept(
             "gmail.create_draft", {"to": "me@example.com"}, "me@example.com",
         )
         assert verdict == "auto_accept"
@@ -1045,7 +1066,7 @@ class TestPreflightAutoAccept:
         # approved_folder needs the fetched file's parent_ids -- data-dependent, so preflight can
         # never resolve it from args alone.
         install_rules({"drive.read_file_contents": [{"predicate": "approved_folder", "value": ["f1"]}]})
-        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+        verdict, matched_rule, matched_rule_id, _reason, _source = gate.preflight_auto_accept(
             "drive.read_file_contents", {},
         )
         assert (verdict, matched_rule, matched_rule_id) == ("unknown", "", "")
@@ -1060,7 +1081,7 @@ class TestPreflightAutoAccept:
                 operations=frozenset({"apps_script.read_content"}),
             ),
         ])
-        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+        verdict, matched_rule, matched_rule_id, _reason, _source = gate.preflight_auto_accept(
             "apps_script.read_content", {"script_id": "script1"},
         )
         assert verdict == "auto_accept"
@@ -1074,11 +1095,11 @@ class TestPreflightAutoAccept:
                 operations=frozenset({"grist.read_records"}),
             ),
         ])
-        verdict, matched_rule, _id, _reason = gate.preflight_auto_accept(
+        verdict, matched_rule, _id, _reason, _source = gate.preflight_auto_accept(
             "grist.read_records", {"doc_id": "DOC1", "table_id": "T"},
         )
         assert (verdict, matched_rule) == ("auto_accept", "r-grist")
-        verdict, _rule, _id, _reason = gate.preflight_auto_accept(
+        verdict, _rule, _id, _reason, _source = gate.preflight_auto_accept(
             "grist.read_records", {"doc_id": "DOC2", "table_id": "T"},
         )
         assert verdict != "auto_accept"
@@ -1090,11 +1111,11 @@ class TestPreflightAutoAccept:
                 operations=frozenset({"miro.list_items"}),
             ),
         ])
-        verdict, matched_rule, _id, _reason = gate.preflight_auto_accept(
+        verdict, matched_rule, _id, _reason, _source = gate.preflight_auto_accept(
             "miro.list_items", {"board_id": "uXjVOD6LSME="},
         )
         assert (verdict, matched_rule) == ("auto_accept", "r-miro")
-        verdict, _rule, _id, _reason = gate.preflight_auto_accept(
+        verdict, _rule, _id, _reason, _source = gate.preflight_auto_accept(
             "miro.list_items", {"board_id": "o9J_kzZb3Xg="},
         )
         assert verdict != "auto_accept"
@@ -1106,9 +1127,9 @@ class TestPreflightAutoAccept:
                 operations=frozenset({"peek.upload_page"}),
             ),
         ])
-        verdict, matched_rule, _id, _reason = gate.preflight_auto_accept("peek.upload_page", {"slug": "dash"})
+        verdict, matched_rule, _id, _reason, _source = gate.preflight_auto_accept("peek.upload_page", {"slug": "dash"})
         assert (verdict, matched_rule) == ("auto_accept", "r-peek")
-        verdict, _rule, _id, _reason = gate.preflight_auto_accept("peek.upload_page", {"slug": ""})
+        verdict, _rule, _id, _reason, _source = gate.preflight_auto_accept("peek.upload_page", {"slug": ""})
         assert verdict != "auto_accept"
 
     @pytest.mark.parametrize("verb, operation", [
@@ -1120,9 +1141,9 @@ class TestPreflightAutoAccept:
         auto_accept.set_policy_v2_store_rules(
             policy_catalogue.rules_for_catalogue_entry("grist.document", ["DOC1"], [verb])
         )
-        verdict, _rule, _id, _reason = gate.preflight_auto_accept(operation, {"doc_id": "DOC1", "table_id": "T"})
+        verdict, _rule, _id, _reason, _source = gate.preflight_auto_accept(operation, {"doc_id": "DOC1", "table_id": "T"})
         assert verdict == "auto_accept"
-        verdict, _rule, _id, _reason = gate.preflight_auto_accept(operation, {"doc_id": "DOC2", "table_id": "T"})
+        verdict, _rule, _id, _reason, _source = gate.preflight_auto_accept(operation, {"doc_id": "DOC2", "table_id": "T"})
         assert verdict != "auto_accept"
 
     @pytest.mark.parametrize("tool, operation", [
@@ -1141,7 +1162,7 @@ class TestPreflightAutoAccept:
                 operations=frozenset({"apps_script.read_content"}),
             ),
         ])
-        verdict, _matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+        verdict, _matched_rule, matched_rule_id, _reason, _source = gate.preflight_auto_accept(
             "apps_script.read_content", {},
         )
         assert verdict == "unknown"
@@ -1157,12 +1178,12 @@ class TestPreflightAutoAccept:
                 operations=frozenset({"slack.read_messages"}),
             ),
         ])
-        verdict, _rule, _id, reason = gate.preflight_auto_accept(
+        verdict, _rule, _id, reason, _source = gate.preflight_auto_accept(
             "slack.read_messages", {"member_only": True}, tool="slack_search_messages",
         )
         assert verdict == "requires_review"
         assert "r-mine-read" not in reason
-        verdict, _rule, _id, reason = gate.preflight_auto_accept(
+        verdict, _rule, _id, reason, _source = gate.preflight_auto_accept(
             "slack.read_messages", {"channel_id": "C1"}, tool="slack_get_channel_history",
         )
         assert verdict == "unknown"
@@ -1175,7 +1196,7 @@ class TestPreflightAutoAccept:
                 operations=frozenset({"slack.read_messages"}),
             ),
         ])
-        verdict, _rule, _id, reason = gate.preflight_auto_accept(
+        verdict, _rule, _id, reason, _source = gate.preflight_auto_accept(
             "slack.read_messages", {"member_only": True}, tool="slack_search_messages",
         )
         assert verdict == "unknown"
@@ -3722,6 +3743,207 @@ class TestPrincipalScopedLedger:
         await asyncio.sleep(0.02)
 
 
+CORP = SimpleNamespace(sender="a@corp.example", labels=[])
+
+
+def _org_row(value: str = "corp.example", scope: str = "gmail.sender_domain", verbs=(Verb.READ,)):
+    ops = scope_rows.implied_operations(scope, verbs)
+    return scope_rows.ScopeRow(
+        id=scope_rows.row_id_for(scope, [value]), scope=scope, value=[value],
+        verbs=frozenset(verbs), operations=ops,
+    )
+
+
+def _corp_ctx() -> ReviewContext:
+    return ReviewContext(connector="gmail", tool="gmail_get_message", args={}, raw_data=CORP, my_email="")
+
+
+class TestOrgRules:
+    """Organization rules (issue 1167): checked after the person's own rules for an unscoped call,
+    attributed as ``org_rule``, and re-evaluated for every principal's pending card on a change."""
+
+    @pytest.fixture(autouse=True)
+    def _clean(self, monkeypatch):
+        auto_accept.set_policy_v2_store_rules([])
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        approval_ui.init_approval_ui(WebApprovalUI())
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+        org_rules.reset()
+
+    @staticmethod
+    def _person_rows(*rows):
+        auto_accept.set_policy_v2_store_rules(scope_rows.compile_rows(list(rows)))
+
+    @staticmethod
+    def _denying_popups(monkeypatch):
+        shown: list = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (shown.append(1) or "deny", None))
+        return shown
+
+    async def test_an_org_rule_auto_accepts_an_unscoped_call_and_is_attributed(self, audit_dir):
+        row = _org_row()
+        org_rules.set([row])
+
+        assert await gate.gated_call(**base_kwargs(raw_data=CORP)) is FILTERED
+
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["decision"], entry["allowed_by"], entry["rule_id"]) == ("auto_accepted", "org_rule", row.id)
+
+    async def test_a_person_rule_with_the_same_scope_and_value_wins(self, audit_dir):
+        row = _org_row()
+        org_rules.set([row])
+        self._person_rows(row)
+
+        assert await gate.gated_call(**base_kwargs(raw_data=CORP)) is FILTERED
+
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["allowed_by"], entry["rule_id"]) == ("person_rule", row.id)
+
+    async def test_a_scoped_call_without_a_token_rule_ignores_the_org_rule(self, monkeypatch, audit_dir):
+        org_rules.set([_org_row()])
+        self._denying_popups(monkeypatch)
+
+        with scoped_tokens.token_scope(_scoped_token(rules=())):
+            with pytest.raises(gate.GateDeniedError):
+                await gate.gated_call(**base_kwargs(raw_data=CORP))
+
+        assert all(e["decision"] != "auto_accepted" for e in read_audit_entries(audit_dir))
+
+    async def test_an_unattended_call_covered_by_an_org_rule_is_auto_accepted(self, audit_dir):
+        org_rules.set([_org_row()])
+
+        with gate.unattended_scope(True):
+            assert await gate.gated_call(**base_kwargs(raw_data=CORP)) is FILTERED
+
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["decision"], entry["allowed_by"]) == ("auto_accepted", "org_rule")
+
+    def test_a_token_only_predicate_row_in_the_admin_config_is_not_matched(self):
+        custom = scope_rows.ScopeRow(
+            id="c1", scope=None, value=["x"], verbs=frozenset({Verb.READ}),
+            operations=frozenset({"gmail.read_message"}), predicate="upstream.approved_tool",
+        )
+        org_rules.load_from_config({"org_rules": [scope_rows.row_to_dict(custom)]})
+
+        assert gate._evaluate_auto_accept("gmail.read_message", _corp_ctx())[0] is False
+        assert gate._rules_in_scope(None) == []
+
+    def test_a_token_only_org_rule_is_filtered_out_of_the_gate_lists(self, monkeypatch):
+        rule = PolicyRule(
+            id="r-up", predicate="upstream.approved_tool", value=None, operations=frozenset({"gmail.read_message"}),
+        )
+        monkeypatch.setattr(org_rules, "rules", lambda: [rule])
+
+        assert gate._rules_in_scope(None) == []
+        assert gate._evaluate_auto_accept("gmail.read_message", _corp_ctx())[0] is False
+
+    async def test_the_org_list_changing_between_two_calls_changes_the_next_source_only(self, audit_dir):
+        row = _org_row()
+        self._person_rows(row)
+        org_rules.set([row])
+        await gate.gated_call(**base_kwargs(raw_data=CORP))
+
+        auto_accept.set_policy_v2_store_rules([])
+        await gate.gated_call(**base_kwargs(raw_data=CORP))
+
+        sources = [e["allowed_by"] for e in read_audit_entries(audit_dir)]
+        assert sources == ["person_rule", "org_rule"]
+
+    async def test_the_temp_accept_window_audits_as_person(self, monkeypatch, audit_dir):
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
+        sheets_args = {"spreadsheet_id": "sheet-1", "range_a1": "A1:B2", "values": [["x"]]}
+        kwargs = base_kwargs(gate="popup", connector="drive", tool="drive_sheets_write_range", args=sheets_args)
+        org_rules.set([_org_row()])  # present but covering nothing here
+
+        await gate.gated_call(**kwargs)
+        await gate.gated_call(**kwargs)
+
+        window = [
+            e for e in read_audit_entries(audit_dir)
+            if e["auto_accept_rule"] == "session_temp_accept" and e["decision"] == "auto_accepted"
+        ]
+        assert [e["allowed_by"] for e in window] == ["person"]
+
+    async def test_pii_still_forces_the_card_despite_an_org_rule(self, monkeypatch, audit_dir):
+        org_rules.set([_org_row()])
+        shown = self._denying_popups(monkeypatch)
+
+        with pytest.raises(RuntimeError):
+            await gate.gated_call(**base_kwargs(
+                raw_data=CORP, details_text="Wire it to DE89370400440532013000, thanks.",
+            ))
+
+        assert shown == [1]
+        assert all(e["decision"] != "auto_accepted" for e in read_audit_entries(audit_dir))
+
+    def test_a_tag_writing_operation_is_not_covered(self):
+        op = "drive.set_file_tags"
+        row = scope_rows.ScopeRow(
+            id="r-tag", scope="gmail.sender_domain", value=["corp.example"], verbs=frozenset({Verb.READ}),
+            operations=frozenset({op}),
+        )
+        org_rules.set([row])
+
+        assert gate._evaluate_auto_accept(op, _corp_ctx())[0] is False
+
+    def test_rule_values_include_an_org_rules_values(self):
+        org_rules.set([_org_row("corp.example")])
+        self._person_rows(_org_row("mine.example"))
+
+        assert gate.rule_values("trusted_sender_domain", "gmail.read_message") == ["mine.example", "corp.example"]
+
+    def test_preflight_returns_the_source(self):
+        row = _org_row("dash", scope="peek.page", verbs=(Verb.ADD,))
+        org_rules.set([row])
+        args = {"slug": "dash"}
+
+        assert gate.preflight_auto_accept("peek.upload_page", args)[0::4] == ("auto_accept", "organization")
+        self._person_rows(row)
+        assert gate.preflight_auto_accept("peek.upload_page", args)[0::4] == ("auto_accept", "person")
+        org_rules.set([])
+        auto_accept.set_policy_v2_store_rules([])
+        assert gate.preflight_auto_accept("peek.upload_page", args)[0::4] == ("requires_review", "")
+
+    async def test_propose_policy_change_refuses_an_org_rule_id(self, tmp_path):
+        config = tmp_path / "settings.yaml"
+        config.write_text("auto_accept: {}\n", encoding="utf-8")
+        auto_accept.init_config_path(str(config))
+        row = _org_row()
+        org_rules.set([row])
+
+        for operation in ("remove", "update"):
+            with pytest.raises(ValueError) as err:
+                await gate.propose_policy_change(operation=operation, reason="r", rule_id=row.id)
+            assert str(err.value) == (
+                "That rule is set by your organization; only an administrator can change it on the Admin page."
+            )
+
+    async def test_an_org_rule_change_resolves_only_the_pending_card_it_covers(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+
+        cards = {}
+        for name, sender in (("alice", "a@other.example"), ("bob", "b@corp.example")):
+            with principal_scope(Principal(id=name)):
+                result = await gated_call_or_pending(
+                    **base_kwargs(gate="review", raw_data=SimpleNamespace(sender=sender, labels=[])),
+                )
+            assert result["status"] == "approval_pending"
+            cards[name] = registry.get(result["approval_id"])
+        assert not any(c.is_finalized() for c in cards.values())
+
+        org_rules.set([_org_row("corp.example")])
+        org_rules.notify_changed()
+
+        assert cards["bob"].final_decision == "auto_accepted"
+        assert cards["bob"].final_rule_source == "organization"
+        assert not cards["alice"].is_finalized()
+
+        registry.answer(cards["alice"].id, "deny")
+        await asyncio.sleep(0.02)
+
+
 class TestRulesChangedReevaluation:
     """A rule change resolves the pending cards the new rules cover (gate._on_rules_changed ->
     PendingApprovalRegistry.reevaluate_all), through gate._should_auto_accept."""
@@ -3765,7 +3987,7 @@ class TestRulesChangedReevaluation:
     ):
         def only_alice(operation_key, ctx):
             ok = current_principal().id == "alice"
-            return (ok, "alice_rule" if ok else "", "alice_rule" if ok else "")
+            return (ok, "alice_rule" if ok else "", "alice_rule" if ok else "", "person" if ok else "")
 
         registry = self._registry(monkeypatch, FakeEvaluator())
         cards = {}
@@ -4449,7 +4671,7 @@ class TestScopedTokenGate:
         monkeypatch.setattr(gate, "is_temp_accepted", lambda *a, **k: False)
 
         def predict(script: str) -> tuple[str, str]:
-            verdict, _rule, rule_id, _reason = gate.preflight_auto_accept(
+            verdict, _rule, rule_id, _reason, _source = gate.preflight_auto_accept(
                 "apps_script.read_content", {"script_id": script},
             )
             return verdict, rule_id
