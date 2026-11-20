@@ -37,7 +37,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p8-token-copy
 
-- pending
+- worker: Added a shared copyable_rows() helper in scoped_tokens.py used by the copy check and both proposal call sites; the "(set by your organization)" label sits after the rule title in the chip, not after a sentence.
 
 ## p9-retire-docs-adrs
 
