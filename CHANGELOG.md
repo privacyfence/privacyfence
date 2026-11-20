@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.2.0] - 2026-11-20
+
 ### Added
 
 - Administrators can set organization auto-accept rules on the Admin page; the audit log and its Excel export now say whether a person, their own rule, an organization rule or a scoped token's rule allowed each call (new Allowed By column).
