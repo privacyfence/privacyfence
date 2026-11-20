@@ -2663,3 +2663,123 @@ class TestGoogleUnavailableErrors:
 
         assert type(excinfo.value) is RuntimeError
         assert public_message(excinfo.value) == GENERIC_PUBLIC_MESSAGE
+
+
+class TestFolderTreeListingGrants:
+    """drive.folder_tree: a listing of the rule's folder records its subfolders, and the four gated
+    read tools hand the file's own granted parents to the gate as ``listed_folders``."""
+
+    ROOT = "rootfolderid1"
+    SUB = "subfolderid1"
+    FOLDER = "application/vnd.google-apps.folder"
+    SHORTCUT = "application/vnd.google-apps.shortcut"
+
+    @pytest.fixture
+    def tree(self, monkeypatch, tmp_path):
+        init_audit_logger(str(tmp_path))
+        monkeypatch.setattr(
+            drive_module, "rule_values",
+            lambda predicate, operation: [self.ROOT] if predicate == "drive.folder_tree" else [],
+        )
+        connector, client = make_connector()
+        children = [
+            make_file(id=self.SUB, mime_type=self.FOLDER),
+            make_file(id="shortcutid001", mime_type=self.SHORTCUT),
+            make_file(id="plainfileid01", mime_type="text/plain"),
+        ]
+        client.list_folder.side_effect = lambda folder_id, _max: children if folder_id == self.ROOT else []
+        client.get_file_content.return_value = DriveFileContent(file=make_file(), content_text="hi")
+        client.get_revision_content.return_value = DriveFileContent(
+            file=make_file(), content_text="old", revision_id="r1", revision_modified_time="2026-10-05T09:00:00Z",
+        )
+        client.get_sheet_values.return_value = [["a"]]
+        client.download_file_bytes.return_value = b"bytes"
+        return connector, client
+
+    @staticmethod
+    def _use_parents(client, parents):
+        client.get_file_metadata.return_value = make_file(parent_ids=parents)
+        client.get_file_content.return_value.file = make_file(parent_ids=parents)
+        client.get_revision_content.return_value.file = make_file(parent_ids=parents)
+
+    async def _read_all(self, connector):
+        calls = [
+            ("drive_get_file_content", {"file_id": "f1"}),
+            ("drive_get_revision_content", {"file_id": "f1", "revision_id": "r1"}),
+            ("drive_sheets_get_values", {"spreadsheet_id": "f1", "range_a1": "A1"}),
+            ("drive_download_file", {"file_id": "f1"}),
+        ]
+        for tool, args in calls:
+            try:
+                await connector.call(tool, args)
+            except Exception:  # noqa: BLE001 - only the args handed to the gate matter here
+                pass
+
+    async def test_listed_subfolder_is_handed_to_every_gated_read(self, tree, gated_call_spy):
+        connector, client = tree
+        listing = await connector.call("drive_list_folder", {"folder_id": self.ROOT})
+        self._use_parents(client, [self.SUB])
+
+        await self._read_all(connector)
+
+        assert len(gated_call_spy) == 4
+        for kwargs in gated_call_spy:
+            assert kwargs["args"]["listed_folders"] == {self.ROOT: [self.SUB]}, kwargs["tool"]
+        assert [f["id"] for f in listing] == [self.SUB, "shortcutid001", "plainfileid01"]
+
+    @pytest.mark.parametrize("parents", [["shortcutid001"], ["unlistedfolder1"], []])
+    async def test_other_parents_get_no_listed_folders(self, tree, gated_call_spy, parents):
+        connector, client = tree
+        await connector.call("drive_list_folder", {"folder_id": self.ROOT})
+        self._use_parents(client, parents)
+
+        await self._read_all(connector)
+
+        assert len(gated_call_spy) == 4
+        assert all("listed_folders" not in kwargs["args"] for kwargs in gated_call_spy)
+
+    async def test_identical_uncovered_reads_have_identical_args(self, tree, gated_call_spy):
+        connector, client = tree
+        self._use_parents(client, ["unlistedfolder1"])
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+        await connector.call("drive_list_folder", {"folder_id": self.ROOT})
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        assert gated_call_spy[0]["args"] == gated_call_spy[1]["args"] == {"file_id": "f1"}
+
+    async def test_listing_an_unrelated_folder_records_nothing(self, tree, gated_call_spy):
+        connector, client = tree
+        client.list_folder.side_effect = lambda *_: [make_file(id=self.SUB, mime_type=self.FOLDER)]
+        await connector.call("drive_list_folder", {"folder_id": "unrelatedfolder1"})
+        self._use_parents(client, [self.SUB])
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        assert "listed_folders" not in gated_call_spy[0]["args"]
+        assert connector.listing_grants.granted("", [self.ROOT]) == {}
+
+    async def test_without_rule_values_nothing_is_recorded(self, tree, gated_call_spy, monkeypatch):
+        connector, client = tree
+        monkeypatch.setattr(drive_module, "rule_values", lambda predicate, operation: [])
+        await connector.call("drive_list_folder", {"folder_id": self.ROOT})
+        monkeypatch.setattr(
+            drive_module, "rule_values",
+            lambda predicate, operation: [self.ROOT] if predicate == "drive.folder_tree" else [],
+        )
+        self._use_parents(client, [self.SUB])
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        assert connector.listing_grants.granted("", [self.ROOT]) == {}
+        assert "listed_folders" not in gated_call_spy[0]["args"]
+
+    async def test_a_caller_supplied_listed_folders_never_reaches_the_gate(self, tree, gated_call_spy):
+        connector, client = tree
+        self._use_parents(client, ["unlistedfolder1"])
+
+        with pytest.raises(TypeError):
+            await connector.call(
+                "drive_get_file_content", {"file_id": "f1", "listed_folders": {self.ROOT: ["unlistedfolder1"]}},
+            )
+
+        assert gated_call_spy == []

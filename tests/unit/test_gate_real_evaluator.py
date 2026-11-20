@@ -200,6 +200,90 @@ class TestDriveApprovedFolder:
         assert entries[0]["pii_detected"] is False
 
 
+class TestDriveFolderTreeRule:
+    """A drive.folder_tree row on a scoped token: only folders a listing of its root returned are
+    covered, per token, end to end through the real connector, gate and evaluator."""
+
+    ROOT = "rootfolderid1"
+    SUB = "subfolderid1"
+    OTHER = "otherfolderid"
+
+    @staticmethod
+    def _token(token_id: str):
+        import time
+
+        from privacyfence import scoped_tokens
+        from privacyfence.policy import scope_rows
+        from privacyfence.policy.engine import PolicyRule
+
+        rule = PolicyRule(
+            id="r-tree", predicate="drive.folder_tree", value=[TestDriveFolderTreeRule.ROOT],
+            operations=frozenset({"drive.read_file_contents"}),
+        )
+        return scoped_tokens.ScopedToken(
+            id=token_id, label="tree", digest="", principal_id="local", principal_email="",
+            principal_display_name="", created_at=time.time(), expires_at=time.time() + 86400,
+            tools=frozenset({"drive_list_folder", "drive_get_file_content"}),
+            rules=tuple(scope_rows.rows_for_rules([rule], rule.id)),
+        )
+
+    @staticmethod
+    def _connector():
+        from unittest.mock import MagicMock
+
+        from privacyfence.connectors.drive import DriveConnector
+        from privacyfence.drive_client import DriveFile, DriveFileContent
+
+        client = MagicMock()
+        folder = DriveFile(id=TestDriveFolderTreeRule.SUB, name="sub", mime_type="application/vnd.google-apps.folder", size=0)
+        client.list_folder.return_value = [folder]
+
+        def content(file_id):
+            parent = {"inlisted": TestDriveFolderTreeRule.SUB, "inunlisted": TestDriveFolderTreeRule.OTHER}[file_id]
+            file = DriveFile(id=file_id, name="n", mime_type="text/plain", size=1, parent_ids=[parent])
+            return DriveFileContent(file=file, content_text="ordinary text")
+
+        client.get_file_content.side_effect = content
+        return DriveConnector(client)
+
+    @pytest.fixture(autouse=True)
+    def _no_rules(self):
+        auto_accept.set_policy_v2_store_rules([])
+        yield
+        auto_accept.set_policy_v2_store_rules([])
+
+    async def test_listed_subfolder_auto_accepts_and_unlisted_is_denied(self, monkeypatch, audit_dir):
+        from privacyfence import scoped_tokens
+
+        fail_if_popup_shown(monkeypatch)
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        connector = self._connector()
+
+        with scoped_tokens.token_scope(self._token("st-aaaaaaaaaaaa")):
+            await connector.call("drive_list_folder", {"folder_id": self.ROOT})
+            result = await connector.call("drive_get_file_content", {"file_id": "inlisted"})
+            with pytest.raises(gate.GateDeniedError):
+                await connector.call("drive_get_file_content", {"file_id": "inunlisted"})
+
+        assert result["content"] == "ordinary text"
+        decisions = [e["decision"] for e in read_audit_entries(audit_dir) if e["tool"] == "drive_get_file_content"]
+        assert decisions[0] == "auto_accepted"
+        assert decisions[1] != "auto_accepted"
+
+    async def test_two_tokens_do_not_share_grants(self, monkeypatch, audit_dir):
+        from privacyfence import scoped_tokens
+
+        fail_if_popup_shown(monkeypatch)
+        monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
+        connector = self._connector()
+
+        with scoped_tokens.token_scope(self._token("st-aaaaaaaaaaaa")):
+            await connector.call("drive_list_folder", {"folder_id": self.ROOT})
+        with scoped_tokens.token_scope(self._token("st-bbbbbbbbbbbb")):
+            with pytest.raises(gate.GateDeniedError):
+                await connector.call("drive_get_file_content", {"file_id": "inlisted"})
+
+
 class TestDriveSandboxFolderCoveragePastComment:
     """drive.comment_file/drive.upload_file/drive.move_file are now targets
     of the same sandbox_folders grant capability as the six pre-existing
