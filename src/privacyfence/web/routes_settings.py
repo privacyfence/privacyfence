@@ -66,7 +66,7 @@ from ..principal import Principal, principal_scope
 from ..resource_names import get_resolver
 from ..scoped_tokens import (
     DEFAULT_DAYS, PROPOSALS_DISABLED_MESSAGE, ScopedToken, ScopedTokenError, ScopedTokenPolicy, ScopedTokenStore,
-    get_store, normalise_create_request,
+    copyable_rows, get_store, normalise_create_request,
 )
 from ..settings_state import (
     REPO_URL, _about_state_dict, _auto_accept_state_from_rows,
@@ -1246,7 +1246,7 @@ def build_org_routes(
                     pass  # _wrap_org_settings meets the same error and renders it
                 else:
                     shown = scoped_token_proposals.review_data(
-                        proposal, auto_accept.get_policy_rows(),
+                        proposal, copyable_rows(),
                         runtime_host=(urlsplit(agent_runtime.base_url).hostname or "") if agent_runtime else "",
                         project_id=agent_runtime.project_id if agent_runtime else "",
                     )

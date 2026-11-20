@@ -605,6 +605,10 @@ class TestScopedTokensSection:
         assert "post('create_scoped_token'" in html
         assert "max=\"' +\n      esc(SCOPED.max_days)" in html
 
+    def test_an_org_row_in_the_copy_list_is_labelled(self):
+        html = build_html(_make_state(), scoped_tokens=self.DATA)
+        assert "r.organization ? ' <span class=\"pf-st-meta\">(set by your organization)</span>'" in html
+
     def test_the_gated_fieldset_text_is_exact(self):
         html = build_html(_make_state(), scoped_tokens={
             **self.DATA, "delivery": "once",
