@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tool call that omits a required argument now fails with a clear error.** The reply names the missing argument and lists what the tool needs, instead of the connector's `missing 1 required positional argument` ([#1172](https://github.com/privacyfence/privacyfence/issues/1172)).
+
 ## [8.2.0] - 2026-11-20
 
 ### Added
