@@ -957,9 +957,12 @@ values shown are the ones in force. The settings are stored in `org/admin_config
 | Sign-in | Allowed email domains, groups claim and required groups ([section 4](#who-may-sign-in)); with the built-in Google sign-in, the administrators read-only | After a restart |
 | Step-up | Whether approvals need a fresh passkey, and for which approvals ([section 12](#12-approvals-and-step-up)) | After a restart |
 | Scoped tokens | Whether people may create scoped tokens, their longest lifetime, whether AI clients may propose one | After a restart |
+| Organization rules | Auto-accept rules for everyone's own AI calls | At once |
 | Audit forwarding | Syslog or HTTPS forwarding of audit entries ([section 14](#monitoring)) | After a restart |
 | Privacy Filter | The install-wide privacy policy and PII detection, below | On the next request |
 | Stats | Counts of people, connectors and auto-accept rules; never whose or what | |
+
+**Organization rules** lets an administrator add auto-accept rules (a scope such as a Drive folder, Drive tag or Grist document, its value and verbs) that let every person's own AI calls through without a card. Saving, changing the verbs of or removing a rule asks for a passkey. People see the rules read-only on their Auto-accept page. A rule with a write or send verb lets everyone's AI change or send without a card, and a rule on a Drive tag can be forged by anyone who can edit a tagged file, so prefer read verbs ([ADR 0333](adr/0333-organization-auto-accept-rules-are-set-by-an-administrator.md)).
 
 After a change that needs a restart, the page lists what is waiting; restart the service when nobody
 is mid-approval. Every change that alters what the server does asks for a passkey, **even when
@@ -982,6 +985,8 @@ Policy is split in two:
 |---|---|---|---|
 | Privacy filter (which content categories are shown, redacted or blocked) and PII detection | Install-wide: applies to everyone | `authority/config/settings.yaml` in the data directory | Admins, on **Admin → Privacy Filter** |
 | Always-allow rules | Per person | `users/<principal>/authority/config/settings.yaml` | Each person, on **Settings → Auto-accept** or with **Always allow** on an approval card |
+
+Organization rules (**Admin → Organization rules**) are install-wide too, but apply to every person's own calls only; they do not apply to scoped tokens.
 
 **Install-wide policy.** A change made on the Admin page is written to the file and applies to everyone's
 next request, without a restart. You can also edit the file by hand and restart the daemon, but do

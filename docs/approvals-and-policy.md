@@ -30,8 +30,9 @@ Every connector tool has one of three gates:
 
 A `review` or `popup` request is decided in this order:
 
-1. **An always-allow rule matches** — the request runs without a card and the audit log records
-   which rule matched. A read with a [PII match](#the-pii-check) is the exception: it always goes
+1. **An always-allow rule matches** — your own, or one your organization set
+   ([below](#where-rules-are-stored)). The request runs without a card and the audit log records
+   which rule matched and who allowed the call (the **Allowed By** column). A read with a [PII match](#the-pii-check) is the exception: it always goes
    to a card.
 2. **A same-file grace window is open** — some Drive writes, see
    [below](#same-file-grace-window).
@@ -368,6 +369,8 @@ auto_accept:
   `null` for a condition that takes none.
 - `id` is derived from the predicate, value and conditions, so the same rule always has the same
   id — the audit log and the Auto-accept page's match counts use it.
+
+**Organization rules.** On an organization install an administrator can set rules for everyone on **Admin → Organization rules**. They are stored in `org/admin_config.json` (`org_rules`), in the same row format, not in your `settings.yaml`. A call is checked against your own rules first and then the organization's. Organization rules do not apply to calls made with a [scoped token](connect-claude-code.md#scoped-tokens), which holds its own rules (a new token can copy one). You see them, read-only, under **Set by your organization** on Settings > Auto-accept and in `privacyfence_list_policy` as `organization_rules`; `privacyfence_check_policy` names the source in `rule_source`. Only an administrator can change them, and an AI client cannot. The audit log's `allowed_by` field and its **Allowed By** column say whether a person, your own rule, an organization rule or a token's rule allowed each call. See [ADR 0333](adr/0333-organization-auto-accept-rules-are-set-by-an-administrator.md) and [ADR 0334](adr/0334-the-audit-entry-names-who-allowed-a-call.md).
 
 To move your rules to another install, use **Export…** and **Import…** on Settings > Auto-accept.
 The file carries your always-allow rules and your step-up level only, and import only adds. See
