@@ -15,6 +15,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 ## p3-approvals-principal-and-source
 
 - retry: Merge turned tests/unit/test_gate.py TestRulesChangedReevaluation red because gate.py (phase p4) still passes a 2-tuple callback; merge undone and p3 sent back to accept a 2-tuple callback until p4 lands.
+- worker: Re-evaluation helper accepts both 2-tuple and 3-tuple callbacks until the gate (p4) moves to 3-tuples.
 
 ## p4-gate-org-rules
 
