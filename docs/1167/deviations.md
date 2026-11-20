@@ -42,7 +42,7 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p9-retire-docs-adrs
 
-- pending
+- worker: The brief names four allowed_by values; the code also infers a fifth, no_approval_needed (a connector own auto rows), and the docs and ADR 0334 name it.
 
 ## Final review
 
