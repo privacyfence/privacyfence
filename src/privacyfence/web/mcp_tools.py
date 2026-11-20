@@ -134,16 +134,17 @@ CHECK_POLICY_TOOL = types.Tool(
     description=(
         "Before calling a gated tool, ask whether that exact call would auto-accept or need a human. "
         "Pass the connector, tool and args you're about to call. Returns {gate, verdict, "
-        "matched_rule, matched_rule_id, reason, pii_gate_may_apply, pii_gate, pii_gate_detail, "
-        "suggested_rules}. verdict: 'auto_accept' (the real call passes through identically), "
-        "'requires_review' (no rule can match these args) or 'unknown' (depends on fetched content). "
-        "matched_rule_id (auto_accept only) is privacyfence_propose_policy_change's rule_id. "
+        "matched_rule, matched_rule_id, rule_source, reason, pii_gate_may_apply, pii_gate, pii_gate_detail, "
+        "suggested_rules}. verdict: 'auto_accept' (the real call passes), "
+        "'requires_review' (no rule can match) or 'unknown' (depends on fetched content). "
+        "matched_rule_id (auto_accept only) is propose_policy_change's rule_id; rule_source: "
+        "'person', 'organization', 'token' or null. "
         "suggested_rules: rules that would cover an uncovered call, {group, label, value, "
-        "value_known, verb, operation, requires_args?}; value is null if the call reaches it at run "
-        "time, [] if the rule takes none; requires_args: args the call must also pass. pii_gate: "
+        "value_known, verb, operation, requires_args?}; value null: the call reaches it at run "
+        "time; []: the rule takes none; requires_args: args the call must also pass. pii_gate: "
         "whether the PII scan can still force a popup or, unattended or with a scoped token, a "
         "denial: 'none', 'allowed_by_token', 'allowed_unless_inline' or 'applies' (see "
-        "pii_gate_detail). No side effects. reason: why you check (logged, unverified)."
+        "pii_gate_detail). No side effects. reason: why you check."
     ),
     input_schema={
         "type": "object",
@@ -162,8 +163,8 @@ LIST_POLICY_TOOL = types.Tool(
     name="privacyfence_list_policy",
     description=(
         "List every configured auto-accept rule, plus the scope catalogue "
-        "privacyfence_propose_policy_change accepts. Returns {rules, scope_groups}. Each rule has: id "
-        "(pass as privacyfence_propose_policy_change's rule_id to update or remove it), sentence "
+        "privacyfence_propose_policy_change accepts. Returns {rules, organization_rules, scope_groups}; organization_rules: read-only admin rules, same shape. Each rule has: id "
+        "(rule_id for privacyfence_propose_policy_change), sentence "
         "(human-readable), connector, scope_type, value, operations (internal keys, informational), "
         "verbs ({verb, family} pairs; family is 'read', 'write', 'send' or 'destructive'), "
         "conditions, and covered_tools (every tool name the rule can auto-accept). Each scope_groups "

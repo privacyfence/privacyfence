@@ -626,7 +626,20 @@ class TestCheckPolicy:
             "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
             "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
             "pii_gate_may_apply": False, "pii_gate": "none", "pii_gate_detail": "", "suggested_rules": [],
+            "rule_source": None,
         }
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("person", "person"), ("organization", "organization"), ("token", "token"), ("", None),
+    ])
+    def test_rule_source_is_reported_from_the_preflight(self, monkeypatch, raw, expected):
+        verdict = "auto_accept" if raw else "requires_review"
+        monkeypatch.setattr(
+            mcp_dispatch, "preflight_auto_accept",
+            lambda operation_key, args, my_email, tool="": (verdict, "r1" if raw else "", "r1" if raw else "", "x", raw),
+        )
+        result = _dispatcher({"gmail": FakeConnector("gmail")}).check_policy("gmail", "gmail_create_draft", {})
+        assert result["rule_source"] == expected
 
     @staticmethod
     def _token(*, allow_personal_data: bool) -> ScopedToken:
@@ -921,6 +934,24 @@ class TestListPolicy:
         result = _dispatcher({}).list_policy()
         assert result["rules"] == []
         assert any(group["id"] == "drive.folder" for group in result["scope_groups"])
+
+    def test_organization_rules_are_empty_by_default(self):
+        assert _dispatcher({}).list_policy()["organization_rules"] == []
+
+    def test_organization_rules_are_listed_with_their_source_and_not_among_the_persons_rules(self):
+        from privacyfence import org_rules
+        from privacyfence.policy import scope_rows
+        from privacyfence.policy.registry import Verb
+        row = scope_rows.ScopeRow(
+            id=scope_rows.row_id_for("drive.folder", ["folderX"]), scope="drive.folder", value=["folderX"],
+            verbs=frozenset({Verb.READ}), operations=scope_rows.implied_operations("drive.folder", [Verb.READ]),
+        )
+        org_rules.set([row])
+        result = _dispatcher({}).list_policy()
+        assert result["rules"] == []
+        (listed,) = result["organization_rules"]
+        assert listed["id"] == row.id and listed["source"] == "organization"
+        assert listed["covered_tools"]
 
     async def test_a_v2_rule_is_listed_with_its_id_sentence_and_covered_tools(self, monkeypatch):
         from privacyfence import gate
