@@ -31,7 +31,9 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p7-admin-and-person-ui
 
-- pending
+- worker: Four existing Admin nav/section tests in test_settings_window_html.py now list org_rules after tokens; four source-string checks were renamed for the shared (list-parameterised) add-rule code.
+- worker: No existing browser test stubs the Admin passkey step; the new browser test replaces the page bridge with a recorder, as test_settings_edit_verbs_browser.py does.
+- review: Worker noted _ORG_ADMIN_PAGE_SECTIONS in tests/integration/test_browser_smoke.py could gain org_rules so the shared phone-layout check covers the new section; left out of scope (not in touches).
 
 ## p8-token-copy
 
