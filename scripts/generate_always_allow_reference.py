@@ -112,6 +112,22 @@ The scope **never covers move, copy or upload**: those name a destination, which
 not describe. **Anyone with edit access to a file can add or remove its tags**, so a tag rule is exactly as
 trustworthy as the people who can edit the tagged files; a collaborator can tag a file they shared with you to
 bring it under your rule. See [ADR 0321](adr/0321-drive-tags-are-plain-properties-and-collaborators-can-forge-them.md).
+
+### Google Drive — a folder and the subfolders reached by listing it
+
+The predicate is `drive.folder_tree`. It is added only from **Settings → Auto-accept → Add a rule** or in a
+scoped token's rules; no card offers it. You paste one Drive folder id (the part after `/folders/` in the
+folder's URL; `root` is not accepted) and tick the verbs.
+
+| Verb | What it covers |
+|---|---|
+| read | reading a file's content, metadata and sheet values, and its revisions |
+| download | downloading the file |
+
+A subfolder is covered after a listing that started at the rule's folder returned it; a file in an unlisted
+subfolder still asks. The memory is per token, in memory, and expires after one hour; list the folder again
+to renew it. Shortcuts are never followed, and the scope never covers write, move, copy or upload.
+See [ADR 0335](adr/0335-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md).
 """
 
 

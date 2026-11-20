@@ -23,10 +23,12 @@ from ..drive_client import (
 )
 from ..drive_tags import normalise_tag, parse_tag_list
 from ..google_errors import unavailable_error
-from ..gate import current_reason, gated_call
+from ..drive_listing_grants import FOLDER_MIME, ListingGrants
+from ..gate import current_reason, gated_call, rule_values
 from ..org_mode import DownloadDeliveryConfig, base64_length
 from ..principal import current_principal
 from ..privacy_filter import apply_list, apply_text, category_policy
+from ..scoped_tokens import current_token_scope
 from ..text_extraction import EXTRACTABLE_MIME_TYPES, extract_text, guess_mime_type, is_prefetch_worthy, preview_blocks_for
 
 logger = logging.getLogger(__name__)
@@ -150,6 +152,8 @@ class DriveConnector(Connector):
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
         self.session_created_ids: set[str] = set()
+        # Per connector instance like session_created_ids, in memory only.
+        self.listing_grants = ListingGrants()
         # file_id -> Drive modifiedTime as of PrivacyFence's own last write to
         # that file. Lets a subsequent read of the *exact same, still-
         # unchanged* content skip the PII gate's forced confirmation (not PII
@@ -1000,7 +1004,29 @@ class DriveConnector(Connector):
         files = await self._fetch(self._drive.list_folder, folder_id, max_results)
         self._auto_audit("drive_list_folder", "List Drive Folder",
                          f"List folder: {folder_id}", f"{len(files)} item(s)", t0)
+        self.listing_grants.note_listing(
+            self._tree_key(), self._tree_roots(), folder_id,
+            [f.id for f in files if f.mime_type == FOLDER_MIME],
+        )
         return apply_list("drive_privacy", "folder_structure", [asdict(f) for f in files])
+
+    def _tree_key(self) -> str:
+        scope = current_token_scope()
+        return scope.id if scope is not None else ""
+
+    def _tree_roots(self) -> list[str]:
+        roots: list[str] = []
+        for operation in ("drive.read_file_contents", "drive.download_file", "sheets.read_values"):
+            for value in rule_values("drive.folder_tree", operation):
+                if value not in roots:
+                    roots.append(value)
+        return roots
+
+    def _tree_args(self, drive_file: Any) -> dict[str, Any]:
+        granted = self.listing_grants.granted(self._tree_key(), self._tree_roots())
+        parents = set(getattr(drive_file, "parent_ids", []) or [])
+        reached = {root: sorted(parents & set(ids)) for root, ids in granted.items() if parents & set(ids)}
+        return {"listed_folders": reached} if reached else {}
 
     async def _list_shared_drives(self, max_results: int = 50) -> Any:
         t0 = time.time()
@@ -1163,7 +1189,7 @@ class DriveConnector(Connector):
             pii_already_reviewed=self._pii_already_reviewed(file_id, modified),
             my_email=self.my_email,
             session_created_ids=self.session_created_ids,
-            args={"file_id": file_id},
+            args={"file_id": file_id, **self._tree_args(drive_file)},
         )
 
     async def _get_revision_content(self, file_id: str, revision_id: str) -> Any:
@@ -1239,7 +1265,7 @@ class DriveConnector(Connector):
             pii_already_reviewed=False,
             my_email=self.my_email,
             session_created_ids=self.session_created_ids,
-            args={"file_id": file_id, "revision_id": revision_id},
+            args={"file_id": file_id, "revision_id": revision_id, **self._tree_args(content.file)},
         )
 
     async def _sheets_get_values(
@@ -1303,6 +1329,7 @@ class DriveConnector(Connector):
                 "range_a1": range_a1,
                 "value_render_option": value_render_option,
                 "include_formatting": include_formatting,
+                **self._tree_args(drive_file),
             },
         )
 
@@ -1432,7 +1459,7 @@ class DriveConnector(Connector):
             pii_already_reviewed=self._pii_already_reviewed(file_id, modified),
             my_email=self.my_email,
             session_created_ids=self.session_created_ids,
-            args={"file_id": file_id},
+            args={"file_id": file_id, **self._tree_args(drive_file)},
             delivery=delivery,
             content_reaches_result=(delivery == "inline_base64"),
         )

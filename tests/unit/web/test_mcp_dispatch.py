@@ -698,6 +698,9 @@ class TestCheckPolicy:
         dispatcher.check_policy("gmail", "gmail_get_message", {"message_id": "m1", "matching_queries": ["in:inbox"]})
         assert seen["args"] == {"message_id": "m1"}
 
+    def test_listed_folders_is_a_connector_computed_arg(self):
+        assert "listed_folders" in mcp_dispatch._CONNECTOR_COMPUTED_ARGS
+
     def test_pii_gate_none_for_popup_tool_outside_the_upload_scan(self):
         result = self._pii("grist", "grist_update_csv")
         assert result["gate"] == "popup"

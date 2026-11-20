@@ -206,6 +206,16 @@ class TestGmailQueryValue:
             normalise_rule_value(["gmail.query"], 'label:"Proposed SPAM')
 
 
+class TestDriveFolderTreeValue:
+    def test_accepts_a_folder_id(self):
+        assert normalise_rule_value(["drive.folder_tree"], "a" * 20) == ["a" * 20]
+
+    @pytest.mark.parametrize("value", ["not an id!", "root", "a" * 9])
+    def test_rejects(self, value):
+        with pytest.raises(RuleValueError):
+            normalise_rule_value(["drive.folder_tree"], value)
+
+
 class TestDriveTagValue:
     def test_accepts_a_tag_name(self):
         assert normalise_rule_value(["drive.tag"], "client-a") == ["client-a"]

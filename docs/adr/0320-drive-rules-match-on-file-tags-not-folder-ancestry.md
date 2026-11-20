@@ -4,6 +4,7 @@
 
 Accepted — 2026-11-17. Implemented: `src/privacyfence/drive_tags.py`, `src/privacyfence/policy/scopes.py` (`drive.tag`), `src/privacyfence/policy/catalogue.py`, `src/privacyfence/policy/value_format.py`.
 Relates to [ADR 0172](0172-one-stored-auto-accept-rule-per-scope.md), [ADR 0222](0222-a-gmail-query-rule-is-evaluated-by-gmail-against-the-message-at-call-time.md), [ADR 0232](0232-miro-rules-are-per-board-and-set-from-settings-not-the-card.md).
+Amended by [ADR 0335](0335-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md), 2026-11-20.
 
 ## Context
 

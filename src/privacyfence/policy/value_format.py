@@ -51,6 +51,11 @@ _DRIVE_FOLDER = _fmt(
     "the id from the folder's URL (the part after /folders/), not its name or the URL",
     "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
 )
+_DRIVE_FOLDER_TREE = _fmt(
+    r"[A-Za-z0-9_-]{10,100}", "a Drive folder id",
+    "the id from the folder's URL (the part after /folders/), not its name, the URL or 'root'",
+    "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
+)
 _SLACK_ID = _fmt(
     r"[CDGUW][A-Z0-9]+", "a Slack ID",
     "the ID from the channel's or person's details (it starts with C, D, G, U or W), not the #name",
@@ -127,6 +132,7 @@ VALUE_FORMATS: dict[str, ValueFormat] = {
         "the id from the board's address (the part after /app/board/), not its name or the full link",
         "uXjVOD6LSME=",
     ),
+    "drive.folder_tree": _DRIVE_FOLDER_TREE,
     "drive.tag": _fmt(
         _TAG_NAME_RE, "a Drive tag name",
         "a lowercase tag name of up to 40 characters: letters, digits, '.', '_' or '-'", "client-a",

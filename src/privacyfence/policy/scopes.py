@@ -731,6 +731,25 @@ def _drive_tag_matches(value: Any, ctx: ReviewContext) -> bool:
     return bool(tags & {str(v).lower() for v in _values_of(value)})
 
 
+def _drive_folder_tree_matches(value: Any, ctx: ReviewContext) -> bool:
+    """True when a parent of the file is a rule folder or a subfolder a listing of it reached.
+
+    The connector passes ``listed_folders`` ({root: [granted folder ids]}); only the roots of this
+    rule are consulted, so a grant recorded under another folder never widens it."""
+    if not value:
+        return False
+    parents = set(getattr(_file_from(ctx.raw_data), "parent_ids", []) or [])
+    listed = ctx.args.get("listed_folders")
+    if not isinstance(listed, dict):
+        listed = {}
+    for root in _values_of(value):
+        granted = listed.get(root)
+        covered = {root} | ({str(i) for i in granted} if isinstance(granted, list) else set())
+        if parents & covered:
+            return True
+    return False
+
+
 NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "drive.file": ScopeSelector(
         predicate="drive.file", scope_type="drive.file", kind=ScopeKind.IDENTITY,
@@ -799,6 +818,10 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "drive.tag": ScopeSelector(
         predicate="drive.tag", scope_type="drive.tag", kind=ScopeKind.ATTRIBUTE,
         resolves_from=ResolvesFrom.FETCHED, matches=_drive_tag_matches,
+    ),
+    "drive.folder_tree": ScopeSelector(
+        predicate="drive.folder_tree", scope_type="drive.folder_tree", kind=ScopeKind.IDENTITY,
+        resolves_from=ResolvesFrom.FETCHED, matches=_drive_folder_tree_matches,
     ),
     "gmail.query": ScopeSelector(
         predicate="gmail.query", scope_type="gmail.query", kind=ScopeKind.ATTRIBUTE,
