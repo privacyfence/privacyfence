@@ -1442,6 +1442,7 @@ _JS = r"""
         esc(withValuesText(r.title_parts, r.value_items, r.title) + (allows ? ', ' + allows : '')) + '" data-st-rule="' + esc(r.id) + '">' +
         // One wrapper span: the chip is inline-flex, which would drop the spaces between its text and value spans.
         '<span>' + withValuesHtml(r.title_parts, r.value_items, r.title) +
+        (r.organization ? ' <span class="pf-st-meta">(set by your organization)</span>' : '') +
         (allows ? ' <span class="pf-st-meta">· ' + esc(allows) + '</span>' : '') + '</span></div>';
     });
     html += '</div>';

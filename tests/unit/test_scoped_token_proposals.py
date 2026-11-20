@@ -277,6 +277,11 @@ class TestReviewData:
         data = stp.review_data(p, [row])
         assert "F9" in data["rules"][0]["sentence"] and data["uncovered_tools"] == ["t"]
 
+    def test_copy_of_an_org_rule_id_is_not_missing_in_merged_rows(self):
+        row = self._copy_row()
+        p = _proposal(request=_request(rules=[{"kind": "copy", "rule_id": row.id}]))
+        assert "F9" in stp.review_data(p, [row])["rules"][0]["sentence"]
+
     def test_missing_copy_rule_says_so(self):
         p = _proposal(request=_request(rules=[{"kind": "copy", "rule_id": "gone"}]))
         assert stp.review_data(p, [])["rules"][0]["sentence"] == "A rule that no longer exists"

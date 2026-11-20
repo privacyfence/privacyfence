@@ -605,7 +605,7 @@ class McpDispatcher:
             f"{body['days']} days" + (", delivery to n8n" if delivery is not None else ""),
         )
         # Only a copy rule's sentence reads the person's Auto-accept rows.
-        own_rows = get_policy_rows() if any(rule["kind"] == "copy" for rule in body["rules"]) else []
+        own_rows = scoped_tokens.copyable_rows() if any(rule["kind"] == "copy" for rule in body["rules"]) else []
         data = review_data(proposal, own_rows)
         result: dict[str, Any] = {
             "proposal_id": proposal.id,

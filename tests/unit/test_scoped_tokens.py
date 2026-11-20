@@ -1712,3 +1712,45 @@ class TestUpstreamApprovalRows:
         token, _ = _create(_store(), rules=_copy("rule-a", "rule-a"))
         assert [row.id for row in token.rules].count(token.rules[0].id) == 1
         assert len(token.rules) == 1
+
+
+class TestCopyOrgRule:
+    @pytest.fixture(autouse=True)
+    def _org(self):
+        from privacyfence import org_rules
+        org_rules.reset()
+        yield
+        org_rules.reset()
+
+    def test_an_org_row_copies_exactly(self):
+        from privacyfence import org_rules
+        org = _row("org-1", "pred-org", {"op.read"})
+        org_rules.set([org])
+
+        token, _ = _create(_store(), rules=_copy("org-1"))
+
+        assert token.rules == (org,)
+
+    def test_a_person_row_with_the_same_id_wins(self):
+        from privacyfence import org_rules
+        org_rules.set([_row("rule-a", "pred-org", {"op.read"})])
+
+        token, _ = _create(_store(), rules=_copy("rule-a"))
+
+        assert token.rules == (ROWS[0],)
+
+    def test_an_unknown_id_is_refused(self):
+        with pytest.raises(ScopedTokenError, match="no longer exists"):
+            _create(_store(), rules=_copy("org-gone"))
+
+    def test_a_copy_never_follows_later_org_changes(self):
+        from privacyfence import org_rules
+        org = _row("org-1", "pred-org", {"op.read"})
+        org_rules.set([org])
+        store = _store()
+        token, _ = _create(store, rules=_copy("org-1"))
+
+        org_rules.set([])
+
+        assert store.tokens_for(LOCAL_PRINCIPAL)[0].rules == (org,)
+        assert token.rules == (org,)
