@@ -15,7 +15,8 @@ Every deviation from the plan is listed under its phase. "None." means the phase
 
 ## p3-docs-adr-retire
 
-- pending
+- worker: Worker reported no deviations; tld was unavailable to it, so the orchestrator ran the roles check (none required).
+- review: Diff review: inside touches, no protected paths; reference doc regenerates cleanly.
 
 ## Final review
 
