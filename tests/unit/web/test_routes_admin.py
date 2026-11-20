@@ -20,6 +20,7 @@ from privacyfence import (
     connector_configs,
     data_format,
     oauth_apps,
+    org_rules,
     paths,
     privacy_filter,
     relay_client,
@@ -70,6 +71,9 @@ ACTION_BODIES = {
     "toggle_pii_category": {"category_key": "detect_ip_addresses"},
     "set_default_policy": {"group": "privacy", "policy": "redact"},
     "set_category_policy": {"group": "privacy", "category": "body", "policy": "block"},
+    "add_org_rule": {"group": "drive.folder", "value": "folder1", "verbs": "read"},
+    "remove_org_rule": {"rule_id": "r1"},
+    "set_org_rule_verbs": {"rule_id": "r1", "verbs": "read"},
     "save_upstream_tools": {"upstream_id": "acme", "gates": {"echo": "review"}, "fetched_at": 1700000000.123456},
     "set_upstream_tool_gates": {"upstream_id": "acme", "gates": {"echo": "auto"}},
 }
@@ -136,6 +140,9 @@ def _passkey_post(world, action, body, csrf):
 def audit(monkeypatch):
     recorded = []
     monkeypatch.setattr(routes_admin, "_record_settings_audit", lambda p, s: recorded.append((p.id, s)))
+    monkeypatch.setattr(
+        routes_admin, "_record_org_rule_audit", lambda p, d, s: recorded.append((p.id, f"{d}: {s}")),
+    )
     return recorded
 
 
@@ -678,6 +685,95 @@ class TestPrivacyAndStatsState:
         csrf = world.sign_in(ADMIN)
         r = _passkey_post(world, "set_default_policy", {"group": "privacy", "policy": "redact"}, csrf)
         assert "stats" in r.json() and r.json()["privacy"]["default_policy"]["privacy"] == "redact"
+
+
+class TestOrgRuleActions:
+    ADD = {"group": "drive.folder", "value": "folder1", "verbs": "read"}
+
+    def _add(self, world, csrf, body=None):
+        return _passkey_post(world, "add_org_rule", body or self.ADD, csrf)
+
+    def _signed_in(self):
+        world = World()
+        _enrol(ADMIN)
+        return world, world.sign_in(ADMIN)
+
+    def test_the_actions_are_org_only_sensitive_and_self_applying(self):
+        for action in ("add_org_rule", "remove_org_rule", "set_org_rule_verbs"):
+            spec = routes_admin.ADMIN_ACTIONS[action]
+            assert (spec.modes, spec.sensitive, spec.applies) == (frozenset({"org"}), True, "self")
+
+    def test_add_writes_the_config_reloads_the_rules_and_audits(self, audit):
+        world, csrf = self._signed_in()
+        r = self._add(world, csrf)
+        assert r.status_code == 200, r.text
+        stored = admin_config.load()["org_rules"]
+        assert len(stored) == 1 and stored[0]["scope"] == "drive.folder" and stored[0]["value"] == ["folder1"]
+        assert [row.id for row in org_rules.rows()] == [stored[0]["id"]]
+        decision_rows = [s for _, s in audit if s.startswith("org_rule_added: ")]
+        assert len(decision_rows) == 1 and "Added organization rule: " in decision_rows[0]
+        assert decision_rows[0].endswith("(admin=carol)")
+        assert [rule["id"] for rule in r.json()["org_rules"]["rules"]] == [stored[0]["id"]]
+
+    def test_set_verbs_and_remove(self, audit):
+        world, csrf = self._signed_in()
+        self._add(world, csrf)
+        rule_id = admin_config.load()["org_rules"][0]["id"]
+        audit.clear()
+        assert _passkey_post(
+            world, "set_org_rule_verbs", {"rule_id": rule_id, "verbs": "read,download"}, csrf,
+        ).status_code == 200
+        assert {"read", "download"} <= set(admin_config.load()["org_rules"][0]["verbs"])
+        assert {"read", "download"} <= set(org_rules.rows()[0].verbs)
+        changed = [s for _, s in audit if not s.startswith("Step-up required")]
+        assert len(changed) == 1 and changed[0].startswith("org_rule_verbs_changed: ")
+        audit.clear()
+        r = _passkey_post(world, "remove_org_rule", {"rule_id": rule_id}, csrf)
+        assert r.status_code == 200 and r.json()["org_rules"]["rules"] == []
+        assert admin_config.load()["org_rules"] == [] and org_rules.rows() == []
+        changed = [s for _, s in audit if not s.startswith("Step-up required")]
+        assert len(changed) == 1 and changed[0].startswith("org_rule_removed: Removed organization rule: ")
+
+    def test_a_refused_change_writes_nothing(self, audit):
+        world, csrf = self._signed_in()
+        r = _passkey_post(world, "remove_org_rule", {"rule_id": "nope"}, csrf)
+        assert r.status_code == 400 and r.json() == {"error": "Unknown organization rule."}
+        assert all(s.startswith("Step-up required") for _, s in audit) and org_rules.rows() == []
+
+    @pytest.mark.parametrize("action", ["add_org_rule", "remove_org_rule", "set_org_rule_verbs"])
+    def test_a_non_admin_is_403(self, action):
+        world = World()
+        csrf = world.sign_in(ALICE)
+        assert world.post(action, ACTION_BODIES[action], csrf).status_code == 403
+
+    def test_a_missing_or_unknown_field_is_refused(self):
+        world, csrf = self._signed_in()
+        assert world.post("add_org_rule", {"group": "drive.folder", "value": "f"}, csrf).json() == {
+            "error": "Missing verbs.",
+        }
+        r = world.post("remove_org_rule", {"rule_id": "x", "extra": "y"}, csrf)
+        assert r.status_code == 400 and "extra" in r.json()["error"]
+
+    def test_the_passkey_is_required_and_nothing_is_written_without_it(self, audit):
+        world, csrf = self._signed_in()
+        r = world.post("add_org_rule", self.ADD, csrf)
+        assert r.status_code == 428
+        assert admin_config.load()["org_rules"] == []
+        assert all("Step-up required" in s for _, s in audit)
+
+    def test_the_state_carries_org_rules_without_usage_fields(self):
+        world = World()
+        world.sign_in(ADMIN)
+        state = world.client.get("/api/admin/state").json()["org_rules"]
+        assert set(state) == {"rules", "scope_groups", "connectors"} and state["rules"] == []
+        assert state["scope_groups"] and state["connectors"]
+
+    def test_state_rules_have_no_usage_fields(self):
+        world, csrf = self._signed_in()
+        self._add(world, csrf)
+        rules = world.client.get("/api/admin/state").json()["org_rules"]["rules"]
+        assert len(rules) == 1
+        assert not {"match_count", "last_matched", "never_matched"} & set(rules[0])
 
 
 class TestRouteClassification:

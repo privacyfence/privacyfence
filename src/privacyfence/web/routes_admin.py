@@ -42,8 +42,10 @@ import hashlib
 import json
 import logging
 import os
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from starlette.requests import Request
@@ -57,15 +59,20 @@ from .. import (
     data_format,
     oauth_apps,
     org_mode,
+    org_rules,
     paths,
     relay_client,
     settings_window_html,
     upstream_mcp_runtime,
     web_shell,
 )
+from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector_registry import ConnectorRegistry
 from ..principal import Principal, principal_scope
-from ..settings_state import REPO_URL, _pii_general_fields, _privacy_state_from_config
+from ..resource_names import get_resolver
+from ..settings_state import (
+    REPO_URL, _auto_accept_state_from_rows, _pii_general_fields, _privacy_state_from_config, cached_row_value,
+)
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
 from . import org_install_policy, org_session, org_stats
@@ -119,11 +126,21 @@ ADMIN_ACTIONS: dict[str, AdminAction] = {
     "toggle_pii_category": AdminAction(_ORG_ONLY, True, "self"),
     "set_default_policy": AdminAction(_ORG_ONLY, True, "self"),
     "set_category_policy": AdminAction(_ORG_ONLY, True, "self"),
+    "add_org_rule": AdminAction(_ORG_ONLY, True, "self"),
+    "remove_org_rule": AdminAction(_ORG_ONLY, True, "self"),
+    "set_org_rule_verbs": AdminAction(_ORG_ONLY, True, "self"),
     # The three upstream-tool actions persist to org/upstream_tools/, not admin_config.json, so
     # upstream_mcp_runtime carries them out (and writes their audit rows).
     "refresh_upstream_tools": AdminAction(_ORG_ONLY, False, "live"),
     "save_upstream_tools": AdminAction(_ORG_ONLY, True, "live"),
     "set_upstream_tool_gates": AdminAction(_ORG_ONLY, True, "live"),
+}
+
+# Org-rule decision recorded in the audit log for each rule action.
+_ORG_RULE_DECISIONS = {
+    "add_org_rule": "org_rule_added",
+    "remove_org_rule": "org_rule_removed",
+    "set_org_rule_verbs": "org_rule_verbs_changed",
 }
 
 _UPSTREAM_ACTIONS = frozenset({"refresh_upstream_tools", "save_upstream_tools", "set_upstream_tool_gates"})
@@ -167,6 +184,9 @@ ADMIN_PARAMS: dict[str, tuple[_Param, ...]] = {
     "toggle_pii_category": (("category_key", str, True),),
     "set_default_policy": (("group", str, True), ("policy", str, True)),
     "set_category_policy": (("group", str, True), ("category", str, True), ("policy", str, True)),
+    "add_org_rule": (("group", str, True), ("value", str, True), ("verbs", str, True)),
+    "remove_org_rule": (("rule_id", str, True),),
+    "set_org_rule_verbs": (("rule_id", str, True), ("verbs", str, True)),
     "refresh_upstream_tools": (("upstream_id", str, True),),
     # ``fetched_at`` is a float: ``_coerce`` would truncate an int and refuses a JSON number as a str.
     "save_upstream_tools": (("upstream_id", str, True), ("gates", dict, True), ("fetched_at", float, True)),
@@ -321,6 +341,38 @@ def _signin_state(bundle: dict[str, Any], org_config: dict[str, Any]) -> dict[st
     return signin
 
 
+def _record_org_rule_audit(principal: Principal, decision: str, summary: str) -> None:
+    """The audit row for an org rule change: the shape ``_record_settings_audit`` writes, with the
+    decision naming what happened. A log that cannot be written costs the row, never the change."""
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="", tool="", tool_name="",
+            summary=summary,
+            sender=principal.email or principal.id,
+            decision=decision,
+            auto_accept_rule="", latency_seconds=0.0, pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for an organization rule change: %s", exc)
+
+
+def _org_rules_state(principal: Principal) -> dict[str, Any]:
+    """The organization's rules for the Admin page: the shared Auto-accept state without the usage
+    fields, which an organization-wide rule has no single owner to count for."""
+    with principal_scope(principal):
+        resolver = get_resolver()
+        state = _auto_accept_state_from_rows(
+            org_rules.rows(), {}, resolve_value=lambda row: cached_row_value(row, resolver), resolver=resolver,
+        )
+    for rule in state["rules"]:
+        for key in ("match_count", "last_matched", "never_matched"):
+            rule.pop(key, None)
+    return state
+
+
 def _admin_state(
     *, bundle: dict[str, Any], org_config: dict[str, Any], startup_admin: dict[str, Any],
     principal: Principal, install_wide_settings: dict[str, Any] | None = None, issuer_url: str = "",
@@ -352,6 +404,7 @@ def _admin_state(
         state["privacy"] = _privacy_rows(install_wide_settings)
     state["stats"] = org_stats.collect(oauth_apps.snapshot(org_config))
     state["upstream_servers"] = upstream_mcp_runtime.admin_rows(principal)
+    state["org_rules"] = _org_rules_state(principal)
     return state
 
 
@@ -460,10 +513,15 @@ async def _dispatch(
         except OSError as exc:
             logger.error("Could not save the admin configuration: %s", exc)
             return _error("Could not save the admin configuration.", 500)
+    if "org_rules" in changed:
+        org_rules.reload_from_admin_config()
     if summary:
         who = f"admin={principal.id}"
         with principal_scope(principal):
-            _record_settings_audit(principal, f"{summary} ({who})")
+            if action in _ORG_RULE_DECISIONS:
+                _record_org_rule_audit(principal, _ORG_RULE_DECISIONS[action], f"{summary} ({who})")
+            else:
+                _record_settings_audit(principal, f"{summary} ({who})")
         if spec.applies == "live":
             refresh_live(changed)
     return JSONResponse({
