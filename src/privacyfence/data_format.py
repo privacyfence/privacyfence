@@ -86,13 +86,22 @@ _CHECKPOINT_TEXT = (
 )
 
 
-def _says_org(root: Path) -> bool:
-    """Whether ``org/org_bundle.json`` says ``"mode": "org"``; anything unreadable says no."""
+def _file_says_org(path: Path) -> bool:
+    """Whether ``path`` is a JSON object with ``"mode": "org"``; anything unreadable says no."""
     try:
-        bundle = json.loads((root / "org" / "org_bundle.json").read_text(encoding="utf-8"))
+        content = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return isinstance(bundle, dict) and bundle.get("mode") == "org"
+    return isinstance(content, dict) and content.get("mode") == "org"
+
+
+def _says_org(root: Path) -> bool:
+    """Whether the data directory is an organization server's: ``org/org_bundle.json`` or the 6.x
+    ``org/org_config.json`` says ``"mode": "org"`` (ADR 0337). 7.x copied the mode from the config
+    into the bundle, and ``--retire-bundle`` deletes the bundle, so the config gives the answer the
+    retired bundle gave. Anything unreadable says no."""
+    org = root / "org"
+    return _file_says_org(org / "org_bundle.json") or _file_says_org(org / "org_config.json")
 
 
 def _present(path: Path) -> bool:
@@ -128,7 +137,7 @@ def check_upgrade_source(root: Path) -> None:
     """Refuse a data directory 8.x cannot trust (ADR 0302); write the marker into a fresh one.
 
     In order: data a newer release has moved on; desktop-install traces outside an organization
-    server; data that 7.x has not marked as fully upgraded. A data directory that cannot be
+    server (one whose ``org/org_bundle.json`` or ``org/org_config.json`` says ``"mode": "org"``); data that 7.x has not marked as fully upgraded. A data directory that cannot be
     inspected, or a fresh one the marker cannot be written into, is refused as well; an org/ holding only admin_config.json counts as fresh."""
     marker = read_marker(root)
     check_not_newer(marker)
