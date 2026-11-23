@@ -28,7 +28,7 @@ from ..gate import current_reason, gated_call, rule_values
 from ..org_mode import DownloadDeliveryConfig, base64_length
 from ..principal import current_principal
 from ..privacy_filter import apply_list, apply_text, category_policy
-from ..scoped_tokens import current_token_scope
+from ..scoped_tokens import REVOKED_SCOPE, current_token_scope
 from ..text_extraction import EXTRACTABLE_MIME_TYPES, extract_text, guess_mime_type, is_prefetch_worthy, preview_blocks_for
 
 logger = logging.getLogger(__name__)
@@ -1438,6 +1438,15 @@ class DriveConnector(Connector):
         except RuntimeError:
             pass
 
+        # A token with only allow_personal_data_reads is covered for an inline download, not for a
+        # link (ADR 0173, 0338): when the real bytes turn out too big for the result, refuse
+        # instead of staging a link the gate never cleared.
+        token_scope = current_token_scope()
+        reads_only = (
+            delivery == "inline_base64" and token_scope is not None and token_scope is not REVOKED_SCOPE
+            and token_scope.allow_personal_data_reads and not token_scope.allow_personal_data
+        )
+
         # Gate before any delivery: gated_call raises on denial, and only a decision made here
         # should ever cause the file to be handed out. Mirrors gmail.py's _download_attachment.
         await gated_call(
@@ -1467,19 +1476,22 @@ class DriveConnector(Connector):
         # inline" is never returned inline because its real size turned out smaller.
         return await self._deliver_org_download(
             file_id, drive_file.size, cfg, allow_inline=(delivery == "inline_base64"),
+            allow_staged=not reads_only,
         )
 
     async def _deliver_org_download(
         self, file_id: str, metadata_size: int, cfg: DownloadDeliveryConfig, allow_inline: bool,
+        allow_staged: bool = True,
     ) -> Any:
         """org mode's own delivery, once approval is granted -- inline
         (base64, in the tool result) for anything under ``cfg.
         inline_max_bytes`` (the whole tool result, base64 included -- ADR
         0092), else a one-time staged link, else (staging disabled for this
         org) a clear refusal. ``allow_inline`` false (the gate was told the content does not reach
-        the result) skips the inline branch. Never writes to this daemon's own disk except
+        the result) skips the inline branch; ``allow_staged`` false (a reads-only token approved this as inline, ADR 0338)
+        refuses instead of staging a link. Never writes to this daemon's own disk except
         via download_staging.py's own encrypted-at-rest store."""
-        if not cfg.allow_disk_staging and not (allow_inline and cfg.fits_inline(metadata_size)):
+        if (not cfg.allow_disk_staging or not allow_staged) and not (allow_inline and cfg.fits_inline(metadata_size)):
             # Bail before ever fetching bytes -- metadata_size (already
             # known, no extra round trip) already rules out inline, and
             # staging is off for this org, so there's nothing productive a
@@ -1497,7 +1509,7 @@ class DriveConnector(Connector):
             if inline is not None:
                 return inline
 
-        if not cfg.allow_disk_staging:
+        if not cfg.allow_disk_staging or not allow_staged:
             raise RuntimeError(cfg.over_inline_limit_message(f"\"{name}\"", size_bytes))
 
         token = await asyncio.to_thread(

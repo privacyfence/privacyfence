@@ -639,7 +639,7 @@ class TestScopedTokensSection:
         assert "Let reads return personal data" in html
         assert 'data-st-personal-data-reads="1"' in html
         assert "Applies only to calls made with this token, and only to Gmail message and thread reads, Slack " in html
-        assert "reads that one of the token\\'s rules covers. The personal-data scan still runs" in html
+        assert "Sheets value reads, and Drive downloads returned inside the result, that one of the token\\'s rules covers. The personal-data scan still runs" in html
         assert "but the AI system receives the content." in html
         assert "ui.stPersonalDataReads = !ui.stPersonalDataReads" in html
 

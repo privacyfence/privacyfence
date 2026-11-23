@@ -84,7 +84,7 @@ class ScopedToken:
     expires_at: float
     tools: frozenset[str]
     allow_personal_data: bool = False  # ADR 0173: exports, downloads and page uploads may carry personal data
-    allow_personal_data_reads: bool = False  # Gmail message/thread and Slack reads may carry personal data
+    allow_personal_data_reads: bool = False  # ADR 0219, 0254, 0338: Gmail, Slack, Drive file/version/Sheets reads and inline Drive downloads may carry personal data
     # Whether the owner's email was verified when the token was made (the ``email_verified`` of the
     # caller identity in ``web/mcp_auth.py``).
     principal_email_verified: bool = False

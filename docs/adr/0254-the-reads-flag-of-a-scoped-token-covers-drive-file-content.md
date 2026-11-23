@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-29. Implemented.
 Amends ADR 0219. Relates to ADR 0173 and ADR 0164.
+Amended by [ADR 0338](0338-the-reads-flag-of-a-scoped-token-covers-drive-version-sheets-and-inline-download-reads.md): the flag also covers `drive_get_revision_content`, `drive_sheets_get_values` and an inline `drive_download_file`.
 
 ## Context
 

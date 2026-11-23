@@ -22,7 +22,7 @@ from ..approvals import ApprovalPending, PendingApprovalRegistry
 from ..audit_log import AuditEntry, current_week, get_audit_logger, released_request_scope
 from .. import org_rules
 from ..auto_accept import (
-    PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
+    PERSONAL_DATA_INLINE_READ_TOOLS, PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, TOOL_TO_OPERATION, UPLOAD_PII_SCAN_TOOLS, get_policy_rows,
 )
 from .. import agent_runtimes, audit_log, local_files, runtime_credentials, scoped_tokens
 from ..connector import Connector
@@ -96,6 +96,13 @@ def _pii_gate(gate: str, tool: str) -> tuple[str, str]:
         if scope.allow_personal_data_reads:
             return "allowed_by_token", ""
         return "applies", f"the token does not allow personal data in reads, so the personal-data scan applies to {tool}"
+    if tool in PERSONAL_DATA_INLINE_READ_TOOLS and scope.allow_personal_data_reads:
+        if scope.allow_personal_data:
+            return "allowed_by_token", ""
+        return "applies", (
+            f"the token allows personal data in {tool} only when the file comes back inside the result, "
+            "so the personal-data scan applies to a download delivered as a link"
+        )
     if not scope.allow_personal_data:
         return "applies", f"the token does not allow personal data, so the personal-data scan applies to {tool}"
     if tool not in PERSONAL_DATA_RULE_TOOLS:

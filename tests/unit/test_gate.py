@@ -2332,6 +2332,44 @@ class TestPersonalDataReads:
             with pytest.raises(gate.GateDeniedError, match="Drive file content reads"):
                 await gate.gated_call(**kwargs)
 
+    async def test_flagged_token_lets_personal_data_through_a_drive_revision_read(self, monkeypatch, audit_dir):
+        rule = self._install(
+            monkeypatch, predicate="approved_folder", value=("f1",), operation="drive.read_file_contents",
+        )
+        kwargs = base_kwargs(
+            connector="drive", tool="drive_get_revision_content",
+            raw_data=SimpleNamespace(file=SimpleNamespace(parent_ids=["f1"])),
+            args={"file_id": "d1", "revision_id": "r1"}, pii_scan_text=self.PII_TEXT,
+        )
+
+        with scoped_tokens.token_scope(self._token(rule, "drive_get_revision_content")):
+            assert await gate.gated_call(**kwargs) is FILTERED
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
+
+        with scoped_tokens.token_scope(self._token(rule, "drive_get_revision_content", reads=False)):
+            with pytest.raises(gate.GateDeniedError, match="Drive file version reads"):
+                await gate.gated_call(**kwargs)
+
+    async def test_flagged_token_lets_personal_data_through_a_sheets_values_read(self, monkeypatch, audit_dir):
+        rule = self._install(
+            monkeypatch, predicate="approved_folder", value=("f1",), operation="sheets.read_values",
+        )
+        kwargs = base_kwargs(
+            connector="drive", tool="drive_sheets_get_values",
+            raw_data={"file": SimpleNamespace(parent_ids=["f1"]), "values": [], "formatting": None},
+            args={"spreadsheet_id": "s1", "range_a1": "A1:B2"}, pii_scan_text=self.PII_TEXT,
+        )
+
+        with scoped_tokens.token_scope(self._token(rule, "drive_sheets_get_values")):
+            assert await gate.gated_call(**kwargs) is FILTERED
+
+        assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
+
+        with scoped_tokens.token_scope(self._token(rule, "drive_sheets_get_values", reads=False)):
+            with pytest.raises(gate.GateDeniedError, match="Sheets value reads"):
+                await gate.gated_call(**kwargs)
+
     async def test_token_without_the_flag_is_denied(self, monkeypatch, audit_dir):
         rule = self._install(monkeypatch)
         popups = []
@@ -2585,7 +2623,7 @@ class TestPersonalDataRules:
         assert entry["rule_id"] == rule.id
         assert entry["pii_detected"] is True
 
-    async def test_inline_download_keeps_the_scan_even_with_flag(self, monkeypatch, audit_dir):
+    async def test_inline_download_keeps_the_scan_with_only_the_exports_flag(self, monkeypatch, audit_dir):
         rule = self._install_drive_folder(monkeypatch)
         popups = []
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
@@ -2593,6 +2631,38 @@ class TestPersonalDataRules:
         with scoped_tokens.token_scope(self._token(rule, "drive_download_file")):
             with pytest.raises(gate.GateDeniedError, match="scoped token"):
                 await self._drive_download(content_reaches_result=True)
+
+        assert popups == []
+        assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]
+
+    def _reads_only_download_token(self, rule: PolicyRule) -> ScopedToken:
+        return dataclasses.replace(
+            self._token(rule, "drive_download_file", allow_personal_data=False), allow_personal_data_reads=True,
+        )
+
+    async def test_reads_flag_lets_an_inline_download_through(self, monkeypatch, audit_dir):
+        rule = self._install_drive_folder(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with scoped_tokens.token_scope(self._reads_only_download_token(rule)):
+            result = await self._drive_download(content_reaches_result=True)
+
+        assert result is FILTERED
+        assert popups == []
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "auto_accepted"
+        assert entry["pii_detected"] is True
+        assert entry["rule_id"] == rule.id
+
+    async def test_reads_flag_alone_does_not_lift_a_download_delivered_as_a_link(self, monkeypatch, audit_dir):
+        rule = self._install_drive_folder(monkeypatch)
+        popups = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popups.append(a) or "deny", None))
+
+        with scoped_tokens.token_scope(self._reads_only_download_token(rule)):
+            with pytest.raises(gate.GateDeniedError, match="scoped token"):
+                await self._drive_download(content_reaches_result=False)
 
         assert popups == []
         assert [e["decision"] for e in read_audit_entries(audit_dir)] == ["denied_scoped_token"]

@@ -265,7 +265,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0170](0170-a-drive-copy-is-its-own-verb-governed-by-the-move-folder-scope.md) | A Drive copy is its own verb, governed by the move folder scope | Accepted; amended by 0171 |
 | [0171](0171-auto-accept-rules-use-nine-verbs.md) | Auto-accept rules use nine verbs | Accepted; amends 0170 |
 | [0172](0172-one-stored-auto-accept-rule-per-scope.md) | One stored auto-accept rule per scope (settings schema version 3) | Accepted; amends 0074; amended by 0198, 0236 |
-| [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164; amended by 0219, 0236 |
+| [0173](0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md) | Personal data is allowed per scoped token, not per rule | Accepted; amends 0157, 0164; amended by 0219, 0236, 0338 |
 | [0174](0174-a-rules-verbs-are-edited-in-place.md) | A rule's verbs are edited in place | Accepted; amends 0166 |
 | [0175](0175-an-approval-is-bound-to-the-whole-request-and-what-its-card-showed.md) | An approval is bound to the whole request and to what its card showed | Accepted; amends 0073 |
 | [0176](0176-a-chainless-audit-line-is-accepted-only-before-the-first-chained-line.md) | A chain-less audit line is accepted only before the first chained line | Accepted; amends 0071 |
@@ -308,7 +308,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0213](0213-the-organization-image-runs-organization-mode-only.md) | The organization image runs organization mode only | Accepted |
 | [0214](0214-the-organization-image-stops-with-sigint.md) | The organization image stops with SIGINT | Accepted |
 | [0215](0215-the-organization-image-is-attested-with-github-build-provenance-not-cosign.md) | The organization image is attested with GitHub build provenance, not cosign | Accepted |
-| [0216](0216-privacyfence-check-policy-reports-whether-the-personal-data-scan-applies.md) | `privacyfence_check_policy` reports whether the personal-data scan applies | Accepted |
+| [0216](0216-privacyfence-check-policy-reports-whether-the-personal-data-scan-applies.md) | `privacyfence_check_policy` reports whether the personal-data scan applies | Accepted; amended by 0338 |
 | [0217](0217-the-org-admin-stats-page-shows-counts-only.md) | The organization admin's Stats page shows counts only | Accepted |
 | [0218](0218-a-gmail-label-rule-can-allow-archiving-a-message-that-carries-the-label.md) | A Gmail label rule can allow archiving a message that carries the label | Accepted; relates to 0172, 0204 |
 | [0219](0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md) | A scoped token can let email and Slack reads return personal data | Accepted; amends 0173 |
@@ -346,7 +346,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0251](0251-a-token-proposal-is-attributed-to-the-client-that-made-it.md) | A token proposal is attributed to the client that made it | Accepted; amends 0006 |
 | [0252](0252-each-mcp-session-keeps-its-approved-calls-in-memory-so-a-token-can-be-proposed-from-them.md) | Each MCP session keeps its approved calls in memory so a token can be proposed from them | Accepted |
 | [0253](0253-ai-token-proposals-are-off-in-organization-mode-until-the-administrator-turns-them-on.md) | AI token proposals are off in organization mode until the administrator turns them on | Accepted; relates to 0165; amended by 0294 |
-| [0254](0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md) | The reads flag of a scoped token covers Drive file content | Accepted; amends 0219 |
+| [0254](0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md) | The reads flag of a scoped token covers Drive file content | Accepted; amends 0219; amended by 0338 |
 | [0255](0255-built-in-oauth-apps-ship-in-every-distribution.md) | Built-in OAuth apps ship in the server distributions | Accepted; relates to 0040; amended by 0309 |
 | [0256](0256-org-config-holds-only-startup-settings-and-app-credentials.md) | The org config holds only startup settings and app credentials | Accepted; amends 0016, 0196 |
 | [0257](0257-operational-settings-live-in-a-daemon-written-admin-config.md) | Operational settings live in a daemon-written admin config | Accepted; amends 0196, 0253; relates to 0016, 0034, 0068, 0070, 0200 |
@@ -430,3 +430,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0335](0335-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md) | A Drive folder-tree rule follows the folders a listing returned | Accepted; amends 0320; relates to 0164, 0175, 0222, 0236 |
 | [0336](0336-the-n8n-node-is-versioned-and-its-arguments-field-is-tool-arguments.md) | The n8n node is versioned and its arguments field is `toolArguments` | Accepted |
 | [0337](0337-an-organization-server-is-recognised-by-its-own-data.md) | An organization server is recognised by its own data | Accepted; amends 0302 |
+| [0338](0338-the-reads-flag-of-a-scoped-token-covers-drive-version-sheets-and-inline-download-reads.md) | The reads flag of a scoped token covers Drive version, Sheets and inline download reads | Accepted; amends 0254, 0173, 0216 |

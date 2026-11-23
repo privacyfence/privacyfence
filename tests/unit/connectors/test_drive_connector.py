@@ -916,6 +916,52 @@ class TestOrgModeDownloadDelivery:
         assert result["delivery"] == "link"
         assert "content_base64" not in result
 
+    @staticmethod
+    def _token_with(*, reads: bool, exports: bool):
+        import dataclasses
+        import time
+        from privacyfence.scoped_tokens import ScopedToken
+
+        return dataclasses.replace(
+            ScopedToken(
+                id="st-0123456789ab", label="sync", digest="", principal_id="local", principal_email="",
+                principal_display_name="", created_at=time.time(), expires_at=time.time() + 86400,
+                tools=frozenset({"drive_download_file"}), rules=(),
+            ),
+            allow_personal_data_reads=reads, allow_personal_data=exports,
+        )
+
+    def _too_big_after_an_inline_estimate(self):
+        connector, client = self._org_connector(inline_max_bytes=1_000)
+        client.get_file_metadata.return_value = make_file(name="doc.pdf", mime_type="application/pdf", size=50)
+        client.download_file_bytes.return_value = {
+            "data": b"x" * 5000, "name": "doc.pdf", "mime_type": "application/pdf", "size_bytes": 5000,
+        }
+        return connector
+
+    async def test_reads_only_token_is_refused_when_an_inline_estimate_turns_out_too_big(self, gated_call_spy):
+        from privacyfence import scoped_tokens
+        from privacyfence.download_staging import get_download_staging_store
+
+        connector = self._too_big_after_an_inline_estimate()
+
+        with scoped_tokens.token_scope(self._token_with(reads=True, exports=False)):
+            with pytest.raises(RuntimeError, match="inline-delivery limit"):
+                await connector.call("drive_download_file", {"file_id": "f1"})
+
+        assert gated_call_spy[0]["content_reaches_result"] is True
+        assert get_download_staging_store().pending_count == 0
+
+    async def test_exports_token_still_gets_a_staged_link_when_an_inline_estimate_turns_out_too_big(self, gated_call_spy):
+        from privacyfence import scoped_tokens
+
+        connector = self._too_big_after_an_inline_estimate()
+
+        with scoped_tokens.token_scope(self._token_with(reads=True, exports=True)):
+            result = await connector.call("drive_download_file", {"file_id": "f1"})
+
+        assert result["delivery"] == "link"
+
     async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
         """An org that opts out of capability links (org_config.json's
         download_delivery.agent_links: false) keeps the
