@@ -394,7 +394,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0299](0299-group-membership-is-updated-through-a-scoped-token-tool.md) | Group membership is updated through a scoped-token tool | Accepted; relates to 0164, 0250; relates to 0298; amended by 0311; amended by 0325; Superseded by 0329 |
 | [0300](0300-an-administrators-tick-approves-a-gated-upstream-tool-for-a-scoped-token.md) | An administrator's tick approves a gated upstream tool for a scoped token | Accepted; amends 0164, 0236, 0285; amended by 0331 |
 | [0301](0301-desktop-mode-and-its-installers-are-removed-in-8.md) | Desktop mode and its installers are removed in 8.x | Accepted; supersedes 0002, 0003, 0261 |
-| [0302](0302-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262; amended by 0317 |
+| [0302](0302-8x-refuses-a-data-directory-that-is-not-ready-for-it.md) | 8.x refuses a data directory that is not ready for it | Accepted; amends 0262; amended by 0317, 0337 |
 | [0303](0303-the-mode-setting-accepts-only-org.md) | The mode setting accepts only org | Accepted; relates to 0260 |
 | [0304](0304-files-move-by-upload-slot-inline-bytes-or-one-time-link-only.md) | Files move by upload slot, inline bytes or one-time link only | Accepted; supersedes 0007, 0012; amends 0028, 0160 |
 | [0305](0305-the-download-page-and-worker-are-retired.md) | The download page and the Worker are retired | Accepted; supersedes 0024; amends 0277 |
@@ -429,3 +429,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0334](0334-the-audit-entry-names-who-allowed-a-call.md) | The audit entry names who allowed a call | Accepted; relates to 0071, 0074, 0333 |
 | [0335](0335-a-drive-folder-tree-rule-follows-the-folders-a-listing-returned.md) | A Drive folder-tree rule follows the folders a listing returned | Accepted; amends 0320; relates to 0164, 0175, 0222, 0236 |
 | [0336](0336-the-n8n-node-is-versioned-and-its-arguments-field-is-tool-arguments.md) | The n8n node is versioned and its arguments field is `toolArguments` | Accepted |
+| [0337](0337-an-organization-server-is-recognised-by-its-own-data.md) | An organization server is recognised by its own data | Accepted; amends 0302 |
