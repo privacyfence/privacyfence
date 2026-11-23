@@ -317,6 +317,71 @@ class TestCheckUpgradeSource:
         with pytest.raises(ConfigurationError, match=self.DESKTOP):
             data_format.check_upgrade_source(tmp_path)
 
+    def test_an_org_config_that_says_org_excuses_a_trace_without_a_bundle(self, tmp_path):
+        (tmp_path / "mcp_token").write_text("secret")
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "org_config.json").write_text(json.dumps({"mode": "org"}))
+        self._marker(tmp_path, 7)
+
+        data_format.check_upgrade_source(tmp_path)
+
+    @pytest.mark.parametrize("content", ["{not json", "[]", json.dumps({"mode": "local"})])
+    def test_an_org_config_that_does_not_say_org_does_not_excuse_a_trace(self, tmp_path, content):
+        (tmp_path / "mcp_token").write_text("secret")
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "org_config.json").write_text(content)
+        self._marker(tmp_path, 7)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_an_org_config_that_is_a_directory_does_not_excuse_a_trace(self, tmp_path):
+        (tmp_path / "mcp_token").write_text("secret")
+        (tmp_path / "org" / "org_config.json").mkdir(parents=True)
+        self._marker(tmp_path, 7)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_another_os_user_directory_is_not_evidence_of_an_organization_server(self, tmp_path):
+        (tmp_path / "authority").mkdir()
+        (tmp_path / "authority" / "mcp_token").write_text("secret")
+        (tmp_path / "users" / "os-1001").mkdir(parents=True)
+        self._marker(tmp_path, 7)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    def test_the_single_user_directory_is_not_evidence_of_an_organization_server(self, tmp_path):
+        (tmp_path / "mcp_token").write_text("secret")
+        (tmp_path / "users" / "single-user").mkdir(parents=True)
+        self._marker(tmp_path, 7)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
+    @staticmethod
+    def _upgraded_organization_server(root, *, org_config):
+        (root / "mcp_token").write_text("secret")
+        (root / "web_base_url").write_text("http://127.0.0.1:1")
+        (root / "org").mkdir()
+        (root / "org" / "org_bundle_adopted.json").write_text(json.dumps({"retired": True}))
+        if org_config:
+            (root / "org" / "org_config.json").write_text(json.dumps({"mode": "org"}))
+        (root / "users" / "alice").mkdir(parents=True)
+        TestCheckUpgradeSource._marker(root, 7)
+
+    def test_an_upgraded_organization_server_with_a_retired_bundle_passes(self, tmp_path):
+        self._upgraded_organization_server(tmp_path, org_config=True)
+
+        data_format.check_upgrade_source(tmp_path)
+
+    def test_the_same_layout_without_the_org_config_is_refused(self, tmp_path):
+        self._upgraded_organization_server(tmp_path, org_config=False)
+
+        with pytest.raises(ConfigurationError, match=self.DESKTOP):
+            data_format.check_upgrade_source(tmp_path)
+
     def test_a_newer_marker_is_still_refused_first(self, tmp_path):
         (tmp_path / "mcp_token").write_text("secret")
         self._marker(tmp_path, 8, written_by="8.0.0")

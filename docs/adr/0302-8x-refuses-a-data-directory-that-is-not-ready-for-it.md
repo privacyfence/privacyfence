@@ -6,6 +6,8 @@ Accepted — 2026-11-14. Amends [ADR 0262](0262-7x-is-the-migration-checkpoint-f
 
 Amended by [ADR 0317](0317-an-org-directory-holding-only-admin-config-is-fresh.md), 2026-11-16.
 
+Amended by [ADR 0337](0337-an-organization-server-is-recognised-by-its-own-data.md), 2026-11-23.
+
 ## Context
 
 [ADR 0262](0262-7x-is-the-migration-checkpoint-for-8x.md) makes 7.x the migration checkpoint and has 8.x refuse data that 7.x has not prepared, but 8.x also has to refuse a desktop install's data, which 7.x never converts. Both cases must stop with a message that says what to do, before anything loads configuration.

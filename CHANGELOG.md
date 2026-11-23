@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.2.3] - 2026-11-23
+
+### Fixed
+
+- **An upgraded organization server is no longer refused as a desktop install.** A leftover `mcp_token` or `web_base_url` no longer stops PrivacyFence 8 when the 6.x `org/org_config.json` says `"mode": "org"`, also after `--retire-bundle` deleted the bundle ([ADR 0337](docs/adr/0337-an-organization-server-is-recognised-by-its-own-data.md), [#1182](https://github.com/privacyfence/privacyfence/issues/1182)).
+
 ## [8.2.2] - 2026-11-20
 
 ### Fixed
