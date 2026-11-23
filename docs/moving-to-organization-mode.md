@@ -32,6 +32,8 @@ and prints:
 
 Nothing in the data directory is changed in either case. Starting 7.x on it again works.
 
+An organization server is recognised by its own data: `org/org_bundle.json`, or the 6.x `org/org_config.json`, saying `"mode": "org"`. A leftover `mcp_token` or `web_base_url` on such a server does not stop PrivacyFence 8, also after `--retire-bundle` has deleted the bundle ([ADR 0337](adr/0337-an-organization-server-is-recognised-by-its-own-data.md)).
+
 A data directory that holds no data yet is a fresh install: PrivacyFence 8 writes `data_format.json` at its first start. That includes a directory whose only content is `org/admin_config.json` written before the first start, for example by a deployment tool that sets the `upstream_mcp` groups ([ADR 0317](adr/0317-an-org-directory-holding-only-admin-config-is-fresh.md)).
 
 PrivacyFence 8 also refuses `PRIVACYFENCE_MODE=local`, and a bundle that says `"mode": "local"`.
