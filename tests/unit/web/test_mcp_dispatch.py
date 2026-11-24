@@ -848,6 +848,25 @@ class TestCheckPolicy:
         denied = self._pii("drive", "drive_get_file_content", self._reads_token(reads=False, exports=True))
         assert denied["pii_gate"] == "applies"
 
+    def test_pii_gate_for_drive_download_with_only_the_reads_flag(self):
+        result = self._pii("drive", "drive_download_file", self._reads_token(reads=True))
+        assert result["pii_gate"] == "applies"
+        assert result["pii_gate_detail"] == (
+            "the token allows personal data in drive_download_file only when the file comes back inside the result, "
+            "so the personal-data scan applies to a download delivered as a link"
+        )
+
+    def test_pii_gate_for_drive_download_with_both_flags(self):
+        result = self._pii("drive", "drive_download_file", self._reads_token(reads=True, exports=True))
+        assert (result["pii_gate"], result["pii_gate_detail"]) == ("allowed_by_token", "")
+
+    def test_pii_gate_is_allowed_by_token_for_drive_revision_and_sheets_reads_with_the_reads_flag(self):
+        for tool in ("drive_get_revision_content", "drive_sheets_get_values"):
+            allowed = self._pii("drive", tool, self._reads_token(reads=True))
+            assert (allowed["pii_gate"], allowed["pii_gate_detail"]) == ("allowed_by_token", ""), tool
+            denied = self._pii("drive", tool, self._reads_token(reads=False, exports=True))
+            assert denied["pii_gate"] == "applies", tool
+
     def test_pii_gate_for_a_read_ignores_the_exports_flag(self):
         result = self._pii("gmail", "gmail_get_thread", self._reads_token(reads=False, exports=True))
         assert result["pii_gate"] == "applies"
@@ -855,8 +874,12 @@ class TestCheckPolicy:
 
     def test_pii_scan_tool_sets_stay_in_step_with_the_gate_table(self):
         from privacyfence.auto_accept import (
-            PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE, UPLOAD_PII_SCAN_TOOLS,
+            PERSONAL_DATA_INLINE_READ_TOOLS, PERSONAL_DATA_READ_TOOLS, PERSONAL_DATA_RULE_TOOLS, TOOL_TO_GATE,
+            UPLOAD_PII_SCAN_TOOLS,
         )
+
+        assert PERSONAL_DATA_INLINE_READ_TOOLS <= PERSONAL_DATA_RULE_TOOLS
+        assert not PERSONAL_DATA_INLINE_READ_TOOLS & PERSONAL_DATA_READ_TOOLS
 
         for tool in PERSONAL_DATA_READ_TOOLS:
             assert TOOL_TO_GATE[tool] == "review", tool

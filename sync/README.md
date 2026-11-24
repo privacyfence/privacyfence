@@ -132,8 +132,7 @@ Notes:
   - `salesforce_export_report`, `jira_export_issues`, `assets_export_objects`,
     `grist_export_records` and `grist_export_sql`;
   - `drive_download_file` when the file is delivered as a file (on an organization server a small
-    file, up to about 75 KB by default, comes back inside the tool result instead, and is still
-    scanned);
+    file, up to about 75 KB by default, comes back inside the tool result instead, which the second box below covers);
   - `peek_upload_page`.
 
   The box is on the token, not on the rule, so a run that uses your own token (not a scoped one)
@@ -144,7 +143,8 @@ Notes:
   model, when a rule of the token covers the call:
   - `gmail_get_message` and `gmail_get_thread`;
   - `slack_get_channel_history`, `slack_get_thread_replies` and `slack_search_messages`;
-  - `drive_get_file_content`.
+  - `drive_get_file_content`, `drive_get_revision_content` and `drive_sheets_get_values`;
+  - `drive_download_file` when the file comes back inside the result (a download delivered as a link needs the first box).
 
   The scan still runs for these, and the audit log records what it found; the box only stops
   the run from being denied. `salesforce_run_report`, `grist_get_records` and the other reads

@@ -158,6 +158,7 @@ from .approval_window_html import NARROW, WIDE
 from .approvals import DEFAULT_MAX_PENDING, ApprovalPending, PendingApproval, PendingApprovalRegistry, binding_key, card_digest
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, allowed_by_for, current_week, get_audit_logger, set_released_request_id
 from .auto_accept import (
+    PERSONAL_DATA_INLINE_READ_TOOLS,
     PERSONAL_DATA_READ_TOOLS,
     PERSONAL_DATA_RULE_TOOLS,
     TOOL_TO_GATE,
@@ -797,16 +798,18 @@ def _personal_data_rule(
 ) -> policy_engine.PolicyRule | None:
     """The token's own rule that covers this call, when the call is made with a scoped token that
     allows personal data for this tool: ``allow_personal_data_reads`` for a tool in
-    ``PERSONAL_DATA_READ_TOOLS``, or ``allow_personal_data`` (ADR 0173) for a tool in
-    ``PERSONAL_DATA_RULE_TOOLS`` (ADR 0157) whose result does not carry the content itself
-    (``content_reaches_result``). ``None`` for an unscoped call, a revoked token, a token without the
+    ``PERSONAL_DATA_READ_TOOLS`` and for an inline call (``content_reaches_result``) of a tool in
+    ``PERSONAL_DATA_INLINE_READ_TOOLS`` (ADR 0338), or ``allow_personal_data`` (ADR 0173) for a call
+    of a tool in ``PERSONAL_DATA_RULE_TOOLS`` (ADR 0157) whose result does not carry the content. ``None`` for an unscoped call, a revoked token, a token without the
     matching flag, every other tool, or when no rule of the token matches."""
     scope = current_token_scope()
     if scope is None or scope is REVOKED_SCOPE:
         return None
     if tool in PERSONAL_DATA_READ_TOOLS:
         allowed = scope.allow_personal_data_reads
-    elif tool in PERSONAL_DATA_RULE_TOOLS and not content_reaches_result:
+    elif tool in PERSONAL_DATA_RULE_TOOLS and content_reaches_result:
+        allowed = tool in PERSONAL_DATA_INLINE_READ_TOOLS and scope.allow_personal_data_reads
+    elif tool in PERSONAL_DATA_RULE_TOOLS:
         allowed = scope.allow_personal_data
     else:
         return None
@@ -1092,8 +1095,8 @@ async def gated_call(
         # content since PrivacyFence's own last write to it. Anything else -- no matching auto-
         # accept rule, a popup-gate write, upload_pii_scan_text -- is unaffected.
     content_reaches_result: bool = False,  # True when this call's result carries the content
-        # itself (an inline download), so a rule's allow_personal_data flag does not apply
-        # (ADR 0157).
+        # itself (an inline download), so the token's allow_personal_data flag does not apply and
+        # allow_personal_data_reads does (ADR 0157, 0338).
     my_email: str = "",
     my_account_id: str = "",
     session_created_ids: set | None = None,
@@ -1781,12 +1784,13 @@ def _pii_denial_text(who: str, pii_categories: list[str]) -> str:
     """The refusal text when the PII scan, not a missing rule, stopped a call that cannot get a
     human's confirmation. Names the categories found (never the matched text), so a rule that does
     cover the call is not blamed, and says which tools a scoped token's personal-data allowance
-    can lift this for (ADR 0157, 0173, and ``allow_personal_data_reads`` for reads)."""
+    can lift this for (ADR 0157, 0173, and ``allow_personal_data_reads`` for reads and inline downloads)."""
     return (
         f"Request denied: {who} and the result holds personal data ({', '.join(sorted(set(pii_categories)))}), "
         "which needs a person's confirmation even when a rule covers the call. A scoped token's "
         "personal-data allowances lift this only for Gmail message and thread reads, Slack channel, "
-        "thread and search reads, Drive file content reads, exports, downloads and page uploads."
+        "thread and search reads, Drive file content reads, Drive file version reads, Sheets value reads, "
+        "exports, downloads and page uploads."
     )
 
 

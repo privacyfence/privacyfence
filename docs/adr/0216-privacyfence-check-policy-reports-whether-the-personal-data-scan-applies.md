@@ -4,6 +4,7 @@
 
 Accepted — 2026-10-21. Implemented.
 Relates to ADR 0157, ADR 0164 and ADR 0173.
+Amended by [ADR 0338](0338-the-reads-flag-of-a-scoped-token-covers-drive-version-sheets-and-inline-download-reads.md): a token with both boxes gets `allowed_by_token` for `drive_download_file`, one with only the reads box gets `applies`.
 
 ## Context
 

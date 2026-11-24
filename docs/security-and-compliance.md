@@ -295,11 +295,13 @@ for one client or job. It has a name, an expiry (90 days by default) and a scope
   ([ADR 0164](adr/0164-scoped-tokens-are-named-expiring-rule-and-tool-scoped-deny-only-credentials.md)).
   Renaming a token changes the name on later entries only; earlier entries keep the name it had.
 - **Personal data in reads.** Two separate boxes on the New token form lift the personal-data scan for
-  a token's covered calls: exports, downloads and page uploads, and Gmail and Slack message reads. The
+  a token's covered calls: exports, downloads and page uploads, and Gmail, Slack, Drive file content, file version and Sheets value reads and Drive downloads returned inside the result. The
   scan still runs and the audit log records what it found; every other call still stops for review, or
   is denied for a token, when personal data is found
   ([ADR 0173](adr/0173-personal-data-is-allowed-per-scoped-token-not-per-rule.md),
-  [ADR 0219](adr/0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md)).
+  [ADR 0219](adr/0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md),
+  [ADR 0254](adr/0254-the-reads-flag-of-a-scoped-token-covers-drive-file-content.md),
+  [ADR 0338](adr/0338-the-reads-flag-of-a-scoped-token-covers-drive-version-sheets-and-inline-download-reads.md)).
 - **One token per routine.** Give each routine its own token with its own rules, so a rule for one
   routine never reaches another routine or your interactive clients
   ([ADR 0220](adr/0220-a-routines-rule-profile-is-a-scoped-token.md),

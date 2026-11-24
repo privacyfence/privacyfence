@@ -5,6 +5,7 @@
 Accepted — 2026-10-13. Implemented.
 Amends ADR 0157 and ADR 0164. The per-rule opt-in ADR 0157 introduced is replaced by a per-token one; ADR 0164's token gains one property.
 Amended by [ADR 0219](0219-a-scoped-token-can-let-email-and-slack-reads-return-personal-data.md): a second flag covers reads; this flag stays limited to results that hold no row.
+Amended by [ADR 0338](0338-the-reads-flag-of-a-scoped-token-covers-drive-version-sheets-and-inline-download-reads.md): an inline `drive_download_file` is covered by `allow_personal_data_reads`.
 Amended by [ADR 0236](0236-a-scoped-token-holds-its-own-rules.md): a token holds its own copy of its rules.
 
 ## Context
