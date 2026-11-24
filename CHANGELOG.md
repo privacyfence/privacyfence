@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.2.4] - 2026-11-24
+
 ### Changed
 
 - **Let reads return personal data covers more Drive reads.** A scoped token with the box now also lets covered Sheets value reads, earlier-version reads and Drive downloads returned inside the result carry personal data; the scan still runs and is audited. A download delivered as a link still needs the first box ([#1186](https://github.com/privacyfence/privacyfence/issues/1186)).
