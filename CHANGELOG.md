@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Confluence search works again.** `confluence_search` and `confluence_cql_search` failed against the Atlassian gateway because the client called a CQL method that the Cloud library does not have; they now call the search endpoint directly ([#1189](https://github.com/privacyfence/privacyfence/issues/1189)).
+
 ## [8.2.4] - 2026-11-24
 
 ### Changed
