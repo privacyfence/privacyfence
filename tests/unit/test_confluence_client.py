@@ -10,9 +10,12 @@ import json
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests
 from freezegun import freeze_time
+from requests.adapters import HTTPAdapter
 
 from privacyfence import atlassian_users
 from privacyfence import confluence_client as confluence_client_module
@@ -539,9 +542,6 @@ class TestSearchThroughRealGatewayUrl:
 
     @staticmethod
     def _real_client() -> tuple[ConfluenceClient, list]:
-        import requests
-        from requests.adapters import HTTPAdapter
-
         seen: list = []
 
         class Recorder(HTTPAdapter):
@@ -561,8 +561,6 @@ class TestSearchThroughRealGatewayUrl:
 
     @pytest.mark.parametrize("method", ["search", "cql_search"])
     def test_reaches_gateway_search_endpoint_with_cql(self, method):
-        from urllib.parse import parse_qs, urlparse
-
         client, seen = self._real_client()
         results = getattr(client, method)("budget" if method == "search" else 'space = "ENG"')
         assert results[0].title == "Doc"
