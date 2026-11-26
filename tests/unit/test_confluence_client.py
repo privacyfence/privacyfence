@@ -571,7 +571,6 @@ class TestSearchThroughRealGatewayUrl:
         assert cql == ('text ~ "budget" order by lastmodified desc' if method == "search" else 'space = "ENG"')
 
 
-
 # ---------------------------------------------------------------------------- #
 # list_pages_in_space / get_page / get_page_by_title
 # ---------------------------------------------------------------------------- #
