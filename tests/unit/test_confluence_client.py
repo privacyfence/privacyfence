@@ -567,6 +567,7 @@ class TestSearchThroughRealGatewayUrl:
         url = urlparse(seen[0].url)
         expected = "https://api.atlassian.com/ex/confluence/cloud-1/wiki/rest/api/search"
         assert f"{url.scheme}://{url.netloc}{url.path}" == expected
+        assert parse_qs(url.query)["limit"] == ["20"]
         cql = parse_qs(url.query)["cql"][0]
         assert cql == ('text ~ "budget" order by lastmodified desc' if method == "search" else 'space = "ENG"')
 
