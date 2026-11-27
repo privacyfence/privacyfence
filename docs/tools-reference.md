@@ -281,7 +281,7 @@ requests for 5 minutes after a decision. Don't retry the same call; ask the user
 | `jira_add_comment` | write | `popup` | Add a comment to an existing Jira issue. |
 | `jira_create_issue` | write | `popup` | Create a new Jira issue. |
 | `jira_transition_issue` | write | `popup` | Move a Jira issue to a new status by transition name (e.g. "Done", "In Progress") — call jira_get_transitions first to see what's valid from the issue's current status. |
-| `jira_update_issue` | write | `popup` | Update fields on an existing Jira issue (summary, description, priority, and/or custom fields). |
+| `jira_update_issue` | write | `popup` | Update fields on an existing Jira issue (summary, description, priority, parent, and/or custom fields). |
 
 ## Confluence
 

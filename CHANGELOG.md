@@ -43,6 +43,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Jira issues can be put under a parent.** `jira_create_issue` and `jira_update_issue` take `parent_key`, which sets the epic of a story or the parent of a subtask in every project type and shows the parent's key and summary on the approval card. `custom_fields` now refuses Parent, Epic Link and Parent Link and points to `parent_key`, and a failed create or update reports which Jira field failed and why instead of only "data was not an object" ([#1192](https://github.com/privacyfence/privacyfence/issues/1192)).
+
 ## [8.2.5] - 2026-11-27
 
 ### Fixed

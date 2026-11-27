@@ -116,6 +116,11 @@ other fields, custom fields included, the agent uses `jira_search_issues_with_fi
 `fields` parameter of `jira_get_issue`, and you review the values on the approval card first. No
 extra scope is needed. `jira_export_issues` writes a whole search, up to 10,000 issues, to a CSV or JSON file in one approval, and the same "this project" rule covers it.
 
+The agent puts an issue under an epic or a parent with `parent_key` on `jira_create_issue` and
+`jira_update_issue`. The approval card shows the parent's key and summary. Epic Link and Parent Link
+are not set separately and are refused in `custom_fields`. Removing a parent is done in Jira. A failed
+create or update tells the agent which Jira field failed and why.
+
 ## Give PrivacyFence the app
 
 On an organization server, sign the client ID and secret as a connector config and upload it on

@@ -63,6 +63,37 @@ _DROPPED_VALUE_KEYS = frozenset({"self", "_links", "avatarUrls", "iconUrl", "ema
 # A Jira Service Management SLA field: it has a name, but its data is in the cycles, so it is not collapsed to the name.
 _SLA_KEYS = frozenset({"ongoingCycle", "completedCycles"})
 _CF_JQL_RE = re.compile(r"cf\[(\d+)\]", re.IGNORECASE)
+# Custom field types of Epic Link and Parent Link (company-managed projects).
+_PARENT_FIELD_CUSTOM_TYPES = frozenset({
+    "com.pyxis.greenhopper.jira:gh-epic-link",
+    "com.atlassian.jpo:jpo-custom-field-parent",
+})
+_API_ERROR_TEXT_LIMIT = 600
+
+
+def _api_error_text(exc: Exception) -> str:
+    """Jira's own per-field reasons for a failed write.
+
+    atlassian-python-api builds its exception text from the ``errors`` values
+    alone and drops the field names, so the reasons are read back from the
+    response the exception keeps.
+    """
+    response: Any = getattr(exc, "response", None)
+    try:
+        body = response.json()
+    except (ValueError, AttributeError):
+        return str(exc)
+    if not isinstance(body, dict):
+        return str(exc)
+    parts: list[str] = []
+    msgs = body.get("errorMessages")
+    if isinstance(msgs, list):
+        parts.extend(m for m in msgs if isinstance(m, str) and m)
+    errors = body.get("errors")
+    if isinstance(errors, dict):
+        parts.extend(f"{name}: {reason}" for name, reason in errors.items())
+    text = "; ".join(parts)[:_API_ERROR_TEXT_LIMIT]
+    return text or str(exc)
 
 
 class JiraClientError(Exception):
@@ -536,6 +567,7 @@ class JiraClient:
         assignee_account_id: str = "",
         labels: list[str] | None = None,
         mention_names: Mapping[str, str] | None = None,
+        parent_key: str = "",
     ) -> JiraIssue:
         if not project_key or not summary:
             raise JiraClientError("create_issue requires project_key and summary")
@@ -552,10 +584,12 @@ class JiraClient:
             fields["assignee"] = {"accountId": assignee_account_id}
         if labels:
             fields["labels"] = labels
+        if parent_key:
+            fields["parent"] = {"key": parent_key}
         try:
             raw = self._request(self._client.create_issue, fields=fields)
         except Exception as exc:
-            raise JiraClientError(f"create_issue failed: {exc}") from exc
+            raise JiraClientError(f"create_issue failed: {_api_error_text(exc)}") from exc
         key = raw.get("key", "")
         logger.info("create_issue created %s", key)
         return self.get_issue(key)
@@ -581,7 +615,9 @@ class JiraClient:
         try:
             self._request(self._client.update_issue_field, issue_key, fields)
         except Exception as exc:
-            raise JiraClientError(f"update_issue({issue_key!r}) failed: {exc}") from exc
+            raise JiraClientError(
+                f"update_issue({issue_key!r}) failed: {_api_error_text(exc)}"
+            ) from exc
         logger.info("update_issue %s: updated fields %s", issue_key, list(fields.keys()))
         return self.get_issue(issue_key)
 
@@ -616,9 +652,18 @@ class JiraClient:
         return field_id, coerced
 
     def custom_field_kind(self, field_name: str) -> str:
-        """``"user"`` for a single-user field, ``"user_list"`` for a multi-user picker,
-        else ``"other"``. Lets callers hold person-valued fields to the accountId shape."""
-        schema = self._get_field_descriptor(field_name).get("schema") or {}
+        """``"parent"`` for the Parent, Epic Link and Parent Link fields (set through
+        the issue's ``parent`` object, never as a field value), ``"user"`` for a
+        single-user field, ``"user_list"`` for a multi-user picker, else ``"other"``.
+        Lets callers hold person-valued fields to the accountId shape."""
+        descriptor = self._get_field_descriptor(field_name)
+        schema = descriptor.get("schema") or {}
+        if (
+            descriptor.get("id") == "parent"
+            or schema.get("system") == "parent"
+            or schema.get("custom") in _PARENT_FIELD_CUSTOM_TYPES
+        ):
+            return "parent"
         if schema.get("type") == "user":
             return "user"
         if schema.get("type") == "array" and schema.get("items") == "user":
