@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.2.6] - 2026-11-27
+
 ### Fixed
 
 - **Jira issues can be put under a parent.** `jira_create_issue` and `jira_update_issue` take `parent_key`, which sets the epic of a story or the parent of a subtask in every project type and shows the parent's key and summary on the approval card. `custom_fields` now refuses Parent, Epic Link and Parent Link and points to `parent_key`, and a failed create or update reports which Jira field failed and why instead of only "data was not an object" ([#1192](https://github.com/privacyfence/privacyfence/issues/1192)).
@@ -3716,7 +3718,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v8.2.5...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v8.2.6...HEAD
+[8.2.6]: https://github.com/privacyfence/privacyfence/compare/v8.2.5...v8.2.6
 [8.2.5]: https://github.com/privacyfence/privacyfence/compare/v8.2.4...v8.2.5
 [8.2.2]: https://github.com/privacyfence/privacyfence/compare/v8.2.1...v8.2.2
 [8.1.0]: https://github.com/privacyfence/privacyfence/compare/v8.0.0...v8.1.0
