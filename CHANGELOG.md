@@ -3718,7 +3718,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v8.2.5...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v8.2.6...HEAD
+[8.2.6]: https://github.com/privacyfence/privacyfence/compare/v8.2.5...v8.2.6
 [8.2.5]: https://github.com/privacyfence/privacyfence/compare/v8.2.4...v8.2.5
 [8.2.2]: https://github.com/privacyfence/privacyfence/compare/v8.2.1...v8.2.2
 [8.1.0]: https://github.com/privacyfence/privacyfence/compare/v8.0.0...v8.1.0
