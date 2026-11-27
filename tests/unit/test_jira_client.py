@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from privacyfence import jira_client as jira_client_module
 from privacyfence.atlassian_oauth import AtlassianOAuthError
@@ -32,6 +33,7 @@ from privacyfence.jira_client import (
     JiraIssue,
     JiraProject,
     JiraTransition,
+    _api_error_text,
     _text_to_adf,
     simplify_field_value,
 )
@@ -984,6 +986,27 @@ class TestCreateIssue:
         assert "priority" not in fields
         assert "assignee" not in fields
         assert "labels" not in fields
+        assert "parent" not in fields
+
+    def test_sends_parent_key_as_a_key_object(self):
+        client = make_client()
+        client._client.create_issue.return_value = {"key": "ENG-99"}
+        client._client.issue.return_value = {"key": "ENG-99", "fields": {}}
+
+        client.create_issue("ENG", "New issue", parent_key="ENG-7")
+
+        fields = client._client.create_issue.call_args.kwargs["fields"]
+        assert fields["parent"] == {"key": "ENG-7"}
+
+    def test_create_error_names_the_failing_field(self):
+        """Jira's 400 "data was not an object" names no field in the library's text; the
+        field comes from the response body."""
+        client = make_client()
+        client._client.create_issue.side_effect = requests.HTTPError(
+            "data was not an object", response=_error_response({"parent": "data was not an object"}),
+        )
+        with pytest.raises(JiraClientError, match="parent: data was not an object"):
+            client.create_issue("ENG", "x", parent_key="ENG-7")
 
     def test_http_error_becomes_jira_client_error(self):
         client = make_client()
@@ -1035,6 +1058,58 @@ class TestUpdateIssue:
         client._client.update_issue_field.side_effect = RuntimeError("boom")
         with pytest.raises(JiraClientError, match="update_issue"):
             client.update_issue("ENG-1", {"summary": "x"})
+
+    def test_update_error_names_the_failing_field(self):
+        """Jira's 400 "data was not an object" names no field in the library's text; the
+        field comes from the response body."""
+        client = make_client()
+        client._client.update_issue_field.side_effect = requests.HTTPError(
+            "data was not an object", response=_error_response({"parent": "data was not an object"}),
+        )
+        with pytest.raises(JiraClientError, match="parent: data was not an object"):
+            client.update_issue("ENG-1", {"parent": "ENG-7"})
+
+
+def _error_response(errors, messages=()):
+    return SimpleNamespace(json=lambda: {"errorMessages": list(messages), "errors": errors})
+
+
+class TestApiErrorText:
+    def test_messages_and_field_errors_are_joined(self):
+        exc = requests.HTTPError("x", response=_error_response({"parent": "bad"}, ["Oops"]))
+        assert _api_error_text(exc) == "Oops; parent: bad"
+
+    def test_text_is_cut_at_600_characters(self):
+        exc = requests.HTTPError("x", response=_error_response({"f": "y" * 900}))
+        assert len(_api_error_text(exc)) == 600
+
+    def test_unreadable_json_falls_back(self):
+        def boom():
+            raise ValueError("no json")
+        exc = requests.HTTPError("plain", response=SimpleNamespace(json=boom))
+        assert _api_error_text(exc) == "plain"
+
+    def test_no_response_falls_back(self):
+        assert _api_error_text(RuntimeError("plain")) == "plain"
+
+    def test_non_dict_body_falls_back(self):
+        exc = requests.HTTPError("plain", response=SimpleNamespace(json=lambda: ["x"]))
+        assert _api_error_text(exc) == "plain"
+
+    def test_errors_that_is_not_a_dict_is_ignored(self):
+        body = {"errorMessages": ["Oops"], "errors": ["x"]}
+        exc = requests.HTTPError("plain", response=SimpleNamespace(json=lambda: body))
+        assert _api_error_text(exc) == "Oops"
+
+    def test_non_string_or_empty_messages_are_skipped(self):
+        body = {"errorMessages": [1, "", "Oops"], "errors": {}}
+        exc = requests.HTTPError("plain", response=SimpleNamespace(json=lambda: body))
+        assert _api_error_text(exc) == "Oops"
+
+    def test_empty_result_falls_back(self):
+        body = {"errorMessages": "not a list", "errors": {}}
+        exc = requests.HTTPError("plain", response=SimpleNamespace(json=lambda: body))
+        assert _api_error_text(exc) == "plain"
 
 
 # ---------------------------------------------------------------------------- #
@@ -1118,6 +1193,19 @@ class TestResolveCustomField:
             field["schema"] = schema
         client._client.get_all_fields.return_value = [field]
         assert client.custom_field_kind("Person") == kind
+
+    @pytest.mark.parametrize("field", [
+        {"id": "customfield_1", "name": "X", "schema": {"type": "issuelink", "system": "parent"}},
+        {"id": "customfield_1", "name": "X",
+         "schema": {"type": "any", "custom": "com.pyxis.greenhopper.jira:gh-epic-link"}},
+        {"id": "customfield_1", "name": "X",
+         "schema": {"type": "any", "custom": "com.atlassian.jpo:jpo-custom-field-parent"}},
+        {"id": "parent", "name": "Parent"},
+    ])
+    def test_parent_fields_are_parent_kind(self, field):
+        client = make_client()
+        client._client.get_all_fields.return_value = [field]
+        assert client.custom_field_kind(field["name"]) == "parent"
 
     def test_unknown_field_name_raises(self):
         client = make_client()

@@ -431,3 +431,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0336](0336-the-n8n-node-is-versioned-and-its-arguments-field-is-tool-arguments.md) | The n8n node is versioned and its arguments field is `toolArguments` | Accepted |
 | [0337](0337-an-organization-server-is-recognised-by-its-own-data.md) | An organization server is recognised by its own data | Accepted; amends 0302 |
 | [0338](0338-the-reads-flag-of-a-scoped-token-covers-drive-version-sheets-and-inline-download-reads.md) | The reads flag of a scoped token covers Drive version, Sheets and inline download reads | Accepted; amends 0254, 0173, 0216 |
+| [0339](0339-jira-parent-is-set-with-parent-key-and-epic-link-is-refused.md) | Jira parent is set with `parent_key` and Epic Link is refused | Accepted |

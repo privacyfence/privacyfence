@@ -131,6 +131,14 @@ class TestToolDefinitions:
     def test_every_tool_definition_is_complete(self):
         assert_tool_definitions_complete(JiraConnector(MagicMock()), JIRA_SIBLINGS)
 
+    def test_both_write_tools_offer_an_optional_parent_key(self):
+        specs = {t.name: t for t in JiraConnector(MagicMock()).tool_specs()}
+        for name in ("jira_create_issue", "jira_update_issue"):
+            param = next(p for p in specs[name].params if p.name == "parent_key")
+            assert not param.required
+            assert param.default == ""
+        assert "jira_get_issue" in specs["jira_update_issue"].description
+
 
 class TestAutoTools:
     async def test_list_projects(self, tmp_path):
@@ -702,7 +710,67 @@ class TestCreateIssue:
         result = await connector.call("jira_create_issue", {"project_key": "ENG", "summary": "New bug"})
 
         assert result["key"] == "ENG-100"
-        client.create_issue.assert_called_once_with("ENG", "New bug", "Task", "", "", "", None, {})
+        client.create_issue.assert_called_once_with("ENG", "New bug", "Task", "", "", "", None, {}, "")
+
+    async def test_parent_key_fetches_the_parent_and_shows_it_on_the_card(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue(key="ENG-7", summary="Epic")
+        client.create_issue.return_value = make_issue(key="ENG-100")
+
+        await connector.call("jira_create_issue", {
+            "project_key": "ENG", "summary": "New", "parent_key": "ENG-7",
+        })
+
+        client.get_issue.assert_called_once_with("ENG-7")
+        assert gated_call_spy[0]["preview"]["Parent"] == "ENG-7 — Epic"
+
+    async def test_parent_key_reaches_the_client_and_the_payload(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue(key="ENG-7", summary="Epic")
+        client.create_issue.return_value = make_issue(key="ENG-100")
+
+        await connector.call("jira_create_issue", {
+            "project_key": "ENG", "summary": "New", "parent_key": "ENG-7",
+        })
+
+        assert gated_call_spy[0]["args"]["parent_key"] == "ENG-7"
+        assert gated_call_spy[0]["raw_data"]["parent_key"] == "ENG-7"
+        client.create_issue.assert_called_once_with("ENG", "New", "Task", "", "", "", None, {}, "ENG-7")
+
+    async def test_parent_key_is_upper_cased(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.return_value = make_issue(key="ENG-7", summary="Epic")
+        client.create_issue.return_value = make_issue(key="ENG-100")
+
+        await connector.call("jira_create_issue", {
+            "project_key": "ENG", "summary": "New", "parent_key": " eng-7 ",
+        })
+
+        client.get_issue.assert_called_once_with("ENG-7")
+
+    async def test_bad_parent_key_is_refused_before_any_call(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="parent_key must be an issue key"):
+            await connector.call("jira_create_issue", {
+                "project_key": "ENG", "summary": "New", "parent_key": "not a key",
+            })
+
+        assert gated_call_spy == []
+        client.get_issue.assert_not_called()
+        client.create_issue.assert_not_called()
+
+    async def test_missing_parent_fails_before_the_card(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_issue.side_effect = JiraClientError("Issue does not exist")
+
+        with pytest.raises(RuntimeError, match="Issue does not exist"):
+            await connector.call("jira_create_issue", {
+                "project_key": "ENG", "summary": "New", "parent_key": "ENG-7",
+            })
+
+        assert gated_call_spy == []
+        client.create_issue.assert_not_called()
 
     async def test_description_renders_as_a_labeled_heading_block(self, gated_call_spy):
         # v2's right pane: a label-styled "Description" heading above the
@@ -829,7 +897,7 @@ class TestWriteMentions:
         assert "Fake" not in str([kwargs["details_text"], kwargs["preview"], kwargs["summary"]])
         client.create_issue.assert_called_once_with(
             "ENG", "S", "Task", f"cc @[Fake]({ACC})", "", ACC2, None,
-            {ACC: "Real Name", ACC2: "Bob Real"},
+            {ACC: "Real Name", ACC2: "Bob Real"}, "",
         )
 
     async def test_create_unresolvable_assignee_refused(self, gated_call_spy):
@@ -900,6 +968,84 @@ class TestUpdateIssue:
         # a raw JSON dump of the update payload instead of a plain-language line.
         assert kwargs["details_text"] == "Summary will be updated; description is unchanged."
         assert "{" not in kwargs["details_text"]
+
+    @staticmethod
+    def _issues(client):
+        client.get_issue.side_effect = lambda k: {
+            "ENG-42": make_issue(), "ENG-7": make_issue(key="ENG-7", summary="Epic"),
+        }[k]
+        client.update_issue.return_value = make_issue()
+
+    async def test_parent_key_sets_the_parent_object(self, gated_call_spy):
+        connector, client = make_connector()
+        self._issues(client)
+
+        await connector.call("jira_update_issue", {"issue_key": "ENG-42", "parent_key": "eng-7"})
+
+        client.update_issue.assert_called_once_with("ENG-42", {"parent": {"key": "ENG-7"}})
+        assert gated_call_spy[0]["args"] == {"issue_key": "ENG-42"}
+
+    async def test_parent_card_row_and_details_text(self, gated_call_spy):
+        connector, client = make_connector()
+        self._issues(client)
+
+        await connector.call("jira_update_issue", {"issue_key": "ENG-42", "parent_key": "ENG-7"})
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Parent"] == "→ ENG-7 — Epic"
+        assert kwargs["details_text"] == "Parent will be updated; description is unchanged."
+
+    async def test_parent_combines_with_other_fields(self, gated_call_spy):
+        connector, client = make_connector()
+        self._issues(client)
+
+        await connector.call("jira_update_issue", {
+            "issue_key": "ENG-42", "priority": "Low", "parent_key": "ENG-7",
+        })
+
+        client.update_issue.assert_called_once_with(
+            "ENG-42", {"priority": {"name": "Low"}, "parent": {"key": "ENG-7"}},
+        )
+        assert gated_call_spy[0]["details_text"] == (
+            "Priority, Parent will be updated; description is unchanged."
+        )
+
+    async def test_parent_equal_to_the_issue_is_refused(self, gated_call_spy):
+        connector, client = make_connector()
+        self._issues(client)
+
+        with pytest.raises(ValueError, match="own parent"):
+            await connector.call("jira_update_issue", {"issue_key": "eng-42", "parent_key": "ENG-42"})
+
+        assert gated_call_spy == []
+        client.update_issue.assert_not_called()
+
+    async def test_bad_parent_key_is_refused_before_any_call(self, gated_call_spy):
+        connector, client = make_connector()
+        self._issues(client)
+
+        with pytest.raises(ValueError, match="parent_key must be an issue key"):
+            await connector.call("jira_update_issue", {"issue_key": "ENG-42", "parent_key": "epic"})
+
+        assert gated_call_spy == []
+        client.get_issue.assert_not_called()
+        client.update_issue.assert_not_called()
+
+    async def test_missing_parent_fails_before_the_card(self, gated_call_spy):
+        connector, client = make_connector()
+
+        def get_issue(key):
+            if key == "ENG-7":
+                raise JiraClientError("Issue does not exist")
+            return make_issue()
+
+        client.get_issue.side_effect = get_issue
+
+        with pytest.raises(RuntimeError, match="Issue does not exist"):
+            await connector.call("jira_update_issue", {"issue_key": "ENG-42", "parent_key": "ENG-7"})
+
+        assert gated_call_spy == []
+        client.update_issue.assert_not_called()
 
     async def test_description_preview_is_placeholder_not_full_text(self, gated_call_spy):
         connector, client = make_connector()
@@ -1000,6 +1146,38 @@ class TestUpdateIssue:
             await connector.call("jira_update_issue", {
                 "issue_key": "ENG-42", "custom_fields": '{"Nope": 1}',
             })
+
+
+class TestParentFieldRedirect:
+    @pytest.mark.parametrize("name", ["Parent", "parent", "Epic Link", "Parent Link"])
+    async def test_parent_field_names_are_redirected(self, gated_call_spy, name):
+        """Jira answers 400 "data was not an object" to a bare string for Parent, and
+        "cannot be set. It is not on the appropriate screen, or unknown." for Epic Link."""
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="dedicated parent_key parameter"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "ENG-1", "custom_fields": json.dumps({name: "ENG-7"}),
+            })
+
+        client.resolve_custom_field.assert_not_called()
+        assert gated_call_spy == []
+
+    async def test_a_field_of_parent_kind_is_redirected(self, gated_call_spy):
+        """A renamed Epic Link field still reaches Jira as a bare string, which it refuses
+        with "data was not an object" or "cannot be set. It is not on the appropriate
+        screen, or unknown."."""
+        connector, client = make_connector()
+        client.resolve_custom_field.return_value = ("customfield_10014", "ENG-7")
+        client.custom_field_kind.return_value = "parent"
+
+        with pytest.raises(ValueError, match="dedicated parent_key parameter"):
+            await connector.call("jira_update_issue", {
+                "issue_key": "ENG-1", "custom_fields": '{"Epic": "ENG-7"}',
+            })
+
+        assert gated_call_spy == []
+        client.update_issue.assert_not_called()
 
 
 class TestCustomFieldPeople:

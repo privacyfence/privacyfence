@@ -32,6 +32,32 @@ _DEDICATED_FIELD_PARAMS = {
 }
 
 
+_PARENT_FIELD_NAMES = {"parent", "epic link", "parent link"}
+_ISSUE_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]+-[0-9]+")
+
+
+def _parent_key(value: str, tool: str, issue_key: str = "") -> str:
+    """The normalised parent issue key, or ``""`` when none was given."""
+    key = value.strip().upper()
+    if not key:
+        return ""
+    if not _ISSUE_KEY_RE.fullmatch(key):
+        raise ValueError(
+            f"{tool}: parent_key must be an issue key such as PROJ-123, "
+            "from jira_search_issues (its key field)."
+        )
+    if key == issue_key.upper():
+        raise ValueError(f"{tool}: an issue cannot be its own parent.")
+    return key
+
+
+def _parent_redirect(field_name: str) -> str:
+    return (
+        f"update_issue: custom_fields cannot set '{field_name}'; use the dedicated "
+        "parent_key parameter instead, which sets the epic or parent in every project type."
+    )
+
+
 def _mention_id(node: dict[str, Any]) -> str:
     """The account id of an ADF ``mention`` node; a mention without a text id is refused."""
     attrs = node.get("attrs")
@@ -523,7 +549,8 @@ class JiraConnector(Connector):
                 description=(
                     "Create a new Jira issue. Returns the created issue, with its new key, in "
                     "the same shape jira_get_issue returns minus comments. Get project_key "
-                    "from jira_list_projects. Requires user approval."
+                    "from jira_list_projects. Pass parent_key to create it under an epic or as a "
+                    "subtask. Requires user approval."
                 ),
                 params=[
                     ToolParam("project_key", "str",
@@ -542,6 +569,12 @@ class JiraConnector(Connector):
                               description="Atlassian account id to assign the issue to, from "
                                           "jira_find_users (its account_id field). Empty assigns "
                                           "nobody."),
+                    ToolParam("parent_key", "str", required=False, default="",
+                              description="Key of the issue to create this one under: the epic of a "
+                                          "story or task, or the parent of a subtask, e.g. PROJ-12, "
+                                          "from jira_search_issues (its key field). The same "
+                                          "parameter works in every project type. Empty creates the "
+                                          "issue with no parent."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -566,10 +599,12 @@ class JiraConnector(Connector):
                 name="jira_update_issue",
                 description=(
                     "Update fields on an existing Jira issue (summary, description, priority, "
-                    "and/or custom fields). Only the fields you pass non-empty change, and at "
+                    "parent, and/or custom fields). Only the fields you pass non-empty change, and at "
                     "least one is required. Returns the updated issue in the same shape "
                     "jira_get_issue returns minus comments. Use jira_transition_issue instead "
-                    "to change its status. Pass assignee_account_id to reassign it. Requires user approval."
+                    "to change its status. Pass assignee_account_id to reassign it. "
+                    "Read the parent back with jira_get_issue and fields [\"Parent\"]. "
+                    "Requires user approval."
                 ),
                 params=[
                     ToolParam("issue_key", "str",
@@ -587,12 +622,18 @@ class JiraConnector(Connector):
                               description="Atlassian account id to assign the issue to, from "
                                           "jira_find_users (its account_id field). Empty leaves the "
                                           "assignee unchanged or unset."),
+                    ToolParam("parent_key", "str", required=False, default="",
+                              description="Key of the issue to move this one under: its epic or "
+                                          "parent, e.g. PROJ-12, from jira_search_issues (its key "
+                                          "field). Empty leaves the parent unchanged; removing a "
+                                          "parent is not supported, do that in Jira."),
                     ToolParam("custom_fields", "str", required=False, default="",
                               description=(
                                   "JSON object mapping Jira Cloud custom field display names "
                                   "(as seen in the Jira UI, not their customfield_NNNNN id) to "
                                   "new values, e.g. {\"Story Points\": 5, \"Sprint\": \"Sprint 12\"}. "
-                                  "Empty changes no custom fields."
+                                  "Empty changes no custom fields. Parent, Epic Link and "
+                                  "Parent Link cannot be set here: use parent_key."
                               )),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
@@ -925,19 +966,26 @@ class JiraConnector(Connector):
         description: str = "",
         priority: str = "",
         assignee_account_id: str = "",
+        parent_key: str = "",
     ) -> Any:
+        parent_key = _parent_key(parent_key, "create_issue")
         names = await self._resolve_write_accounts(description, [assignee_account_id])
+        parent = await self._fetch(self._jira.get_issue, parent_key) if parent_key else None
         payload = {
             "project_key": project_key, "summary": summary,
             "issue_type": issue_type, "description": description, "priority": priority,
         }
         if assignee_account_id:
             payload["assignee_account_id"] = assignee_account_id
+        if parent_key:
+            payload["parent_key"] = parent_key
         preview = {"Project": project_key, "Type": issue_type, "Summary": summary}
         if priority:
             preview["Priority"] = priority
         if assignee_account_id:
             preview["Assignee"] = names[assignee_account_id]
+        if parent is not None:
+            preview["Parent"] = f"{parent.key} — {parent.summary[:80]}"
         if markup_mention_ids(description):
             preview["Mentions"] = ", ".join(names[i] for i in markup_mention_ids(description))
         shown_description = display_markup(description, names)
@@ -969,7 +1017,7 @@ class JiraConnector(Connector):
         )
         issue = await self._fetch(
             self._jira.create_issue, project_key, summary, issue_type, description, priority,
-            assignee_account_id, None, names,
+            assignee_account_id, None, names, parent_key,
         )
         return asdict(issue)
 
@@ -1006,7 +1054,9 @@ class JiraConnector(Connector):
         priority: str = "",
         assignee_account_id: str = "",
         custom_fields: str = "",
+        parent_key: str = "",
     ) -> Any:
+        parent_key = _parent_key(parent_key, "update_issue", issue_key)
         custom_updates = _parse_json_object(custom_fields)
         if custom_fields and custom_updates is None:
             raise ValueError(
@@ -1018,7 +1068,12 @@ class JiraConnector(Connector):
         resolved_custom: list[tuple[str, str, Any, list[str]]] = []  # name, id, sent value, people
         seen_field_ids: set[str] = set()
         for field_name, value in (custom_updates or {}).items():
+            if field_name.strip().lower() in _PARENT_FIELD_NAMES:
+                raise ValueError(_parent_redirect(field_name))
             field_id, coerced = await self._fetch(self._jira.resolve_custom_field, field_name, value)
+            kind = await self._fetch(self._jira.custom_field_kind, field_name)
+            if kind == "parent":
+                raise ValueError(_parent_redirect(field_name))
             if field_id in _DEDICATED_FIELD_PARAMS:
                 raise ValueError(
                     f"update_issue: custom_fields cannot set '{field_name}'; "
@@ -1027,7 +1082,6 @@ class JiraConnector(Connector):
             if field_id in seen_field_ids:
                 raise ValueError(f"update_issue: custom_fields sets '{field_name}' more than once.")
             seen_field_ids.add(field_id)
-            kind = await self._fetch(self._jira.custom_field_kind, field_name)
             if kind != "other":
                 coerced = _normalise_user_value(kind, coerced, field_name)
             resolved_custom.append(
@@ -1036,6 +1090,7 @@ class JiraConnector(Connector):
         custom_ids = [i for *_, ids in resolved_custom for i in ids]
         names = await self._resolve_write_accounts(description, [assignee_account_id, *custom_ids])
         issue = await self._fetch(self._jira.get_issue, issue_key)
+        parent = await self._fetch(self._jira.get_issue, parent_key) if parent_key else None
         fields: dict[str, Any] = {}
         preview = {"Issue": f"{issue.key} — {issue.summary}"}
         if summary:
@@ -1052,6 +1107,9 @@ class JiraConnector(Connector):
         if assignee_account_id:
             fields["assignee"] = {"accountId": assignee_account_id}
             preview["Assignee"] = f"→ {names[assignee_account_id]}"
+        if parent is not None:
+            fields["parent"] = {"key": parent_key}
+            preview["Parent"] = f"→ {parent.key} — {parent.summary[:80]}"
         changed = [k for k in preview if k != "Issue"]
         written: list[str] = []
         sent_custom: dict[str, Any] = {}
