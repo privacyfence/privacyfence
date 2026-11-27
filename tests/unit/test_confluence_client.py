@@ -10,9 +10,12 @@ import json
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests
 from freezegun import freeze_time
+from requests.adapters import HTTPAdapter
 
 from privacyfence import atlassian_users
 from privacyfence import confluence_client as confluence_client_module
@@ -494,27 +497,27 @@ class TestSearch:
 
     def test_wraps_query_in_cql_text_search(self):
         client = make_client()
-        client._client.cql.return_value = {"results": []}
+        client._client.get.return_value = {"results": []}
         client.search("budget")
-        cql = client._client.cql.call_args.args[0]
+        cql = client._client.get.call_args.kwargs["params"]["cql"]
         assert 'text ~ "budget"' in cql
 
     def test_escapes_backslash_and_double_quote(self):
         client = make_client()
-        client._client.cql.return_value = {"results": []}
+        client._client.get.return_value = {"results": []}
         client.search('say "hi" \\ there')
-        cql = client._client.cql.call_args.args[0]
+        cql = client._client.get.call_args.kwargs["params"]["cql"]
         assert cql == 'text ~ "say \\"hi\\" \\\\ there" order by lastmodified desc'
 
     def test_maps_results(self):
         client = make_client()
-        client._client.cql.return_value = {"results": [{"title": "Doc", "entityType": "page"}]}
+        client._client.get.return_value = {"results": [{"title": "Doc", "entityType": "page"}]}
         results = client.search("q")
         assert results[0].title == "Doc"
 
     def test_http_error_becomes_confluence_client_error(self):
         client = make_client()
-        client._client.cql.side_effect = RuntimeError("boom")
+        client._client.get.side_effect = RuntimeError("boom")
         with pytest.raises(ConfluenceClientError, match="search\\('q'\\) failed"):
             client.search("q")
 
@@ -527,9 +530,46 @@ class TestCqlSearch:
 
     def test_passes_cql_through_unmodified(self):
         client = make_client()
-        client._client.cql.return_value = {"results": []}
+        client._client.get.return_value = {"results": []}
         client.cql_search('space = "ENG" and type = "page"')
-        assert client._client.cql.call_args.args[0] == 'space = "ENG" and type = "page"'
+        call = client._client.get.call_args
+        assert call.args[0] == "rest/api/search"
+        assert call.kwargs["params"] == {"cql": 'space = "ENG" and type = "page"', "limit": 20}
+
+
+class TestSearchThroughRealGatewayUrl:
+    """Builds the real library object (no mock of Confluence or cql) and stubs only HTTP."""
+
+    @staticmethod
+    def _real_client() -> tuple[ConfluenceClient, list]:
+        seen: list = []
+
+        class Recorder(HTTPAdapter):
+            def send(self, request, **kwargs):
+                seen.append(request)
+                resp = requests.Response()
+                resp.status_code = 200
+                resp._content = b'{"results": [{"title": "Doc", "entityType": "page"}]}'
+                resp.headers["Content-Type"] = "application/json"
+                resp.url = request.url
+                resp.request = request
+                return resp
+
+        client = ConfluenceClient(config={"access_token": "tok", "cloud_id": "cloud-1"})
+        client._session.mount("https://", Recorder())
+        return client, seen
+
+    @pytest.mark.parametrize("method", ["search", "cql_search"])
+    def test_reaches_gateway_search_endpoint_with_cql(self, method):
+        client, seen = self._real_client()
+        results = getattr(client, method)("budget" if method == "search" else 'space = "ENG"')
+        assert results[0].title == "Doc"
+        url = urlparse(seen[0].url)
+        expected = "https://api.atlassian.com/ex/confluence/cloud-1/wiki/rest/api/search"
+        assert f"{url.scheme}://{url.netloc}{url.path}" == expected
+        assert parse_qs(url.query)["limit"] == ["20"]
+        cql = parse_qs(url.query)["cql"][0]
+        assert cql == ('text ~ "budget" order by lastmodified desc' if method == "search" else 'space = "ENG"')
 
 
 # ---------------------------------------------------------------------------- #

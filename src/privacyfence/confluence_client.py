@@ -65,6 +65,9 @@ logger = logging.getLogger(__name__)
 # instead, via the library's raw get/post/put helpers.
 _V2_SPACES_PATH = "api/v2/spaces"
 _V2_PAGES_PATH = "api/v2/pages"
+# CQL search has no v2 equivalent. ConfluenceCloud (what cloud=True builds)
+# has no ``.cql`` method, so the legacy search endpoint is called directly.
+_SEARCH_PATH = "rest/api/search"
 
 # Hard budget of requests per list call when following ``_links.next`` cursors.
 MAX_PAGES = 10
@@ -446,9 +449,9 @@ class ConfluenceClient:
         escaped = query.replace("\\", "\\\\").replace('"', '\\"')
         try:
             raw = self._request(
-                self._client.cql,
-                f'text ~ "{escaped}" order by lastmodified desc',
-                limit=max_results,
+                self._client.get,
+                _SEARCH_PATH,
+                params={"cql": f'text ~ "{escaped}" order by lastmodified desc', "limit": max_results},
             )
             results = (raw or {}).get("results") or []
         except Exception as exc:
@@ -462,7 +465,7 @@ class ConfluenceClient:
             raise ConfluenceClientError("cql_search requires a non-empty CQL query")
         max_results = max(1, min(max_results, 100))
         try:
-            raw = self._request(self._client.cql, cql, limit=max_results)
+            raw = self._request(self._client.get, _SEARCH_PATH, params={"cql": cql, "limit": max_results})
             results = (raw or {}).get("results") or []
         except Exception as exc:
             raise ConfluenceClientError(f"cql_search failed: {exc}") from exc
